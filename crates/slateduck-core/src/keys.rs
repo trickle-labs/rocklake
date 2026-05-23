@@ -453,6 +453,56 @@ pub fn prefix_inlined_deletes_for_table(table_id: u64) -> Vec<u8> {
     buf
 }
 
+/// Build a scan prefix for views in a schema: `0x07 | schema_id`.
+pub fn prefix_views_for_schema(schema_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_VIEW);
+    buf.extend_from_slice(&encode_u64(schema_id));
+    buf
+}
+
+/// Build a scan prefix for macros in a schema: `0x08 | schema_id`.
+pub fn prefix_macros_for_schema(schema_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_MACRO);
+    buf.extend_from_slice(&encode_u64(schema_id));
+    buf
+}
+
+/// Build a scan prefix for macro implementations: `0x09 | macro_id`.
+pub fn prefix_macro_impls(macro_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_MACRO_IMPL);
+    buf.extend_from_slice(&encode_u64(macro_id));
+    buf
+}
+
+/// Build a scan prefix for macro parameters: `0x0A | macro_id | impl_id`.
+pub fn prefix_macro_params(macro_id: u64, impl_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(17);
+    buf.push(TAG_MACRO_PARAMETERS);
+    buf.extend_from_slice(&encode_u64(macro_id));
+    buf.extend_from_slice(&encode_u64(impl_id));
+    buf
+}
+
+/// Build a scan prefix for tags on an object: `0x1A | object_id`.
+pub fn prefix_tags_for_object(object_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_TAG);
+    buf.extend_from_slice(&encode_u64(object_id));
+    buf
+}
+
+/// Build a scan prefix for column tags: `0x1B | table_id | column_id`.
+pub fn prefix_column_tags(table_id: u64, column_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(17);
+    buf.push(TAG_COLUMN_TAG);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf.extend_from_slice(&encode_u64(column_id));
+    buf
+}
+
 /// Extract the tag byte from a raw key. Returns error if key is empty.
 pub fn extract_tag(key: &[u8]) -> Result<u8, KeyError> {
     if key.is_empty() {

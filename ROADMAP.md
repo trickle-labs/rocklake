@@ -50,9 +50,10 @@ binding on every roadmap release below.
 | **v0.2 — Catalog Core** | All 28 DuckLake tables in SlateDB, full MVCC, catalog-data immutability, Rust API | **Done** |
 | **v0.3 — PG-Wire Sidecar (Alpha)** | Strategy B sidecar serving DuckDB end-to-end | **Done** |
 | **v0.4 — Production Hardening** | Visibility GC, excision, backups, observability, encryption, repair tooling | **Done** |
-| **v0.5 — Native Extension (Beta)** | Strategy C embedded DuckDB extension via FFI | Planning |
+| **v0.5 — Native Extension (Beta)** | Strategy C embedded DuckDB extension via FFI | **Done** |
 | **v0.6 — Multi-Client & Security** | pg-tide-relay onboarding, TLS/auth, audit log, GCS/Azure validation, compatibility matrix CI | Planning |
 | **v0.7 — Performance & Ecosystem** | Hot-key reads, secondary indexes, SlateDB tuning, multi-writer partitioning, DataFusion integration | Planning |
+| **v0.8 — Documentation** | MkDocs Material site, GitHub Pages, full conceptual, operational, and reference coverage | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10 benchmarks, GA polish, full operational story | Planning |
 | **v1.x — Ecosystem Expansion** | Streaming ingest, additional DuckLake clients (Spark/Trino), zone-map index, async catalog FFI | Planning |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces | Exploration |
@@ -698,10 +699,10 @@ All deferred tables return `SQLSTATE 0A000` in Phase 0.3; this release removes t
 
 ### Deliverables
 
-- `INSTALL slateduck; ATTACH 'ducklake:slatedb://…' AS lake;` works in a vanilla DuckDB
-- All Phase 0.3 golden tests pass through the native extension path
-- Strategy B and Strategy C produce identical query results on the same catalog
-- All 28 DuckLake v1.0 tables implemented and tested
+- [x] `INSTALL slateduck; ATTACH 'ducklake:slatedb://…' AS lake;` works in a vanilla DuckDB
+- [x] All Phase 0.3 golden tests pass through the native extension path
+- [x] Strategy B and Strategy C produce identical query results on the same catalog
+- [x] All 28 DuckLake v1.0 tables implemented and tested
 
 ---
 
@@ -823,6 +824,129 @@ Expose `slateduck-catalog` to DataFusion's [`datafusion-ducklake`](https://githu
 - Initial benchmark report: p50/p95/p99 vs. phase-2 baseline and SQLite-backed DuckLake
 - Multi-writer partitioning pattern documented with example architecture and tested with multiple concurrent dataset writers
 - DataFusion integration passing DuckLake tutorial equivalence tests
+
+---
+
+## v0.8 — Documentation
+
+> Publish a complete, production-quality documentation site that explains every aspect of SlateDuck — architecture, design decisions, trade-offs, deployment, operations, and integration — to the same standard as the engineering.
+
+The full specification for this release is in [plans/documentation-1.md](plans/documentation-1.md). This section is a binding summary of the scope, deliverables, and phased implementation plan.
+
+### Technology Stack
+
+- **Framework:** [MkDocs](https://www.mkdocs.org/) with [Material for MkDocs](https://squidfundinglab.github.io/mkdocs-material/) theme
+- **Deployment:** GitHub Actions CI/CD building on every push to `main`; published to GitHub Pages
+- **Plugins:** `search`, `minify`, `git-revision-date-localized`, `social` (Open Graph cards), `glightbox`, `redirects`
+- **Extensions:** `pymdownx.superfences` (Mermaid diagrams), `pymdownx.tabbed` (multi-cloud configs), `pymdownx.details`, `pymdownx.highlight`, `admonition`, `toc`
+- **Dependency file:** `requirements-docs.txt` pinning all documentation dependencies for reproducible builds
+
+The full `mkdocs.yml` configuration — including the navigation tree, theme palette, plugin list, and Markdown extension settings — is defined in `plans/documentation-1.md` and is used verbatim.
+
+### GitHub Actions Workflow
+
+A dedicated `.github/workflows/docs.yml` workflow:
+- **Build job:** runs on every push to `main` (path filter: `docs/**`, `mkdocs.yml`) and on every PR (build only, no deploy). Uses `mkdocs build --strict` so any broken link or misconfigured extension fails the build.
+- **Deploy job:** runs only on push to `main`; deploys the built `site/` artifact to GitHub Pages via `actions/deploy-pages`.
+- **Concurrency:** cancels in-progress builds on the same branch to avoid redundant deploys.
+
+### Documentation Structure
+
+Eighty content pages organized into 13 top-level sections, each with a defined audience and purpose:
+
+| Section | Pages | Audience |
+|---------|-------|----------|
+| Getting Started | 4 | New users: zero to working lakehouse in 5 minutes |
+| Concepts | 9 | Evaluators: deep understanding of what and why |
+| Architecture | 9 | Engineers: how it works at the code level |
+| Deployment | 11 | Operators: every supported backend with copy-paste configs |
+| Operations | 12 | Day-2 operators: CLI reference, GC, excision, repair, monitoring |
+| Integration | 6 | Ecosystem: DuckDB, pg-tide, DataFusion, custom clients |
+| Design Decisions | 8 | Architects: honest trade-off analysis for every major choice |
+| Performance | 5 | Evaluators: real benchmarks, tuning knobs, workload fit guide |
+| Internals | 8 | Contributors: tag allocation, MVCC filter, crash safety |
+| Contributing | 5 | Contributors: dev setup, test pyramid, release process |
+| Reference | 6 | Quick lookup: tables, SQL shapes, error codes, metrics |
+| Roadmap | 2 | Everyone: release timeline, changelog |
+| Landing page | 1 | First impression: pitch, architecture, comparison |
+
+### Content Requirements
+
+Every section must meet the following bar before the release is considered complete:
+
+**Getting Started and Concepts** are written as flowing technical essays — longer paragraphs that build intuition, not bullet-list summaries. Every claim links to the deeper documentation that substantiates it. Trade-offs are stated honestly: both what SlateDuck does well and where it falls short.
+
+**Architecture** pages include Mermaid sequence diagrams for both the read path and write path, a Mermaid dependency graph of the crate workspace, and annotated code references pointing into the source where relevant.
+
+**Deployment** pages are self-contained: a reader following one cloud-provider page should need nothing outside that page to stand up a working deployment. Each page includes IAM/permissions templates, a sample `slateduck serve` invocation, and a DuckDB connection snippet. Tabbed content is used for multi-provider comparisons.
+
+**Design Decisions** pages are the most important pages in the site. Each presents both sides of a design choice — what was chosen, what was rejected, and the full reasoning — written as an honest engineering assessment, not a sales document. These pages address: why SlateDB over PostgreSQL/SQLite; why Strategy B before Strategy C; why bounded SQL over a general engine; why Protobuf; the full costs and benefits of immutability; the single-writer constraint and its workarounds; key-layout rationale for all 28 tables; and an explicit "What SlateDuck Is Not" page.
+
+**Performance** pages publish the real benchmark numbers from `benchmarks/phase-2-baseline.json` and subsequent runs, with methodology documented. The "vs. Alternatives" page provides a direct, honest comparison table against PostgreSQL-backed and SQLite-backed DuckLake.
+
+**Reference** pages are scannable lookup tables: all 28 catalog tables documented in tabular form; every supported SQL shape with parameter types; every SQLSTATE code with its triggering condition and resolution; every exported Prometheus metric; all environment variables.
+
+### Writing Style
+
+The documentation is written to the following standards:
+
+1. **Lead with the why.** Every page opens by explaining why the reader should care about this topic.
+2. **Use longer paragraphs for narrative content.** Concepts and design decisions read like well-written technical essays.
+3. **Be honest about trade-offs.** Every limitation is stated plainly; readers trust documentation that doesn't hide inconvenient facts.
+4. **Use admonitions for emphasis.** Warnings for footguns, tips for optimizations, notes for context.
+5. **Include concrete examples everywhere.** Every concept gets a code example; every CLI page has copy-paste commands with expected output.
+6. **Define terms before using them.** Every project-specific term either defines itself in context or links to the glossary.
+7. **Address the reader directly.** "You can query historical snapshots" not "it is possible to query historical snapshots."
+
+### Implementation Phases
+
+| Phase | Work | Days |
+|-------|------|------|
+| D1 — Scaffolding | `mkdocs.yml`, directory structure, GitHub Actions workflow, `requirements-docs.txt`, section stubs | 1–2 |
+| D2 — Getting Started & Landing | Landing page, what-is, quickstart (local + cloud), first-lakehouse tutorial | 3–5 |
+| D3 — Concepts & Architecture | All 9 concepts pages, all 9 architecture pages, Mermaid diagrams | 6–12 |
+| D4 — Deployment & Operations | All 11 deployment guides, all 12 operations pages | 13–19 |
+| D5 — Integration & Design Decisions | All 6 integration pages, all 8 design-decision pages | 20–24 |
+| D6 — Performance, Internals, Reference | All 5 performance pages, all 8 internals pages, all 6 reference pages | 25–30 |
+| D7 — Contributing, Roadmap, Polish | Contributing, roadmap, changelog, cross-link audit, `mkdocs build --strict` clean | 31–35 |
+
+### Quality Gates
+
+The release is complete when all of the following are true:
+
+- [ ] `mkdocs build --strict` produces zero warnings on CI
+- [ ] No broken internal or external links
+- [ ] No stub pages remain in the published site
+- [ ] Every `bash` and `sql` code block has been run against the actual binary
+- [ ] The top 20 terms a new user would search for return relevant results
+- [ ] All pages render correctly on mobile viewports
+- [ ] Heading hierarchy is correct; images have alt text
+- [ ] At least one reviewer has read every Getting Started and Concepts page
+
+### Maintenance Contract
+
+Once published, the documentation becomes a first-class project artifact:
+
+- PRs that change observable behavior must include a corresponding docs update (enforced via PR template checklist)
+- New CLI commands get a CLI Reference entry before the release is tagged
+- New Prometheus metrics get a Metrics reference entry before the release is tagged
+- New error codes get an Error Codes entry before the release is tagged
+- Benchmark results are refreshed with each performance-relevant release
+- DuckDB compatibility matrix is updated when new versions are validated
+
+### Deliverables
+
+- [ ] `mkdocs.yml` at workspace root with full configuration from `plans/documentation-1.md`
+- [ ] `.github/workflows/docs.yml` building and deploying to GitHub Pages on every push to `main`
+- [ ] `requirements-docs.txt` pinning all documentation dependencies
+- [ ] All 80 content pages published with complete, reviewed content — no stubs
+- [ ] Mermaid architecture diagrams for system overview, crate dependency graph, read path, and write path
+- [ ] All 28 catalog tables documented in the Reference section
+- [ ] Full CLI reference covering every `slateduck` subcommand
+- [ ] Performance comparison page with real benchmark data
+- [ ] Design Decisions section covering all 8 major architectural choices
+- [ ] Documentation site live at GitHub Pages URL
+- [ ] `mkdocs build --strict` green in CI
 
 ---
 

@@ -493,6 +493,390 @@ impl CatalogWriter {
         Ok(SnapshotId::new(snapshot_id))
     }
 
+    // ─── Phase 6: Views ────────────────────────────────────────────────────
+
+    pub async fn create_view(
+        &mut self,
+        schema_id: u64,
+        view_name: &str,
+        sql: &str,
+    ) -> CatalogResult<u64> {
+        let view_id = self.counters.alloc_catalog_id();
+        let snapshot_id = self.counters.peek_snapshot_id();
+
+        let row = ViewRow {
+            view_id,
+            schema_id,
+            view_name: view_name.to_string(),
+            sql: sql.to_string(),
+            begin_snapshot: snapshot_id,
+            end_snapshot: None,
+        };
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let key = keys::key_view(schema_id, view_id, snapshot_id);
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.put(
+            keys::key_counter(COUNTER_NEXT_CATALOG_ID),
+            self.counters.encode_catalog_counter(),
+        )
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        self.mark_schema_changed();
+        Ok(view_id)
+    }
+
+    pub async fn drop_view(
+        &mut self,
+        schema_id: u64,
+        view_id: u64,
+        begin_snapshot: u64,
+    ) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let key = keys::key_view(schema_id, view_id, begin_snapshot);
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let existing = tx
+            .get(&key)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .ok_or_else(|| CatalogError::NotFound(format!("view {view_id}")))?;
+
+        let mut row: ViewRow = values::decode_value(&existing)?;
+        row.end_snapshot = Some(snapshot_id);
+
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        self.mark_schema_changed();
+        Ok(())
+    }
+
+    // ─── Phase 6: Macros ────────────────────────────────────────────────────
+
+    pub async fn create_macro(
+        &mut self,
+        schema_id: u64,
+        macro_name: &str,
+        macro_type: &str,
+    ) -> CatalogResult<u64> {
+        let macro_id = self.counters.alloc_catalog_id();
+        let snapshot_id = self.counters.peek_snapshot_id();
+
+        let row = MacroRow {
+            macro_id,
+            schema_id,
+            macro_name: macro_name.to_string(),
+            macro_type: macro_type.to_string(),
+            begin_snapshot: snapshot_id,
+            end_snapshot: None,
+        };
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let key = keys::key_macro(schema_id, macro_id, snapshot_id);
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.put(
+            keys::key_counter(COUNTER_NEXT_CATALOG_ID),
+            self.counters.encode_catalog_counter(),
+        )
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        self.mark_schema_changed();
+        Ok(macro_id)
+    }
+
+    pub async fn drop_macro(
+        &mut self,
+        schema_id: u64,
+        macro_id: u64,
+        begin_snapshot: u64,
+    ) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let key = keys::key_macro(schema_id, macro_id, begin_snapshot);
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let existing = tx
+            .get(&key)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .ok_or_else(|| CatalogError::NotFound(format!("macro {macro_id}")))?;
+
+        let mut row: MacroRow = values::decode_value(&existing)?;
+        row.end_snapshot = Some(snapshot_id);
+
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        self.mark_schema_changed();
+        Ok(())
+    }
+
+    pub async fn add_macro_impl(&mut self, macro_id: u64, definition: &str) -> CatalogResult<u64> {
+        let impl_id = self.counters.alloc_catalog_id();
+
+        let row = MacroImplRow {
+            impl_id,
+            macro_id,
+            definition: definition.to_string(),
+        };
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let key = keys::key_macro_impl(macro_id, impl_id);
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.put(
+            keys::key_counter(COUNTER_NEXT_CATALOG_ID),
+            self.counters.encode_catalog_counter(),
+        )
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        Ok(impl_id)
+    }
+
+    pub async fn add_macro_parameter(
+        &mut self,
+        macro_id: u64,
+        impl_id: u64,
+        column_id: u64,
+        parameter_name: &str,
+        parameter_type: &str,
+        default_value: Option<&str>,
+    ) -> CatalogResult<()> {
+        let row = MacroParametersRow {
+            macro_id,
+            impl_id,
+            column_id,
+            parameter_name: parameter_name.to_string(),
+            parameter_type: parameter_type.to_string(),
+            default_value: default_value.map(|s| s.to_string()),
+        };
+
+        let key = keys::key_macro_parameters(macro_id, impl_id, column_id);
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(())
+    }
+
+    // ─── Phase 6: Tags ──────────────────────────────────────────────────────
+
+    pub async fn set_tag(
+        &mut self,
+        object_id: u64,
+        tag_key: &str,
+        tag_value: &str,
+    ) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let tag_key_hash = hash_tag_key(tag_key);
+
+        let row = TagRow {
+            object_id,
+            tag_key: tag_key.to_string(),
+            tag_value: tag_value.to_string(),
+            begin_snapshot: snapshot_id,
+            end_snapshot: None,
+        };
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let key = keys::key_tag(object_id, tag_key_hash, snapshot_id);
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn remove_tag(
+        &mut self,
+        object_id: u64,
+        tag_key: &str,
+        begin_snapshot: u64,
+    ) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let tag_key_hash = hash_tag_key(tag_key);
+        let key = keys::key_tag(object_id, tag_key_hash, begin_snapshot);
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let existing = tx
+            .get(&key)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .ok_or_else(|| CatalogError::NotFound(format!("tag {tag_key} on {object_id}")))?;
+
+        let mut row: TagRow = values::decode_value(&existing)?;
+        row.end_snapshot = Some(snapshot_id);
+
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn set_column_tag(
+        &mut self,
+        table_id: u64,
+        column_id: u64,
+        tag_key: &str,
+        tag_value: &str,
+    ) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let tag_key_hash = hash_tag_key(tag_key);
+
+        let row = ColumnTagRow {
+            table_id,
+            column_id,
+            tag_key: tag_key.to_string(),
+            tag_value: tag_value.to_string(),
+            begin_snapshot: snapshot_id,
+            end_snapshot: None,
+        };
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let key = keys::key_column_tag(table_id, column_id, tag_key_hash, snapshot_id);
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn remove_column_tag(
+        &mut self,
+        table_id: u64,
+        column_id: u64,
+        tag_key: &str,
+        begin_snapshot: u64,
+    ) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let tag_key_hash = hash_tag_key(tag_key);
+        let key = keys::key_column_tag(table_id, column_id, tag_key_hash, begin_snapshot);
+
+        let tx = self.begin_tx().await?;
+        self.check_epoch(&tx).await?;
+
+        let existing = tx
+            .get(&key)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .ok_or_else(|| {
+                CatalogError::NotFound(format!("column tag {tag_key} on {table_id}.{column_id}"))
+            })?;
+
+        let mut row: ColumnTagRow = values::decode_value(&existing)?;
+        row.end_snapshot = Some(snapshot_id);
+
+        tx.put(&key, values::encode_value(&row))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
+        Ok(())
+    }
+
+    // ─── Phase 6: File Variant Stats ────────────────────────────────────────
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_file_variant_stats(
+        &mut self,
+        table_id: u64,
+        column_id: u64,
+        variant_path: &str,
+        data_file_id: u64,
+        min_value: Option<&str>,
+        max_value: Option<&str>,
+    ) -> CatalogResult<()> {
+        let variant_path_hash = hash_tag_key(variant_path);
+        let row = FileVariantStatsRow {
+            table_id,
+            column_id,
+            variant_path_hash,
+            data_file_id,
+            variant_path: variant_path.to_string(),
+            min_value: min_value.map(|s| s.to_string()),
+            max_value: max_value.map(|s| s.to_string()),
+        };
+        let key =
+            keys::key_file_variant_stats(table_id, column_id, variant_path_hash, data_file_id);
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(())
+    }
+
+    // ─── Phase 6: Files Scheduled for Deletion ──────────────────────────────
+
+    pub async fn schedule_file_deletion(
+        &mut self,
+        data_file_id: u64,
+        path: &str,
+        file_type: &str,
+    ) -> CatalogResult<()> {
+        let schedule_start = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let row = FilesScheduledForDeletionRow {
+            data_file_id,
+            schedule_start,
+            path: path.to_string(),
+            file_type: file_type.to_string(),
+        };
+
+        let key = keys::key_files_scheduled_for_deletion(schedule_start, data_file_id);
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(())
+    }
+
+    pub async fn remove_scheduled_deletion(
+        &mut self,
+        schedule_start: u64,
+        data_file_id: u64,
+    ) -> CatalogResult<()> {
+        let key = keys::key_files_scheduled_for_deletion(schedule_start, data_file_id);
+        self.db.delete(&key).await?;
+        Ok(())
+    }
+
+    // ─── Internal Helpers ───────────────────────────────────────────────────
+
     async fn begin_tx(&self) -> CatalogResult<DbTransaction> {
         self.db
             .begin(IsolationLevel::SerializableSnapshot)
@@ -514,4 +898,12 @@ impl CatalogWriter {
         }
         Ok(())
     }
+}
+
+/// Hash a tag key string to u64 for key encoding.
+fn hash_tag_key(key: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
 }
