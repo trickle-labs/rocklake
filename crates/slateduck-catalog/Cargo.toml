@@ -1,0 +1,22 @@
+[package]
+name = "slateduck-catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "DuckLake catalog operations backed by SlateDB"
+
+[dependencies]
+slateduck-core = { path = "../slateduck-core" }
+slatedb = { workspace = true }
+object_store = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }

@@ -19,7 +19,7 @@ DuckLake-compatible clients.
 
 | Release | Milestone | Status |
 |---------|-----------|--------|
-| **v0.1 — Foundation** | Validated infrastructure, data model, Rust workspace | Planning |
+| **v0.1 — Foundation** | Validated infrastructure, data model, Rust workspace | ✅ Complete |
 | **v0.2 — Catalog Core** | All 28 DuckLake tables in SlateDB, full MVCC, Rust API | Planning |
 | **v0.3 — PG-Wire Sidecar (Alpha)** | Strategy B sidecar serving DuckDB end-to-end | Planning |
 | **v0.4 — Production Hardening** | GC, backups, observability, encryption, repair tooling | Planning |
@@ -39,7 +39,7 @@ the design has been explicitly updated to account for a failed assumption.
 
 ### Rust Workspace and CI
 
-- Set up the full Rust workspace structure:
+- [x] Set up the full Rust workspace structure:
   ```
   slateduck/
   ├── Cargo.toml
@@ -54,9 +54,9 @@ the design has been explicitly updated to account for a failed assumption.
   ├── docs/
   └── tests/
   ```
-- Configure GitHub Actions: `cargo fmt`, `clippy`, `test` on Linux and macOS.
-- Pin initial dependencies: `slatedb`, `object_store`, `bytes`, `tokio`, `serde`, `prost`, `pgwire`, `sqlparser-rs`, `proptest`, `fail-parallel`.
-- Add `CONTRIBUTING.md`, `LICENSE`, and `docs/architecture.md` stubs.
+- [x] Configure GitHub Actions: `cargo fmt`, `clippy`, `test` on Linux and macOS.
+- [x] Pin initial dependencies: `slatedb`, `object_store`, `bytes`, `tokio`, `serde`, `prost`, `pgwire`, `sqlparser-rs`, `proptest`, `fail-parallel`.
+- [x] Add `CONTRIBUTING.md`, `LICENSE`, and `docs/architecture.md` stubs.
 
 ### SlateDB API Validation
 
@@ -140,10 +140,10 @@ Stand up the full DuckLake tutorial against SQLite-backed DuckLake and capture a
 
 ### Deliverables
 
-- Passing `hello world` smoke test: open SlateDB on LocalFS, put/get, scan a prefix, transaction, checkpoint
-- All Phase 0 validation artifacts checked in and green
-- Go/no-go decision recorded for: GlueSQL vs. custom dispatcher, transaction API, conditional init, `flush()` barrier, `pgwire` crate extended-protocol support
-- No Phase 1 data-model code until all gates pass or the plan is updated for failures
+- [x] Passing `hello world` smoke test: open SlateDB on LocalFS, put/get, scan a prefix, transaction, checkpoint
+- [x] All Phase 0 validation artifacts checked in and green
+- [x] Go/no-go decision recorded for: GlueSQL vs. custom dispatcher, transaction API, conditional init, `flush()` barrier, `pgwire` crate extended-protocol support
+- [x] No Phase 1 data-model code until all gates pass or the plan is updated for failures
 
 ---
 

@@ -1,0 +1,15 @@
+[package]
+name = "slateduck-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "C FFI bindings for SlateDuck (Strategy C native extension)"
+
+[dependencies]
+slateduck-core = { path = "../slateduck-core" }
+slateduck-catalog = { path = "../slateduck-catalog" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
