@@ -2989,6 +2989,7 @@ dependencies = [
  "serde_json",
  "slatedb",
  "slateduck-core",
+ "slateduck-ffi",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3021,8 +3022,11 @@ dependencies = [
 name = "slateduck-ffi"
 version = "0.1.0"
 dependencies = [
+ "object_store",
  "slateduck-catalog",
  "slateduck-core",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

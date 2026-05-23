@@ -232,4 +232,160 @@ impl CatalogReader {
         }
         Ok(rows)
     }
+
+    // ─── Phase 6: Views ────────────────────────────────────────────────────
+
+    pub async fn list_views(&self, schema_id: u64) -> CatalogResult<Vec<ViewRow>> {
+        let prefix = keys::prefix_views_for_schema(schema_id);
+        let mut views = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ViewRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                views.push(row);
+            }
+        }
+        Ok(views)
+    }
+
+    // ─── Phase 6: Macros ────────────────────────────────────────────────────
+
+    pub async fn list_macros(&self, schema_id: u64) -> CatalogResult<Vec<MacroRow>> {
+        let prefix = keys::prefix_macros_for_schema(schema_id);
+        let mut macros = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: MacroRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                macros.push(row);
+            }
+        }
+        Ok(macros)
+    }
+
+    pub async fn list_macro_impls(&self, macro_id: u64) -> CatalogResult<Vec<MacroImplRow>> {
+        let prefix = keys::prefix_macro_impls(macro_id);
+        let mut impls = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: MacroImplRow = values::decode_value(&kv.value)?;
+            impls.push(row);
+        }
+        Ok(impls)
+    }
+
+    pub async fn list_macro_parameters(
+        &self,
+        macro_id: u64,
+        impl_id: u64,
+    ) -> CatalogResult<Vec<MacroParametersRow>> {
+        let prefix = keys::prefix_macro_params(macro_id, impl_id);
+        let mut params = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: MacroParametersRow = values::decode_value(&kv.value)?;
+            params.push(row);
+        }
+        Ok(params)
+    }
+
+    // ─── Phase 6: Tags ──────────────────────────────────────────────────────
+
+    pub async fn list_tags(&self, object_id: u64) -> CatalogResult<Vec<TagRow>> {
+        let prefix = keys::prefix_tags_for_object(object_id);
+        let mut tags = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: TagRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                tags.push(row);
+            }
+        }
+        Ok(tags)
+    }
+
+    pub async fn list_column_tags(
+        &self,
+        table_id: u64,
+        column_id: u64,
+    ) -> CatalogResult<Vec<ColumnTagRow>> {
+        let prefix = keys::prefix_column_tags(table_id, column_id);
+        let mut tags = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ColumnTagRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                tags.push(row);
+            }
+        }
+        Ok(tags)
+    }
+
+    // ─── Phase 6: File Variant Stats ────────────────────────────────────────
+
+    pub async fn list_file_variant_stats(
+        &self,
+        table_id: u64,
+        column_id: u64,
+    ) -> CatalogResult<Vec<FileVariantStatsRow>> {
+        let mut buf = Vec::with_capacity(17);
+        buf.push(TAG_FILE_VARIANT_STATS);
+        buf.extend_from_slice(&keys::encode_u64(table_id));
+        buf.extend_from_slice(&keys::encode_u64(column_id));
+
+        let mut stats = Vec::new();
+        let mut iter = self.db.scan_prefix(&buf).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: FileVariantStatsRow = values::decode_value(&kv.value)?;
+            stats.push(row);
+        }
+        Ok(stats)
+    }
+
+    // ─── Phase 6: Files Scheduled for Deletion ──────────────────────────────
+
+    pub async fn list_files_scheduled_for_deletion(
+        &self,
+    ) -> CatalogResult<Vec<FilesScheduledForDeletionRow>> {
+        let prefix = keys::prefix_for_tag(TAG_FILES_SCHEDULED_FOR_DELETION);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: FilesScheduledForDeletionRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
+    }
 }
