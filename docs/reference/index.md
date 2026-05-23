@@ -1,12 +1,12 @@
 # Reference
 
-Technical reference material.
+This section provides lookup-oriented reference material for SlateDuck. Unlike the conceptual documentation (which explains why things work), reference pages provide quick answers to specific questions: what tables exist, what error codes mean, what environment variables are available, and what SQL is supported.
 
-## Pages in this section
+## Pages
 
-- [Catalog Tables](catalog-tables.md) — All 28 DuckLake tables
-- [SQL Supported](sql-supported.md) — Every accepted SQL shape
-- [Error Codes](error-codes.md) — SQLSTATE reference
-- [Metrics](metrics.md) — Prometheus metrics
-- [Environment Variables](environment-vars.md) — Configuration via env
-- [Glossary](glossary.md) — Terminology
+- **[Catalog Tables](catalog-tables.md)** — Complete list of all catalog table types and their fields
+- **[SQL Supported](sql-supported.md)** — Exhaustive list of supported SQL statements
+- **[Error Codes](error-codes.md)** — All SQLSTATE codes returned by SlateDuck
+- **[Environment Variables](environment-vars.md)** — Complete configuration reference
+- **[Metrics](metrics.md)** — All exposed Prometheus metrics
+- **[Glossary](glossary.md)** — Definitions of terms used throughout the documentation

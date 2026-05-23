@@ -1,26 +1,70 @@
 # Troubleshooting
 
-## Connection Refused on Port 5432
+This page covers common problems encountered when running SlateDuck and their solutions.
 
-1. Check process: `ps aux | grep slateduck`
-2. Check bind address: `ss -tlnp | grep 5432`
-3. Check startup logs
+## Connection Errors
 
-## SQLSTATE 0A000 (Feature Not Supported)
+### "connection refused" when DuckDB tries to connect
 
-The SQL statement doesn't match any bounded dispatcher pattern. Check [SQL Supported](../reference/sql-supported.md).
+**Cause:** SlateDuck is not running or is listening on a different address/port.
 
-## SQLSTATE 57P04 (Writer Fenced)
+**Solution:** Verify SlateDuck is running (`ps aux | grep slateduck`), check the bind address and port in the startup output, and ensure there is no firewall blocking the connection.
 
-Another writer took the epoch. Expected during restarts. Client should reconnect.
+### "WriterFenced" error (SQLSTATE 57P04)
 
-## SQLSTATE 08006 (Connection Failure)
+**Cause:** Another SlateDuck instance has taken over the writer role by incrementing the epoch.
 
-Object-store access failing. Check IAM credentials, bucket access, VPC endpoints.
+**Solution:** This is expected during failover. The old instance should be terminated. If you see this unexpectedly, check for duplicate SlateDuck processes pointing at the same catalog.
 
-## High Latency (> 1s)
+### "FormatVersionMismatch" on startup
 
-1. Check `slateduck_storage_get_duration_seconds`
-2. If high: S3 throttling or network issue
-3. If read amplification high: run GC
-4. Consider `--tuning-profile read_heavy`
+**Cause:** The SlateDuck binary does not recognize the catalog's format version. Either the catalog was created by a newer version, or it is corrupted.
+
+**Solution:** Ensure you are running the correct SlateDuck version for your catalog. If you recently downgraded, you may need to upgrade back to the version that performed the migration.
+
+## Performance Issues
+
+### Slow catalog queries (> 500ms)
+
+**Possible causes:**
+- High latency to object storage (check network, region mismatch)
+- Many superseded rows causing scan amplification (run GC + excision)
+- Large number of data files per table (expected for large tables; consider partitioning)
+- SlateDB compaction backlog (check compaction metrics)
+
+**Solution:** Run `slateduck inspect` to check row counts. If there are many more rows than expected, run GC. Check object store latency with a simple GET test.
+
+### DuckDB queries are slow after connecting to SlateDuck
+
+**Cause:** DuckDB's `ducklake` extension makes multiple catalog round-trips per query (list files, get stats, etc.). If each round-trip takes 50-100ms, a query with 10 catalog calls adds 500-1000ms of overhead.
+
+**Solution:** This is inherent to the architecture when using S3 Standard. Options: use S3 Express One Zone for lower latency, switch to the native extension (Strategy C) for in-process catalog access, or batch data files into fewer, larger Parquet files.
+
+## Storage Errors
+
+### "ObjectStore: 403 Forbidden"
+
+**Cause:** Insufficient IAM permissions for the configured storage path.
+
+**Solution:** Ensure the IAM role/user has `s3:GetObject`, `s3:PutObject`, `s3:ListBucket`, and `s3:DeleteObject` permissions on the catalog path prefix.
+
+### "ObjectStore: 429 Too Many Requests"
+
+**Cause:** S3 request rate limiting. This can happen during heavy compaction or when scanning very large catalogs.
+
+**Solution:** SlateDuck retries automatically with exponential backoff. If sustained, consider spreading catalog data across multiple S3 prefixes or reducing scan frequency.
+
+## Data Integrity
+
+### Verify reports errors
+
+**Solution:** Run `slateduck repair --dry-run` to see what repairs are proposed. If repairs are available, apply them. If the error is unrecoverable, restore from an NDJSON backup or checkpoint.
+
+### Unexpected empty results from catalog queries
+
+**Possible causes:**
+- Reading at a snapshot before the entities were created
+- GC has advanced `retain_from` past the target snapshot
+- Writer fencing: writes went to a different catalog instance
+
+**Solution:** Check the current snapshot with `slateduck inspect`. Verify `retain_from` is not too aggressive. Ensure all DuckDB instances connect to the same SlateDuck instance.

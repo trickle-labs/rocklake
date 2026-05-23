@@ -1,12 +1,12 @@
 # Integration
 
-SlateDuck integrates with multiple query engines and client libraries.
+SlateDuck integrates with several systems in the data ecosystem. This section covers how to connect SlateDuck with DuckDB (the primary client), Apache DataFusion (for Rust-native query execution), and other tools.
 
-## Pages in this section
+## Integration Points
 
-- [DuckDB](duckdb.md) — Primary client connection and usage
-- [DuckDB Compatibility](duckdb-compatibility.md) — Version matrix and validation
-- [pg-tide-relay](pg-tide-relay.md) — Streaming ingest from Kafka/NATS
-- [DataFusion](datafusion.md) — Rust-native query engine integration
-- [Native Extension](native-extension.md) — DuckDB extension via FFI
-- [Custom Clients](custom-clients.md) — Onboarding new clients
+- **[DuckDB](duckdb.md)** — Connecting DuckDB to SlateDuck via the PG-wire sidecar
+- **[Native Extension](native-extension.md)** — Loading SlateDuck as a DuckDB extension (Strategy C)
+- **[DataFusion](datafusion.md)** — Using SlateDuck as a DataFusion catalog provider
+- **[DuckDB Compatibility](duckdb-compatibility.md)** — SQL compatibility matrix with DuckLake
+- **[Custom Clients](custom-clients.md)** — Building your own client using the PG-wire protocol
+- **[pg-tide-relay](pg-tide-relay.md)** — Relaying DuckLake traffic through existing PG infrastructure

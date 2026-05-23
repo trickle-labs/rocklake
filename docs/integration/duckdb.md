@@ -1,28 +1,80 @@
-# DuckDB
+# DuckDB Integration
 
-DuckDB is the primary client. It connects via the `postgres` extension using the PG wire protocol.
+DuckDB is the primary client for SlateDuck. The integration uses DuckDB's `ducklake` extension, which connects to SlateDuck over the PostgreSQL wire protocol to manage lakehouse catalog metadata while executing analytical queries locally against Parquet data files in object storage.
 
-## Connection
+## Prerequisites
 
-```sql
-ATTACH 'ducklake:postgres:host=localhost port=5432 dbname=warehouse' AS lake;
-USE lake;
-```
+- DuckDB v1.2.0 or later (with the `ducklake` extension)
+- A running SlateDuck instance (see [Deployment](../deployment/index.md))
 
-## Common Operations
+## Connecting
 
 ```sql
+-- Install the ducklake extension (first time only)
+INSTALL ducklake;
+LOAD ducklake;
+
+-- Attach a SlateDuck catalog
+ATTACH 'ducklake:host=localhost;port=5432' AS my_lake;
+
+-- Start using the lakehouse
+USE my_lake;
 CREATE SCHEMA analytics;
-CREATE TABLE analytics.events (id BIGINT, event_type VARCHAR, ts TIMESTAMP);
-INSERT INTO analytics.events VALUES (1, 'click', '2024-01-01 10:00:00');
-SELECT * FROM analytics.events;
-SELECT * FROM analytics.events AT (SNAPSHOT 5);
+CREATE TABLE analytics.events (
+    event_id BIGINT,
+    event_type VARCHAR,
+    timestamp TIMESTAMP,
+    payload JSON
+);
 ```
 
-## Session Settings
+## Connection String Parameters
 
-DuckDB sends SET commands during startup. SlateDuck accepts all and stores `timezone`, `client_encoding`, and `DateStyle`.
+The connection string follows the `ducklake:` scheme with PostgreSQL-style parameters:
 
-## What Is Not Supported
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `host` | `localhost` | SlateDuck server hostname or IP |
+| `port` | `5432` | SlateDuck server port |
+| `password` | (none) | Authentication password (if configured) |
+| `sslmode` | `prefer` | TLS mode: `disable`, `prefer`, `require`, `verify-ca`, `verify-full` |
+| `connect_timeout` | `10` | Connection timeout in seconds |
 
-Arbitrary SQL queries against catalog tables (JOINs, subqueries, CTEs, window functions) return `SQLSTATE 0A000`.
+## What Happens Under the Hood
+
+When you execute DDL or DML through DuckDB against a DuckLake-attached catalog, the following occurs:
+
+1. DuckDB's query planner recognizes the operation targets a DuckLake catalog
+2. The `ducklake` extension translates the operation into catalog SQL and sends it to SlateDuck over PG-wire
+3. SlateDuck classifies the SQL, executes the catalog operation, and returns results
+4. For data operations (INSERT, SELECT), DuckDB reads/writes Parquet files directly in object storage — SlateDuck only provides the file locations
+
+This means SlateDuck never sees your actual data. It only manages metadata: which tables exist, what columns they have, and where the data files are stored.
+
+## Supported Operations
+
+All DuckLake catalog operations are supported:
+
+- Schema management (CREATE/DROP/ALTER SCHEMA)
+- Table management (CREATE/DROP/ALTER TABLE)
+- View and macro management
+- Data file registration and deregistration
+- Table statistics and column statistics
+- Transaction management (BEGIN/COMMIT)
+- Time travel (reading historical catalog state)
+
+## Performance Characteristics
+
+Each catalog operation requires at least one network round-trip to SlateDuck. A typical DuckDB query that touches one table involves:
+
+1. List schemas (1 round-trip)
+2. Get table metadata (1 round-trip)
+3. List columns for the table (1 round-trip)
+4. List data files for the table (1 round-trip)
+5. Get column statistics for partition pruning (1 round-trip)
+
+Total: ~5 round-trips × 1-5ms local network latency = 5-25ms catalog overhead. This is negligible for analytical queries that scan gigabytes of Parquet data (seconds to minutes of execution time).
+
+## Multiple DuckDB Instances
+
+Multiple DuckDB instances can connect to the same SlateDuck catalog simultaneously. All read catalog state at the same snapshot and see a consistent view. Only one instance at a time should perform write operations (coordinated by DuckLake's transaction semantics).

@@ -1,50 +1,102 @@
-# SQL Supported
+# Supported SQL Reference
+
+This page provides an exhaustive list of SQL statements that SlateDuck's bounded SQL dispatcher recognizes and handles. These are the exact patterns emitted by DuckDB's `ducklake` extension.
 
 ## Schema Operations
 
 ```sql
-CREATE SCHEMA <name>
-DROP SCHEMA <name>
+-- Create a schema
+INSERT INTO ducklake_schemas (schema_name) VALUES ('analytics')
+
+-- Drop a schema
+UPDATE ducklake_schemas SET end_snapshot = ? WHERE schema_id = ?
+
+-- Rename a schema
+INSERT INTO ducklake_schemas (schema_id, schema_name, begin_snapshot) VALUES (?, 'new_name', ?)
+UPDATE ducklake_schemas SET end_snapshot = ? WHERE schema_id = ? AND begin_snapshot = ?
+
+-- List schemas
+SELECT schema_id, schema_name FROM ducklake_schemas WHERE begin_snapshot <= ? AND (end_snapshot IS NULL OR end_snapshot > ?)
 ```
 
 ## Table Operations
 
 ```sql
-CREATE TABLE <schema>.<table> (<columns>)
-DROP TABLE <schema>.<table>
-ALTER TABLE ... ADD COLUMN / DROP COLUMN / RENAME COLUMN / ALTER TYPE / RENAME TO
+-- Create a table
+INSERT INTO ducklake_tables (table_name, schema_id) VALUES ('events', 1)
+
+-- Drop a table
+UPDATE ducklake_tables SET end_snapshot = ? WHERE table_id = ?
+
+-- Rename a table
+INSERT INTO ducklake_tables (table_id, schema_id, table_name, begin_snapshot) VALUES (?, ?, 'new_name', ?)
+UPDATE ducklake_tables SET end_snapshot = ? WHERE table_id = ? AND begin_snapshot = ?
+
+-- Move table to schema
+INSERT INTO ducklake_tables (table_id, schema_id, table_name, begin_snapshot) VALUES (?, new_schema_id, ?, ?)
+UPDATE ducklake_tables SET end_snapshot = ? WHERE table_id = ? AND begin_snapshot = ?
+
+-- List tables in schema
+SELECT table_id, table_name FROM ducklake_tables WHERE schema_id = ? AND begin_snapshot <= ? AND (end_snapshot IS NULL OR end_snapshot > ?)
 ```
 
-## Data Registration
+## Column Operations
 
 ```sql
-INSERT INTO ducklake_data_file (...) VALUES (...)
-INSERT INTO ducklake_delete_file (...) VALUES (...)
-INSERT INTO ducklake_file_column_stats (...) VALUES (...)
-INSERT INTO ducklake_inlined_data_insert (...) VALUES (...)
-INSERT INTO ducklake_inlined_data_delete (...) VALUES (...)
+-- Add column
+INSERT INTO ducklake_columns (table_id, column_name, data_type, column_index, is_nullable) VALUES (?, ?, ?, ?, ?)
+
+-- Drop column
+UPDATE ducklake_columns SET end_snapshot = ? WHERE column_id = ?
+
+-- Rename column
+INSERT INTO ducklake_columns (column_id, table_id, column_name, ..., begin_snapshot) VALUES (?, ?, 'new_name', ..., ?)
+UPDATE ducklake_columns SET end_snapshot = ? WHERE column_id = ? AND begin_snapshot = ?
+
+-- List columns
+SELECT column_id, column_name, data_type, column_index, is_nullable FROM ducklake_columns WHERE table_id = ? AND begin_snapshot <= ? AND (end_snapshot IS NULL OR end_snapshot > ?)
 ```
 
-## Snapshot Management
+## Data File Operations
 
 ```sql
-INSERT INTO ducklake_snapshot (...) VALUES (...)
-INSERT INTO ducklake_snapshot_changes (...) VALUES (...)
-UPDATE ducklake_table SET end_snapshot = $1 WHERE ...
-UPDATE ducklake_column SET end_snapshot = $1 WHERE ...
+-- Register data file
+INSERT INTO ducklake_data_files (table_id, file_path, file_size_bytes, row_count, snapshot_id) VALUES (?, ?, ?, ?, ?)
+
+-- Register column statistics
+INSERT INTO ducklake_file_column_stats (file_id, column_id, min_value, max_value, null_count) VALUES (?, ?, ?, ?, ?)
+
+-- List data files for table
+SELECT file_id, file_path, file_size_bytes, row_count FROM ducklake_data_files WHERE table_id = ? AND snapshot_id <= ?
+
+-- Get column statistics
+SELECT min_value, max_value, null_count FROM ducklake_file_column_stats WHERE file_id = ? AND column_id = ?
 ```
 
-## Queries
+## Transaction Operations
 
 ```sql
-SELECT * FROM ducklake_table WHERE schema_id = $1
-SELECT * FROM ducklake_column WHERE table_id = $1
-SELECT * FROM ducklake_data_file WHERE table_id = $1
-SELECT max(snapshot_id) FROM ducklake_snapshot
-SELECT * FROM ducklake_file_column_stats WHERE table_id = $1 AND column_id = $2
-SELECT * FROM ducklake_metadata WHERE metadata_key = $1
+-- Begin transaction (allocate snapshot)
+BEGIN TRANSACTION
+
+-- Commit (finalize snapshot)
+COMMIT
+
+-- Rollback
+ROLLBACK
 ```
 
-## Not Supported
+## Session Operations
 
-JOINs, subqueries, CTEs, window functions, GROUP BY, UNION — all return `SQLSTATE 0A000`.
+```sql
+-- These are accepted for protocol compatibility but have limited effect
+SET search_path TO ...
+SET client_encoding TO ...
+SELECT version()
+```
+
+## Notes
+
+- The exact SQL format may vary slightly between DuckDB versions (column ordering, quoting, spacing)
+- SlateDuck's classifier handles these variations through pattern matching rather than exact string comparison
+- Statements not matching any known pattern are rejected with SQLSTATE 42601 (Syntax Error)

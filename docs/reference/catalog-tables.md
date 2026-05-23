@@ -1,41 +1,155 @@
-# Catalog Tables
+# Catalog Tables Reference
 
-All 28 DuckLake v1.0 catalog tables:
+This page lists all table types stored in the SlateDuck catalog, their fields, and their purposes. Each table type corresponds to a tag byte in the key encoding and a protobuf message type for its values.
 
-| Tag | Table | Type |
-|-----|-------|------|
-| `0x01` | `ducklake_catalog` | Singleton |
-| `0x02` | `ducklake_schema` | Versioned |
-| `0x03` | `ducklake_snapshot` | Append-only |
-| `0x04` | `ducklake_snapshot_changes` | Append-only |
-| `0x05` | `ducklake_table` | Versioned |
-| `0x06` | `ducklake_column` | Versioned |
-| `0x07` | `ducklake_data_file` | Versioned |
-| `0x08` | `ducklake_delete_file` | Versioned |
-| `0x09` | `ducklake_file_column_stats` | Versioned |
-| `0x0A` | `ducklake_table_stats` | Point-write |
-| `0x0B` | `ducklake_metadata` | Point-write |
-| `0x0C` | `ducklake_partition_key` | Versioned |
-| `0x0D` | `ducklake_partition` | Versioned |
-| `0x0E` | `ducklake_secret` | Point-write |
-| `0x0F` | `ducklake_table_function` | Versioned |
-| `0x10` | `ducklake_scalar_function` | Versioned |
-| `0x11` | `ducklake_macro` | Versioned |
-| `0x12` | `ducklake_index` | Versioned |
-| `0x13` | `ducklake_view` | Versioned |
-| `0x14` | `ducklake_table_sort_order` | Versioned |
-| `0x15` | `ducklake_table_column_mapping` | Versioned |
-| `0x16` | `ducklake_inlined_data_insert` | Versioned |
-| `0x17` | `ducklake_inlined_data_delete` | Versioned |
-| `0x18` | `ducklake_tag` | Point-write |
-| `0x19` | `ducklake_extension` | Versioned |
-| `0x1A` | `ducklake_transaction` | Append-only |
-| `0x1B` | `ducklake_type` | Versioned |
-| `0x1C` | `ducklake_comment` | Point-write |
+## DuckLake Protocol Tables
 
-## Types
+These tables implement the DuckLake catalog protocol. Their schema matches what DuckDB's `ducklake` extension expects.
 
-- **Singleton:** One row per catalog
-- **Versioned:** MVCC with begin/end snapshot
-- **Append-only:** Never modified after creation
-- **Point-write:** Simple KV, no versioning
+### ducklake_catalog (tag 0x01)
+
+The root catalog entry. One row per catalog.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| catalog_id | u64 | Unique catalog identifier |
+| catalog_name | string | Human-readable catalog name |
+| catalog_version | u64 | Schema version of this catalog |
+
+### ducklake_snapshot (tag 0x02)
+
+Records each catalog snapshot (atomic commit point).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| snapshot_id | u64 | Unique snapshot identifier |
+| timestamp | i64 | Unix timestamp (microseconds) when snapshot was created |
+| author | string | Who created the snapshot (process name or user) |
+| message | string | Optional human-readable commit message |
+
+### ducklake_schema (tag 0x04)
+
+Schema definitions. Versioned (has begin_snapshot, end_snapshot).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| schema_id | u64 | Unique schema identifier |
+| schema_name | string | Schema name (e.g., "public", "analytics") |
+| begin_snapshot | u64 | Snapshot that created this version |
+| end_snapshot | Option<u64> | Snapshot that superseded this version (None if current) |
+
+### ducklake_table (tag 0x05)
+
+Table definitions. Versioned.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| table_id | u64 | Unique table identifier |
+| schema_id | u64 | Schema this table belongs to |
+| table_name | string | Table name |
+| begin_snapshot | u64 | Snapshot that created this version |
+| end_snapshot | Option<u64> | Snapshot that superseded this version |
+
+### ducklake_column (tag 0x06)
+
+Column definitions. Versioned.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| column_id | u64 | Unique column identifier |
+| table_id | u64 | Table this column belongs to |
+| column_name | string | Column name |
+| data_type | string | DuckDB type name (e.g., "BIGINT", "VARCHAR") |
+| column_index | u32 | Position in the table (0-based) |
+| is_nullable | bool | Whether the column allows NULLs |
+| default_value | Option<string> | Default expression (if any) |
+| begin_snapshot | u64 | Snapshot that created this version |
+| end_snapshot | Option<u64> | Snapshot that superseded this version |
+
+### ducklake_data_file (tag 0x07)
+
+Registered data file metadata. Not versioned (belongs to a specific snapshot).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| file_id | u64 | Unique file identifier |
+| table_id | u64 | Table this file belongs to |
+| snapshot_id | u64 | Snapshot that registered this file |
+| file_path | string | Object storage path to the data file |
+| file_size_bytes | u64 | Size of the data file in bytes |
+| row_count | u64 | Number of rows in the file |
+| file_format | string | File format (typically "parquet") |
+
+### ducklake_delete_file (tag 0x08)
+
+Registered delete file metadata (for row-level deletes).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| file_id | u64 | Unique file identifier |
+| table_id | u64 | Table this file belongs to |
+| snapshot_id | u64 | Snapshot that registered this file |
+| file_path | string | Object storage path to the delete file |
+| data_file_id | u64 | The data file whose rows are being deleted |
+
+### ducklake_file_column_stats (tag 0x09)
+
+Per-column statistics for data files.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| file_id | u64 | Data file these stats describe |
+| column_id | u64 | Column these stats describe |
+| min_value | Option<bytes> | Minimum value (type-dependent encoding) |
+| max_value | Option<bytes> | Maximum value (type-dependent encoding) |
+| null_count | u64 | Number of NULL values |
+| has_null | bool | Whether any NULLs exist |
+
+### ducklake_view (tag 0x0B)
+
+View definitions. Versioned.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| view_id | u64 | Unique view identifier |
+| schema_id | u64 | Schema this view belongs to |
+| view_name | string | View name |
+| sql | string | View definition SQL |
+| begin_snapshot | u64 | Snapshot that created this version |
+| end_snapshot | Option<u64> | Snapshot that superseded this version |
+
+### ducklake_macro (tag 0x0C)
+
+Macro definitions. Versioned.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| macro_id | u64 | Unique macro identifier |
+| schema_id | u64 | Schema this macro belongs to |
+| macro_name | string | Macro name |
+| macro_definition | string | Macro SQL body |
+| begin_snapshot | u64 | Snapshot that created this version |
+| end_snapshot | Option<u64> | Snapshot that superseded this version |
+
+## System Tables
+
+### counter (tag 0xFE)
+
+ID allocation counters.
+
+| Key Suffix | Description |
+|------------|-------------|
+| `next_snapshot_id` | Next snapshot ID to allocate |
+| `next_catalog_id` | Next catalog/schema/table ID |
+| `next_file_id` | Next file ID to allocate |
+
+### system (tag 0xFF)
+
+System configuration and state.
+
+| Key Suffix | Description |
+|------------|-------------|
+| `catalog-format-version` | Format version (currently 1) |
+| `writer-epoch` | Current writer epoch |
+| `retain-from` | GC retention horizon |
+| `hot-key` | Cached frequently-read metadata |

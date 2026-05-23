@@ -1,19 +1,28 @@
 # Upgrades
 
-## Binary Upgrade
+This page covers upgrading SlateDuck to new versions, including version compatibility guarantees, the upgrade procedure, and rollback strategies.
 
-```bash
-systemctl stop slateduck
-cp slateduck-new /usr/local/bin/slateduck
-systemctl start slateduck
-```
+## Version Compatibility
 
-Newer binaries always read older catalog formats. No manual migration needed.
+SlateDuck follows semantic versioning. The catalog format version (stored as a system key) determines binary compatibility:
 
-## Catalog Format Version
+- **Same format version:** Any binary that supports that format version can read/write the catalog
+- **New format version:** Only binaries that know the new format can read it; old binaries refuse with `FormatVersionMismatch`
 
-Stored at `0xFF | catalog-format-version`. Newer binaries operate in compatibility mode on older formats and write new format for new keys.
+Currently there is only format version 1. Future versions will include migration tooling.
 
-## Rolling Upgrades (Kubernetes)
+## Upgrade Procedure
 
-Update image tag. Kubernetes `Recreate` strategy stops old pod, starts new. Upgrade window: 5-15 seconds.
+1. Take an NDJSON backup: `slateduck export --storage s3://bucket/catalog/ --output pre-upgrade.ndjson`
+2. Stop the SlateDuck process
+3. Replace the binary with the new version
+4. Start the new version: it will detect the existing catalog and resume
+5. Verify: `slateduck inspect --storage s3://bucket/catalog/`
+
+If the new version requires a format migration, it will either perform it automatically on startup or provide a separate migration command (documented in release notes).
+
+## Rollback
+
+If problems occur after upgrade:
+- If no format migration occurred: simply replace the binary with the old version
+- If a format migration occurred: restore from the NDJSON backup taken in step 1
