@@ -251,6 +251,16 @@ user-defined relational schema, a Datalog query interface, an event-sourced
 application store — without changing the storage engine. This is tracked as
 the v2.x "general fact store" roadmap item.
 
+**Schema isolation by design.** Each independent schema gets its own SlateDB
+`Db` instance at a dedicated object-store path. The 1-byte tag space, counter
+sub-IDs, and system keys are scoped to a single `Db`, so schemas never share
+a namespace. This is the design choice that makes extraction clean: the generic
+primitives in `slateduck-core` (key encoding, SDKV value header, counter
+allocation, retain-from, excision) are reusable without modification; the
+DuckLake-specific parts (28-table tag allocation, MVCC filter, `schema_version`
+logic) stay in `slateduck-catalog`. For the concrete extraction boundary, the
+three orthogonal version namespaces, and C ABI stability, see section 5.29.
+
 ---
 
 ## 2. Goals and Non-Goals
@@ -436,6 +446,17 @@ because there is exactly one writer; no concurrent-update races exist. The
 a version mismatch on open returns `SQLSTATE 0A000`. Excision audit records
 are appended under a dedicated `0xFF | "excised"` prefix so the audit trail
 accumulates across excision runs.
+
+The `0xFE` counter sub-ID space is partitioned to prevent future collision when
+additional schemas are built on the same substrate:
+
+```
+0xFE | 0x00 – 0x0F   DuckLake built-in counters (next_snapshot_id, catalog_id, file_id)
+0xFE | 0x10 – 0x7F   DuckLake extension counters (per-table IDs, future DuckLake domains)
+0xFE | 0x80 – 0xFF   Reserved for non-DuckLake schemas (see section 5.29)
+```
+
+New DuckLake counter allocations must use sub-IDs in `0x10–0x7F`.
 
 `0xFD` is reserved for DuckLake-generated inlined data/delete tables rather
 than a fixed spec table. Subtype `0x01` stores inlined insert rows keyed by
@@ -2371,6 +2392,80 @@ Classify corruption before attempting repair:
   object-store files are gone. `repair --dry-run` must refuse mutation in these
   cases and direct the operator to restore the latest good SlateDB checkpoint or
   rebuild a new catalog from Parquet metadata where possible.
+
+---
+
+### 5.29 Future-Proofing: Version Namespaces, Extraction Boundaries, and C ABI Stability
+
+Three topics must be locked in before or during Phase 1 to keep the long-term
+vision achievable without a breaking rewrite.
+
+#### Three orthogonal version namespaces
+
+Three distinct versioning mechanisms coexist; conflating them is a common
+source of bugs and upgrade pain:
+
+| Namespace | Location | Increment when | Mismatch behaviour |
+| --- | --- | --- | --- |
+| `catalog-format-version` | `0xFF` key, `u32`, written once at init | Tag byte assignments, key shapes, or system-key semantics change | Writer refuses to open old catalog; returns `SQLSTATE 0A000` |
+| `encoding-version` | First byte of every value | Any Protobuf change that would break a version-`0x01` decoder | Old reader returns decode error; new reader lazy-migrates on read |
+| DuckLake `schema_version` | Column in `ducklake_snapshot` rows | Any DDL operation (`CREATE TABLE`, `ALTER TABLE`, etc.) — section 5.4 | DuckDB discards its cached schema and re-fetches |
+
+These three namespaces are orthogonal. A data-only `INSERT` touches none of
+them. Adding a new Protobuf field increments only `encoding-version`. A DuckDB
+`ALTER TABLE` increments only `schema_version`. A tag-space reorganisation
+increments only `catalog-format-version`. Never use one as a proxy for another.
+
+#### Extraction boundary: `slateduck-core` vs `slateduck-catalog`
+
+When `slateduck-factstore` is carved out for v2.x the split follows the line
+between generic storage primitives and DuckLake-specific application logic:
+
+| Stays in `slateduck-catalog` (DuckLake-specific) | Moves to `slateduck-factstore` (reusable) |
+| --- | --- |
+| 28-table tag allocation (`tags.rs`) | Key encoding utilities (big-endian, prefix construction) |
+| DuckLake MVCC filter (`begin_snapshot ≤ id < end_snapshot`) | Value header encoding (SDKV magic + `encoding-version` + Protobuf dispatch) |
+| `schema_version` increment logic and `mark_schema_changed()` | Counter allocation (`0xFE` + transactional read-modify-write) |
+| Inlined-data (`0xFD`) encoding and lifecycle | `retain-from` key and TTL advancement |
+| DuckLake spec operations (`create_snapshot`, `list_tables`, etc.) | Excision primitives and audit log |
+| `dl_snapshot_id` type alias and MVCC semantics | Leadership/epoch keys (`0xFF | "writer-epoch"`, `"writer-endpoint"`) |
+| | `CatalogStore` skeleton with neutral `SnapshotId(u64)` newtype |
+
+`slateduck-core` already uses a neutral `SnapshotId(u64)` newtype in its
+public API. Keep DuckLake-specific naming (`dl_snapshot_id`, `catalog_version`)
+as variable-name conventions within `slateduck-catalog`; never bake them into
+the core library's type names.
+
+#### Schema isolation: one SlateDB `Db` per schema
+
+The 1-byte tag space, `0xFE` counter sub-IDs, and `0xFF` system keys are all
+scoped to a single SlateDB `Db` instance. Each independent schema or
+application must use its own `Db` at a dedicated object-store path. Do not
+store two independent schemas under the same `Db` path, even if they would
+use disjoint tag ranges — the WAL, manifest, and compaction are also shared,
+and tag-range isolation is not enforced at the storage layer.
+
+This is the choice that makes v2.x extraction clean: each schema is already
+a self-contained `Db`; `slateduck-factstore` is a packaging of the generic
+primitives, and a new schema implementation opens its own `Db` path.
+
+#### C ABI versioning for Strategy C (`slateduck-ffi`)
+
+A C ABI mismatch between the compiled Rust library and the C++ DuckDB
+extension produces a silent crash or data corruption rather than a clear error.
+Require before the first Strategy C release:
+
+- `slateduck-ffi` exports `uint32_t slateduck_abi_version()` returning a
+  compile-time constant encoded as `major * 1000 + minor` (e.g. `1003` for
+  v1.3).
+- The DuckDB extension calls `slateduck_abi_version()` at load time and
+  refuses to proceed if the result does not match its compiled-in minimum.
+- The ABI version increments on any change that alters function signatures,
+  removes exported functions, or changes opaque handle layouts. Adding new
+  functions with new names is backward-compatible and does not require an
+  increment.
+- Document the minimum compatible ABI version in `extension/CMakeLists.txt`
+  so the requirement is visible at build time, not only at runtime.
 
 ---
 

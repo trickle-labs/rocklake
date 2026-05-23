@@ -649,6 +649,7 @@ Expose `slateduck-catalog` through a stable C ABI:
 - C functions for each spec operation
 - Well-defined error codes mapped to DuckDB's expected return values
 - All Rust `async fn` bridged via a blocking Tokio runtime (Strategy C v1)
+- **ABI versioning:** export `uint32_t slateduck_abi_version()` returning a compile-time constant (`major * 1000 + minor`); the DuckDB extension checks this at load time and refuses to proceed on version mismatch — a mismatch otherwise produces a silent crash (see §5.29 for full requirements)
 
 ```c
 slateduck_catalog_t* slateduck_open(const char* uri, slateduck_error_t* err);
@@ -881,12 +882,23 @@ without changing the storage engine.
 
 ### Generalized Fact Model
 
-Lift the storage engine into a standalone crate:
-- Reusable key namespace allocator (tag bytes for arbitrary schemas, not only DuckLake's 28 tables)
-- Generic append-only fact API: `assert(entity, attribute, value, snapshot)`, `retract(entity, attribute, snapshot)`, `as_of(snapshot)`, `history(entity, attribute)`
-- Reusable counter, leadership, retain-from, and excision primitives carved out of `slateduck-core`
-- Reusable replay/audit log and checkpoint API
-- Reusable Protobuf-with-version-header value encoding
+Carve out `slateduck-factstore` as a standalone crate by following the extraction boundary defined in [slatedb-ducklake.md §5.29](slatedb-ducklake.md):
+
+| What moves into `slateduck-factstore` | What stays in `slateduck-catalog` |
+| --- | --- |
+| Key encoding utilities | 28-table tag allocation (`tags.rs`) |
+| SDKV value header + `encoding-version` + Protobuf dispatch | DuckLake MVCC filter logic |
+| Counter allocation (`0xFE` + transactional read-modify-write) | `schema_version` increment and `mark_schema_changed()` |
+| `retain-from` key and TTL advancement | Inlined-data (`0xFD`) encoding |
+| Excision primitives and audit log | DuckLake spec operations |
+| Leadership/epoch keys | `dl_snapshot_id` semantics |
+| `CatalogStore` skeleton with neutral `SnapshotId(u64)` | — |
+
+Each schema gets its own isolated SlateDB `Db` at a dedicated path; schemas
+never share a `Db`, WAL, or compaction process. `slateduck-factstore` exposes
+a generic fact API: `assert(entity, attribute, value, snapshot)`,
+`retract(entity, attribute, snapshot)`, `as_of(snapshot)`,
+`history(entity, attribute)`.
 
 ### Alternative Schemas on the Same Substrate
 
@@ -895,8 +907,8 @@ Demonstrate the substrate hosting workloads other than DuckLake:
 - **Event-sourced application store.** Append-only entity/attribute/value/transaction quads; current-state derivation via materialized views built from the fact log; native time travel.
 - **Datalog query interface.** A read-only Datalog engine over the fact log for exploratory and graph-style queries.
 
-Each schema lives in its own tag-prefix sandbox and shares the same counter,
-leadership, retain-from, and excision machinery.
+Each schema opens its own `Db` at a distinct path prefix and reuses the same
+counter, leadership, retain-from, and excision *code* from `slateduck-factstore`.
 
 ### Horizontal Read Scale-Out as a Product Feature
 
