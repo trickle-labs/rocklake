@@ -2699,11 +2699,13 @@ dependencies = [
 
 [[package]]
 name = "slateduck-catalog"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "object_store",
+ "proptest",
  "serde",
+ "serde_json",
  "slatedb",
  "slateduck-core",
  "tempfile",
@@ -2714,7 +2716,7 @@ dependencies = [
 
 [[package]]
 name = "slateduck-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "object_store",
@@ -2731,7 +2733,7 @@ dependencies = [
 
 [[package]]
 name = "slateduck-ffi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "slateduck-catalog",
  "slateduck-core",
@@ -2740,7 +2742,7 @@ dependencies = [
 
 [[package]]
 name = "slateduck-pgwire"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pgwire",
  "slateduck-catalog",
@@ -2753,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "slateduck-sql"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "slateduck-core",
  "sqlparser",
@@ -2764,7 +2766,7 @@ dependencies = [
 
 [[package]]
 name = "slateduck-sqlite-vfs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "slateduck-core",
  "thiserror 2.0.18",
