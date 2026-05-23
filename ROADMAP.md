@@ -20,7 +20,7 @@ DuckLake-compatible clients.
 | Release | Milestone | Status |
 |---------|-----------|--------|
 | **v0.1 — Foundation** | Validated infrastructure, data model, Rust workspace | ✅ Complete |
-| **v0.2 — Catalog Core** | All 28 DuckLake tables in SlateDB, full MVCC, Rust API | Planning |
+| **v0.2 — Catalog Core** | All 28 DuckLake tables in SlateDB, full MVCC, Rust API | ✅ Complete |
 | **v0.3 — PG-Wire Sidecar (Alpha)** | Strategy B sidecar serving DuckDB end-to-end | Planning |
 | **v0.4 — Production Hardening** | GC, backups, observability, encryption, repair tooling | Planning |
 | **v0.5 — Native Extension (Beta)** | Strategy C embedded DuckDB extension via FFI | Planning |
@@ -301,11 +301,11 @@ Using `proptest`:
 
 ### Deliverables
 
-- Documented Rust library storing and retrieving every row type defined by DuckLake v1.0 including `0xFD` dynamic inlined rows
-- Property test suite green
-- `tags.rs` complete and reviewed
-- `slateduck verify catalog` command working
-- Benchmark baseline recorded
+- [x] Documented Rust library storing and retrieving every row type defined by DuckLake v1.0 including `0xFD` dynamic inlined rows
+- [x] Property test suite green
+- [x] `tags.rs` complete and reviewed
+- [x] `slateduck verify catalog` command working
+- [x] Benchmark baseline recorded
 
 ---
 

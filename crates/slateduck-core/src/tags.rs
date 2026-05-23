@@ -109,7 +109,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "scope | scope_id | metadata_key",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_SNAPSHOT,
@@ -117,7 +117,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "snapshot_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_SNAPSHOT_CHANGES,
@@ -125,7 +125,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "snapshot_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_SCHEMA,
@@ -133,7 +133,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "schema_id",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::Required,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_TABLE,
@@ -141,7 +141,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "schema_id | table_id | begin_snapshot",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::Required,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_COLUMN,
@@ -149,7 +149,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | column_id | begin_snapshot",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::Required,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_VIEW,
@@ -157,7 +157,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "schema_id | view_id | begin_snapshot",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::Required,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_MACRO,
@@ -165,7 +165,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "schema_id | macro_id | begin_snapshot",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::Required,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_MACRO_IMPL,
@@ -173,7 +173,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "macro_id | impl_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_MACRO_PARAMETERS,
@@ -181,7 +181,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "macro_id | impl_id | column_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_DATA_FILE,
@@ -189,7 +189,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | data_file_id",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_DELETE_FILE,
@@ -197,7 +197,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "data_file_id | delete_file_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_FILES_SCHEDULED_FOR_DELETION,
@@ -205,7 +205,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "schedule_start | data_file_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_INLINED_DATA_TABLES,
@@ -213,7 +213,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | schema_version",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_COLUMN_MAPPING,
@@ -221,7 +221,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | mapping_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_NAME_MAPPING,
@@ -229,7 +229,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "mapping_id | column_id | source_name_hash",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_TABLE_STATS,
@@ -237,7 +237,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_TABLE_COLUMN_STATS,
@@ -245,7 +245,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | column_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_FILE_COLUMN_STATS,
@@ -253,7 +253,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | column_id | data_file_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_FILE_VARIANT_STATS,
@@ -261,7 +261,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | column_id | variant_path_hash | data_file_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_PARTITION_INFO,
@@ -269,7 +269,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | partition_id | begin_snapshot",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_PARTITION_COLUMN,
@@ -277,7 +277,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "partition_id | partition_key_index",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_FILE_PARTITION_VALUE,
@@ -285,7 +285,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | partition_key_index | data_file_id",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_SORT_INFO,
@@ -293,7 +293,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | sort_id | begin_snapshot",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_SORT_EXPRESSION,
@@ -301,7 +301,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "sort_id | sort_key_index",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_TAG,
@@ -309,7 +309,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "object_id | tag_key | begin_snapshot",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_COLUMN_TAG,
@@ -317,7 +317,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | column_id | tag_key | begin_snapshot",
         mvcc: MvccBehavior::Versioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
     TableDescriptor {
         tag: TAG_DUCKLAKE_SCHEMA_VERSIONS,
@@ -325,7 +325,7 @@ pub static ALL_TABLES: &[TableDescriptor] = &[
         key_shape: "table_id | begin_snapshot",
         mvcc: MvccBehavior::Unversioned,
         unique_guard: UniqueGuard::None,
-        status: TableStatus::Deferred(2),
+        status: TableStatus::Live,
     },
 ];
 
