@@ -37,7 +37,7 @@ command invoked outside the normal write path (compliance erasure, opt-in
 bounded retention). The default `slateduck gc` only advances query-visibility
 metadata (`retain-from`); it does not delete bytes. The full principle,
 including the distinction between catalog-data immutability and infrastructure-
-key management, is in [slatedb-ducklake.md §1.4](slatedb-ducklake.md) and is
+key management, is in [plans/blueprint.md §1.4](plans/blueprint.md) and is
 binding on every roadmap release below.
 
 ---
@@ -218,7 +218,7 @@ FF  SlateDuck system keys      writer epoch / endpoint / retain-from / catalog-f
 ```
 
 The `0xFE` counter keys and `0xFF` system keys are managed with simple
-transactional writes (see [slatedb-ducklake.md §1.4](slatedb-ducklake.md)).
+transactional writes (see [plans/blueprint.md §1.4](plans/blueprint.md)).
 Excision audit records are appended under a dedicated `0xFF | "excised"` prefix
 and accumulate without overwriting previous entries.
 
@@ -226,7 +226,7 @@ Produce `crates/slateduck-core/src/tags.rs` as the single source of truth listin
 
 Key-layout rules:
 - Big-endian integers throughout; `u8` table tag as first byte
-- **Catalog-data facts (the 28 DuckLake tables and `0xFD` inlined rows) are never physically deleted outside explicit excision** (see Vision and [slatedb-ducklake.md §1.4](slatedb-ducklake.md))
+- **Catalog-data facts (the 28 DuckLake tables and `0xFD` inlined rows) are never physically deleted outside explicit excision** (see Vision and [plans/blueprint.md §1.4](plans/blueprint.md))
 - Tables with `begin_snapshot`/`end_snapshot` and no SQL primary key include `begin_snapshot` in the SlateDB key so historical versions are distinct keys — each version is written once at creation and updated at most once when `end_snapshot` is set (that single terminal update is the only permitted in-place change for a version row)
 - `ducklake_file_column_stats` keyed by `(table_id, column_id, data_file_id)` for efficient per-column pruning scans
 - `ducklake_metadata` scoped key: `scope_enum | scope_id | length-prefixed UTF-8 key`
@@ -875,14 +875,14 @@ If DuckDB exposes an async catalog extension API (check in Phase 0):
 
 > Expose the immutable append-only substrate beyond DuckLake. SlateDuck's storage engine is schema-agnostic by design; this release line opens it up to non-DuckLake workloads.
 
-The architectural principle in [slatedb-ducklake.md §1.4](slatedb-ducklake.md)
+The architectural principle in [plans/blueprint.md §1.4](plans/blueprint.md)
 treats the storage engine as a generic fact log over object storage. DuckLake
 is the first schema. v2.x explores what else the same substrate can carry,
 without changing the storage engine.
 
 ### Generalized Fact Model
 
-Carve out `slateduck-factstore` as a standalone crate by following the extraction boundary defined in [slatedb-ducklake.md §5.29](slatedb-ducklake.md):
+Carve out `slateduck-factstore` as a standalone crate by following the extraction boundary defined in [plans/blueprint.md §5.29](plans/blueprint.md):
 
 | What moves into `slateduck-factstore` | What stays in `slateduck-catalog` |
 | --- | --- |
