@@ -610,6 +610,40 @@ SQL shapes, transaction behavior, parameter/result format codes, and generated
 inlined-table operations are captured in `tests/fixtures/wire-corpus/` and pass
 the same replay tests.
 
+**Onboarding non-DuckDB clients (post-Phase 4):** Strategy B's bounded
+dispatcher is designed to support additional DuckLake clients beyond DuckDB. The
+onboarding process for a new client:
+
+1. The client project captures its complete SQL corpus as a JSONL wire-corpus
+   file (one entry per distinct statement shape, with parameter types and
+   expected result columns).
+2. The corpus is contributed to `tests/fixtures/wire-corpus/{client}-{version}.jsonl`.
+3. Each statement in the corpus is classified as: (a) already in the dispatcher,
+   (b) a trivial extension of an existing pattern (e.g., adding `LIMIT $1` to
+   a SELECT shape), or (c) a new pattern requiring dispatcher work.
+4. Category (b) statements are added to the dispatcher with a feature flag
+   gated on the contributing client's corpus.
+5. Category (c) statements are evaluated case-by-case; the dispatcher will not
+   grow into a general SQL engine.
+6. The client's replay tests run in CI alongside DuckDB's.
+
+The first planned non-DuckDB client is **pg-tide-relay** (the streaming relay
+binary from the [pg-tide](https://github.com/trickle-labs/pg-tide) project).
+Its corpus is expected to contain ~20 statement shapes, all within or trivially
+near the existing bounded set. Known extensions it will require:
+
+- `ORDER BY ... ASC LIMIT 1` on `ducklake_snapshot` (for reading latest snapshot)
+- `SELECT max(snapshot_id) FROM ducklake_snapshot WHERE snapshot_id > $1`
+  (change detection poll)
+- Parameterized `LIMIT $1` on data-file SELECT (batch sizing)
+- `gen_random_uuid()` in INSERT VALUES (or acceptance that the client generates
+  UUIDs and supplies them as literal parameters — preferred approach)
+- `INSERT INTO ducklake_metadata ... VALUES (...)` and
+  `SELECT value FROM ducklake_metadata WHERE metadata_key = $1` (offset
+  tracking — both already in the DuckDB corpus)
+
+These additions are minimal and do not push the dispatcher toward general SQL.
+
 #### 4.4 Concurrency
 
 - One SlateDB writer per catalog → the sidecar serialises writes
@@ -729,9 +763,23 @@ production B-first path.
   [`datafusion-ducklake`](https://github.com/datafusion-contrib/datafusion-ducklake)
   via Rust trait impl — could be easier than the DuckDB integration
   since both are Rust.
-- **Streaming ingest.** Combine SlateDB's stream-processing positioning
-  with DuckLake's append-only nature to offer a "Kafka → DuckLake"
-  durable pipeline in one process.
+- **Streaming ingest via pg-tide-relay.** The
+  [pg-tide](https://github.com/trickle-labs/pg-tide) relay already has a
+  DuckLake sink (PostgreSQL-backed) that writes transactional outbox events to
+  DuckLake catalogs as Parquet files or inlined rows. A native `SlateDuckSink`
+  variant would connect directly to the PG-wire sidecar, giving users a
+  zero-infrastructure path from a PostgreSQL transaction to a queryable data
+  lake in S3. pg-tide's relay queries constitute a second client corpus
+  alongside DuckDB's and are documented in
+  [`plans/ecosystem/slateduck.md`](https://github.com/trickle-labs/pg-tide/blob/main/plans/ecosystem/slateduck.md).
+  The relay uses only INSERT/UPDATE/SELECT patterns already within or trivially
+  near the bounded set (no JOINs, CTEs, subqueries, or DDL). Supporting
+  pg-tide-relay is the first concrete non-DuckDB client target for Strategy B.
+- **Other DuckLake pipeline clients.** The wire-corpus approach and bounded-SQL
+  dispatcher generalize to any DuckLake-aware client that issues spec-compliant
+  queries. Once pg-tide-relay is validated, the same onboarding process (capture
+  corpus, add to `tests/fixtures/wire-corpus/`, run replay tests) applies to
+  DataFusion-DuckLake, Spark-DuckLake, or any future catalog client.
 
 ---
 
@@ -1859,6 +1907,50 @@ set and counter set is committed and both processes proceed without error.
 
 ---
 
+### 5.19a Application Metadata Key Namespaces in `ducklake_metadata`
+
+The `ducklake_metadata` scoped key/value table is the natural place for
+non-DuckDB DuckLake clients to persist pipeline-level state that must survive
+process restarts. The DuckLake spec reserves specific metadata keys (e.g.
+`version`, `data_path`, `data_inlining_row_limit`); SlateDuck should
+additionally define a namespace convention for application keys:
+
+**Convention:** Application keys use a dotted prefix:
+`{application}.{instance}.{key}`, stored with `scope = 'global'` and
+`scope_id = 0`. Examples:
+
+```
+pg_tide.orders-to-lake.offset        → "4782"
+pg_tide.orders-to-lake.last_commit   → "2026-05-23T14:02:11Z"
+pg_tide.enriched.partition_config    → "daily"
+```
+
+**Rules for application metadata:**
+
+1. Application keys MUST NOT collide with DuckLake spec-reserved keys.
+   Spec keys never contain a dot in the first position, so any key starting
+   with `{alphanumeric_app_name}.` is safe.
+2. SlateDuck MUST treat application keys identically to spec keys for
+   read/write/transaction semantics. No special-casing is needed in the
+   dispatcher — `INSERT INTO ducklake_metadata` and
+   `SELECT value FROM ducklake_metadata WHERE metadata_key = $1` already
+   cover this.
+3. Application keys are NOT visible to DuckDB's `ducklake_metadata()`
+   function unless DuckDB explicitly queries them. They do not pollute
+   DuckDB's catalog view.
+4. Multiple applications can coexist in the same catalog by using distinct
+   prefixes (`pg_tide.*`, `datafusion_pipeline.*`, etc.).
+5. Application keys participate in snapshot transactions: a write to
+   `pg_tide.pipeline.offset` inside a `BEGIN`/`COMMIT` block is atomic
+   with any other catalog mutations in the same transaction.
+
+This design allows streaming pipelines (like pg-tide-relay) to checkpoint their
+offset atomically alongside catalog writes, providing exactly-once semantics
+within the SlateDuck transaction boundary without requiring any SlateDuck-side
+awareness of the application's semantics.
+
+---
+
 ### 5.20 DuckLake Catalog Table Coverage Matrix
 
 The DuckLake v1.0 spec defines 28 catalog tables in the stable table overview
@@ -2852,6 +2944,21 @@ These questions do not block Phase 0-4 implementation:
   This would push Strategy B's SQL layer into the embedded case too.
 - Pricing/operational guidance: at what scale does the S3 PUT cost of
   SlateDB's WAL become significant compared to PG hosting cost?
+- Should parameterized `LIMIT $1` be part of the Phase 4 bounded set?
+  pg-tide-relay uses `ORDER BY snapshot_id DESC LIMIT 1` for reading
+  the latest snapshot. DuckDB may not use parameterized LIMIT today,
+  but it is a common pattern for non-DuckDB clients doing batch reads.
+  Adding it to the dispatcher is trivial (clamp to an integer, apply
+  after the scan) and prevents every new client from needing client-side
+  slicing.
+- Should the dispatcher support `ORDER BY col ASC/DESC` as a general
+  modifier on bounded SELECT shapes, or only on specific corpus-captured
+  statements? The former is more flexible for future clients; the latter
+  keeps the dispatcher more constrained.
+- What is the isolation level contract for `BEGIN` with no explicit
+  level? Non-DuckDB clients like pg-tide-relay expect snapshot isolation
+  (SlateDB's natural default) but should the sidecar accept
+  `BEGIN ISOLATION LEVEL SERIALIZABLE` as a no-op or reject it?
 
 ---
 
