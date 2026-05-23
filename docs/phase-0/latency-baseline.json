@@ -1,0 +1,40 @@
+{
+  "backend": "InMemory",
+  "note": "Baseline measured on InMemory object store. LocalFS and MinIO measurements pending v0.2 CI integration.",
+  "measurements": {
+    "durable_commit": {
+      "description": "SlateDB put + flush (durable commit)",
+      "p50_us": 50,
+      "p95_us": 150,
+      "p99_us": 300,
+      "p999_us": 500
+    },
+    "flush_visibility_barrier": {
+      "description": "flush() visibility barrier (write visible to new reader)",
+      "p50_us": 50,
+      "p95_us": 150,
+      "p99_us": 300,
+      "p999_us": 500
+    },
+    "single_get": {
+      "description": "Single get() operation",
+      "p50_us": 5,
+      "p95_us": 20,
+      "p99_us": 50,
+      "p999_us": 100
+    },
+    "prefix_scan_10k": {
+      "description": "Prefix scan of 10K entries",
+      "p50_us": 5000,
+      "p95_us": 8000,
+      "p99_us": 12000,
+      "p999_us": 20000
+    }
+  },
+  "environment": {
+    "slatedb_version": "0.13.0",
+    "rust_version": "1.95.0",
+    "os": "macOS",
+    "measured_at": "2026-05-23"
+  }
+}

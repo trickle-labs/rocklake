@@ -1,0 +1,25 @@
+[package]
+name = "slateduck-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Core data model, key layout, and encoding for SlateDuck"
+
+[dependencies]
+slatedb = { workspace = true }
+object_store = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+prost = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
