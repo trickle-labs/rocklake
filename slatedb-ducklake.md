@@ -775,6 +775,12 @@ production B-first path.
   The relay uses only INSERT/UPDATE/SELECT patterns already within or trivially
   near the bounded set (no JOINs, CTEs, subqueries, or DDL). Supporting
   pg-tide-relay is the first concrete non-DuckDB client target for Strategy B.
+  **pg-tide v0.34.0** extends this further by registering DuckLake (and
+  `SlateDuckSink`) as a valid *reverse pipeline sink* — meaning any external
+  source (Kafka, NATS, Redis, SQS, webhook) can write directly to a DuckLake
+  or SlateDuck catalog without routing through a PostgreSQL inbox, enabling the
+  Kafka → SlateDuck and NATS → SlateDuck patterns that require no persistent
+  database other than the SlateDB-backed catalog itself.
 - **Other DuckLake pipeline clients.** The wire-corpus approach and bounded-SQL
   dispatcher generalize to any DuckLake-aware client that issues spec-compliant
   queries. Once pg-tide-relay is validated, the same onboarding process (capture
