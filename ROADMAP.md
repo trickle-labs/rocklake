@@ -55,6 +55,10 @@ binding on every roadmap release below.
 | **v0.7 — Performance & Ecosystem** | Hot-key reads, secondary indexes, SlateDB tuning, multi-writer partitioning, DataFusion integration | **Done** |
 | **v0.8 — Documentation** | MkDocs Material site, GitHub Pages, full conceptual, operational, and reference coverage | **Done** |
 | **v0.9 — Production Readiness** | K8s deployment, writer routing and failover, performance tuning, cost analysis, migration and corpus tooling | **Done** |
+| **v0.9.1 — Write Protocol Correctness** | Atomic snapshot commits, stale-counter fix, `UPDATE end_snapshot` key resolution, writer protocol spec | Planning |
+| **v0.9.2 — Security Enforcement** | Real PG-Wire auth, CLI/env-var alignment, encryption wired into storage, FFI null safety | Planning |
+| **v0.9.3 — Operational Safety** | GC retention enforcement, excision guards, checkpoint restore, typed import validation, rebuild fix | Planning |
+| **v0.9.4 — Quality Gates & GA Readiness** | Concurrent reads, DataFusion scan, test coverage, CI gates, docs alignment, supply chain, release automation | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, GA sign-off | Planning |
 | **v1.x — Ecosystem Expansion** | Streaming ingest, additional DuckLake clients, zone-map index, async FFI v2, virtual catalog SQL, Lambda integration | Planning |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
@@ -1191,6 +1195,368 @@ slateduck corpus validate --corpus tests/fixtures/wire-corpus/duckdb-2.x.jsonl
 - [x] `slateduck migrate` subcommand tested with dry-run and apply modes on a v0.x catalog
 - [x] `slateduck corpus diff` and `slateduck corpus validate` subcommands shipping in the binary
 - [x] CI workflow for corpus PRs deployed and verified on a test corpus update
+
+---
+
+## v0.9.1 — Write Protocol Correctness
+
+> Close the critical MVCC correctness gaps identified in `plans/overall-assessment-1.md`: stale in-memory counters enabling ID reuse, non-atomic catalog mutations, and faulty `UPDATE end_snapshot` key resolution. These issues undermine every correctness property the project claims.
+
+### Counter State and Read-Latest Correctness (F-01)
+
+`CatalogStore::begin_write()` clones counters into a `CatalogWriter` and never synchronises them back on commit. `read_latest()` returns stale snapshot IDs from the same uncorrected cache. PG-Wire sessions that each create a writer via `execute_commit()` can reuse `snapshot_id`, `catalog_id`, and `file_id`.
+
+- [ ] Introduce `CatalogStore::commit_writer(writer)` that updates in-memory counters from the committed writer after every successful SlateDB transaction
+- [ ] Make `read_latest()` derive its snapshot ID from the authoritative counter, not a stale in-memory copy
+- [ ] Add regression tests for sequential `begin_write()` calls on one store: IDs must be monotonically increasing across sessions
+- [ ] Add regression tests for `read_latest()` after every commit: must return the just-committed snapshot ID
+- [ ] Add PG-Wire-level regression tests for `SELECT max(snapshot)` after multiple write sessions on one connection
+
+### Atomic Snapshot Publication (F-02)
+
+Each writer operation commits its own SlateDB transaction using the current `peek_snapshot_id()`. The snapshot row is committed separately by `create_snapshot()`. A failure between any mutation and the matching `create_snapshot()` leaves unpublished rows that a later snapshot can inadvertently publish.
+
+- [ ] Stage all catalog row writes in memory within a single logical writer transaction
+- [ ] Commit all row writes, counter updates, and the snapshot row in one atomic SlateDB transaction inside `create_snapshot()`
+- [ ] Remove or clearly mark as internal-only any public writer methods that commit individual rows without a snapshot
+- [ ] Add tests for simulated mid-write failures: verify no phantom rows appear in subsequent snapshots
+- [ ] Update the writer API documentation to describe the staging model explicitly
+
+### Fix `UPDATE end_snapshot` Key Resolution (F-04)
+
+`execute_commit()` calls `drop_table(0, entity_id, begin_snapshot)` with a hard-coded `schema_id = 0` and `drop_column(entity_id, entity_id, begin_snapshot)` using the same value for both table ID and column ID.
+
+- [ ] Resolve the owning `(schema_id, table_id, begin_snapshot)` tuple by reading the existing row before mutating it for table drops
+- [ ] Resolve the owning `(table_id, column_id, begin_snapshot)` tuple by reading the existing row before mutating it for column drops
+- [ ] Add end-to-end PG-Wire tests for `DROP TABLE` and `ALTER TABLE DROP COLUMN` that verify the correct row is marked with `end_snapshot`
+
+### Writer Protocol State-Machine Specification (F-30)
+
+Writer fencing prevents concurrent writers but does not guard against stale in-memory state or non-atomic staging.
+
+- [ ] Document the single writer protocol: acquire fencing epoch → load counters from SlateDB → stage mutations in memory → commit rows + snapshot + counters atomically → update in-memory state → emit observability event
+- [ ] Add a conformance test that verifies no variant of this protocol produces duplicate IDs or unpublished facts under simulated failures
+- [ ] Document the protocol in `docs/architecture/transaction-model.md`
+
+### Deliverables
+
+- [ ] `CatalogStore::begin_write()` and `read_latest()` always reflect post-commit state
+- [ ] `create_snapshot()` is the sole commit boundary; all mutations are committed atomically with the snapshot row
+- [ ] `UPDATE end_snapshot` for tables and columns uses correct key resolution
+- [ ] Sequential write sessions on one `CatalogStore` produce monotonically increasing IDs with no reuse
+- [ ] PG-Wire `SELECT max(snapshot)` is consistent with committed state after every transaction
+- [ ] Writer protocol state-machine documented in `docs/architecture/transaction-model.md`
+
+---
+
+## v0.9.2 — Security Enforcement
+
+> Turn every security feature that is configured but not enforced into a real enforcement boundary: authentication bypass, FFI memory safety, CLI/env-var misalignment, and encryption wiring.
+
+### Real PG-Wire Authentication (F-16 / F-03)
+
+`SlateDuckHandler` stores `AuthConfig` but unconditionally uses `NoopStartupHandler`. Any client can connect regardless of configured credentials.
+
+- [ ] Implement a `SlateDuckStartupHandler` that enforces cleartext password authentication when `AuthConfig.is_enabled()` is true
+- [ ] Use constant-time comparison for password verification to prevent timing-based credential inference
+- [ ] Deny connections that do not supply the configured username; return `SQLSTATE 28P01`
+- [ ] Add end-to-end tests: correct credentials → `AuthenticationOk`; wrong password → `ErrorResponse 28P01`; missing credentials when auth required → `ErrorResponse 28P01`
+- [ ] Verify `NoopStartupHandler` behaviour is only present when auth is explicitly disabled
+
+### Fix CLI/Docs/Env-Var Alignment (F-18 / F-12)
+
+Docs advertise `--auth-user` / `SLATEDUCK_AUTH_USER`, `--auth-password` / `SLATEDUCK_AUTH_PASSWORD`, `--tls-required`, and GCS/Azure catalog URLs. Code parses `--username` / `--password`, reads no env vars, has no `--tls-required`, and only resolves `s3://` and local paths.
+
+- [ ] Rename CLI flags to `--auth-user` and `--auth-password` to match all documentation
+- [ ] Read `SLATEDUCK_AUTH_USER` and `SLATEDUCK_AUTH_PASSWORD` environment variables as documented
+- [ ] Implement `--tls-required` that rejects plaintext connections when TLS is configured
+- [ ] Implement `gs://` and Azure catalog URL resolution, or mark GCS/Azure docs as planned and update binary help text to reflect actual support
+- [ ] Implement `--read-only`, `--s3-path-style`, `--s3-endpoint`, and `--metrics-bind` if documented, or remove from docs
+- [ ] Add a CI smoke test that validates every documented flag is accepted by the binary
+
+### Wire Encryption Into Storage (F-19)
+
+`EncryptionConfig` validates a hex key and `--encryption-key` is parsed by the CLI, but the key is discarded and `CatalogStore::open()` has no encryption option.
+
+- [ ] Wire `EncryptionConfig` into `CatalogStore::open()` using SlateDB's block-transformer encryption option
+- [ ] Add an integration test that writes encrypted and reads back the same data using the same key
+- [ ] Add a test that opening an encrypted catalog with the wrong key returns a clear error
+- [ ] Document the encryption model (catalog values encrypted; Parquet data encryption is a separate Parquet-native concern) in `docs/deployment/tls.md` and the CLI reference
+
+### FFI Null and Handle Safety (F-17 / F-08)
+
+Every FFI entrypoint dereferences caller-supplied pointers without null or ownership validation. Invalid C input can cause undefined behaviour.
+
+- [ ] Add null checks to every `#[no_mangle] pub extern "C"` function before any dereference
+- [ ] Add an opaque magic/version field to `SlateduckCatalog` and validate it on every read/write operation
+- [ ] Return structured error codes rather than undefined behaviour for double-close and invalid handles
+- [ ] Document the ownership contract for every returned pointer in `include/slateduck.h`
+- [ ] Add CI sanitizer job (`-Zsanitizer=address,leak`) for the FFI crate
+- [ ] Add tests for: null URI, null error pointer, null catalog handle, double-close, handle-after-close
+
+### Deliverables
+
+- [ ] PG-Wire authentication enforced when `AuthConfig.is_enabled()` is true; verified by end-to-end credential tests
+- [ ] CLI flags and env-var names match all documentation exactly
+- [ ] `--tls-required` implemented and tested
+- [ ] `--encryption-key` wired into `CatalogStore::open()` and covered by round-trip and wrong-key tests
+- [ ] Every FFI entrypoint null-checks inputs before dereference; sanitizer CI green
+- [ ] Undocumented or unimplemented features removed from binary help text or clearly labelled as planned with a target version
+
+---
+
+## v0.9.3 — Operational Safety
+
+> Make every operational command safe to invoke in production: enforce the GC visibility floor, require a valid retention floor before excision, redesign checkpoint restore to prevent snapshot ID reuse, validate import input strictly, and ensure `rebuild_catalog()` produces a coherent catalog.
+
+### Enforce Retain-From in Readers (F-05)
+
+`gc_apply()` advances `retain-from`, but `CatalogReader::read_at()` and PG-Wire snapshot reads never consult it. Snapshots below the floor remain readable despite being operationally hidden.
+
+- [ ] Read the current `retain-from` value at reader open time (or validate on every `read_at()` call)
+- [ ] Return `SQLSTATE 22023` (snapshot out of retention window) when a client requests a snapshot below `retain-from`
+- [ ] Add tests that verify `read_at(hidden_snapshot)` returns the retention error after `gc_apply()`
+- [ ] Update `docs/concepts/snapshots.md` to document the visibility floor semantics
+
+### Fix Excision Safety at `retain_from == 0` (F-06)
+
+`excise_plan()` sets `is_safe = retain_from >= before_snapshot || retain_from == 0`. The `retain_from == 0` branch permits physical deletion before retention has ever been set, inverting the safety logic.
+
+- [ ] Change the safety check to require `retain_from > 0 && retain_from >= before_snapshot`
+- [ ] Apply the same corrected condition to `excise_plan()` `is_safe` field
+- [ ] Add a test that `excise_apply()` fails when `retain_from == 0` regardless of `before_snapshot`
+- [ ] Document the required sequence in `docs/operations/garbage-collection.md`: advance `retain-from` first, then excise
+
+### Fix Checkpoint Restore Snapshot ID Reuse (F-07)
+
+`restore_checkpoint()` only resets `next_snapshot_id` to `checkpoint.snapshot_id + 1`. Facts written after the checkpoint remain in the catalog; new writes reuse post-checkpoint snapshot IDs, creating a split timeline.
+
+- [ ] Implement logical restore: write a new snapshot that marks all facts created after `checkpoint.snapshot_id` as ended, hiding post-checkpoint facts from new writes while preserving historical reads
+- [ ] Guarantee post-restore snapshot IDs are strictly greater than all pre-restore IDs (no reuse)
+- [ ] Add tests: write facts, checkpoint, write more facts, restore, write new facts — verify pre-checkpoint facts visible, between-checkpoint facts hidden, and post-restore facts visible without ID collisions
+- [ ] Document the logical restore model in `docs/operations/backup-restore.md`
+
+### Typed Import Validation (F-09)
+
+`import_catalog()` uses `unwrap_or(0)` / `unwrap_or("")` / `unwrap_or(true)` throughout; the hand-rolled base64 decoder silently maps every invalid byte to `0`.
+
+- [ ] Replace per-field `serde_json::Value` extraction with typed per-table structs and `serde` deserialization
+- [ ] Return a structured import error including line number and table name on any field parse failure
+- [ ] Replace the hand-rolled base64 decoder with the `base64` crate and fail explicitly on invalid input
+- [ ] Add import tests with deliberately malformed NDJSON: missing required field, wrong type, invalid base64 payload
+
+### Fix `rebuild_catalog()` Missing Table Row (F-10)
+
+`rebuild_catalog()` registers data files with `table_id = 1` but never writes a `TableRow` for table `1`, producing a catalog where data files cannot be reached through table queries.
+
+- [ ] Write schema and table rows for each inferred table before registering its data files
+- [ ] Set `next_catalog_id` and `next_file_id` from actual max IDs, not hard-coded `1` / `file_id`
+- [ ] Run `verify_catalog()` at the end of `rebuild_catalog()` and return an error if verification fails
+- [ ] Add a test that rebuild output is queryable through `CatalogReader`: list schemas → list tables → list data files → non-empty results
+
+### Fix Float NaN Comparison in Pruning (F-07 medium)
+
+`compare_floats()` uses `partial_cmp().unwrap_or(Ordering::Equal)`. NaN comparisons return `Equal`, making file pruning non-deterministic.
+
+- [ ] Replace `unwrap_or(Ordering::Equal)` with fail-closed behaviour: return `Ordering::Greater` (keep the file) or propagate a `TypeCompareError::NanComparison` variant
+- [ ] Add tests for NaN in predicate, min-value, and max-value positions
+
+### Fix `pg_migrate()` Unescaped SQL Output (F-08 medium)
+
+SQL strings in `row_to_pg_insert()` are built with `format!("... '{}' ...", value)` without SQL literal escaping.
+
+- [ ] Add a `sql_literal_escape(s: &str) -> String` helper that doubles single quotes
+- [ ] Apply it to every string field in `row_to_pg_insert()`
+- [ ] Add tests for names containing single quotes and backslashes
+
+### Snapshot Lifecycle State-Machine Specification (F-31)
+
+GC, excision, and checkpoint docs and code do not share a consistent model of when a snapshot is committed, retained, hidden, excised, or restored.
+
+- [ ] Write a formal snapshot lifecycle spec in `docs/architecture/transaction-model.md` defining each state and the valid transitions
+- [ ] Verify every operational command (`gc plan/apply`, `excise plan/apply`, `checkpoint create/restore`, `repair`) respects the spec
+- [ ] Update operational docs to reference the spec
+
+### Deliverables
+
+- [ ] `read_at(snapshot)` returns `SQLSTATE 22023` for snapshots below `retain-from`
+- [ ] `excise_apply()` rejects invocation when `retain_from == 0` or `retain_from < before_snapshot`
+- [ ] Checkpoint restore does not reuse snapshot IDs; post-checkpoint facts are hidden, not deleted
+- [ ] `import_catalog()` returns a typed error with line number and table name for any malformed row; base64 errors return a decode error
+- [ ] `rebuild_catalog()` produces a catalog that passes `verify_catalog()` and returns non-empty tables and files via `CatalogReader`
+- [ ] NaN pruning comparisons fail closed (keep file) instead of returning `Equal`
+- [ ] `pg_migrate()` output correctly escapes single quotes in all string fields
+- [ ] Snapshot lifecycle state-machine documented in `docs/architecture/transaction-model.md`
+
+---
+
+## v0.9.4 — Quality Gates & GA Readiness
+
+> Bring the project to a state where the v1.0 GA claim is defensible: fix performance and scalability issues, expand test coverage to cover the highest-risk scenarios, add CI quality gates, resolve all doc/code divergence, clean up placeholder integrations, and define measurable v1.0 acceptance criteria.
+
+### Unlock PG-Wire Concurrent Reads (F-11 scalability)
+
+PG-Wire holds `Arc<Mutex<CatalogStore>>` across async SlateDB reads, serialising every concurrent session.
+
+- [ ] Restructure read paths to clone the `Db` handle or a `CatalogReader` snapshot while holding the mutex, then drop the lock before any async I/O
+- [ ] Verify that write paths still hold the lock for the minimum required window (counter allocation + commit only)
+- [ ] Add a concurrency test: N concurrent read-only sessions must not block each other
+- [ ] Benchmark median read latency before and after; confirm improvement for ≥ 4 concurrent sessions
+
+### Fix `describe_table()` O(n) Table Scan (F-13 performance)
+
+`describe_table(table_id)` scans all `TAG_TABLE` rows because the key layout encodes `(schema_id, table_id, begin_snapshot)` but the caller only has `table_id`.
+
+- [ ] Add `schema_id` as a required parameter to `describe_table`, or add a secondary `TAG_TABLE_BY_ID` index keyed by `table_id` alone
+- [ ] Verify PG-Wire and DataFusion callers can supply schema ID or resolve it from a single point-lookup
+- [ ] Add a microbenchmark for `describe_table` at 100, 1 000, and 10 000 historical table versions
+
+### Fix DataFusion Sync/Async Bridge (F-14)
+
+`schema_names()` and `table_names()` spawn threads and `block_on()` async operations; if no Tokio runtime is present they silently return empty lists.
+
+- [ ] Replace `try_current()` + `thread::spawn` + `block_on` with a stored `tokio::runtime::Handle` or `Arc<Runtime>` inside the provider
+- [ ] Return an explicit error or log a warning rather than an empty list when the runtime is unavailable
+- [ ] Add a test verifying both methods return correct results when called from outside an async context
+
+### DataFusion Scan — Explicit Unsupported Error or Real Implementation (F-15 / F-32)
+
+`TableProvider::scan()` returns `EmptyExec`, silently producing zero rows for all queries.
+
+- [ ] Replace `EmptyExec` with either a Parquet-reading implementation or an explicit `Err(DataFusionError::NotImplemented(...))`
+- [ ] Add a test verifying the scan result is either real data or a clear error, not silently empty
+- [ ] Document in `docs/integration/datafusion.md` exactly what the integration provides today and the target version for full scan support
+
+### Writer Session and MVCC Regression Tests (F-20)
+
+The existing test suite uses single-writer patterns and only checks non-empty result shapes after failover.
+
+- [ ] Add test: two sequential `begin_write()` sessions on one `CatalogStore` produce monotonically increasing, non-overlapping snapshot IDs
+- [ ] Add test: `read_latest()` after commit returns the committed snapshot ID, not a prior one
+- [ ] Add test: aborted write session (dropped without `create_snapshot()`) must not expose its mutations in subsequent snapshots
+- [ ] Add property-based test: any sequence of begin/mutate/commit produces strictly increasing snapshot IDs
+
+### Security Protocol Tests (F-21)
+
+Auth and TLS tests only verify `is_enabled()` on config structs; no real protocol round-trip test exists.
+
+- [ ] Add end-to-end test: connect with valid credentials → `AuthenticationOk`
+- [ ] Add end-to-end test: connect with wrong password → `ErrorResponse 28P01`
+- [ ] Add end-to-end test: connect with no credentials when auth required → rejection
+- [ ] Add test: TLS handshake success with a self-signed certificate
+- [ ] Add test: `--tls-required` rejects a plaintext connection
+
+### FFI and DataFusion Coverage (F-22)
+
+FFI has four basic happy-path tests; DataFusion has five.
+
+- [ ] FFI: add tests for null URI, null error pointer, null catalog handle, double-close, and handle-after-close
+- [ ] FFI: add a test verifying all free functions do not crash on null input
+- [ ] DataFusion: add test for `schema_names()`/`table_names()` called without a Tokio runtime
+- [ ] DataFusion: add test for concurrent calls to `schema_names()` from multiple threads
+- [ ] DataFusion: add test verifying the scan path returns the expected error or data, not silently empty
+
+### Remove or Gate `slateduck-sqlite-vfs` Placeholder (F-23 / F-10)
+
+The crate has no implementation, no tests, and is a workspace member implying parity it does not have.
+
+- [ ] Remove `slateduck-sqlite-vfs` from the workspace `members` list, or add a `[features]` gate `experimental = []` and document it as a future direction
+- [ ] Update README and docs to note that Strategy C (native SQLite VFS) is a future milestone, not a current feature
+
+### Structured Parameter Validation in PG-Wire (F-24)
+
+Missing or unparsable parameters default to `0`, `u64::MAX`, or empty strings across executor read and write paths.
+
+- [ ] Define `require_param_u64`, `require_param_i64`, and `require_param_string` helpers that return a structured SQLSTATE error rather than a default
+- [ ] Apply them to every `params.get_u64(idx).unwrap_or(0)` and equivalent call in the executor
+- [ ] Add tests that deliberately omit required parameters and verify the returned SQLSTATE code
+
+### Tracing and Metrics on Critical Paths (F-25)
+
+Core write, read, GC, excision, repair, and FFI paths lack tracing spans and metrics counters.
+
+- [ ] Add `#[tracing::instrument]` to `CatalogWriter::create_snapshot()`, `execute_commit()`, `gc_apply()`, `excise_apply()`, and `repair_apply()`
+- [ ] Emit counter metrics for snapshot commits, transaction conflicts, auth failures, FFI errors, and excision events
+- [ ] Emit histogram metrics for commit latency, read latency, and scan row counts
+- [ ] Integrate with the existing `metrics.rs` module and document metric names in `docs/operations/logging.md`
+
+### Docs/CLI Conformance Gates (F-26 / F-12)
+
+Documentation is ahead of implementation in TLS, auth, CLI flags, env vars, and cloud backends.
+
+- [ ] Add a CI smoke test that runs `slateduck --help` and validates every documented flag is present in the output
+- [ ] Audit `docs/deployment/tls.md`, `docs/operations/cli-reference.md`, and `docs/reference/environment-vars.md` against the actual binary; mark any planned-but-unimplemented features with an "Available from: v0.9.x" callout
+- [ ] Verify `--tls-required`, GCS URL support, Azure URL support, and all documented env vars exist in the binary before any GA claim
+
+### Roadmap Status Accuracy (F-27)
+
+Roadmap phases v0.4 through v0.9 are marked Done but contain features that are scaffolded rather than fully implemented and tested.
+
+- [ ] Add per-phase acceptance criteria specifying the tests, docs pages, and CI gates that must be green for a phase to be marked Done
+- [ ] Audit phases v0.4 through v0.9 against those criteria; downgrade phases where criteria are not met
+- [ ] Record findings from `plans/overall-assessment-1.md` as closed items in the relevant roadmap phases when resolved
+
+### Supply Chain and MSRV Gates (F-28 / F-29)
+
+No `cargo audit`, `cargo deny`, or MSRV check exists in CI; workspace-level feature flags pull broad dependencies into all crates.
+
+- [ ] Add `deny.toml` with advisories, bans, licenses, and sources policies
+- [ ] Add `cargo deny check` and `cargo audit` to the CI `check` job
+- [ ] Declare `rust-version` in workspace `[package]` metadata and add an MSRV CI job pinned to that version
+- [ ] Audit `tokio = { features = ["full"] }` and `object_store = { features = ["aws", "gcp", "azure"] }` and scope features by crate where not all are needed
+
+### Error Type Preservation (F-09 / F-11)
+
+SlateDB errors and lower-level errors are collapsed into strings via `.map_err(|e| CatalogError::SlateDb(e.to_string()))`, making programmatic error classification impossible.
+
+- [ ] Preserve source errors using `#[source]` or structured variants for at least: transaction conflict, object-store permission denied, decode failure, and writer fenced
+- [ ] Add error context (operation, table name, key) when mapping errors at catalog module boundaries
+- [ ] Update SQLSTATE mappings in `error.rs` to use the new structured variants
+
+### CI Quality Gates (F-33)
+
+CI currently runs fmt, clippy, tests, compatibility replay, and strict docs. No coverage, security audit, sanitizer, MSRV, or benchmark regression gate exists.
+
+- [ ] Add a `coverage` CI job using `cargo llvm-cov --all-features` targeting ≥ 80% line coverage for `slateduck-catalog` and `slateduck-core`
+- [ ] Add a `security` CI job running `cargo deny check` and `cargo audit`
+- [ ] Add an `msrv` CI job using the declared `rust-version`
+- [ ] Add a `sanitizer` CI job for the FFI crate using `-Zsanitizer=address,leak` on nightly
+- [ ] Add a `bench-regression` CI job that runs criterion benchmarks on PRs touching catalog read/write paths and fails if p99 degrades more than 20% vs. `benchmarks/phase-2-baseline.json`
+
+### Release Automation (F-34)
+
+No release workflow for signed artifacts, checksums, crates publishing, or binary publishing exists.
+
+- [ ] Add a `release.yml` GitHub Actions workflow triggered on `v*` tags
+- [ ] Workflow must: run full quality gates, build binaries for Linux x86-64/arm64 and macOS arm64, generate checksums, create a GitHub Release with attached binaries and checksums, and update `CHANGELOG.md`
+- [ ] Add a release sign-off checklist to `CONTRIBUTING.md` referencing v1.0 GA acceptance criteria
+
+### v1.0 Acceptance Criteria Definition
+
+Convert roadmap Done status from self-reported to criteria-driven:
+
+- [ ] Define measurable acceptance criteria for v1.0: specific test names that must pass, benchmark thresholds, supported deployment matrix, security checks, and operational drill results
+- [ ] Add acceptance criteria to `docs/contributing/release-process.md`
+- [ ] No v1.0 release tag until every acceptance criterion is documented, automated, and green
+
+### Deliverables
+
+- [ ] Concurrent PG-Wire read sessions do not block each other; confirmed by concurrency test and benchmark
+- [ ] `describe_table()` is O(1) or O(log n) for any catalog size
+- [ ] DataFusion `schema_names()`/`table_names()` do not spawn threads; return an explicit error or correct results outside a runtime
+- [ ] DataFusion `scan()` returns a clear unsupported error or real data, not `EmptyExec`
+- [ ] Writer session regression tests pass for ID monotonicity, `read_latest()` consistency, and aborted session isolation
+- [ ] Security protocol tests pass: valid/invalid auth, TLS handshake, tls-required plaintext rejection
+- [ ] FFI null/invalid-handle tests pass under address and leak sanitizers
+- [ ] `slateduck-sqlite-vfs` removed from workspace or clearly gated as experimental with docs updated
+- [ ] All documented PG-Wire parameters return structured errors rather than silent defaults
+- [ ] Tracing spans and counters emitted on all critical paths; metric names documented
+- [ ] Every documented CLI flag present in the binary help text; CI smoke test enforces this
+- [ ] `cargo deny` and `cargo audit` green in CI
+- [ ] MSRV declared and tested in CI
+- [ ] Coverage ≥ 80% for `slateduck-catalog` and `slateduck-core`
+- [ ] Release automation workflow present and documented
+- [ ] v1.0 acceptance criteria documented and automated
 
 ---
 
