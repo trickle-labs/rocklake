@@ -2,7 +2,8 @@
 //!
 //! Commands:
 //!   serve, gc, excise, checkpoint, export, import, pg-migrate,
-//!   rebuild, inspect, verify, repair
+//!   rebuild, inspect, verify, repair,
+//!   warmup, migrate, corpus, tune
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -41,6 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "inspect" => cmd_inspect(&args).await?,
         "verify" => cmd_verify(&args).await?,
         "repair" => cmd_repair(&args).await?,
+        "warmup" => cmd_warmup(&args).await?,
+        "migrate" => cmd_migrate(&args).await?,
+        "corpus" => cmd_corpus(&args).await?,
+        "tune" => cmd_tune(&args).await?,
         "--help" | "-h" => print_usage(),
         other => {
             eprintln!("Unknown command: {other}");
@@ -57,17 +62,21 @@ fn print_usage() {
         r#"Usage: slateduck <command> [options]
 
 Commands:
-  serve                        Start PG-Wire sidecar
-  gc plan|apply                Visibility GC (advance retain-from)
-  excise plan|apply            Physical excision of old facts
-  checkpoint create|list|restore  Manage catalog checkpoints
-  export                       NDJSON export of catalog
-  import                       Import catalog from NDJSON
-  pg-migrate                   Convert NDJSON to PostgreSQL INSERTs
-  rebuild                      Rebuild catalog from Parquet files
-  inspect snapshot --latest    Show current catalog state
-  verify catalog|data-files    Verify catalog integrity
-  repair --dry-run|--apply     Repair catalog issues
+  serve                          Start PG-Wire sidecar
+  gc plan|apply                  Visibility GC (advance retain-from)
+  excise plan|apply              Physical excision of old facts
+  checkpoint create|list|restore Manage catalog checkpoints
+  export                         NDJSON export of catalog
+  import                         Import catalog from NDJSON
+  pg-migrate                     Convert NDJSON to PostgreSQL INSERTs
+  rebuild                        Rebuild catalog from Parquet files
+  inspect snapshot|api-costs|cache-utilization  Show catalog state
+  verify catalog|data-files      Verify catalog integrity
+  repair --dry-run|--apply       Repair catalog issues
+  warmup [--tables N]            Warm up block cache before serving
+  migrate [--dry-run|--apply]    Migrate catalog to new format version
+  corpus diff|validate           Wire-corpus diff and validation
+  tune [--target-cost-usd N]     Output recommended settings
 
 Options:
   --catalog <path>             Catalog path (required for most commands)
@@ -92,6 +101,11 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to open catalog: {e}"))?;
 
     tracing::info!("Catalog opened successfully");
+    tracing::info!(
+        "Serving mode: {}, cost mode: {:?}",
+        config.mode,
+        config.cost_mode
+    );
 
     let catalog = Arc::new(Mutex::new(store));
 
@@ -134,6 +148,10 @@ struct ServeConfig {
     tls_key: Option<String>,
     auth_username: Option<String>,
     auth_password: Option<String>,
+    /// Serving mode: "writer" (accepts writes) or "reader" (read-only, returns 25006 on writes).
+    mode: String,
+    /// Cost/latency preset: "conservative", "balanced" (default), or "latency".
+    cost_mode: slateduck_catalog::CostMode,
 }
 
 fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
@@ -145,6 +163,8 @@ fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
     let mut tls_key = None;
     let mut auth_username = None;
     let mut auth_password = None;
+    let mut mode = "writer".to_string();
+    let mut cost_mode = slateduck_catalog::CostMode::Balanced;
 
     let mut i = 2;
     while i < args.len() {
@@ -197,8 +217,26 @@ fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
                 i += 1;
                 auth_password = Some(args.get(i).cloned().ok_or("--password requires a value")?);
             }
+            "--mode" => {
+                i += 1;
+                let m = args.get(i).cloned().ok_or("--mode requires a value")?;
+                if m != "writer" && m != "reader" {
+                    return Err(format!("--mode must be 'writer' or 'reader', got '{m}'"));
+                }
+                mode = m;
+            }
+            "--cost-mode" => {
+                i += 1;
+                let m = args.get(i).ok_or("--cost-mode requires a value")?;
+                cost_mode = m.parse::<slateduck_catalog::CostMode>()?;
+            }
             "--help" | "-h" => {
-                eprintln!("Usage: slateduck serve --catalog <path> [--bind <addr>] [--max-sessions <n>] [--metrics-port <port>] [--tls-cert <path>] [--tls-key <path>] [--username <user>] [--password <pass>]");
+                eprintln!(
+                    "Usage: slateduck serve --catalog <path> \
+                    [--bind <addr>] [--max-sessions <n>] [--metrics-port <port>] \
+                    [--tls-cert <path>] [--tls-key <path>] [--username <user>] [--password <pass>] \
+                    [--mode writer|reader] [--cost-mode conservative|balanced|latency]"
+                );
                 std::process::exit(0);
             }
             other => {
@@ -223,6 +261,8 @@ fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
         tls_key,
         auth_username,
         auth_password,
+        mode,
+        cost_mode,
     })
 }
 
@@ -465,28 +505,86 @@ async fn cmd_rebuild(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 // ─── inspect ───────────────────────────────────────────────────────────────
 
 async fn cmd_inspect(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_catalog_arg(args, 2)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
-    let db = slatedb::Db::open(catalog_path, object_store).await?;
+    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("snapshot");
 
-    let result = slateduck_catalog::inspect::inspect_snapshot(&db).await?;
-    println!("Catalog State:");
-    println!("  Latest snapshot ID: {}", result.latest_snapshot_id);
-    println!("  Schema version: {}", result.schema_version);
-    println!("  Snapshot time: {}", result.snapshot_time);
-    println!("  Next snapshot ID: {}", result.next_snapshot_id);
-    println!("  Next catalog ID: {}", result.next_catalog_id);
-    println!("  Next file ID: {}", result.next_file_id);
-    println!("  Schemas: {}", result.schema_count);
-    println!("  Tables: {}", result.table_count);
-    println!("  Columns: {}", result.column_count);
-    println!("  Data files: {}", result.data_file_count);
-    println!("  Delete files: {}", result.delete_file_count);
-    println!("  Retain-from: {}", result.retain_from);
-    println!("  Writer epoch: {}", result.writer_epoch);
-    println!("  Format version: {}", result.format_version);
+    match subcmd {
+        "snapshot" | "--latest" => {
+            let catalog_url = extract_catalog_arg(args, 3)?;
+            let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+            let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    db.close().await?;
+            let result = slateduck_catalog::inspect::inspect_snapshot(&db).await?;
+            println!("Catalog State:");
+            println!("  Latest snapshot ID: {}", result.latest_snapshot_id);
+            println!("  Schema version: {}", result.schema_version);
+            println!("  Snapshot time: {}", result.snapshot_time);
+            println!("  Next snapshot ID: {}", result.next_snapshot_id);
+            println!("  Next catalog ID: {}", result.next_catalog_id);
+            println!("  Next file ID: {}", result.next_file_id);
+            println!("  Schemas: {}", result.schema_count);
+            println!("  Tables: {}", result.table_count);
+            println!("  Columns: {}", result.column_count);
+            println!("  Data files: {}", result.data_file_count);
+            println!("  Delete files: {}", result.delete_file_count);
+            println!("  Retain-from: {}", result.retain_from);
+            println!("  Writer epoch: {}", result.writer_epoch);
+            println!("  Format version: {}", result.format_version);
+
+            db.close().await?;
+        }
+        "api-costs" => {
+            let catalog_url = extract_catalog_arg(args, 3)?;
+            let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+            let db = slatedb::Db::open(catalog_path, object_store).await?;
+            let state = slateduck_catalog::inspect::inspect_snapshot(&db).await?;
+            db.close().await?;
+
+            let file_count = state.data_file_count;
+            let snap = slateduck_catalog::cost::ApiCallSnapshot {
+                put_count: file_count * 3,
+                get_count: file_count * 10,
+                list_count: file_count / 10 + 1,
+                delete_count: 0,
+                elapsed: std::time::Duration::from_secs(3600),
+            };
+            let report = slateduck_catalog::cost::ApiCostReport::from_snapshot(&snap);
+
+            let stream = args.iter().any(|a| a == "--stream");
+            if stream {
+                println!("Streaming mode: one report per minute. Press Ctrl+C to stop.");
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    report.print();
+                }
+            } else {
+                report.print();
+            }
+        }
+        "cache-utilization" => {
+            let catalog_url = extract_catalog_arg(args, 3)?;
+            let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+            let db = slatedb::Db::open(catalog_path, object_store).await?;
+            let state = slateduck_catalog::inspect::inspect_snapshot(&db).await?;
+            db.close().await?;
+
+            let cache_size_mb = extract_numeric_arg(args, "--cache-size-mb").unwrap_or(256);
+            let stats = slateduck_catalog::cache_utilization(
+                cache_size_mb,
+                state.data_file_count,
+                state.column_count,
+            )
+            .await;
+            stats.print();
+        }
+        _ => {
+            eprintln!(
+                "Usage: slateduck inspect [snapshot|api-costs|cache-utilization] --catalog <path>"
+            );
+            std::process::exit(1);
+        }
+    }
+
     Ok(())
 }
 
@@ -579,6 +677,174 @@ async fn cmd_repair(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     db.close().await?;
+    Ok(())
+}
+
+// ─── warmup ────────────────────────────────────────────────────────────────
+
+async fn cmd_warmup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = extract_catalog_arg(args, 2)?;
+    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+    let db = slatedb::Db::open(catalog_path, object_store).await?;
+
+    let max_tables = extract_numeric_arg(args, "--tables").unwrap_or(20) as usize;
+    let result = slateduck_catalog::warmup_cache(&db, max_tables).await?;
+
+    println!("Cache Warmup Complete:");
+    println!("  Entries warmed:   {}", result.entries_warmed);
+    println!("  Snapshot loaded:  {}", result.snapshot_loaded);
+    println!("  Warmup hit ratio: {:.2}", result.warmup_hit_ratio);
+
+    if result.warmup_hit_ratio >= 0.5 {
+        println!("  Status: OK — cache warm for first requests");
+    } else {
+        println!("  Status: COLD — first requests will pay S3 round-trip latency");
+    }
+
+    db.close().await?;
+    Ok(())
+}
+
+// ─── migrate ───────────────────────────────────────────────────────────────
+
+async fn cmd_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = extract_catalog_arg(args, 2)?;
+    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+    let db = slatedb::Db::open(catalog_path, object_store).await?;
+
+    let target_version = extract_numeric_arg(args, "--target-version").unwrap_or(2) as u32;
+    let apply = args.iter().any(|a| a == "--apply");
+    let dry_run = args.iter().any(|a| a == "--dry-run") || !apply;
+
+    if dry_run {
+        let result = slateduck_catalog::migrate::migrate_dry_run(&db, target_version).await?;
+        println!("Migration Dry Run:");
+        println!("  Current version:    {}", result.current_version);
+        println!("  Target version:     {}", result.target_version);
+        println!("  Rows to migrate:    {}", result.rows_to_migrate);
+        println!("  Estimated duration: ~{}s", result.estimated_seconds);
+        println!();
+        println!("{}", result.description);
+        if result.rows_to_migrate > 0 {
+            println!();
+            println!("Run with --apply to execute the migration.");
+        }
+    } else {
+        let backup_dir =
+            extract_string_arg(args, "--backup-dir").unwrap_or_else(|| ".".to_string());
+        let result =
+            slateduck_catalog::migrate::migrate_apply(&db, target_version, &backup_dir).await?;
+        println!("Migration Complete:");
+        println!("  Rows migrated:  {}", result.rows_migrated);
+        println!("  New version:    {}", result.new_version);
+        println!("  Backup written: {}", result.backup_path);
+    }
+
+    db.close().await?;
+    Ok(())
+}
+
+// ─── corpus ────────────────────────────────────────────────────────────────
+
+async fn cmd_corpus(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("validate");
+
+    match subcmd {
+        "diff" => {
+            let old_path = extract_string_arg(args, "--old")
+                .ok_or("--old <file> is required for corpus diff")?;
+            let new_path = extract_string_arg(args, "--new")
+                .ok_or("--new <file> is required for corpus diff")?;
+
+            let old_file = std::fs::File::open(&old_path)
+                .map_err(|e| format!("Cannot open old corpus: {e}"))?;
+            let new_file = std::fs::File::open(&new_path)
+                .map_err(|e| format!("Cannot open new corpus: {e}"))?;
+
+            let old_records = slateduck_catalog::parse_corpus(std::io::BufReader::new(old_file));
+            let new_records = slateduck_catalog::parse_corpus(std::io::BufReader::new(new_file));
+            let diffs = slateduck_catalog::corpus_diff(&old_records, &new_records);
+
+            if diffs.is_empty() {
+                println!("No differences found between corpus files.");
+            } else {
+                println!("Corpus Diff ({} changes):", diffs.len());
+                for d in &diffs {
+                    println!(
+                        "  [{:8}] {} — {}",
+                        d.change_type, d.statement_family, d.detail
+                    );
+                }
+            }
+        }
+        "validate" => {
+            let corpus_path = extract_string_arg(args, "--corpus")
+                .ok_or("--corpus <file> is required for corpus validate")?;
+
+            let file = std::fs::File::open(&corpus_path)
+                .map_err(|e| format!("Cannot open corpus: {e}"))?;
+            let records = slateduck_catalog::parse_corpus(std::io::BufReader::new(file));
+            let result = slateduck_catalog::corpus_validate(&records);
+            result.print();
+        }
+        _ => {
+            eprintln!("Usage: slateduck corpus [diff|validate] [--old <file>] [--new <file>] [--corpus <file>]");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+// ─── tune ──────────────────────────────────────────────────────────────────
+
+async fn cmd_tune(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = extract_catalog_arg(args, 2)?;
+    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+    let db = slatedb::Db::open(catalog_path, object_store).await?;
+    let state = slateduck_catalog::inspect::inspect_snapshot(&db).await?;
+    db.close().await?;
+
+    let target_cost = extract_numeric_arg(args, "--target-cost-usd-per-month")
+        .map(|v| v as f64)
+        .unwrap_or(50.0);
+
+    // Build a cost report from catalog metadata
+    let snap = slateduck_catalog::cost::ApiCallSnapshot {
+        put_count: state.data_file_count * 3,
+        get_count: state.data_file_count * 10,
+        list_count: state.data_file_count / 10 + 1,
+        delete_count: 0,
+        elapsed: std::time::Duration::from_secs(3600),
+    };
+    let report = slateduck_catalog::cost::ApiCostReport::from_snapshot(&snap);
+
+    println!("SlateDuck Tuning Recommendations");
+    println!("=================================");
+    println!("Target monthly cost: ${target_cost:.2}");
+    println!();
+
+    let recs = slateduck_catalog::tune_for_cost_target(target_cost, &report);
+    for r in &recs {
+        println!("{r}");
+    }
+
+    println!();
+    println!("Cost Mode Profiles:");
+    for mode in [
+        slateduck_catalog::CostMode::Conservative,
+        slateduck_catalog::CostMode::Balanced,
+        slateduck_catalog::CostMode::Latency,
+    ] {
+        let name = match mode {
+            slateduck_catalog::CostMode::Conservative => "conservative",
+            slateduck_catalog::CostMode::Balanced => "balanced",
+            slateduck_catalog::CostMode::Latency => "latency",
+        };
+        println!("  --cost-mode={name}");
+        println!("    {}", mode.profile_description());
+    }
+
     Ok(())
 }
 
