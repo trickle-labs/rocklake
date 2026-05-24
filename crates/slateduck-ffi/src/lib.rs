@@ -3,6 +3,9 @@
 //! This crate provides a stable C ABI over `slateduck-catalog` operations.
 //! All async operations are bridged via a blocking Tokio runtime.
 
+// FFI functions must accept raw pointers from C callers.
+// Null/handle safety is enforced explicitly via validate_catalog() and
+// per-function null checks — not by Rust's type system.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use std::ffi::{CStr, CString};
@@ -48,6 +51,8 @@ pub enum SlateduckErrorCode {
     ValueTooLarge = 5,
     TransactionConflict = 6,
     NotInitialized = 7,
+    /// Null or already-closed catalog handle passed to an FFI function.
+    InvalidHandle = 8,
 }
 
 impl SlateduckError {
@@ -55,6 +60,15 @@ impl SlateduckError {
         Self {
             code: SlateduckErrorCode::Ok as i32,
             message: ptr::null_mut(),
+        }
+    }
+
+    fn invalid_handle() -> Self {
+        Self {
+            code: SlateduckErrorCode::InvalidHandle as i32,
+            message: CString::new("invalid or null catalog handle")
+                .unwrap_or_default()
+                .into_raw(),
         }
     }
 
@@ -112,10 +126,28 @@ pub extern "C" fn slateduck_error_message(err: *const SlateduckError) -> *const 
 
 // ─── Opaque Handles ────────────────────────────────────────────────────────
 
+/// Magic value stored in every live `SlateduckCatalog` to detect invalid
+/// or double-closed handles. Bytes: 'D','U','C','K'.
+const CATALOG_MAGIC: u32 = 0x4455_434B;
+
 /// Opaque handle for a CatalogStore.
 pub struct SlateduckCatalog {
+    magic: u32,
     store: CatalogStore,
     runtime: Arc<tokio::runtime::Runtime>,
+}
+
+/// Validate a catalog handle: returns `Some(&mut cat)` when the pointer is
+/// non-null and the magic field is intact, `None` otherwise.
+fn validate_catalog(ptr: *mut SlateduckCatalog) -> Option<&'static mut SlateduckCatalog> {
+    if ptr.is_null() {
+        return None;
+    }
+    let cat = unsafe { &mut *ptr };
+    if cat.magic != CATALOG_MAGIC {
+        return None;
+    }
+    Some(cat)
 }
 
 /// Opaque handle for a snapshot query result.
@@ -200,6 +232,19 @@ pub extern "C" fn slateduck_open(
     uri: *const c_char,
     err: *mut SlateduckError,
 ) -> *mut SlateduckCatalog {
+    if uri.is_null() {
+        write_error(
+            err,
+            SlateduckError {
+                code: SlateduckErrorCode::InvalidHandle as i32,
+                message: CString::new("uri must not be null")
+                    .unwrap_or_default()
+                    .into_raw(),
+            },
+        );
+        return ptr::null_mut();
+    }
+
     let uri_str = match unsafe { CStr::from_ptr(uri) }.to_str() {
         Ok(s) => s,
         Err(_) => {
@@ -236,6 +281,7 @@ pub extern "C" fn slateduck_open(
         let opts = OpenOptions {
             object_store,
             path: ObjectPath::from("catalog"),
+            encryption: None,
         };
 
         CatalogStore::open(opts).await
@@ -244,7 +290,11 @@ pub extern "C" fn slateduck_open(
     match result {
         Ok(store) => {
             write_error(err, SlateduckError::ok());
-            Box::into_raw(Box::new(SlateduckCatalog { store, runtime }))
+            Box::into_raw(Box::new(SlateduckCatalog {
+                magic: CATALOG_MAGIC,
+                store,
+                runtime,
+            }))
         }
         Err(e) => {
             write_error(err, SlateduckError::from_catalog_error(e));
@@ -253,12 +303,18 @@ pub extern "C" fn slateduck_open(
     }
 }
 
-/// Close and free a catalog handle.
+/// Close and free a catalog handle. Safe to call with null or already-closed handles.
 #[no_mangle]
 pub extern "C" fn slateduck_close(catalog: *mut SlateduckCatalog) {
     if catalog.is_null() {
         return;
     }
+    // Check and zeroize magic atomically to prevent double-close.
+    let magic = unsafe { (*catalog).magic };
+    if magic != CATALOG_MAGIC {
+        return;
+    }
+    unsafe { (*catalog).magic = 0 };
     let cat = unsafe { Box::from_raw(catalog) };
     let _ = cat.runtime.block_on(cat.store.close());
 }
@@ -271,7 +327,16 @@ pub extern "C" fn slateduck_get_current_snapshot(
     catalog: *mut SlateduckCatalog,
     err: *mut SlateduckError,
 ) -> SlateduckSnapshot {
-    let cat = unsafe { &*catalog };
+    let cat = match validate_catalog(catalog) {
+        Some(c) => c,
+        None => {
+            write_error(err, SlateduckError::invalid_handle());
+            return SlateduckSnapshot {
+                snapshot_id: 0,
+                schema_version: 0,
+            };
+        }
+    };
     let reader = cat.store.read_latest();
 
     let result = cat.runtime.block_on(reader.get_snapshot());
@@ -307,7 +372,16 @@ pub extern "C" fn slateduck_list_schemas(
     snapshot_id: u64,
     err: *mut SlateduckError,
 ) -> SlateduckSchemaList {
-    let cat = unsafe { &*catalog };
+    let cat = match validate_catalog(catalog) {
+        Some(c) => c,
+        None => {
+            write_error(err, SlateduckError::invalid_handle());
+            return SlateduckSchemaList {
+                schemas: ptr::null_mut(),
+                count: 0,
+            };
+        }
+    };
     let reader = cat.store.read_at(SnapshotId::new(snapshot_id));
 
     let result = cat.runtime.block_on(reader.list_schemas());
@@ -347,7 +421,16 @@ pub extern "C" fn slateduck_list_tables(
     snapshot_id: u64,
     err: *mut SlateduckError,
 ) -> SlateduckTableList {
-    let cat = unsafe { &*catalog };
+    let cat = match validate_catalog(catalog) {
+        Some(c) => c,
+        None => {
+            write_error(err, SlateduckError::invalid_handle());
+            return SlateduckTableList {
+                tables: ptr::null_mut(),
+                count: 0,
+            };
+        }
+    };
     let reader = cat.store.read_at(SnapshotId::new(snapshot_id));
 
     let result = cat.runtime.block_on(reader.list_tables(schema_id));
@@ -385,7 +468,16 @@ pub extern "C" fn slateduck_describe_table(
     snapshot_id: u64,
     err: *mut SlateduckError,
 ) -> SlateduckColumnList {
-    let cat = unsafe { &*catalog };
+    let cat = match validate_catalog(catalog) {
+        Some(c) => c,
+        None => {
+            write_error(err, SlateduckError::invalid_handle());
+            return SlateduckColumnList {
+                columns: ptr::null_mut(),
+                count: 0,
+            };
+        }
+    };
     let reader = cat.store.read_at(SnapshotId::new(snapshot_id));
 
     let result = cat.runtime.block_on(reader.describe_table(table_id));
@@ -441,7 +533,16 @@ pub extern "C" fn slateduck_list_data_files(
     snapshot_id: u64,
     err: *mut SlateduckError,
 ) -> SlateduckFileList {
-    let cat = unsafe { &*catalog };
+    let cat = match validate_catalog(catalog) {
+        Some(c) => c,
+        None => {
+            write_error(err, SlateduckError::invalid_handle());
+            return SlateduckFileList {
+                files: ptr::null_mut(),
+                count: 0,
+            };
+        }
+    };
     let reader = cat.store.read_at(SnapshotId::new(snapshot_id));
 
     let result = cat.runtime.block_on(reader.list_data_files(table_id));
@@ -638,5 +739,46 @@ mod tests {
         } else {
             slateduck_close(catalog);
         }
+    }
+
+    #[test]
+    fn null_uri_returns_invalid_handle_error() {
+        let mut err = SlateduckError::ok();
+        let catalog = slateduck_open(ptr::null(), &mut err);
+        assert!(catalog.is_null(), "expected null on null URI");
+        assert_eq!(
+            err.code,
+            SlateduckErrorCode::InvalidHandle as i32,
+            "expected InvalidHandle error code"
+        );
+        slateduck_error_free(&mut err);
+    }
+
+    #[test]
+    fn null_catalog_returns_invalid_handle_error() {
+        let mut err = SlateduckError::ok();
+        let snap = slateduck_get_current_snapshot(ptr::null_mut(), &mut err);
+        assert_eq!(
+            err.code,
+            SlateduckErrorCode::InvalidHandle as i32,
+            "expected InvalidHandle on null handle"
+        );
+        assert_eq!(snap.snapshot_id, 0);
+        slateduck_error_free(&mut err);
+    }
+
+    #[test]
+    fn double_close_is_safe() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let mut err = SlateduckError::ok();
+
+        let catalog = slateduck_open(path.as_ptr(), &mut err);
+        assert!(!catalog.is_null(), "open failed: code={}", err.code);
+
+        // First close is normal.
+        slateduck_close(catalog);
+        // Second close must not panic or segfault (magic is zeroed).
+        slateduck_close(catalog);
     }
 }

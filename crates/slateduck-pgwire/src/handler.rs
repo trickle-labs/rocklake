@@ -1,14 +1,16 @@
 //! PG Wire protocol handler implementation.
 //!
 //! Implements SimpleQueryHandler and ExtendedQueryHandler for the pgwire crate.
-//! Supports optional password authentication (md5/scram-sha-256).
+//! Supports optional password authentication (cleartext with constant-time comparison).
 
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::sink::Sink;
-use pgwire::api::auth::noop::NoopStartupHandler;
+use futures::sink::{Sink, SinkExt};
+use pgwire::api::auth::{
+    finish_authentication, save_startup_parameters_to_metadata, DefaultServerParameterProvider,
+};
 use pgwire::api::copy::NoopCopyHandler;
 use pgwire::api::portal::Portal;
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
@@ -17,9 +19,14 @@ use pgwire::api::results::{
 };
 use pgwire::api::stmt::{QueryParser, StoredStatement};
 use pgwire::api::store::PortalStore;
-use pgwire::api::{ClientInfo, ClientPortalStore, NoopErrorHandler, PgWireServerHandlers, Type};
-use pgwire::error::{PgWireError, PgWireResult};
-use pgwire::messages::PgWireBackendMessage;
+use pgwire::api::{
+    ClientInfo, ClientPortalStore, NoopErrorHandler, PgWireConnectionState, PgWireServerHandlers,
+    Type, METADATA_USER,
+};
+use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::messages::response::ErrorResponse;
+use pgwire::messages::startup::Authentication;
+use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use tokio::sync::Mutex;
 
 use slateduck_catalog::CatalogStore;
@@ -57,8 +64,132 @@ impl SlateDuckHandler {
     }
 }
 
+/// Constant-time byte slice equality comparison to resist timing attacks.
+fn ct_bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Startup handler that enforces authentication when configured.
+///
+/// When `AuthConfig::is_enabled()` returns false, connections are accepted
+/// without any credential check (noop). When it returns true, cleartext
+/// password auth is required; username is verified before issuing the
+/// password challenge, and the password is compared in constant time.
+///
+/// When `tls_required` is true and the client connects without TLS, the
+/// connection is rejected immediately with a fatal error.
+pub struct SlateDuckStartupHandler {
+    auth: Arc<AuthConfig>,
+    tls_required: bool,
+}
+
+impl SlateDuckStartupHandler {
+    pub fn new(auth: Arc<AuthConfig>) -> Self {
+        Self {
+            auth,
+            tls_required: false,
+        }
+    }
+
+    pub fn new_with_tls_required(auth: Arc<AuthConfig>, tls_required: bool) -> Self {
+        Self { auth, tls_required }
+    }
+}
+
 #[async_trait]
-impl NoopStartupHandler for SlateDuckHandler {}
+impl pgwire::api::auth::StartupHandler for SlateDuckStartupHandler {
+    async fn on_startup<C>(
+        &self,
+        client: &mut C,
+        message: PgWireFrontendMessage,
+    ) -> PgWireResult<()>
+    where
+        C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        match message {
+            PgWireFrontendMessage::Startup(ref startup) => {
+                // Reject plaintext connections when TLS is required.
+                if self.tls_required && !client.is_secure() {
+                    let error_info = ErrorInfo::new(
+                        "FATAL".to_owned(),
+                        "28000".to_owned(),
+                        "SSL connection is required. Connect using SSL/TLS.".to_owned(),
+                    );
+                    client
+                        .feed(PgWireBackendMessage::ErrorResponse(ErrorResponse::from(
+                            error_info,
+                        )))
+                        .await?;
+                    client.close().await?;
+                    return Ok(());
+                }
+                save_startup_parameters_to_metadata(client, startup);
+                if !self.auth.is_enabled() {
+                    finish_authentication(client, &DefaultServerParameterProvider::default())
+                        .await?;
+                } else {
+                    let expected_user = self.auth.username.as_deref().unwrap_or("").to_owned();
+                    let provided_user = client
+                        .metadata()
+                        .get(METADATA_USER)
+                        .cloned()
+                        .unwrap_or_default();
+                    if provided_user != expected_user {
+                        let error_info = ErrorInfo::new(
+                            "FATAL".to_owned(),
+                            "28P01".to_owned(),
+                            format!("Password authentication failed for user \"{provided_user}\""),
+                        );
+                        client
+                            .feed(PgWireBackendMessage::ErrorResponse(ErrorResponse::from(
+                                error_info,
+                            )))
+                            .await?;
+                        client.close().await?;
+                        return Ok(());
+                    }
+                    client.set_state(PgWireConnectionState::AuthenticationInProgress);
+                    client
+                        .send(PgWireBackendMessage::Authentication(
+                            Authentication::CleartextPassword,
+                        ))
+                        .await?;
+                }
+            }
+            PgWireFrontendMessage::PasswordMessageFamily(pwd) if self.auth.is_enabled() => {
+                let pwd = pwd.into_password()?;
+                let expected = self.auth.password.as_deref().unwrap_or("").as_bytes();
+                if ct_bytes_eq(pwd.password.as_bytes(), expected) {
+                    finish_authentication(client, &DefaultServerParameterProvider::default())
+                        .await?;
+                } else {
+                    let error_info = ErrorInfo::new(
+                        "FATAL".to_owned(),
+                        "28P01".to_owned(),
+                        "Password authentication failed".to_owned(),
+                    );
+                    client
+                        .feed(PgWireBackendMessage::ErrorResponse(ErrorResponse::from(
+                            error_info,
+                        )))
+                        .await?;
+                    client.close().await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
 
 #[async_trait]
 impl SimpleQueryHandler for SlateDuckHandler {
@@ -227,14 +358,17 @@ impl ExtendedQueryHandler for SlateDuckHandler {
 /// Server handlers collection for SlateDuck.
 pub struct SlateDuckServerHandlers {
     pub handler: Arc<SlateDuckHandler>,
+    pub startup: Arc<SlateDuckStartupHandler>,
     pub copy_handler: Arc<NoopCopyHandler>,
     pub error_handler: Arc<NoopErrorHandler>,
 }
 
 impl SlateDuckServerHandlers {
     pub fn new(catalog: Arc<Mutex<CatalogStore>>) -> Self {
+        let auth = Arc::new(AuthConfig::default());
         Self {
             handler: Arc::new(SlateDuckHandler::new(catalog)),
+            startup: Arc::new(SlateDuckStartupHandler::new(auth)),
             copy_handler: Arc::new(NoopCopyHandler),
             error_handler: Arc::new(NoopErrorHandler),
         }
@@ -242,7 +376,24 @@ impl SlateDuckServerHandlers {
 
     pub fn new_with_auth(catalog: Arc<Mutex<CatalogStore>>, auth: Arc<AuthConfig>) -> Self {
         Self {
-            handler: Arc::new(SlateDuckHandler::new_with_auth(catalog, auth)),
+            handler: Arc::new(SlateDuckHandler::new_with_auth(catalog, auth.clone())),
+            startup: Arc::new(SlateDuckStartupHandler::new(auth)),
+            copy_handler: Arc::new(NoopCopyHandler),
+            error_handler: Arc::new(NoopErrorHandler),
+        }
+    }
+
+    pub fn new_with_config(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        tls_required: bool,
+    ) -> Self {
+        Self {
+            handler: Arc::new(SlateDuckHandler::new_with_auth(catalog, auth.clone())),
+            startup: Arc::new(SlateDuckStartupHandler::new_with_tls_required(
+                auth,
+                tls_required,
+            )),
             copy_handler: Arc::new(NoopCopyHandler),
             error_handler: Arc::new(NoopErrorHandler),
         }
@@ -250,7 +401,7 @@ impl SlateDuckServerHandlers {
 }
 
 impl PgWireServerHandlers for SlateDuckServerHandlers {
-    type StartupHandler = SlateDuckHandler;
+    type StartupHandler = SlateDuckStartupHandler;
     type SimpleQueryHandler = SlateDuckHandler;
     type ExtendedQueryHandler = SlateDuckHandler;
     type CopyHandler = NoopCopyHandler;
@@ -265,7 +416,7 @@ impl PgWireServerHandlers for SlateDuckServerHandlers {
     }
 
     fn startup_handler(&self) -> Arc<Self::StartupHandler> {
-        self.handler.clone()
+        self.startup.clone()
     }
 
     fn copy_handler(&self) -> Arc<Self::CopyHandler> {

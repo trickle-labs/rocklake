@@ -210,6 +210,7 @@ mod tests {
         let opts = crate::OpenOptions {
             object_store: store,
             path,
+            encryption: None,
         };
         let _catalog = crate::CatalogStore::open(opts).await.unwrap();
         let store2 = std::sync::Arc::new(

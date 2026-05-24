@@ -28,6 +28,7 @@ pub use audit::{AuditChange, AuditEntry};
 pub use cache::{cache_utilization, CacheStats};
 pub use corpus::{corpus_diff, corpus_validate, parse_corpus, CorpusRecord, ValidateResult};
 pub use cost::{tune_for_cost_target, ApiCostReport, CostMode};
+pub use encryption::{EncryptionConfig, EncryptionError};
 pub use error::{CatalogError, CatalogResult};
 pub use metrics::CatalogMetrics;
 pub use migrate::{migrate_apply, migrate_dry_run, MigrateDryRunResult, MigrateResult};

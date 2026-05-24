@@ -18,6 +18,7 @@ async fn setup_store(dir: &tempfile::TempDir) -> Arc<Mutex<CatalogStore>> {
     let opts = OpenOptions {
         object_store: store,
         path: ObjectPath::from(""),
+        encryption: None,
     };
     let catalog = CatalogStore::open(opts).await.unwrap();
     Arc::new(Mutex::new(catalog))
@@ -438,6 +439,7 @@ async fn test_pgwire_server_lifecycle() {
     let opts = OpenOptions {
         object_store: store_obj,
         path: ObjectPath::from(""),
+        encryption: None,
     };
     let catalog = CatalogStore::open(opts).await.unwrap();
     let catalog = Arc::new(Mutex::new(catalog));
@@ -476,6 +478,7 @@ async fn test_pgwire_client_connection() {
     let opts = OpenOptions {
         object_store: store_obj,
         path: ObjectPath::from(""),
+        encryption: None,
     };
     let catalog = CatalogStore::open(opts).await.unwrap();
     let catalog = Arc::new(Mutex::new(catalog));
@@ -833,6 +836,7 @@ async fn test_audit_log_write_and_read() {
     let opts = slateduck_catalog::OpenOptions {
         object_store,
         path: ObjectPath::from(""),
+        encryption: None,
     };
     let catalog = slateduck_catalog::CatalogStore::open(opts).await.unwrap();
 
@@ -885,12 +889,14 @@ fn test_tls_config() {
     let enabled = TlsConfig {
         cert_path: Some("/path/to/cert.pem".to_string()),
         key_path: Some("/path/to/key.pem".to_string()),
+        required: false,
     };
     assert!(enabled.is_enabled());
 
     let partial = TlsConfig {
         cert_path: Some("/path/to/cert.pem".to_string()),
         key_path: None,
+        required: false,
     };
     assert!(!partial.is_enabled());
 }
@@ -1094,4 +1100,142 @@ async fn test_select_max_snapshot_consistent_after_multiple_write_sessions() {
         1,
         "SELECT max(snapshot) must return 1 row after second commit"
     );
+}
+
+// ─── v0.9.2: Authentication enforcement tests ────────────────────────────
+
+/// Helper: start a server with auth config, returns (addr, shutdown_sender, server_handle).
+async fn start_server_with_auth(
+    dir: &tempfile::TempDir,
+    auth: slateduck_pgwire::server::AuthConfig,
+) -> (
+    std::net::SocketAddr,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let store_obj = Arc::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
+    let opts = OpenOptions {
+        object_store: store_obj,
+        path: ObjectPath::from(""),
+        encryption: None,
+    };
+    let catalog = CatalogStore::open(opts).await.unwrap();
+    let catalog = Arc::new(Mutex::new(catalog));
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let config = slateduck_pgwire::ServerConfig {
+        bind_addr: addr,
+        auth,
+        ..Default::default()
+    };
+
+    let catalog_clone = catalog.clone();
+    let handle = tokio::spawn(async move {
+        slateduck_pgwire::server::run_server_with_shutdown(config, catalog_clone, rx)
+            .await
+            .unwrap();
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    (addr, tx, handle)
+}
+
+#[tokio::test]
+async fn test_auth_correct_credentials_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth = slateduck_pgwire::server::AuthConfig {
+        username: Some("admin".to_string()),
+        password: Some("secret".to_string()),
+    };
+    let (addr, tx, handle) = start_server_with_auth(&dir, auth).await;
+
+    let conn_str = format!(
+        "host=127.0.0.1 port={} user=admin password=secret dbname=ducklake",
+        addr.port()
+    );
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls)
+        .await
+        .expect("should connect with correct credentials");
+
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let rows = client.query("SELECT version()", &[]).await.unwrap();
+    assert_eq!(rows.len(), 1);
+
+    drop(client);
+    let _ = tx.send(());
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn test_auth_wrong_password_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth = slateduck_pgwire::server::AuthConfig {
+        username: Some("admin".to_string()),
+        password: Some("secret".to_string()),
+    };
+    let (addr, tx, handle) = start_server_with_auth(&dir, auth).await;
+
+    let conn_str = format!(
+        "host=127.0.0.1 port={} user=admin password=wrongpassword dbname=ducklake",
+        addr.port()
+    );
+    let result = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await;
+    assert!(result.is_err(), "wrong password must be rejected");
+
+    let _ = tx.send(());
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn test_auth_wrong_username_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth = slateduck_pgwire::server::AuthConfig {
+        username: Some("admin".to_string()),
+        password: Some("secret".to_string()),
+    };
+    let (addr, tx, handle) = start_server_with_auth(&dir, auth).await;
+
+    let conn_str = format!(
+        "host=127.0.0.1 port={} user=notadmin password=secret dbname=ducklake",
+        addr.port()
+    );
+    let result = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await;
+    assert!(result.is_err(), "wrong username must be rejected");
+
+    let _ = tx.send(());
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn test_auth_no_auth_configured_any_user_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth = slateduck_pgwire::server::AuthConfig::default(); // no auth
+    let (addr, tx, handle) = start_server_with_auth(&dir, auth).await;
+
+    let conn_str = format!(
+        "host=127.0.0.1 port={} user=anyuser dbname=ducklake",
+        addr.port()
+    );
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls)
+        .await
+        .expect("should connect without auth");
+
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let rows = client.query("SELECT version()", &[]).await.unwrap();
+    assert_eq!(rows.len(), 1);
+
+    drop(client);
+    let _ = tx.send(());
+    let _ = handle.await;
 }

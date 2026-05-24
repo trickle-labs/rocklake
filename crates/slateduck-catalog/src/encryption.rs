@@ -3,6 +3,9 @@
 //! Uses SlateDB's block-level encryption for catalog values.
 //! Parquet encryption is a separate, Parquet-native concern.
 
+use async_trait::async_trait;
+use bytes::Bytes;
+
 /// Encryption configuration for the catalog store.
 #[derive(Debug, Clone)]
 pub struct EncryptionConfig {
@@ -28,6 +31,58 @@ impl EncryptionConfig {
     /// Create encryption config from raw bytes.
     pub fn from_bytes(key: [u8; 32]) -> Self {
         Self { key }
+    }
+}
+
+/// A SlateDB `BlockTransformer` that applies AES-256-GCM encryption.
+///
+/// Layout on disk: `[12-byte nonce][ciphertext + 16-byte GCM tag]`
+pub struct AesGcmTransformer {
+    key: [u8; 32],
+}
+
+impl AesGcmTransformer {
+    pub fn new(config: &EncryptionConfig) -> Self {
+        Self { key: config.key }
+    }
+}
+
+#[async_trait]
+impl slatedb::BlockTransformer for AesGcmTransformer {
+    async fn encode(&self, data: Bytes) -> Result<Bytes, slatedb::Error> {
+        use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
+        use aes_gcm::Aes256Gcm;
+
+        let cipher = Aes256Gcm::new((&self.key).into());
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(&nonce, data.as_ref())
+            .map_err(|_| slatedb::Error::data("AES-GCM encryption failed".to_string()))?;
+
+        let mut out = Vec::with_capacity(12 + ciphertext.len());
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ciphertext);
+        Ok(Bytes::from(out))
+    }
+
+    async fn decode(&self, data: Bytes) -> Result<Bytes, slatedb::Error> {
+        use aes_gcm::aead::{Aead, KeyInit};
+        use aes_gcm::{Aes256Gcm, Nonce};
+
+        const NONCE_LEN: usize = 12;
+        if data.len() < NONCE_LEN {
+            return Err(slatedb::Error::data(
+                "encrypted block too short to contain nonce".to_string(),
+            ));
+        }
+        let nonce = Nonce::from_slice(&data[..NONCE_LEN]);
+        let cipher = Aes256Gcm::new((&self.key).into());
+        let plaintext = cipher.decrypt(nonce, &data[NONCE_LEN..]).map_err(|_| {
+            slatedb::Error::data(
+                "AES-GCM decryption failed (wrong key or corrupt block)".to_string(),
+            )
+        })?;
+        Ok(Bytes::from(plaintext))
     }
 }
 

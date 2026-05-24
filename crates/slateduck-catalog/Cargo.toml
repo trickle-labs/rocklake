@@ -17,6 +17,8 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 futures = "0.3"
 prost = { workspace = true }
+aes-gcm = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

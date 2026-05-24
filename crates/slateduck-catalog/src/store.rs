@@ -9,6 +9,7 @@ use slateduck_core::tags::*;
 use slateduck_core::values;
 use std::sync::Arc;
 
+use crate::encryption::{AesGcmTransformer, EncryptionConfig};
 use crate::error::CatalogResult;
 use crate::init;
 use crate::reader::CatalogReader;
@@ -21,6 +22,8 @@ pub struct OpenOptions {
     pub object_store: Arc<dyn object_store::ObjectStore>,
     /// Path within the object store for the SlateDB database.
     pub path: ObjectPath,
+    /// Optional AES-256-GCM encryption for at-rest block data.
+    pub encryption: Option<EncryptionConfig>,
 }
 
 /// The main catalog store backed by SlateDB.
@@ -35,7 +38,15 @@ impl CatalogStore {
     /// Open or create a catalog store.
     /// Uses safe `open_or_create` with serializable transactions.
     pub async fn open(opts: OpenOptions) -> CatalogResult<Self> {
-        let db = Db::open(opts.path, opts.object_store).await?;
+        let db = if let Some(ref enc) = opts.encryption {
+            let transformer = Arc::new(AesGcmTransformer::new(enc));
+            Db::builder(opts.path, opts.object_store)
+                .with_block_transformer(transformer)
+                .build()
+                .await?
+        } else {
+            Db::open(opts.path, opts.object_store).await?
+        };
 
         // Initialize or verify
         let counters = init::initialize_catalog(&db).await?;

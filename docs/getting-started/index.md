@@ -26,7 +26,7 @@ Start here if you have completed the quickstart and want to understand what Slat
 
 Before you begin, you will need:
 
-- **A Rust toolchain** (for building from source) or a **pre-built binary** from the [releases page](https://github.com/geir-gronmo/slateduck/releases). SlateDuck is a single static binary with no runtime dependencies beyond libc.
+- **A Rust toolchain** (for building from source) or a **pre-built binary** from the [releases page](https://github.com/trickle-labs/slateduck/releases). SlateDuck is a single static binary with no runtime dependencies beyond libc.
 - **DuckDB 1.2 or later** with the `ducklake` extension installed. You can install the extension from within DuckDB by running `INSTALL ducklake;` followed by `LOAD ducklake;`.
 - **For cloud deployments:** credentials for your object-store provider (AWS access keys, GCS service account, or Azure connection string). The cloud quickstart covers the minimum permissions needed.
 
