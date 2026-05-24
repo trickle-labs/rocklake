@@ -944,15 +944,52 @@ All pages must pass `mkdocs build --strict` and have non-trivial content (no stu
 ### v0.14 — Operational Hardening (matches ROADMAP §v0.14)
 - Native `SlateDbTrace`, cost optimization, observability, `REFRESH ... FULL`, fault injection
 
+### v0.15 — Feature Completeness (matches ROADMAP §v0.15)
+
+Goal: any SQL view that can be written against a static DuckDB table can be maintained incrementally. Adds the advanced operators deferred from v0.11–v0.14.
+
+**Window functions** require an `SlateDbOrderedTrace` variant that maintains per-partition sorted state. Partition-local windows (PARTITION BY = shard key) are fully parallel. Total-order windows force `shard_count = 1` and route through a merge-sort writer in the output plane. Key module changes:
+
+- `trace.rs`: add `SlateDbOrderedTrace` backed by a B-tree-sorted SST layout
+- `output.rs`: add `merge_sorted_parquet_writer` that merges N shard outputs into a single sorted Parquet
+- `circuit.rs`: lower window function nodes in the DataFusion logical plan to DBSP `window` operators
+
+**`ORDER BY` and `LIMIT`/`OFFSET`** reuse the ordered trace. Top-N views use DBSP's `top_k` operator for a bounded heap; shard-local top-N merged by the output plane.
+
+**Correlated subqueries** require a decorrelation pass over the DataFusion `LogicalPlan` before lowering to DBSP. DataFusion already provides `PullUpCorrelatedPredicates` and `DecorrelatePredicateSubquery`; we apply them in `plan.rs` before the DBSP lowering step. Any plan that survives decorrelation contains only joins and aggregations.
+
+**Recursive CTEs** map to DBSP's `iterate` operator. The `plan.rs` lowering step detects cycles in the CTE dependency graph and wraps the recursive body in `iterate`. Termination via frontier advancement. `max_iterations` guard for divergent queries.
+
+**Non-deterministic function capture** is a pre-pass in `circuit.rs`: before executing a batch, scan the plan for allow-listed functions (`now()`, `random()`, etc.), sample each once, substitute a `Literal` node, and record the sampled value in the checkpoint row. Repair replays with the stored value.
+
+**WASM UDFs** require:
+- New catalog table `matview_udfs` (tag `0x21`) — schema identical to `MatviewRow` pattern
+- New `CREATE/DROP/ALTER FUNCTION` DDL in `slateduck-sql`
+- `wasmtime` as a workspace dependency in `slateduck-ivm`
+- A `WasmExecutor` struct in `circuit.rs` that hydrates a compiled module, bounds fuel + memory, and maps Arrow arrays to/from WASM linear memory
+- UDF version pinning at view creation; migration via `ALTER INCREMENTAL MATERIALIZED VIEW ... USING FUNCTION ... VERSION N` (triggers `REFRESH ... FULL`)
+
+**Key module diffs for v0.15:**
+
+| Module | Change |
+|---|---|
+| `crates/slateduck-core/src/tags.rs` | Add `TAG_MATVIEW_UDFS = 0x21` |
+| `crates/slateduck-core/src/rows.rs` | Add `UdfRow` protobuf schema |
+| `crates/slateduck-catalog/src/writer.rs` | `create_udf`, `drop_udf`, `replace_udf` |
+| `crates/slateduck-catalog/src/reader.rs` | `get_udf`, `list_udfs` |
+| `crates/slateduck-sql/src/grammar/` | `CREATE/DROP/ALTER FUNCTION` grammar additions |
+| `crates/slateduck-ivm/src/trace.rs` | `SlateDbOrderedTrace` |
+| `crates/slateduck-ivm/src/plan.rs` | Decorrelation pass, window lowering, `iterate` lowering, non-det capture pass |
+| `crates/slateduck-ivm/src/circuit.rs` | `WasmExecutor`, top-k operator, window operator |
+| `crates/slateduck-ivm/src/output.rs` | `merge_sorted_parquet_writer` |
+
 ### v1.0 GA gate
-- IVM acceptance tests all green; the IVM GA gate item in `## v1.0` of the roadmap.
+- v0.11–v0.15 acceptance tests all green; the IVM GA gate item in `## v1.0` of the roadmap.
 
 ### Post-1.0 (out of scope for this plan)
-- Correlated subqueries
-- Window functions
-- Recursive CTEs (raw DD, not DBSP)
-- Continuous integrity-constraint checking
-- Cross-warehouse views
+- Continuous integrity-constraint checking as a special case of IVM
+- Cross-warehouse views (single-warehouse only through v1.0)
+- Raw DD (non-DBSP) for Datalog / graph algorithms beyond `CONNECT BY`
 
 ---
 
@@ -970,6 +1007,10 @@ All pages must pass `mkdocs build --strict` and have non-trivial content (no stu
 | 8 | Cost model defaults: S3 PUT throttling, compaction cadence | Open; empirical | — | v0.14 |
 | 9 | Schema-evolution UX: auto-stale vs auto-rebuild | Recommended: auto-stale, explicit refresh | — | v0.14 |
 | 10 | Multi-warehouse views: in scope for v1.x or v2.x? | Out of scope for v0.11–v1.0 | — | Post-1.0 |
+| 11 | WASM runtime: `wasmtime` vs `wasmi` (interpreter, no JIT) | Open; `wasmtime` preferred for throughput | — | Before v0.15 alpha |
+| 12 | Window functions in sharded mode: error or auto-downgrade to `shard_count = 1`? | Recommended: error with a clear message | — | Before v0.15 alpha |
+| 13 | Recursive CTE `max_iterations` default: 100 or unbounded with cost-based cap? | Open | — | Before v0.15 alpha |
+| 14 | Non-deterministic function allow-list: user-extensible or hardcoded? | Recommended: hardcoded; UDFs cover extension | — | Before v0.15 alpha |
 
 This tracker is maintained alongside the implementation; resolved questions become design decisions documented in `docs/design-decisions/`.
 

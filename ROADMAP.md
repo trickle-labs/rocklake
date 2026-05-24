@@ -2034,6 +2034,154 @@ The naive implementation flushes a SlateDB batch on every input snapshot, genera
 
 ---
 
+## v0.15 — IVM Feature Completeness
+
+> Expand the IVM SQL surface to full feature-parity with a general-purpose streaming SQL engine: window functions, ordered results, top-N materialization, correlated subqueries, recursive computation, non-deterministic functions with deterministic capture semantics, and WASM user-defined functions. After v0.15 the answer to "what SQL can a materialized view use?" is: anything you can write against a static DuckDB table.
+
+### Why feature completeness before v1.0
+
+SlateDuck's goal is to be the only lakehouse that materializes *any* SQL view without leaving S3. A restricted SQL surface invites the question "what can't it do?" v0.15 closes that gap. Each feature adds real implementation complexity, but the architectural seams — ordered traces, UDF registry, deterministic timestamp capture — are far cheaper to design before GA than to retrofit afterward. v1.0 should mean something complete.
+
+### Window Functions
+
+`ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`, `NTILE`, and all aggregate windows (`SUM/AVG/COUNT OVER (PARTITION BY … ORDER BY …)`). Requires ordered collections and per-partition state, not unordered sets.
+
+**Design impact.** Partition-local windows (PARTITION BY = shard key) are fully parallel and cost the same as equivalent `GROUP BY`. Full-table or cross-partition windows require a single-shard merge stage; the output plane gains a merge-sort writer for ordered views.
+
+- [ ] `PARTITION BY` windows where partition key = shard key: fully parallel, same throughput as aggregation
+- [ ] `PARTITION BY` windows where partition key ≠ shard key: route to single-shard merge stage
+- [ ] Full-table windows (no PARTITION BY): `shard_count = 1` enforced at create time with a clear error message if user attempts sharded
+- [ ] `SlateDbOrderedTrace` extending `SlateDbTrace` with per-partition sort order
+- [ ] Output plane `merge_sorted_parquet_writer` for total-ordered output tables
+- [ ] Supported window frames: `ROWS BETWEEN`, `RANGE BETWEEN`, `GROUPS BETWEEN`
+- [ ] Navigation functions: `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`
+- [ ] Ranking functions: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`
+- [ ] `WITH (window_mode = 'partitioned' | 'total_order')` option; auto-selected from SQL plan if unambiguous
+- [ ] TPC-DS Q4 and Q11 maintained incrementally
+- [ ] Partition-local window throughput within 15% of equivalent aggregation
+
+### `ORDER BY` in Materialized Views
+
+A top-level `ORDER BY` implies a total order on the output; Parquet is physically sorted and pre-ordered reads require no runtime sort.
+
+- [ ] `ORDER BY` accepted in view SQL; stored as `output_sort_key` in `MatviewRow`
+- [ ] Output Parquet written with `sorting_columns` metadata
+- [ ] Multiple `ORDER BY` columns with `ASC`/`DESC`/`NULLS FIRST`/`NULLS LAST`
+- [ ] `shard_count = 1` auto-enforced for total-order views
+- [ ] DuckDB scan of an `ORDER BY` matview delivers rows in declared order without a runtime sort (verified by query plan inspection)
+
+### `LIMIT` / `OFFSET` (Top-N Materialized Views)
+
+`LIMIT N` materializes only the top N rows by a specified order — "latest N events", "top N customers", "most recent N records". Common pattern; cheap with DBSP's `top_k` operator.
+
+- [ ] `LIMIT N [OFFSET M]` requires `ORDER BY`; error if absent
+- [ ] Incremental top-N via DBSP `top_k`: bounded sorted heap of N candidates maintained across updates
+- [ ] Output Parquet contains exactly N rows; previous output superseded atomically on each publish
+- [ ] Sharded top-N: each shard maintains local top-N; merge shard selects global top-N from `shard_count × N` candidates
+- [ ] `OFFSET` only with `ORDER BY + LIMIT`; document stable-row-numbering caveat
+- [ ] Tested with TPC-H "top 10 orders by value" maintained across 1000 input snapshots
+
+### Correlated Subqueries
+
+`WHERE EXISTS (SELECT … WHERE t.id = outer.id)`, `WHERE IN (SELECT …)`, scalar subquery in SELECT list. Requires re-evaluation of the inner query as outer rows change.
+
+**Implementation approach.** Decorrelation via algebraic rewrites (same technique DataFusion uses for batch evaluation). Correlated `EXISTS` → semi-join; correlated scalar → left join + aggregation. After decorrelation the circuit contains only regular joins and aggregations.
+
+- [ ] Decorrelation pass in `plan.rs` via DataFusion's `PullUpCorrelatedPredicates` / `DecorrelatePredicateSubquery` rewrites
+- [ ] `EXISTS`, `NOT EXISTS`, `IN (SELECT …)`, `NOT IN (SELECT …)` → semi/anti-join
+- [ ] Scalar correlated subquery in SELECT list → left join + aggregation
+- [ ] Clear "cannot decorrelate" error for subqueries that escape the rewrite (deep mutual correlation)
+- [ ] TPC-H Q4 (`WHERE EXISTS (SELECT … FROM lineitem WHERE …)`) maintained incrementally
+
+### Recursive CTEs
+
+`WITH RECURSIVE` enables transitive closure, hierarchical rollups, graph reachability. Requires feedback loops in the DBSP circuit and fixed-point termination.
+
+**Implementation approach.** Map to DBSP's `iterate` operator: base case is the seed; recursive term is the iterate body; termination detected by frontier advancement (output = input at fixed point).
+
+- [ ] Recursive CTEs identified in the SQL plan (cycles in CTE dependency graph)
+- [ ] Lowered to DBSP `iterate` operators
+- [ ] Bounded iteration: configurable `max_iterations` (default 100); exceeding it sets view to `Stale` and alerts
+- [ ] `CONNECT BY`-style depth-bounded expansion (org-chart / BOM queries)
+- [ ] Non-recursive `WITH` (already handled in v0.11 as inline subquery expansion) unchanged
+- [ ] Transitive closure over a 1M-edge graph maintained incrementally as edges are added and removed
+- [ ] Incremental per-batch latency ≤ 5× the non-recursive baseline for the same operator count
+
+### Non-Deterministic Functions with Capture Semantics
+
+`now()`, `current_timestamp`, `random()`, `gen_random_uuid()` are non-deterministic but users legitimately need views like `SELECT *, now() AS captured_at FROM events`. Fix: sample once per batch, substitute a literal, store the value alongside the checkpoint for deterministic repair/replay.
+
+- [ ] Allow-listed functions: `now()`, `current_timestamp`, `current_date`, `current_time`, `localtime`, `localtimestamp`, `random()`, `gen_random_uuid()`
+- [ ] Per-batch sampling: each listed function sampled once at the start of a DBSP batch; substituted as a literal throughout
+- [ ] Sampled value stored in the checkpoint row for deterministic repair (repair re-uses captured value, not re-sampled)
+- [ ] `current_snapshot_id()` — new IVM-specific function returning the batch's `last_input_snapshot` as a stable integer
+- [ ] `random()` / `gen_random_uuid()` subject to a per-batch seed stored in checkpoint (enables deterministic replay)
+- [ ] Error on functions that cannot be safely allow-listed (volatile functions with side effects)
+- [ ] "Capture semantics" section in `docs/concepts/incremental-views.md`
+
+### User-Defined Functions (WASM)
+
+UDFs extend the view SQL surface with custom logic: custom hash functions, domain-specific type coercions, scoring models. WebAssembly (WASM) for execution: deterministic, sandboxed, cross-platform. Compiled modules stored as binary blobs in the catalog.
+
+- [ ] New catalog table `matview_udfs` (tag `0x21`): `(udf_id, name, schema_name, wasm_blob, signature, deterministic, created_at_snapshot)`
+- [ ] `CREATE FUNCTION name(arg_type, …) RETURNS type LANGUAGE WASM AS '…'` DDL surface
+- [ ] `DROP FUNCTION`, `ALTER FUNCTION … REPLACE` (bumps `udf_id`; views pin to specific `udf_id` at creation)
+- [ ] WASM execution via `wasmtime` embedded in `slateduck-ivm`; sandboxed (no I/O, no network, bounded fuel + memory)
+- [ ] `deterministic = true` annotation required; non-deterministic UDFs rejected at view creation with a clear error
+- [ ] UDF versioning: view pins to `udf_id` at creation; `ALTER INCREMENTAL MATERIALIZED VIEW v USING FUNCTION f VERSION N` migrates and triggers `REFRESH … FULL`
+- [ ] Argument and return types limited to Arrow-compatible scalars: BOOLEAN, INT8–INT64, FLOAT32/FLOAT64, UTF8, BINARY, DATE32, TIMESTAMP
+- [ ] Fuel limit: 10M instructions per row; memory limit: 64 MiB per invocation; violation → clean error, not panic
+- [ ] WASM module validates against a whitelist of allowed WASI imports (none for pure functions)
+- [ ] Tested with a custom tokenizer UDF over event strings maintained incrementally
+- [ ] `docs/reference/udfs.md`: authoring guide, WASM compilation instructions (Rust → wasm32-unknown-unknown), determinism contract, version migration
+
+### Extended Operator Support Matrix
+
+| Operator | v0.11 | v0.12 | v0.13 | v0.14 | v0.15 |
+|---|---|---|---|---|---|
+| `SELECT` / `WHERE` / `GROUP BY` / `HAVING` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Aggregates (count, sum, min, max, avg) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `DISTINCT`, `UNION ALL/DISTINCT` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `JOIN` (broadcast, co-partition, reshuffle) | — | — | ✓ | ✓ | ✓ |
+| Uncorrelated subqueries | — | — | ✓ | ✓ | ✓ |
+| `ORDER BY` (total-order output) | — | — | — | — | ✓ |
+| `LIMIT` / `OFFSET` (top-N) | — | — | — | — | ✓ |
+| Window functions (partitioned) | — | — | — | — | ✓ |
+| Window functions (total-order) | — | — | — | — | ✓ |
+| Correlated subqueries (`EXISTS`, `IN`, scalar) | — | — | — | — | ✓ |
+| `CONNECT BY` / depth-bounded recursion | — | — | — | — | ✓ |
+| Recursive CTEs | — | — | — | — | ✓ |
+| `now()` / `random()` (capture semantics) | — | — | — | — | ✓ |
+| User-defined functions (WASM) | — | — | — | — | ✓ |
+
+### Acceptance Criteria
+
+- [ ] Every operator in the matrix passes a correctness test against a DuckDB single-shot reference query over the same input data
+- [ ] Partition-local `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)` maintained correctly for 1000 input snapshots; throughput within 15% of equivalent aggregation
+- [ ] Transitive closure over 1M edges processes 10k-edge incremental batches in ≤ 10 s
+- [ ] `LIMIT 100 ORDER BY value DESC` view correctly maintains the global top-100 across 1000 input snapshots
+- [ ] `now()` capture: repaired shard re-uses stored captured value, not re-sampled; output is bit-identical to original
+- [ ] WASM UDF exceeding fuel/memory limit returns a clean error; no worker panic, no view corruption
+- [ ] All v0.11–v0.14 acceptance tests still pass
+- [ ] Extended benchmark: TPC-DS Q4, Q11, Q14, Q47, Q49 maintained incrementally with correctness verified
+
+### Deliverables
+
+- [ ] `SlateDbOrderedTrace` implementation
+- [ ] Merge-sort output writer in the output plane
+- [ ] Decorrelation pass in `plan.rs`
+- [ ] DBSP `iterate` integration for recursive CTEs
+- [ ] Non-deterministic function capture with per-batch seed storage
+- [ ] `matview_udfs` catalog table (tag `0x21`) and `CREATE/DROP/ALTER FUNCTION` SQL surface
+- [ ] `wasmtime` integration in `slateduck-ivm` with fuel + memory sandboxing
+- [ ] TPC-DS Q4/Q11/Q14/Q47/Q49 streaming benchmark suite in `benches/`
+- [ ] `benchmarks/v0.15-ivm-feature-complete.json` published
+- [ ] `docs/reference/udfs.md` authoring guide
+- [ ] All SQL reference docs in `docs/reference/sql-ivm.md` updated to reflect full operator coverage
+- [ ] Implementation plan [plans/incremental-view-maintenance-implementation.md](plans/incremental-view-maintenance-implementation.md) updated to reflect v0.15 additions
+
+---
+
 ## v1.0 — General Availability
 
 > Formal TPC-H @ SF10/SF100 benchmark publication, S3 Express acceptance gate, IVM correctness gate, and GA sign-off.
@@ -2068,7 +2216,7 @@ Measurable acceptance criteria that must all be green before v1.0 is tagged:
 6. All 28 DuckLake v1.0 catalog tables implemented, tag-allocated, fixture-covered, and explicitly status-tracked in `tags.rs`.
 7. Phase 0 validation gates pass on LocalFS, MinIO, S3 Standard, and S3 Express; results documented.
 8. `mkdocs build --strict` green; documentation site live with no stub pages.
-9. **IVM GA gate.** v0.11–v0.14 acceptance tests all green: single-shard demo, 8-shard scale-out, TPC-H Q1/Q3/Q5 maintained incrementally, 24 h soak with zero correctness drift, fault-injection suite passing, native `SlateDbTrace` benchmarked, operator playbook complete. IVM is a v1.0 surface, not a v1.x experiment.
+9. **IVM GA gate.** v0.11–v0.15 acceptance tests all green: single-shard demo, 8-shard scale-out, TPC-H Q1/Q3/Q5 maintained incrementally, window functions correct (partition-local and total-order), recursive CTEs stable under fixed-point iteration, correlated subqueries decorrelated, non-deterministic function capture reproducible on repair, WASM UDFs sandboxed under fuel + memory limits, 24 h soak with zero correctness drift, fault-injection suite passing, native `SlateDbTrace` benchmarked, operator playbook complete. IVM is feature-complete at v1.0: any SQL view that can be written against a static DuckDB table can be maintained incrementally by SlateDuck.
 
 ### Deliverables
 
