@@ -38,8 +38,8 @@ version = 2
 [bans]
 # Warn (not deny) on duplicate versions of the same crate (common in large dep trees).
 multiple-versions = "warn"
-# Deny wildcard dependencies.
-wildcards = "deny"
+# Warn on wildcard dependencies (path-only workspace deps have implicit "*" version).
+wildcards = "warn"
 
 # ─── Sources ──────────────────────────────────────────────────────────────────
 [sources]
