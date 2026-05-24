@@ -238,6 +238,26 @@ a prefix scan of `[0x40][entity][attribute]` with an upper-bound stop at
 post-filtering overhead. The same pattern extends to AVET: range scans by
 value at a given version are key-range queries, not table scans.
 
+**AVET and VAET as RoaringBitmap posting-list indexes.** For attributes
+declaring `:indexed`, `:unique`, or `:reverse-ref`, each distinct
+`(attribute, value)` pair maps to a **RoaringBitmap** of entity IDs stored
+as a single key-value pair, rather than one physical key per entity. A query
+"all entities where `:country` = `"NO"`" becomes a single key lookup
+followed by an in-memory bitmap scan. Multi-attribute conditions (`AND`)
+become bitmap intersections — far cheaper than two range scans joined after
+the fact. RoaringBitmaps provide efficient compression and fast set
+operations (intersection, union), and they are already used for exactly this
+purpose by [OpenData's Timeseries and Vector
+databases](https://opendata.dev/docs/overview/storage) on SlateDB.
+
+**Merge operators for secondary index writes.** Every AVET or VAET write
+would naively require a read-modify-write cycle: read the current posting
+list, add the entity ID, write back. With SlateDB's merge operator, the
+write path emits a blind `AddEntity(eid)` merge operand and returns
+immediately. The LSM merges operands lazily into the RoaringBitmap at
+compaction time. This eliminates the read on the secondary-index write path
+entirely — the most expensive hidden cost of the tiered index model.
+
 ### 3.4 Leveraging SlateDB features
 
 The substrate is designed to make full use of SlateDB capabilities:
@@ -268,6 +288,12 @@ This gives us §6 (CDN-friendly read replicas) almost for free.
 **Compaction** — Excised facts (the audited deletion path) propagate
 through SlateDB compaction the same way `end_snapshot`-marked rows do
 today. No new compaction policy is needed.
+
+**Merge operators** — AVET and VAET secondary indexes write `AddEntity(eid)`
+merge operands rather than performing read-modify-write cycles. The LSM
+merges them lazily at compaction time into the RoaringBitmap posting list
+(§3.3). This is the same technique OpenData Timeseries and Vector use for
+their inverted indexes on SlateDB.
 
 **Writer fencing** — The single-writer guarantee on the substrate carries
 over; multi-writer exploration (§10) builds *on top* of fencing rather than
@@ -312,6 +338,32 @@ one counter bump (`counter += 1000`) and hand them out from memory. The
 range itself is durable; only the in-memory cursor is volatile. After a
 crash the unallocated tail of the range is permanently skipped — a price
 worth paying for batched allocation.
+
+This is the same *block-based sequence allocation* pattern used by [OpenData
+Log](https://opendata.dev/docs/log/storage-design): a `SeqBlock` record
+captures the allocated range; crash recovery reads the last block and skips
+forward, preserving monotonicity with O(1) recovery cost.
+
+### 3.7 Proposed SST enhancements (upstream to SlateDB)
+
+Two SlateDB enhancements would materially improve read performance and are
+worth contributing upstream rather than working around:
+
+**Entity-level bloom filters.** Current bloom filters are keyed on the full
+composite key (e.g. the complete EAVT tuple). A probe “does entity `E` have
+*any* fact in this SST?” cannot answer without enumerating every possible
+attribute+version combination. If bloom filters were keyed on the entity-ID
+prefix alone, a single probe skips entire SSTs for absent entities. OpenData
+Log [proposes the same enhancement](https://opendata.dev/docs/log/storage-design)
+for log-key-level bloom filters (keyed on user key, not composite key).
+
+**Block-level record counts.** Including a cumulative record count in each
+SST block-index entry enables `COUNT(entity)` and cardinality-estimation
+queries at the block-index level, without reading block data. OpenData Log
+uses this for O(1) range counting within a segment.
+
+Both are *proposed* enhancements, not requirements for Phase 2.0. Tracked
+as open questions in §18.
 
 ---
 
@@ -768,6 +820,61 @@ maintains a small LRU of recently-seen tokens; replays return the original
 version without re-committing. This makes the write path safe for clients
 behind a load balancer where retries are routine.
 
+### 8.5 Stateless multi-producer ingestion (Buffer pattern)
+
+The direct write path routes all clients through the single SlateDuck writer
+process. For deployments with application instances spread across
+availability zones this means cross-zone transfer costs and write
+unavailability during writer restarts.
+
+An optional **Buffer front-end** decouples write availability from writer
+availability, following the same object-storage queue pattern used by
+[OpenData Buffer](https://opendata.dev/docs/buffer):
+
+```
+  ┌────────────────────────────────────────────────────────────┐
+  │  App A  |  App B  |  App C    (producers, any AZ)       │
+  └───┬────────┬────────┬────────────────────────────────┘
+        │          │          │  flush ULID-named batch
+        └──────────┴─────────┘
+                      │
+           ┌──────────▼──────────┐
+           │  Object Storage    │  data/ + CAS queue manifest
+           └──────────┬──────────┘
+                      │  poll
+           ┌──────────▼──────────┐
+           │  SlateDuck Writer  │
+           │  BufferConsumer    │
+           │  → FactStore.write │
+           └────────────────────┘
+```
+
+Key properties:
+
+- **Multi-producer, single consumer.** Any number of app instances append
+  to the queue manifest concurrently via compare-and-swap. Only the
+  SlateDuck writer consumes. This preserves the single-writer guarantee
+  on the fact store.
+- **Epoch-based consumer fencing.** On writer restart, the consumer
+  increments the manifest epoch, fencing any zombie consumer from a
+  previous instance — the same fencing primitive v1.x already uses for
+  writer exclusivity.
+- **At-least-once delivery with idempotent replay.** If the consumer
+  crashes between processing a batch and acknowledging it, the batch is
+  re-processed on restart. Idempotency tokens (§8.4) make replay safe.
+- **Write availability decoupled from writer availability.** Apps continue
+  writing to object storage even while SlateDuck is down or deploying.
+
+Trade-off: a fact is not queryable until the producer flushes its batch
+(default 100 ms), the consumer polls the manifest (default 1 s), and the
+writer commits to SlateDB. For audit, compliance, and metadata workloads
+— the primary targets for v2.x — this is acceptable. For sub-second
+freshness, use the direct write path (§8.1–§8.4).
+
+This pattern is directly related to the multi-writer exploration in §10 but
+implemented as a **single-consumer** queue, which keeps the single-writer
+guarantee intact. It is evaluated in Phase 2.3.
+
 ---
 
 ## 9. Observability
@@ -957,11 +1064,15 @@ in-workspace extraction is sufficient.
 
 - [ ] EAVT primary index implemented with big-endian version in key.
 - [ ] Temporal key pruning: `as_of(V)` is a key-range query, no post-filter.
+- [ ] AVET and VAET posting lists stored as RoaringBitmaps (§3.3).
+- [ ] Merge operators for AVET/VAET writes: blind `AddEntity` operands, no read on the write path (§3.4).
 - [ ] AVET built for attributes declaring `:indexed` or `:unique`.
 - [ ] AEVT built for attributes declaring `:attribute-scan`.
 - [ ] VAET built for attributes declaring `:reverse-ref`.
 - [ ] Schema-as-facts: strict mode (§7.1) with declared attributes.
 - [ ] Dynamic mode (§7.1): infer and record types from first assertion.
+- [ ] ListingEntry records for attribute discovery in dynamic namespaces: one entry per (namespace, attribute) on first assert, enabling O(1) attribute enumeration without full EAVT scans.
+- [ ] Block-based sequence allocation (§3.6): pre-allocate ID ranges, O(1) crash recovery.
 - [ ] Transaction log (tag `0x44`) and audit view.
 - [ ] Typed Rust API: `assert`, `retract`, `as_of`, `entity`, `query`.
 - [ ] Property tests: every fact appears in EAVT and every declared secondary
@@ -986,6 +1097,10 @@ in-workspace extraction is sufficient.
 - [ ] CDN cache contract documentation and validated proxy configurations.
 - [ ] Linear-scaling benchmark to ≥ 100 reader pods.
 - [ ] Lambda / edge cold-start guide.
+- [ ] Buffer front-end for stateless multi-producer ingestion (§8.5):
+      CAS manifest, epoch fencing, at-least-once delivery.
+- [ ] Disaggregated compaction deployment guide: compactor on a separate
+      (spot) instance, writer unaffected.
 
 ### Phase 2.4 — Schema evolution
 
@@ -1136,6 +1251,13 @@ v2.x succeeds when:
   remove facts from EAVT **and** every secondary index; the implementation
   must handle the case where secondary index declarations change between
   the assertion version and the excision version.
+- Should entity-level bloom filters and block-level record counts (§3.7) be
+  proposed as upstream SlateDB enhancements, or implemented via a
+  SlateDuck-specific SST extension? The former is the right long-term path
+  but requires coordination with SlateDB maintainers.
+- Should the Buffer front-end (§8.5) depend on the `opendata-buffer` crate
+  (lower maintenance, proven) or be re-implemented in-house (tighter
+  integration, no transitive SlateDB version constraint)?
 
 ---
 
@@ -1148,5 +1270,11 @@ v2.x succeeds when:
 - [`docs/architecture/key-layout.md`](../docs/architecture/key-layout.md) —
   Current tag namespace allocation and reservations.
 - [`docs/architecture/mvcc-implementation.md`](../docs/architecture/mvcc-implementation.md) —
+- [OpenData](https://opendata.dev/docs) — A family of object-storage-native
+  databases built on SlateDB. The Buffer, Log, Timeseries, and Vector
+  databases demonstrate the structured-key model, merge operators for
+  inverted indexes, RoaringBitmap posting lists, block-level record counts,
+  entity-level bloom filter proposals, and the stateless zonal ingestion
+  pattern — all directly applicable to the v2.x fact store.
   v1.x MVCC mechanics that v2.x generalises.
 - [`ROADMAP.md`](../ROADMAP.md) — v2.x roadmap entry (Exploration).
