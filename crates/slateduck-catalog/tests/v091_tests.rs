@@ -204,7 +204,10 @@ async fn all_staged_mutations_visible_after_create_snapshot() {
 
     let mut writer = store.begin_write();
     let schema_id = writer.create_schema("main").await.unwrap();
-    let table_id = writer.create_table(schema_id, "events", None).await.unwrap();
+    let table_id = writer
+        .create_table(schema_id, "events", None)
+        .await
+        .unwrap();
     writer
         .add_column(table_id, "id", "BIGINT", 0, false, None)
         .await
@@ -254,10 +257,7 @@ async fn find_table_schema_id_returns_correct_schema() {
 
     // Verify find_table_schema_id returns the correct schema
     let reader_writer = store.begin_write();
-    let found_schema = reader_writer
-        .find_table_schema_id(table_id)
-        .await
-        .unwrap();
+    let found_schema = reader_writer.find_table_schema_id(table_id).await.unwrap();
     assert_eq!(
         found_schema,
         Some(schema_id),
@@ -267,11 +267,7 @@ async fn find_table_schema_id_returns_correct_schema() {
 
     // Now drop the table using the correct schema_id
     let mut w2 = store.begin_write();
-    let resolved_schema = w2
-        .find_table_schema_id(table_id)
-        .await
-        .unwrap()
-        .unwrap();
+    let resolved_schema = w2.find_table_schema_id(table_id).await.unwrap().unwrap();
     w2.drop_table(resolved_schema, table_id, snap.as_u64())
         .await
         .unwrap();
@@ -317,10 +313,7 @@ async fn find_column_table_id_returns_correct_table() {
 
     // Verify find_column_table_id returns the correct table
     let lookup_writer = store.begin_write();
-    let found_table = lookup_writer
-        .find_column_table_id(column_id)
-        .await
-        .unwrap();
+    let found_table = lookup_writer.find_column_table_id(column_id).await.unwrap();
     assert_eq!(
         found_table,
         Some(table_id),
@@ -330,11 +323,7 @@ async fn find_column_table_id_returns_correct_table() {
 
     // Drop the column using the correctly resolved table_id
     let mut w2 = store.begin_write();
-    let resolved_table = w2
-        .find_column_table_id(column_id)
-        .await
-        .unwrap()
-        .unwrap();
+    let resolved_table = w2.find_column_table_id(column_id).await.unwrap().unwrap();
     w2.drop_column(resolved_table, column_id, snap.as_u64())
         .await
         .unwrap();

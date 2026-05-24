@@ -361,7 +361,6 @@ impl CatalogWriter {
         Ok(())
     }
 
-
     pub async fn register_inlined_delete(
         &mut self,
         table_id: u64,

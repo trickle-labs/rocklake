@@ -1054,7 +1054,11 @@ async fn test_select_max_snapshot_consistent_after_multiple_write_sessions() {
     )
     .await
     .unwrap();
-    assert_eq!(r1.len(), 1, "SELECT max(snapshot) must return 1 row after first commit");
+    assert_eq!(
+        r1.len(),
+        1,
+        "SELECT max(snapshot) must return 1 row after first commit"
+    );
 
     // Session 2
     executor::execute_sql("BEGIN", &empty_params, &store, &mut session)
@@ -1085,5 +1089,9 @@ async fn test_select_max_snapshot_consistent_after_multiple_write_sessions() {
     )
     .await
     .unwrap();
-    assert_eq!(r2.len(), 1, "SELECT max(snapshot) must return 1 row after second commit");
+    assert_eq!(
+        r2.len(),
+        1,
+        "SELECT max(snapshot) must return 1 row after second commit"
+    );
 }
