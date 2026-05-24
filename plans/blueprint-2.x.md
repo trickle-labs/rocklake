@@ -73,6 +73,12 @@ into v2.5+.
   attempt to compete with log brokers on per-event latency.
 - **Multi-writer per fact store.** v2.x keeps the single-writer model from
   v1.x. Multi-writer is evaluated as a separate exploration in §10.
+- **Bulk analytical processing.** EAV on an LSM tree cannot compete with
+  columnar stores for aggregations over millions of rows. The recommended
+  answer for analytical workloads is: export to Parquet and query with
+  DuckDB — exactly what the v1.x lakehouse catalog already enables.
+  v2.x targets **lookup-dominated, audit-grade, temporally-queried
+  metadata** workloads, not OLAP.
 
 ---
 
@@ -119,9 +125,22 @@ retracts the old one. Every change participates in time travel: queries at
 older versions still see the old schema and the old data exactly as they
 were.
 
-EAV pays a cost at query time: assembling a logical "row" requires joining
-several facts. This cost is the central engineering challenge §3 and §4
-address with index design and query compilation.
+EAV pays real costs that must be acknowledged:
+
+- **Write amplification.** A fact stored across N indexes means N physical
+  writes per attribute per transaction. §3.3 addresses this with a tiered
+  index model that avoids blanket 4× amplification.
+- **Full-entity reads are prefix scans, not block reads.** A columnar store
+  returns an entity's 30 attributes in one block fetch; EAVT requires a
+  prefix scan over 30 keys. This is acceptable for the target workloads
+  (point lookups, audit, metadata) and is addressed by the pull API (§4.4)
+  which batches the scan into one round-trip.
+- **Analytical aggregations are expensive.** Counting or summing across all
+  entities for one attribute requires an AVET scan, not a column read. See
+  §1.2 — this is a deliberate non-goal.
+
+These costs are the central engineering challenges §3 and §4 address with
+tiered index design, query compilation, and honest workload scoping.
 
 ### 2.3 The fact lifecycle
 
@@ -175,39 +194,49 @@ tags, v2.x reserves a contiguous block for the generic fact-store schema:
 ```
 Tag    Role
 ----   ----
-0x40   Datom: EAVT primary index   (Entity, Attribute, Version, Tx)
-0x41   Datom: AEVT secondary       (Attribute, Entity, Version, Tx)
-0x42   Datom: AVET unique/range    (Attribute, Value, Entity, Tx)
-0x43   Datom: VAET reverse refs    (Value, Attribute, Entity, Tx)
+0x40   Datom: EAVT primary index   (Entity, Attribute, Version, Tx) — always built
+0x41   Datom: AEVT opt-in index    (Attribute, Entity, Version, Tx) — declare :attribute-scan
+0x42   Datom: AVET index           (Attribute, Value, Entity, Tx)   — declare :indexed or :unique
+0x43   Datom: VAET opt-in index    (Value, Attribute, Entity, Tx)   — declare :reverse-ref
 0x44   Tx log: per-transaction audit record
-0x45   Schema facts (attribute declarations, indexed at 0x40–0x43)
+0x45   Schema facts (attribute declarations)
 0x46   Schema migration log
-0x47   User-defined system facts (rate limits, retention policies, etc.)
+0x47   Statistics: per-attribute fact counts, cardinality sketches, min/max
 0x48–0x4F  Reserved for future fact-store internals
 0x50–0xBF  User-allocated tag ranges for application schemas
 ```
 
-A fact `(e, a, v, V, op)` is stored as **four physical keys**, one per
-index. Each is independently sorted, independently prefix-scannable, and
-independently mergeable. Reads choose the index that minimises scan width
-for the query at hand (§4.2).
+A fact is stored in EAVT (always) plus any declared secondary indexes.
+Version ranges are embedded in the key prefix so temporal pruning happens
+during the prefix scan itself, not as a post-filter (§3.3).
 
-### 3.3 Why four indexes
+### 3.3 Tiered index model: mandatory, opt-in, and derived
 
-Each index serves a distinct access pattern:
+Not every attribute needs every index. Blanket four-way write amplification
+is the wrong default on an LSM tree — it inflates SST count, compaction
+pressure, and per-request object-storage costs. Instead, indexes are
+declared per attribute:
 
-| Index | Optimised for                                              |
-|-------|------------------------------------------------------------|
-| EAVT  | "Tell me everything about entity E as of version V"        |
-| AEVT  | "Which entities have attribute A set as of version V"      |
-| AVET  | "Which entity has attribute A = value X" (uniqueness, range scans) |
-| VAET  | "What references entity E via any attribute" (reverse refs) |
+| Index | When it is built | Access pattern it enables |
+|-------|------------------|---------------------------|
+| **EAVT** (always) | Every attribute, unconditionally | Point and range lookups on entity; full-entity scan; time travel |
+| **AVET** (declare `:indexed` or `:unique`) | Attributes where value lookups matter | "Which entity has attribute A = value X?"; uniqueness enforcement; range scans by value |
+| **AEVT** (declare `:attribute-scan`) | Attributes frequently queried across all entities | "Which entities have attribute A set?" without scanning all EAVT keys |
+| **VAET** (declare `:reverse-ref`) | Reference attributes where reverse traversal is needed | "What references entity E?" graph reverse-edge queries |
 
-This is the same insight LSM-backed systems have rediscovered repeatedly:
-*indexes are not a luxury; they are the difference between O(N) scans and
-O(log N) lookups*. The substrate already sorts every key — adding three
-more sorted projections of the same fact costs 4× the write amplification
-in exchange for orders-of-magnitude better read selectivity.
+This gives operators control over the write-amplification budget. A simple
+configuration fact store might use only EAVT. An entity-graph workload
+adds AVET (unique IDs) and VAET (reverse refs) on a handful of attributes.
+AEVT is only needed for analytical-flavoured queries across all entities of
+a type, which is in the non-goals for v2.x but supported if declared.
+
+**Temporal pruning in the key.** Each EAVT key is
+`[0x40][entity][attribute][version_bigendian]`. Because version is encoded
+big-endian and facts are appended in version order, a scan `as_of(V)` is
+a prefix scan of `[0x40][entity][attribute]` with an upper-bound stop at
+`[0x40][entity][attribute][V+1]` — a natural LSM range scan with zero
+post-filtering overhead. The same pattern extends to AVET: range scans by
+value at a given version are key-range queries, not table scans.
 
 ### 3.4 Leveraging SlateDB features
 
@@ -321,9 +350,46 @@ Selection rules, in order:
 4. If the query traverses a reference backward → VAET scan.
 5. Otherwise, fall through to a full scan with a covering filter.
 
-### 4.3 The rule-based query language
+### 4.3 The pipeline query model
 
-A small surface, designed to compile efficiently to prefix scans. Example:
+All query interfaces share a common **pipeline** model: queries are built
+from small, composable operators that transform a stream of fact tuples.
+A query is a *source operator* followed by zero or more *tail operators*.
+This model is deliberately explicit and iteratively testable — you can
+remove tail operators to inspect intermediate results at any step.
+
+Core source operators:
+
+| Operator | Description |
+|----------|-------------|
+| `from(namespace, bindings)` | Read facts from the EAVT index. Temporal filter defaults to current version. |
+| `from(namespace, bindings, for_version: V)` | Same, pinned to a specific version. |
+| `from(namespace, bindings, for_valid_time: T)` | Valid-time filter (bi-temporal, §5.2). |
+| `rel(inline_data)` | Inline relation — useful for constants and test fixtures. |
+
+Core tail operators: `where`, `with` (computed columns), `return`
+(projection), `without` (column exclusion), `order_by`, `limit`,
+`aggregate`, `join`, `left_join`.
+
+Multi-source joins use **unification**: declare a binding variable in two
+`from` sources and the planner automatically adds the join condition on
+equal values — no explicit `ON` clause needed for the common case.
+
+```rust
+// Rust API — composable query:
+let q = store.as_of(v)
+    .from("user", ["name", "country"])
+    .join(
+        store.as_of(v).from("order", ["user_id", "total"]),
+        on: |u, o| u.entity_id == o["user_id"]
+    )
+    .where_(|row| row["country"] == "NO")
+    .aggregate(["country"], [("total_revenue", sum("total"))])
+    .order_by("total_revenue", Desc);
+```
+
+The rule-based query engine is a thin layer on top of the pipeline model
+that evaluates **recursive rules** via *semi-naïve* bottom-up evaluation:
 
 ```
 ?ancestor(X, Y) :- parent(X, Y).
@@ -332,46 +398,49 @@ A small surface, designed to compile efficiently to prefix scans. Example:
 ?- ancestor(Alice, ?who).
 ```
 
-Compilation strategy:
+- **Non-recursive rules** compile directly to pipeline join sequences.
+- **Recursive rules** maintain a worklist of newly-derived tuples,
+  scan only their neighbourhood at each iteration, terminate when empty.
+- **Negation as failure** is supported only for stratified programs
+  (no cycles through negation).
+- **Aggregates** are pushed into scans when the index supports it.
 
-- **Non-recursive rules** compile to a sequence of indexed joins. Each
-  predicate becomes a scan whose index is chosen by §4.2.
-- **Recursive rules** compile to *semi-naïve* evaluation: maintain a
-  worklist of newly-derived facts, scan only their neighbourhood at each
-  iteration, terminate when the worklist is empty. This is the textbook
-  bottom-up evaluation strategy and is well-suited to LSM-backed storage.
-- **Negation as failure** is supported only against *stratified* programs
-  to keep semantics decidable.
-- **Aggregates** (`count`, `sum`, `min`, `max`, `distinct`) are pushed
-  down into scans whenever the index supports it.
-
-The compiler emits a query plan that is a DAG of physical operators
-(`Scan`, `Filter`, `Join`, `Project`, `Aggregate`). The runtime is
-streaming: results flow through operators row-at-a-time, no materialisation
-of intermediate results unless an explicit `Aggregate` requires it.
+The compiler emits the same DAG of physical operators (`Scan`, `Filter`,
+`Join`, `Project`, `Aggregate`) regardless of which surface syntax was
+used. SQL, rules, and the typed API produce the same plan for the same
+logical query.
 
 ### 4.4 The pull API
 
-A complementary, declarative way to retrieve a hierarchical shape:
+Pull is **sugar over subqueries**, not a separate mechanism. Every nested
+level in a pull spec compiles to a fully-powered sub-pipeline with the
+complete set of tail operators available: ordering, filtering, limiting,
+and aggregation are all legal inside a nested pull. This means there is
+no "pull can't do X" class of problems — if a sub-query can express it, a
+nested pull can express it too.
 
 ```rust
-let user = store.as_of(version).pull(user_id, &spec! {
+// Pull a user with their 10 most-recent orders, each with line items
+let user = store.as_of(version).pull(user_id, pull! {
     "user/name",
     "user/email",
-    "user/orders": [
-        "order/total",
-        "order/items": [
-            "item/name",
-            "item/price",
-        ],
-    ],
+    // nested pull is a sub-pipeline — full operator access
+    "user/orders": from("order", ["total", "created_at"])
+        .order_by("created_at", Desc)
+        .limit(10)
+        .pull! {
+            "order/total",
+            "order/created_at",
+            "order/items": from("item", ["name", "price"]),
+        },
 }).await?;
 ```
 
-The pull spec is compiled into a batched scan: one EAVT scan for the root
-entity, one AEVT scan per nested reference attribute, and so on. The
-operator tree is fixed by the spec, so the planner has perfect cardinality
-information.
+Compilation: one EAVT scan for the root entity, one index scan per nested
+relationship, batched in one SlateDB scan pipeline. Each nested scan uses
+the most selective available index (AVET for unique refs, EAVT for
+entity-keyed lookups). The planner has perfect cardinality information
+because the spec shape is fixed at compile time.
 
 This eliminates the N+1-query problem that plagues most graph traversal
 APIs — every nested level is a single batched scan, not one round-trip per
@@ -381,20 +450,53 @@ parent entity.
 
 The existing PG-wire dispatcher gains a synthetic schema where every
 attribute becomes a column on a virtual `entity` table per namespace.
-This is enough for BI tools to issue:
+This is enough for BI tools to issue standard SQL:
 
 ```sql
 SELECT u.name, COUNT(o.id) AS order_count
 FROM   user u
-JOIN   order o ON o.user_id = u.id
+JOIN   "order" o ON o.user_id = u.id
 WHERE  u.created_at > '2026-01-01'
 GROUP BY u.name;
 ```
 
-The SQL planner translates joins into rule-based query fragments under the
-hood, so SQL and rule-based queries share an optimiser. Time travel is
-expressed via PostgreSQL's `AS OF SYSTEM TIME` extension syntax, the same
-clause already used by the lakehouse adapter.
+The SQL planner translates joins and subqueries into pipeline operators
+under the hood, so SQL and rule-based queries share the same optimiser and
+produce the same physical plans.
+
+**Time travel** is expressed via SQL:2011 temporal syntax:
+
+```sql
+-- Transaction-time (system-time) view
+SELECT name FROM user FOR SYSTEM_TIME AS OF '2025-06-01';
+
+-- Valid-time view (bi-temporal, §5.2)
+SELECT name FROM user FOR VALID_TIME AS OF '2025-01-01';
+
+-- Full history
+SELECT name, _system_from, _system_to FROM user FOR ALL SYSTEM_TIME;
+```
+
+**Hierarchical result shaping** is available via `NEST_ONE` and
+`NEST_MANY` extensions, avoiding the N+1 problem in SQL consumers:
+
+```sql
+SELECT
+    u._id AS user_id,
+    u.name,
+    NEST_MANY(
+        SELECT total, created_at
+        FROM   "order" WHERE user_id = u._id
+        ORDER BY created_at DESC
+        LIMIT  10
+    ) AS recent_orders
+FROM user u
+WHERE u.country = 'NO';
+```
+
+`NEST_ONE` returns a JSON object (or NULL), `NEST_MANY` returns a JSON
+array. Both compile to the same batched index scans as the pull API;
+they are not client-side post-processing.
 
 ### 4.6 Materialised views
 
@@ -545,7 +647,34 @@ v2.x ships with reproducible benchmarks demonstrating:
 
 ## 7. Schema and Evolution
 
-### 7.1 Schemas as facts
+### 7.1 Schema modes: strict and dynamic
+
+v2.x supports two schema modes per namespace, configurable per application
+schema:
+
+**Strict mode** (default for declared schemas):
+- Attribute declarations are required before facts can be asserted.
+- The value type, cardinality, and index set are enforced at write time.
+- Schema violations are rejected at the writer's validation pipeline (§8.2).
+- Best for: configuration management, compliance records, catalog metadata
+  where the shape is known in advance.
+
+**Dynamic mode** (opt-in per namespace):
+- Facts can be asserted without a prior attribute declaration.
+- Types are inferred from the first assertion and recorded as schema facts
+  automatically.
+- New attributes appear in queries immediately without a schema migration.
+- Conflicting types produce type-widening (e.g. `i64` + `f64` → `f64`),
+  recorded as a schema fact.
+- Best for: exploratory data, log-like workloads, prototyping, or any case
+  where the shape isn't fully known in advance.
+
+Both modes store their schema in the same reserved namespace (tag `0x45`).
+A dynamic namespace can be promoted to strict mode at any version by
+declaring the inferred schema as authoritative — all future writes are
+then validated against it.
+
+### 7.2 Schemas as facts
 
 Attribute declarations are themselves facts in a reserved namespace
 (tag `0x45`). A schema change is a transaction; rollback is a query at an
@@ -555,7 +684,7 @@ This eliminates the perennial "schema registry" problem — there is no
 separate service to keep in sync with the data, because the schema *is*
 data.
 
-### 7.2 Permitted changes
+### 7.3 Permitted changes
 
 Without rewriting history:
 
@@ -576,7 +705,7 @@ With explicit migration:
   valid).
 - Change cardinality from `many` to `one` (requires conflict resolution).
 
-### 7.3 Migration log
+### 7.4 Migration log
 
 Every migration is recorded as a fact under tag `0x46`. A migration log
 entry captures the transformation (as code or as a declarative rule), the
@@ -601,7 +730,8 @@ caller                writer                  SlateDB                 audit
   │                     │ validate references    │                      │
   │ commit() ───────────►                        │                      │
   │                     │ build WriteBatch       │                      │
-  │                     │  ├── 4 index writes    │                      │
+  │                     │  ├── EAVT (always)     │                      │
+  │                     │  ├── opt-in indexes    │                      │
   │                     │  ├── tx-log fact       │                      │
   │                     │  └── counter bumps     │                      │
   │                     │ commit_with_options ───► durable ─────────────►
@@ -825,21 +955,30 @@ in-workspace extraction is sufficient.
 
 ### Phase 2.1 — Generic fact model
 
-- [ ] EAVT, AEVT, AVET, VAET indexes implemented.
-- [ ] Schema-as-facts (tag `0x45`).
+- [ ] EAVT primary index implemented with big-endian version in key.
+- [ ] Temporal key pruning: `as_of(V)` is a key-range query, no post-filter.
+- [ ] AVET built for attributes declaring `:indexed` or `:unique`.
+- [ ] AEVT built for attributes declaring `:attribute-scan`.
+- [ ] VAET built for attributes declaring `:reverse-ref`.
+- [ ] Schema-as-facts: strict mode (§7.1) with declared attributes.
+- [ ] Dynamic mode (§7.1): infer and record types from first assertion.
 - [ ] Transaction log (tag `0x44`) and audit view.
 - [ ] Typed Rust API: `assert`, `retract`, `as_of`, `entity`, `query`.
-- [ ] Property tests for index consistency: every fact appears in all
-      four indexes with identical content.
+- [ ] Property tests: every fact appears in EAVT and every declared secondary
+      index; no undeclared secondary index entries.
 
 ### Phase 2.2 — Query layer
 
-- [ ] Query planner with index-selection heuristics.
-- [ ] Pull API with batched scans.
-- [ ] Rule-based query engine with semi-naïve evaluation.
-- [ ] SQL surface extension over rule-based engine.
-- [ ] Cross-interface query-plan parity tests (same logical query, same
-      physical plan).
+- [ ] Pipeline query model: source operators (`from`, `rel`) + tail
+      operators (`where`, `with`, `return`, `order_by`, `limit`,
+      `aggregate`, `join`, `left_join`).
+- [ ] Index selection planner (§4.2) using per-attribute statistics.
+- [ ] Pull API: nested pull compiles to batched sub-pipelines (§4.4).
+- [ ] Rule-based query engine with semi-naïve recursive evaluation (§4.3).
+- [ ] SQL surface with `FOR SYSTEM_TIME AS OF` and `FOR ALL SYSTEM_TIME`.
+- [ ] `NEST_ONE` / `NEST_MANY` SQL extensions for hierarchical results (§4.5).
+- [ ] Cross-interface parity tests: same logical query → same physical plan
+      regardless of surface syntax.
 
 ### Phase 2.3 — Read scale-out
 
@@ -850,8 +989,9 @@ in-workspace extraction is sufficient.
 
 ### Phase 2.4 — Schema evolution
 
-- [ ] All "without rewrite" changes from §7.2.
-- [ ] Migration log and replay tool.
+- [ ] All "without rewrite" changes from §7.3.
+- [ ] Dynamic-to-strict mode promotion path.
+- [ ] Migration log (tag `0x46`) and replay tool.
 - [ ] Schema diff CLI.
 
 ### Phase 2.5 — Bi-temporal and retention
@@ -887,7 +1027,9 @@ performance) and adds:
 
 | Layer | What it tests |
 |-------|---------------|
-| **Index consistency** | Every fact appears in all four indexes with byte-identical content. Property test, exhaustive. |
+| **Index consistency** | Every fact appears in EAVT and every declared secondary index with byte-identical content. Property test, exhaustive. |
+| **Index opt-in isolation** | A fact with no secondary indexes declared does not appear in any secondary index. |
+| **Temporal key pruning** | A scan `as_of(V)` does not read any key with version > V (verified at the key-range level, not post-filter). |
 | **Query-plan parity** | Logically equivalent queries across SQL, rules, and the typed API produce identical physical plans. |
 | **Time-travel determinism** | A query at version V returns identical results regardless of how many versions exist past V. |
 | **Schema-evolution safety** | Every permitted change in §7.2 leaves historical queries unchanged. |
@@ -937,7 +1079,9 @@ land.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| Four-index write amplification dominates write throughput | Medium | High | Benchmark in Phase 2.1; if real, offer "index sets" (subset of indexes per attribute) as an opt-in. |
+| Tiered index model adds schema-declaration friction for new adopters | Medium | Medium | Dynamic mode (§7.1) removes the requirement; strict mode can be adopted incrementally. |
+| EAVT-only stores have poor attribute-scan performance | High | Low | By design — §1.2 explicitly excludes bulk analytical aggregations. Materialised views (§4.6) and Parquet export are the recommended escape hatches. |
+| `NEST_ONE` / `NEST_MANY` encoding choice (JSON vs. Arrow) blocks adoption | Medium | Medium | Default to `serde_json::Value` for PG-wire; expose Arrow-typed API for embedded use. See Open Questions §18. |
 | Query planner cannot beat hand-written scans in early benchmarks | High | Medium | Ship the typed API first; defer SQL/rules optimisation until the substrate is stable. |
 | Bi-temporal semantics confuse early adopters | High | Low | Keep bi-temporal opt-in per attribute; default is single-time. |
 | Materialised-view freshness lag breaks user expectations | Medium | High | Bound the lag explicitly (10 ms group-commit window) and expose it as a metric. |
@@ -982,6 +1126,16 @@ v2.x succeeds when:
   GCS ↔ Azure) without performance cliffs?
 - Should counters be per-entity-type or global per-store? (Performance vs.
   conceptual simplicity trade-off.)
+- Should `NEST_ONE` / `NEST_MANY` return native JSON, Arrow structs, or
+  Rust `serde_json::Value`? The answer affects the SQL surface, the FFI,
+  and the PG-wire encoding.
+- What is the promotion path from dynamic mode to strict mode? Should
+  inferred types be auto-promoted after N asserts, or always require
+  explicit operator action?
+- How do secondary indexes interact with the excision path? Excision must
+  remove facts from EAVT **and** every secondary index; the implementation
+  must handle the case where secondary index declarations change between
+  the assertion version and the excision version.
 
 ---
 
