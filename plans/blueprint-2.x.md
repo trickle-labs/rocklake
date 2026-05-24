@@ -378,6 +378,40 @@ O(1) range counting within a key-prefix range.
 Both are *proposed* enhancements, not requirements for Phase 2.0. Tracked
 as open questions in §18.
 
+### 3.8 Disaggregated compaction and garbage collection
+
+Because all data lives in object storage, compaction and garbage collection
+do not need to run on the same process as the writer. This disaggregation
+yields three practical benefits:
+
+1. **No resource contention.** Compaction never competes with ingest or
+   queries for CPU, memory, or disk I/O.
+2. **Cheaper compute.** Compaction and GC jobs are stateless and
+   restartable — they can run on spot or preemptible instances without
+   risk of data loss. The writer and readers continue normally regardless
+   of whether a compaction job is active.
+3. **Independent scheduling.** Compaction intensity can be dialled up
+   during off-peak hours and throttled during ingest spikes.
+
+SlateDB already supports this model through its `compactor_options` and
+`garbage_collector_options` configuration blocks. Recommended production
+slots:
+
+```yaml
+compactor_options:
+  max_concurrent_compactions: 2
+  max_sst_size: 67108864          # 64 MiB
+garbage_collector_options:
+  manifest_options: { interval: '60s', min_age: '3600s' }
+  wal_options:      { interval: '60s', min_age: '60s' }
+  compacted_options: { interval: '60s', min_age: '3600s' }
+```
+
+The `min_age` guards prevent the GC from deleting SST files that a reader
+pinned to a recent manifest generation still needs. Setting it to 1 hour
+for manifests and compacted SSTs is conservative but safe; tighten it only
+if storage costs are a concern.
+
 ---
 
 ## 4. Query Layer
@@ -634,6 +668,23 @@ excise` invokes the audited deletion path on a schedule.
 The default is `keep: forever, mode: visibility_only`. Operators must opt
 in to byte-level deletion, just as in v1.x.
 
+**SlateDB native TTL.** For short-lived data (staging namespaces, rolling
+event windows, ephemeral tenants) the SlateDB `default_ttl` setting
+applies a storage-level expiry to every key written. Once the TTL elapses
+SlateDB marks the key as a tombstone during the next compaction pass —
+no application code required. This is a lightweight complement to
+per-attribute retention: use TTL for whole-namespace expiry, per-attribute
+policies for finer-grained control.
+
+**Segment-based retention.** Encoding a time-window boundary in the key
+prefix (e.g. `[tag][hour_bucket][entity][attr][version]`) physically
+clusters all facts from that window into a contiguous key range. Expiring
+an entire window then becomes a bounded prefix-range delete rather than a
+per-key tombstone sweep — O(1) in the number of key ranges, not O(n) in
+the number of facts. This is worth considering for high-volume append-only
+workloads (event logs, metric facts) where entire time windows age out
+together.
+
 ### 5.4 Excision
 
 Inherited from v1.x unchanged. `slateduck excise --before V --apply`
@@ -644,6 +695,35 @@ under tag `0xFF`).
 v2.x adds **per-entity excision** for compliance use cases (right-to-be-
 forgotten): `slateduck excise --entity 12345 --apply` removes all facts
 for entity 12345 across all indexes and writes a compliance audit record.
+
+### 5.5 Checkpoints and branches
+
+Because the fact store is an immutable LSM tree on object storage, a
+**checkpoint** is a single O(1) metadata operation: it records the current
+SlateDB manifest generation and marks the referenced SST files immune from
+garbage collection. The checkpoint can be held indefinitely without
+blocking writes.
+
+Checkpoints enable three operational patterns that are otherwise expensive
+or impossible:
+
+- **Point-in-time restore.** Roll back to a known-good version after a bad
+  bulk import or a runaway migration:
+  ```
+  slateduck checkpoint create --name pre-migration-v42
+  slateduck checkpoint restore --name pre-migration-v42   # dry-run by default
+  ```
+- **Test and staging branches.** Developers take a checkpoint of production
+  data, open it in a read-only reader, and run the migration script against
+  real data without risking production. No data copy required.
+- **Snapshot isolation for long-running analytics.** Pin a multi-hour
+  analytical query to a stable manifest generation. The writer continues
+  committing at full speed; the pinned reader sees a frozen view.
+
+A checkpoint is purely a manifest reference — it does not copy any SST
+files. `slateduck checkpoint list` shows all named checkpoints and their
+generation numbers; `slateduck checkpoint drop` releases the GC hold when
+the checkpoint is no longer needed.
 
 ---
 
@@ -658,6 +738,10 @@ sees a stable view that no concurrent writer can perturb. This means:
 - Readers do not need to talk to each other.
 - Readers can be cached, replicated, and pinned to specific manifest
   generations indefinitely.
+- Readers can be deployed in specific availability zones. An in-zone
+  replica serves all reads locally, eliminating cross-zone S3 data-transfer
+  costs entirely. At high query volumes cross-zone transfer is a measurable
+  line item; zonal replica deployment is the operational lever to remove it.
 
 This is the strongest scale-out story possible: linear throughput by
 adding processes, no coordination overhead, no consistency protocol.
@@ -949,6 +1033,29 @@ Key properties:
 - **At-least-once delivery with idempotent replay.** If the consumer
   crashes between processing a batch and acknowledging it, the batch is
   re-processed on restart. Idempotency tokens (§8.6) make replay safe.
+- **Exactly-once delivery via atomic sequence persistence.** To upgrade
+  from at-least-once to exactly-once, the consumer writes the batch
+  payload and the last acknowledged sequence number in the *same*
+  `WriteBatch` to SlateDB. On restart the new consumer reads the last
+  persisted sequence number and resumes from that position, then bumps
+  the manifest epoch to fence any zombie consumer. No batch is committed
+  twice.
+- **ULID-named batch files.** Each flushed batch is named with a ULID
+  (Universally Unique Lexicographically Sortable Identifier) that encodes
+  a millisecond-precision timestamp. Batches sort naturally by creation
+  time without coordination, and the timestamp in the ULID lets operators
+  instantly identify which batches correspond to a given time range.
+- **O(1) manifest appends.** The queue manifest is designed so that
+  existing entries are never deserialized during an append — only the tail
+  is written. Concurrent producers use compare-and-swap on the manifest;
+  on conflict a producer re-reads and retries. Append latency is
+  independent of queue depth.
+- **Self-describing batch format.** Each batch file contains an
+  optionally-compressed record block followed by a compact footer (7
+  bytes) encoding the compression type, record count, and format version.
+  The consumer reads the footer first, decompresses if needed, and then
+  parses the length-prefixed record entries. This makes it safe to add new
+  compression codecs or record types without breaking existing consumers.
 - **Write availability decoupled from writer availability.** Apps continue
   writing to object storage even while SlateDuck is down or deploying.
 
@@ -990,6 +1097,20 @@ spec:
 ```
 
 Read replicas have no such constraint and can use `RollingUpdate` freely.
+
+**Health check endpoints.** The writer and reader expose two distinct
+HTTP health endpoints:
+
+| Endpoint | Probe type | Behaviour |
+|----------|------------|-----------|
+| `GET /-/healthy` | Liveness | Returns 200 while the process is running. Kubernetes restarts the pod only if this fails. |
+| `GET /-/ready` | Readiness | Returns 200 if the SlateDB storage backend is accessible; returns 503 otherwise. Kubernetes removes the pod from the load balancer until the backend recovers. |
+
+The critical distinction: a writer that temporarily cannot reach the object
+store should fail **readiness**, not liveness. Failing liveness would
+trigger a restart loop that does not fix the underlying problem; failing
+readiness removes the pod from the load balancer while leaving the process
+alive to recover when the object store becomes reachable again.
 
 ---
 
@@ -1037,6 +1158,37 @@ ORDER  BY version DESC;
 
 The view is backed directly by the tag `0x44` index — no separate audit
 table needs to be maintained.
+
+### 9.5 Buffer queue observability
+
+When the Buffer front-end (§8.7) is active, the writer exposes additional
+metrics for the ingest queue under the `buffer_` prefix:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `buffer_consumer_lag_seconds` | gauge | Wall clock minus last successfully processed batch’s ingestion time. A growing lag indicates the consumer is falling behind ingest rate. |
+| `buffer_queue_length` | gauge | Number of pending (unacknowledged) batches in the manifest. |
+| `buffer_batches_collected` | counter | Total batches fetched from object storage. |
+| `buffer_bytes_collected` | counter | Total compressed bytes read from object storage. |
+| `buffer_manifest_conflicts` | counter | CAS conflicts during manifest append. A high rate means many concurrent producers are contending; consider increasing flush interval. |
+| `buffer_gc_files_deleted` | counter | Batch files deleted by the garbage collector. |
+
+Key PromQL queries for buffer health:
+
+```promql
+# Is the consumer keeping up with producers?
+buffer_consumer_lag_seconds
+
+# Ingest rate (batches per second)
+rate(buffer_batches_collected[5m])
+
+# Producer contention
+rate(buffer_manifest_conflicts[5m])
+```
+
+`buffer_consumer_lag_seconds` is the primary SLO signal for the buffered
+write path: if it grows beyond the acceptable freshness window (§6.5) alert
+on it directly.
 
 ---
 
