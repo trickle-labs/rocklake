@@ -59,13 +59,13 @@ binding on every roadmap release below.
 | **v0.9.2 — Security Enforcement** | Real PG-Wire auth, CLI/env-var alignment, encryption wired into storage, FFI null safety | **Done** |
 | **v0.9.3 — Operational Safety** | GC retention enforcement, excision guards, checkpoint restore, typed import validation, rebuild fix | **Done** |
 | **v0.9.4 — GA Ready** | Concurrent reads, zone-map (conditional), Spark/Trino clients, DataFusion scan/pg-wire, virtual catalog SQL, test coverage, CI gates, docs complete, versioning policy, release automation | **Done** |
-| **v0.10 — Streaming Ingest** | pg-tide-relay integration, Kafka/NATS support, exactly-once delivery semantics, metadata key namespacing | Planning |
+| **v0.10 — Streaming Ingest** | pg-tide-relay integration, Kafka/NATS support, exactly-once delivery, CDC output (snapshot diffs, S3/Kafka/webhook) | Planning |
 | **v0.11 — IVM Foundations** | Catalog schema additions (tags 0x1D–0x20), `slateduck-ivm` crate, single-shard GROUP BY views, end-to-end demo | Planning |
 | **v0.12 — IVM Scale-Out** | Shard lease management, per-shard SlateDB state stores, multi-shard scale-out, re-sharding | Planning |
 | **v0.13 — IVM Joins** | Broadcast, co-partitioned, and re-shuffle join strategies; TPC-H Q3/Q4/Q5 | Planning |
-| **v0.14 — IVM Operational Hardening** | Native `SlateDbTrace`, cost optimization, observability, fault injection, 24 h soak | Planning |
+| **v0.14 — IVM Operational Hardening** | Native `SlateDbTrace`, cost optimization, cost guardrails (per-view budgets), observability, fault injection, 24 h soak | Planning |
 | **v0.15 — IVM Feature Completeness** | Window functions, ORDER BY, LIMIT/top-N, correlated subqueries, recursive CTEs, non-det capture, WASM UDFs | Planning |
-| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, IVM feature-complete GA sign-off | Planning |
+| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, IVM feature-complete GA sign-off, real-world validation gate | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
 
@@ -1969,6 +1969,17 @@ The naive implementation flushes a SlateDB batch on every input snapshot, genera
 - [ ] Aggressive compaction policy for matview state stores (configurable per matview)
 - [ ] Documented cost model: API calls per million input rows × shard count × freshness, with empirical numbers on S3 Standard, S3 Express, GCS, R2
 
+### Cost Guardrails (User-Facing)
+
+IVM can generate real S3 API costs at scale. Users need visibility and protection *before* they get an unexpected bill.
+
+- [ ] **Cost estimator at view creation.** `EXPLAIN MATERIALIZED VIEW v` includes estimated monthly S3 API cost based on: input rate (from recent snapshot commit frequency), shard count, freshness target, and empirical cost-per-million-rows from the v0.14 cost model
+- [ ] **Per-view cost budget.** `WITH (monthly_cost_limit = '$50')` option; workers throttle freshness (relax from 5 s toward 60 s) when projected cost exceeds budget. Clear warning surfaced in `SHOW MATERIALIZED VIEWS`
+- [ ] **Automatic freshness degradation.** When cost exceeds budget, freshness widens gracefully rather than stopping the view. Workers reduce flush frequency proportionally. View remains correct, just staler
+- [ ] **Per-worker cost tracking.** `slateduck_ivm_estimated_monthly_cost{matview, shard}` metric; `slateduck-ivm doctor` reports per-view projected monthly cost
+- [ ] **Cost ceiling alert.** If any view's projected monthly cost exceeds the budget by 2× (burst scenario), emit `WARN`-level log and Prometheus alert. No automatic stop (correctness over cost), but operator visibility is immediate
+- [ ] **Documentation.** `docs/operations/ivm-cost-control.md`: how to estimate costs before creating views, how budgets work, how to diagnose cost spikes, rules of thumb (freshness↑ = cost↓, shards↓ = cost↓)
+
 ### Backpressure & Per-Shard Publication Modes
 
 - [ ] Backpressure protocol: workers stall ingest when output plane is N snapshots behind (default N = 100)
@@ -2222,6 +2233,7 @@ Measurable acceptance criteria that must all be green before v1.0 is tagged:
 7. Phase 0 validation gates pass on LocalFS, MinIO, S3 Standard, and S3 Express; results documented.
 8. `mkdocs build --strict` green; documentation site live with no stub pages.
 9. **IVM GA gate.** v0.11–v0.15 acceptance tests all green: single-shard demo, 8-shard scale-out, TPC-H Q1/Q3/Q5 maintained incrementally, window functions correct (partition-local and total-order), recursive CTEs stable under fixed-point iteration, correlated subqueries decorrelated, non-deterministic function capture reproducible on repair, WASM UDFs sandboxed under fuel + memory limits, 24 h soak with zero correctness drift, fault-injection suite passing, native `SlateDbTrace` benchmarked, operator playbook complete. IVM is feature-complete at v1.0: any SQL view that can be written against a static DuckDB table can be maintained incrementally by SlateDuck.
+10. **Real-world validation gate.** At least 30 days of dogfood deployment on a realistic workload (see Cross-Cutting Concerns: Real-World Validation Policy). Friction log reviewed and all blocking findings resolved. One external-to-the-team developer has successfully deployed IVM using only published docs.
 
 ### Deliverables
 
@@ -2232,6 +2244,8 @@ Measurable acceptance criteria that must all be green before v1.0 is tagged:
 ---
 
 ## v0.10.0 — Streaming Ingest
+
+> **Note:** v0.10 is documented after v1.0 because it is an independent, parallel workstream. It can be implemented concurrently with the IVM track (v0.11–v0.15) and does not block or depend on IVM. Its CDC output primitives *feed into* IVM when both are deployed — see "Streaming Ingest + IVM Integration" below.
 
 > Kafka/NATS streaming pipelines, exactly-once delivery semantics, and pg-tide-relay integration for zero-infrastructure ingest paths from transactional sources to S3-backed data lakes.
 
@@ -2270,6 +2284,48 @@ Multiple applications coexist by using distinct prefixes. Application metadata r
 - [ ] Consumer offset tracking test: offset advances monotonically across 10 consecutive ingest batches
 - [ ] Performance test: Kafka ingest throughput ≥ 10k records/sec to S3 with catalog commit latency ≤ 50ms p95
 - [ ] Documentation: `docs/integration/streaming-ingest.md` with Kafka and NATS examples, offset recovery procedure, and failure mode handling
+
+### CDC Output (Change Data Capture Export)
+
+The complement to ingest: when a DuckLake snapshot is committed, the *diff* between the previous and current snapshot is a natural change stream. This turns SlateDuck from a streaming sink into a streaming source — enabling pipelines like `Source → SlateDuck → IVM → CDC → downstream`.
+
+**Snapshot diff as a first-class primitive.** The diff between snapshots `S_n` and `S_{n+1}` is already computed implicitly: it's the set of catalog facts with `begin_snapshot = S_{n+1}` (new) or `end_snapshot = S_{n+1}` (retired). Expose this as a typed API and as a streaming output.
+
+**CDC output targets:**
+
+- **S3 CDC files.** Write per-snapshot diff as a Parquet or JSON-lines file under `{warehouse}/cdc/{table_id}/snapshot-{id}.parquet`. Readers poll or use S3 event notifications. Zero-infrastructure; natural for batch-oriented downstream.
+- **Kafka/NATS CDC producer.** A sidecar (`slateduck-cdc`) tails the catalog and publishes per-table diffs to Kafka topics or NATS subjects. Exactly-once via consumer-offset tracking (same pattern as ingest, reversed).
+- **Webhook CDC.** HTTP POST to a configurable URL on each snapshot commit. Includes snapshot ID, affected tables, and a pre-signed URL to the diff file. Useful for serverless triggers (Lambda, Cloud Functions).
+
+**IVM-aware CDC.** When a materialized view updates, its output snapshot diff is itself a CDC event. This enables `Base table → IVM → Materialized view → CDC → external system`. The CDC producer treats materialized views identically to base tables.
+
+- [ ] `CatalogReader::snapshot_diff(from_snapshot, to_snapshot)` → structured diff (added/retired facts per table)
+- [ ] S3 CDC file writer: per-snapshot Parquet diff files under `{warehouse}/cdc/`
+- [ ] `slateduck-cdc` sidecar: tail catalog, produce to Kafka/NATS/webhook
+- [ ] CDC for materialized views: view output snapshot diffs exported like any table
+- [ ] End-to-end test: write → IVM update → CDC event → verify downstream receives correct diff
+- [ ] Documentation: `docs/integration/cdc-output.md` with Kafka, webhook, and S3-polling examples
+
+### Streaming Ingest + IVM Integration
+
+When v0.10 (streaming ingest) and v0.11+ (IVM) are both deployed, the end-to-end story is:
+
+```
+Kafka/NATS → pg-tide-relay → SlateDuck snapshot → IVM worker → materialized view update → CDC export
+```
+
+All within a single S3 bucket, no external state, no coordination servers.
+
+- [ ] Integration test: Kafka → ingest → base table → IVM view auto-updates within freshness target → CDC output matches expected diff
+- [ ] Documented architecture diagram in `docs/architecture/streaming-pipeline.md`
+- [ ] Latency budget documented: ingest commit + IVM processing + output publish ≤ freshness target + ingest batch interval
+
+### Deliverables (updated)
+
+- [ ] `SlateDuckSink` implementation in pg-tide registers without errors
+- [ ] CDC output: `snapshot_diff()` API, S3 CDC writer, and `slateduck-cdc` sidecar (Kafka + webhook)
+- [ ] End-to-end streaming pipeline test: ingest → IVM → CDC → downstream
+- [ ] Documentation: streaming ingest + CDC output + IVM integration
 
 ---
 
@@ -2443,6 +2499,42 @@ When a new DuckLake spec version is published:
 - DuckDB patch bumps: corpus replay CI; expected to remain compatible
 - DuckDB minor bumps: new corpus capture required; explicit sign-off
 - DuckDB major bumps: treated as a new client; full re-capture
+
+### DBSP/Feldera Dependency Strategy
+
+The IVM track (v0.11–v0.15) depends on the `dbsp` crate from [Feldera](https://www.feldera.com/). Feldera is a venture-funded startup; the crate is open-source (MIT) but its maintenance trajectory is not guaranteed. This is the single most important external dependency in the entire roadmap.
+
+**Risk mitigation layers:**
+
+1. **Thin adapter boundary.** All DBSP interaction is confined to `slateduck-ivm/src/circuit.rs`. The rest of the crate (source, trace, worker, output) depends only on the adapter's trait surface. Swapping DBSP for another engine requires rewriting one module, not the entire crate.
+
+2. **Version pinning with `=` constraint.** Never float on `^` or `~`. Every DBSP upgrade is an explicit decision with a full regression pass.
+
+3. **Contingency: vendored fork.** If Feldera stops maintaining `dbsp` or makes breaking changes incompatible with SlateDuck's needs:
+   - Fork the crate at the last known-good version
+   - Maintain a `slateduck-dbsp` fork under `trickle-labs/` with only the operators SlateDuck uses (filter, map, aggregate, join, iterate, top_k, window)
+   - Strip unused operators and external storage backends; reduce surface area
+
+4. **Contingency: raw differential-dataflow.** If a fork becomes untenable:
+   - Replace DBSP with direct `differential-dataflow` + `timely-dataflow` (same underlying engine, more stable, maintained by Frank McSherry)
+   - Loses the SQL-to-circuit compiler but retains the core DD semantics
+   - The `plan.rs` → circuit lowering step becomes more manual but the architecture remains unchanged
+
+5. **Evaluation gate.** At the start of v0.11, spend one week evaluating:
+   - DBSP's current release cadence
+   - Feldera's financial health (recent funding, hiring/layoffs)
+   - Alternative: [arroyo](https://github.com/ArroyoSystems/arroyo) (Rust, streaming SQL)
+   - Decision: proceed with DBSP, proceed with alternative, or vendor from day one
+
+**Document the decision in `docs/design-decisions/dbsp-dependency.md` before v0.11 alpha.**
+
+### Real-World Validation Policy
+
+Synthetic benchmarks (TPC-H, TPC-DS) catch performance regressions and correctness bugs, but they do not catch usability gaps, cost surprises, or workflow friction. Before v1.0 GA:
+
+1. **Internal dogfood.** Run a real SlateDuck+IVM deployment against pg-tide's own analytics pipeline (if available) or a synthetic-but-realistic workload (e.g. GitHub event stream, NYC taxi stream) for ≥ 30 days.
+2. **Document surprises.** Any unexpected behaviour, cost spike, or operational friction discovered during dogfooding becomes a documented finding and must be resolved or explicitly accepted before GA.
+3. **User-experience review.** At least one developer unfamiliar with SlateDuck internals must successfully create, monitor, and debug a materialized view using only the published documentation. Their friction log becomes a documentation and UX backlog item.
 
 ---
 
