@@ -58,10 +58,15 @@ binding on every roadmap release below.
 | **v0.9.1 — Write Protocol Correctness** | Atomic snapshot commits, stale-counter fix, `UPDATE end_snapshot` key resolution, writer protocol spec | **Done** |
 | **v0.9.2 — Security Enforcement** | Real PG-Wire auth, CLI/env-var alignment, encryption wired into storage, FFI null safety | **Done** |
 | **v0.9.3 — Operational Safety** | GC retention enforcement, excision guards, checkpoint restore, typed import validation, rebuild fix | **Done** |
-| **v0.9.4 — GA Ready** | Concurrent reads, zone-map (conditional), Spark/Trino clients, DataFusion scan/pg-wire, virtual catalog SQL, test coverage, CI gates, docs complete, versioning policy, release automation | Done |
-| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, GA sign-off | Planning |
-| **v0.10.0 — Streaming Ingest** | pg-tide-relay integration, Kafka/NATS support, exactly-once delivery semantics, metadata key namespacing | Planning |
-| **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda integration, additional performance optimizations | Planning |
+| **v0.9.4 — GA Ready** | Concurrent reads, zone-map (conditional), Spark/Trino clients, DataFusion scan/pg-wire, virtual catalog SQL, test coverage, CI gates, docs complete, versioning policy, release automation | **Done** |
+| **v0.10 — Streaming Ingest** | pg-tide-relay integration, Kafka/NATS support, exactly-once delivery semantics, metadata key namespacing | Planning |
+| **v0.11 — IVM Foundations** | Catalog schema additions (tags 0x1D–0x20), `slateduck-ivm` crate, single-shard GROUP BY views, end-to-end demo | Planning |
+| **v0.12 — IVM Scale-Out** | Shard lease management, per-shard SlateDB state stores, multi-shard scale-out, re-sharding | Planning |
+| **v0.13 — IVM Joins** | Broadcast, co-partitioned, and re-shuffle join strategies; TPC-H Q3/Q4/Q5 | Planning |
+| **v0.14 — IVM Operational Hardening** | Native `SlateDbTrace`, cost optimization, observability, fault injection, 24 h soak | Planning |
+| **v0.15 — IVM Feature Completeness** | Window functions, ORDER BY, LIMIT/top-N, correlated subqueries, recursive CTEs, non-det capture, WASM UDFs | Planning |
+| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, IVM feature-complete GA sign-off | Planning |
+| **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
 
 ---
