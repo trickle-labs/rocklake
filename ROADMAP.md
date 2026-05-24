@@ -1712,6 +1712,58 @@ Four new MVCC-versioned tables under freshly allocated tag bytes in [crates/slat
 - [ ] Wire-level fixtures captured under `tests/fixtures/matview/` for each table
 - [ ] Key-encoding test corpus extended for the new tag bytes (round-trip, ordering, prefix isolation)
 
+### Catalog Format Compatibility
+
+Adding tags `0x1D`–`0x21` must NOT require a `catalog-format-version` bump. The design already handles unknown tags: older binaries encountering an unknown tag byte return an explicit error rather than silent data loss (§ v0.2 Key Layout). This means:
+
+- [ ] Tags `0x1D`–`0x21` are additive: a v0.9.4 binary opening a v0.11 catalog ignores matview rows (they are not in any scan prefix it uses) and operates normally on the 28 base tables
+- [ ] A v0.11 binary opening a v0.9.4 catalog (no matview rows) operates normally; `list_matviews()` returns empty
+- [ ] No `catalog-format-version` increment required for v0.11; the existing format accommodates new tags by construction
+- [ ] Document this in `docs/architecture/key-layout.md`: "tag bytes are an extensibility mechanism; unknown tags are skipped during prefix scans and error on direct access"
+- [ ] Add a cross-version integration test: v0.9 binary reads a catalog that contains `0x1D`–`0x21` rows without error
+
+### Matview Output Table Semantics
+
+A materialized view's output is a **normal DuckLake table** — the same Parquet files, same catalog rows, same query path. The magic is that IVM workers write to it instead of a user INSERT.
+
+**User-facing contract:**
+
+- `CREATE INCREMENTAL MATERIALIZED VIEW v AS <select>` creates both a `MatviewRow` (under `0x1D`) and a regular `TableRow` (under `0x05`) for the output. The output table is named `_matview_{name}` by convention (e.g. `_matview_events_by_day`)
+- Users query the view by its logical name: `SELECT * FROM events_by_day`. The pg-wire dispatcher resolves `events_by_day` to the output table `_matview_events_by_day` via a name-mapping lookup in the matview registry
+- Unmodified DuckDB (via Strategy B or Strategy C) queries the output table like any other DuckLake table — no client-side changes required
+- The output table is read-only for users; `INSERT`/`UPDATE`/`DELETE` against it returns `SQLSTATE 25006`
+- `DROP INCREMENTAL MATERIALIZED VIEW v` drops both the `MatviewRow` and the output `TableRow` (cascading logical delete via `end_snapshot`)
+
+**Output table lifecycle:**
+
+- [ ] Output table created atomically with the matview definition in one catalog snapshot
+- [ ] Output table schema derived from the view SELECT's output columns
+- [ ] Output table marked with a `managed_by = 'ivm'` metadata key preventing user writes
+- [ ] `DROP … CASCADE` drops the matview, its output table, and all output data files (scheduled for GC)
+- [ ] Stale matviews (schema change on base table) surface a `status = 'stale'` marker in `SHOW MATERIALIZED VIEWS` but output table remains queryable at its last-valid state
+
+### View Dependency Cascades
+
+The `matview_deps` table tracks which base tables each view reads. This enables:
+
+**DROP behavior:**
+- `DROP TABLE t` where `t` is a dependency of matview `v`: reject with `SQLSTATE 2BP01` (dependent objects exist) unless `CASCADE` specified
+- `DROP TABLE t CASCADE`: mark all dependent matviews as `status = 'dropped_dependency'`; IVM workers stop processing; output tables remain queryable at their last state (stale but not deleted)
+- `DROP INCREMENTAL MATERIALIZED VIEW v CASCADE`: also drops matviews that depend on `v`'s output table
+
+**Cascading views (view-on-view):**
+- A matview can reference another matview's output table as a base input: `CREATE INCREMENTAL MATERIALIZED VIEW summary AS SELECT … FROM events_by_day`
+- `matview_deps` records the dependency on the output table; the dependency graph is a DAG (cycles rejected at creation time with `SQLSTATE 42P19`)
+- IVM workers process views in topological order: upstream views must publish before downstream views read
+- `SHOW MATERIALIZED VIEWS` includes a `depth` column (0 = directly on base tables, 1 = depends on one matview, etc.)
+- Documented maximum depth: 10 levels (configurable via `WITH (max_cascade_depth = N)`)
+
+- [ ] `DROP TABLE` with dependent matviews returns `SQLSTATE 2BP01` unless CASCADE
+- [ ] View-on-view creation validates DAG property (no cycles)
+- [ ] IVM scheduler respects topological ordering for cascading views
+- [ ] `matview_deps` populated for both base-table and matview-output-table dependencies
+- [ ] Test: three-level cascade (base → view_a → view_b → view_c) maintains correctness end-to-end
+
 ### SQL Surface
 
 Bounded SQL extension in `slateduck-sql` — the inner `<select>` is parsed but stored verbatim; only the new statement shells are validated by pgwire.
@@ -1868,12 +1920,20 @@ Each matview owns `shard_count` shards. A shard is identified by `(matview_id, s
 - [ ] Old and new view versions coexist until cutover; old version GC'd after retention window
 - [ ] Tested across snapshot boundaries: re-sharding during active ingest does not lose updates
 
+### Graceful Shutdown & Rolling Updates
+
+- [ ] SIGTERM triggers graceful drain: finish current batch (bounded by `--max-drain-time`), checkpoint all shards, release leases, exit 0
+- [ ] Rolling update with `maxSurge: 1, maxUnavailable: 0` achieves zero-downtime shard handoff
+- [ ] `terminationGracePeriodSeconds` guidance documented (must exceed drain + checkpoint flush)
+- [ ] Test: rolling restart of a 4-worker pool holding 16 shards results in zero dropped batches and ≤ lease_ttl handoff window
+
 ### Acceptance Criteria
 
 - [ ] 8-shard `GROUP BY` view maintains correctness across 1000 input snapshots
 - [ ] Kill-and-restart of a worker holding multiple shards results in zero data loss and ≤ 2× TTL recovery latency
 - [ ] Linear ingest scaling 1 → 16 shards within ±15 %
 - [ ] Re-sharding from 1 → 8 shards completes for a 100 GB base table without service interruption
+- [ ] Graceful shutdown releases all leases within `max_drain_time + 5s`
 - [ ] No regression in v0.11 single-shard tests
 - [ ] Per-shard observability surfaces visible in `SHOW MATVIEW SHARDS` and exported metrics
 
@@ -2034,8 +2094,9 @@ IVM can generate real S3 API costs at scale. Users need visibility and protectio
 - [ ] Steady-state S3 PUT cost ≤ 2× SlateDB's bare-substrate cost for the same write volume
 - [ ] All fault-injection scenarios pass deterministically
 - [ ] `slateduck-ivm doctor` correctly identifies every fault class in the test suite
-- [ ] Continuous-soak test: TPC-H Q1 maintained for 24 h with zero correctness drift
+- [ ] Continuous-soak test: TPC-H Q1 maintained for 24 h with zero correctness drift (runs on scale-test infrastructure, see Cross-Cutting: Scale Testing Infrastructure)
 - [ ] All v0.11-v0.13 acceptance tests still pass
+- [ ] IVM worker K8s deployment pattern tested with 4-worker pool and rolling updates
 
 ### Deliverables
 
@@ -2535,6 +2596,147 @@ Synthetic benchmarks (TPC-H, TPC-DS) catch performance regressions and correctne
 1. **Internal dogfood.** Run a real SlateDuck+IVM deployment against pg-tide's own analytics pipeline (if available) or a synthetic-but-realistic workload (e.g. GitHub event stream, NYC taxi stream) for ≥ 30 days.
 2. **Document surprises.** Any unexpected behaviour, cost spike, or operational friction discovered during dogfooding becomes a documented finding and must be resolved or explicitly accepted before GA.
 3. **User-experience review.** At least one developer unfamiliar with SlateDuck internals must successfully create, monitor, and debug a materialized view using only the published documentation. Their friction log becomes a documentation and UX backlog item.
+
+### SlateDB Dependency Strategy
+
+SlateDB is the storage foundation. Unlike DBSP (an IVM-track dependency), SlateDB underpins *every* roadmap phase. It is pre-1.0, actively evolving, and maintained by a small team. The risk profile is different from DBSP but equally consequential.
+
+**Risk mitigation layers:**
+
+1. **API surface confinement.** All SlateDB interaction is confined to `slateduck-core/src/store.rs` (reads) and `slateduck-catalog/src/writer.rs` (writes). The rest of the codebase depends on `CatalogStore`/`CatalogReader`/`CatalogWriter` traits, not raw SlateDB types. This is already true today.
+
+2. **Version pinning with `=` constraint.** Same as DBSP: every SlateDB upgrade is an explicit decision. Pin to a specific release; never float.
+
+3. **SlateDB API contract surface.** The SlateDuck-relevant API is small:
+   - `Db::open()`, `Db::close()`
+   - `Db::get()`, `Db::put()`, `Db::delete()`, `Db::scan()`
+   - `WriteBatch` (atomic multi-key writes)
+   - `DbReader` / snapshots (concurrent readers)
+   - `Db::flush()` (visibility barrier)
+   - `Checkpoint` API (backup/restore)
+   - Fencing / writer epoch
+
+   If any of these changes semantics (not just signature), it is a correctness-critical event requiring a full regression pass.
+
+4. **Contingency: vendored fork.** If SlateDB introduces incompatible changes or is abandoned:
+   - Fork at last known-good version
+   - Maintain `trickle-labs/slatedb` fork with only the features SlateDuck uses
+   - Object-store agnosticism (via `object_store` crate) means the fork remains portable
+
+5. **Contingency: alternative embedded KV.** If forking becomes untenable:
+   - Evaluate `sled` (mature but different persistence model)
+   - Evaluate writing a minimal WAL + SST layer directly on `object_store` (high effort, last resort)
+   - The `CatalogStore` abstraction layer means migration is confined to one module
+
+6. **Relationship maintenance.** SlateDB is maintained by a team with whom we can collaborate:
+   - File issues for any behavior that affects SlateDuck
+   - Contribute fixes upstream when possible
+   - Monitor the SlateDB changelog and test against each release before adopting
+
+**Monitor:** SlateDB release cadence, open issue count, and maintainer activity quarterly. Document findings in `docs/design-decisions/slatedb-dependency.md`.
+
+### IVM Worker Deployment Model (Kubernetes)
+
+v0.9 defines K8s patterns for catalog writer and reader pods. IVM workers (v0.11+) are a third workload class with distinct requirements:
+
+**Pattern — IVM Worker Pool**
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: slateduck-ivm-worker }
+spec:
+  replicas: 4    # scale based on total shard count / shards-per-worker
+  template:
+    spec:
+      containers:
+      - name: slateduck-ivm
+        args:
+          - "serve"
+          - "--catalog=s3://bucket/catalogs/warehouse-a"
+          - "--state-prefix=s3://bucket/ivm-state/"
+          - "--shard-limit=8"         # max shards this worker claims
+          - "--lease-ttl=30s"
+        resources:
+          requests: { cpu: "2", memory: "4Gi" }
+          limits:   { cpu: "4", memory: "8Gi" }
+```
+
+**Key differences from writer/reader pods:**
+
+| Dimension | Writer/Reader | IVM Worker |
+|-----------|--------------|------------|
+| Catalog access | Writer: read+write, Reader: read | Read (base tables) + Write (checkpoints + output) |
+| State stores | None (stateless) | Per-shard SlateDB instances under `--state-prefix` |
+| Scaling unit | By session count | By total shard count across all matviews |
+| Statefulness | Stateless (S3 is the state) | Lease-based: holds shard leases, releases on shutdown |
+| Failure mode | Writer fencing handles crash | Lease expiry handles crash; peer workers pick up shards |
+
+**Autoscaling guidance:**
+
+- Scale on `max(ivm_lag_ms)` across all shards: if any shard exceeds 2× freshness target, add a worker
+- Scale on `ivm_shards_unassigned`: if > 0 for longer than 2× lease TTL, add a worker
+- Scale down conservatively: only remove a worker when it holds 0 shards for > 5 min (all its shards were redistributed)
+- Document HPA configuration in `docs/deployment/kubernetes.md`
+
+**IAM credentials for IVM workers:**
+
+| Permission | Scope |
+|-----------|-------|
+| Read base table data files | `s3://bucket/data/**` (read-only) |
+| Read/write catalog | `s3://bucket/catalogs/**` |
+| Read/write state stores | `s3://bucket/ivm-state/**` |
+| Write output data files | `s3://bucket/data/**` (write to output table paths) |
+
+IVM workers need broader access than reader pods because they read Parquet data *and* write output Parquet. Document this IAM template in `docs/deployment/credential-isolation.md`.
+
+### Graceful Shutdown & Rolling Updates (IVM Workers)
+
+IVM workers are long-lived processes that hold shard leases and buffer in-flight DBSP batches. Ungraceful shutdown (kill -9) is always safe (lease expiry + checkpoint recovery), but graceful shutdown minimizes wasted work and recovery time.
+
+**Graceful shutdown protocol (on SIGTERM):**
+
+1. Stop acquiring new shard leases
+2. Finish the current DBSP batch for all held shards (bounded by `--max-drain-time`, default 30 s)
+3. Flush and checkpoint all shard state stores
+4. Release all shard leases (set `lease_expires_at = now` via CAS)
+5. Exit 0
+
+If `--max-drain-time` elapses before step 2 completes, abandon in-progress batches (they will be replayed by the next worker from the checkpoint) and proceed to step 4.
+
+**Rolling update strategy:**
+
+- Kubernetes `maxSurge: 1, maxUnavailable: 0` ensures new workers start before old ones drain
+- `terminationGracePeriodSeconds: 60` (must exceed `--max-drain-time` + checkpoint flush time)
+- New workers wait for lease expiry on shards held by draining pods (lease TTL bounds the handoff window)
+- Zero-downtime guarantee: at no point are shards unprocessed for longer than `lease_ttl + max_drain_time`
+
+**Version upgrade (v0.11 → v0.12 etc.):**
+
+- State store format changes require a `state_format_version` key in each shard's state store
+- If a new worker binary encounters an incompatible state format, it runs `REFRESH ... FULL` for that shard rather than attempting migration (correctness over speed)
+- Document the upgrade path in `docs/operations/ivm-upgrades.md`
+
+### Scale Testing Infrastructure
+
+The IVM acceptance criteria include tests that cannot run in normal CI: 24 h soaks, 1 TB inputs, 1M-edge graphs, and 16-shard scale-out benchmarks. These require dedicated infrastructure.
+
+**Testing tiers:**
+
+| Tier | What runs | Where | Trigger |
+|------|-----------|-------|---------|
+| CI (every PR) | Unit tests, property tests, single-shard correctness on LocalFS | GitHub Actions (standard runner) | Push/PR |
+| Integration (every merge to main) | Multi-shard correctness, MinIO end-to-end, fault injection (<1h) | GitHub Actions (large runner, 8 vCPU) | Merge to main |
+| Scale (weekly / pre-release) | 16-shard scale-out, 1 TB input, TPC-DS full suite, cost measurement | Dedicated EC2 (c6i.4xlarge) + S3 Standard | Scheduled / manual |
+| Soak (pre-release) | 24 h continuous ingest, fault injection every 15 min, correctness drift check | Dedicated EC2 + S3 Express | Manual gate before GA |
+
+**Infrastructure requirements:**
+
+- Scale and soak tests run via a GitHub Actions self-hosted runner on a dedicated EC2 instance
+- S3 bucket dedicated to scale tests: `slateduck-scale-tests-{region}`
+- Results published to `benchmarks/` directory as JSON; compared against previous run
+- Soak test failure blocks the release: any correctness drift in 24 h means the release is not ready
+- Document the setup in `docs/contributing/testing.md` under "Scale Testing"
 
 ---
 
