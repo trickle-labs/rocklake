@@ -44,7 +44,11 @@ impl SlateDuckCatalogProvider {
         path: ObjectPath,
         snapshot_id: Option<SnapshotId>,
     ) -> Result<Self, DataFusionError> {
-        let opts = OpenOptions { object_store, path };
+        let opts = OpenOptions {
+            object_store,
+            path,
+            encryption: None,
+        };
         let store = CatalogStore::open(opts)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

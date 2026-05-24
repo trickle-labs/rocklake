@@ -56,11 +56,12 @@ binding on every roadmap release below.
 | **v0.8 — Documentation** | MkDocs Material site, GitHub Pages, full conceptual, operational, and reference coverage | **Done** |
 | **v0.9 — Production Readiness** | K8s deployment, writer routing and failover, performance tuning, cost analysis, migration and corpus tooling | **Done** |
 | **v0.9.1 — Write Protocol Correctness** | Atomic snapshot commits, stale-counter fix, `UPDATE end_snapshot` key resolution, writer protocol spec | **Done** |
-| **v0.9.2 — Security Enforcement** | Real PG-Wire auth, CLI/env-var alignment, encryption wired into storage, FFI null safety | Planning |
+| **v0.9.2 — Security Enforcement** | Real PG-Wire auth, CLI/env-var alignment, encryption wired into storage, FFI null safety | **Done** |
 | **v0.9.3 — Operational Safety** | GC retention enforcement, excision guards, checkpoint restore, typed import validation, rebuild fix | Planning |
-| **v0.9.4 — Quality Gates & GA Readiness** | Concurrent reads, DataFusion scan, test coverage, CI gates, docs alignment, supply chain, release automation | Planning |
+| **v0.9.4 — GA Ready** | Concurrent reads, zone-map (conditional), Spark/Trino clients, DataFusion scan/pg-wire, virtual catalog SQL, test coverage, CI gates, docs complete, versioning policy, release automation | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, GA sign-off | Planning |
-| **v1.x — Ecosystem Expansion** | Streaming ingest, additional DuckLake clients, zone-map index, async FFI v2, virtual catalog SQL, Lambda integration | Planning |
+| **v0.10.0 — Streaming Ingest** | pg-tide-relay integration, Kafka/NATS support, exactly-once delivery semantics, metadata key namespacing | Planning |
+| **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda integration, additional performance optimizations | Planning |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
 
 ---
@@ -1257,51 +1258,51 @@ Writer fencing prevents concurrent writers but does not guard against stale in-m
 
 `SlateDuckHandler` stores `AuthConfig` but unconditionally uses `NoopStartupHandler`. Any client can connect regardless of configured credentials.
 
-- [ ] Implement a `SlateDuckStartupHandler` that enforces cleartext password authentication when `AuthConfig.is_enabled()` is true
-- [ ] Use constant-time comparison for password verification to prevent timing-based credential inference
-- [ ] Deny connections that do not supply the configured username; return `SQLSTATE 28P01`
-- [ ] Add end-to-end tests: correct credentials → `AuthenticationOk`; wrong password → `ErrorResponse 28P01`; missing credentials when auth required → `ErrorResponse 28P01`
-- [ ] Verify `NoopStartupHandler` behaviour is only present when auth is explicitly disabled
+- [x] Implement a `SlateDuckStartupHandler` that enforces cleartext password authentication when `AuthConfig.is_enabled()` is true
+- [x] Use constant-time comparison for password verification to prevent timing-based credential inference
+- [x] Deny connections that do not supply the configured username; return `SQLSTATE 28P01`
+- [x] Add end-to-end tests: correct credentials → `AuthenticationOk`; wrong password → `ErrorResponse 28P01`; missing credentials when auth required → `ErrorResponse 28P01`
+- [x] Verify `NoopStartupHandler` behaviour is only present when auth is explicitly disabled
 
 ### Fix CLI/Docs/Env-Var Alignment (F-18 / F-12)
 
 Docs advertise `--auth-user` / `SLATEDUCK_AUTH_USER`, `--auth-password` / `SLATEDUCK_AUTH_PASSWORD`, `--tls-required`, and GCS/Azure catalog URLs. Code parses `--username` / `--password`, reads no env vars, has no `--tls-required`, and only resolves `s3://` and local paths.
 
-- [ ] Rename CLI flags to `--auth-user` and `--auth-password` to match all documentation
-- [ ] Read `SLATEDUCK_AUTH_USER` and `SLATEDUCK_AUTH_PASSWORD` environment variables as documented
-- [ ] Implement `--tls-required` that rejects plaintext connections when TLS is configured
-- [ ] Implement `gs://` and Azure catalog URL resolution, or mark GCS/Azure docs as planned and update binary help text to reflect actual support
-- [ ] Implement `--read-only`, `--s3-path-style`, `--s3-endpoint`, and `--metrics-bind` if documented, or remove from docs
-- [ ] Add a CI smoke test that validates every documented flag is accepted by the binary
+- [x] Rename CLI flags to `--auth-user` and `--auth-password` to match all documentation
+- [x] Read `SLATEDUCK_AUTH_USER` and `SLATEDUCK_AUTH_PASSWORD` environment variables as documented
+- [x] Implement `--tls-required` that rejects plaintext connections when TLS is configured
+- [x] Implement `gs://` and Azure catalog URL resolution, or mark GCS/Azure docs as planned and update binary help text to reflect actual support
+- [x] Implement `--read-only`, `--s3-path-style`, `--s3-endpoint`, and `--metrics-bind` if documented, or remove from docs
+- [x] Add a CI smoke test that validates every documented flag is accepted by the binary
 
 ### Wire Encryption Into Storage (F-19)
 
 `EncryptionConfig` validates a hex key and `--encryption-key` is parsed by the CLI, but the key is discarded and `CatalogStore::open()` has no encryption option.
 
-- [ ] Wire `EncryptionConfig` into `CatalogStore::open()` using SlateDB's block-transformer encryption option
-- [ ] Add an integration test that writes encrypted and reads back the same data using the same key
-- [ ] Add a test that opening an encrypted catalog with the wrong key returns a clear error
-- [ ] Document the encryption model (catalog values encrypted; Parquet data encryption is a separate Parquet-native concern) in `docs/deployment/tls.md` and the CLI reference
+- [x] Wire `EncryptionConfig` into `CatalogStore::open()` using SlateDB's block-transformer encryption option
+- [x] Add an integration test that writes encrypted and reads back the same data using the same key
+- [x] Add a test that opening an encrypted catalog with the wrong key returns a clear error
+- [x] Document the encryption model (catalog values encrypted; Parquet data encryption is a separate Parquet-native concern) in `docs/deployment/tls.md` and the CLI reference
 
 ### FFI Null and Handle Safety (F-17 / F-08)
 
 Every FFI entrypoint dereferences caller-supplied pointers without null or ownership validation. Invalid C input can cause undefined behaviour.
 
-- [ ] Add null checks to every `#[no_mangle] pub extern "C"` function before any dereference
-- [ ] Add an opaque magic/version field to `SlateduckCatalog` and validate it on every read/write operation
-- [ ] Return structured error codes rather than undefined behaviour for double-close and invalid handles
-- [ ] Document the ownership contract for every returned pointer in `include/slateduck.h`
-- [ ] Add CI sanitizer job (`-Zsanitizer=address,leak`) for the FFI crate
-- [ ] Add tests for: null URI, null error pointer, null catalog handle, double-close, handle-after-close
+- [x] Add null checks to every `#[no_mangle] pub extern "C"` function before any dereference
+- [x] Add an opaque magic/version field to `SlateduckCatalog` and validate it on every read/write operation
+- [x] Return structured error codes rather than undefined behaviour for double-close and invalid handles
+- [x] Document the ownership contract for every returned pointer in `include/slateduck.h`
+- [x] Add CI sanitizer job (`-Zsanitizer=address,leak`) for the FFI crate
+- [x] Add tests for: null URI, null error pointer, null catalog handle, double-close, handle-after-close
 
 ### Deliverables
 
-- [ ] PG-Wire authentication enforced when `AuthConfig.is_enabled()` is true; verified by end-to-end credential tests
-- [ ] CLI flags and env-var names match all documentation exactly
-- [ ] `--tls-required` implemented and tested
-- [ ] `--encryption-key` wired into `CatalogStore::open()` and covered by round-trip and wrong-key tests
-- [ ] Every FFI entrypoint null-checks inputs before dereference; sanitizer CI green
-- [ ] Undocumented or unimplemented features removed from binary help text or clearly labelled as planned with a target version
+- [x] PG-Wire authentication enforced when `AuthConfig.is_enabled()` is true; verified by end-to-end credential tests
+- [x] CLI flags and env-var names match all documentation exactly
+- [x] `--tls-required` implemented and tested
+- [x] `--encryption-key` wired into `CatalogStore::open()` and covered by round-trip and wrong-key tests
+- [x] Every FFI entrypoint null-checks inputs before dereference; sanitizer CI green
+- [x] Undocumented or unimplemented features removed from binary help text or clearly labelled as planned with a target version
 
 ---
 
@@ -1390,9 +1391,9 @@ GC, excision, and checkpoint docs and code do not share a consistent model of wh
 
 ---
 
-## v0.9.4 — Quality Gates & GA Readiness
+## v0.9.4 — GA Ready
 
-> Bring the project to a state where the v1.0 GA claim is defensible: fix performance and scalability issues, expand test coverage to cover the highest-risk scenarios, add CI quality gates, resolve all doc/code divergence, clean up placeholder integrations, and define measurable v1.0 acceptance criteria.
+> Bring the project to GA readiness: unlock concurrent read throughput, add zone-map index if profiling warrants it, onboard production DuckLake clients (Spark, Trino), deliver real DataFusion integration (Parquet scan + pg-wire mode), expose catalog as read-only SQL tables, establish versioning and deprecation policies, document the complete compatibility matrix, expand test coverage to cover the highest-risk scenarios, add CI quality gates, and deliver release automation.
 
 ### Unlock PG-Wire Concurrent Reads (F-11 scalability)
 
@@ -1411,7 +1412,7 @@ PG-Wire holds `Arc<Mutex<CatalogStore>>` across async SlateDB reads, serialising
 - [ ] Verify PG-Wire and DataFusion callers can supply schema ID or resolve it from a single point-lookup
 - [ ] Add a microbenchmark for `describe_table` at 100, 1 000, and 10 000 historical table versions
 
-### Fix DataFusion Sync/Async Bridge (F-14)
+### DataFusion Sync/Async Bridge (F-14)
 
 `schema_names()` and `table_names()` spawn threads and `block_on()` async operations; if no Tokio runtime is present they silently return empty lists.
 
@@ -1419,13 +1420,62 @@ PG-Wire holds `Arc<Mutex<CatalogStore>>` across async SlateDB reads, serialising
 - [ ] Return an explicit error or log a warning rather than an empty list when the runtime is unavailable
 - [ ] Add a test verifying both methods return correct results when called from outside an async context
 
-### DataFusion Scan — Explicit Unsupported Error or Real Implementation (F-15 / F-32)
+### Coarse Zone-Map Index for Large-Scale Pruning (conditional)
 
-`TableProvider::scan()` returns `EmptyExec`, silently producing zero rows for all queries.
+If profiling during v0.9 shows MVCC filter amplification exceeds 10× at 10⁵ files on S3 Standard, implement the zone-map index here to meet the **3× PostgreSQL p99 latency** S3 Express acceptance criterion for v1.0.
 
-- [ ] Replace `EmptyExec` with either a Parquet-reading implementation or an explicit `Err(DataFusionError::NotImplemented(...))`
-- [ ] Add a test verifying the scan result is either real data or a clear error, not silently empty
-- [ ] Document in `docs/integration/datafusion.md` exactly what the integration provides today and the target version for full scan support
+**Algorithm (full design in planned v1.x section below):**
+
+1. Divide the value range of each typed column into approximately 100 bins per column per table
+2. Write zone-map keys during data file registration: `0x13-zone | table_id_be | column_id_be | stats_bucket_be | data_file_id_be`
+3. For `WHERE col >= X AND col <= Y` predicates, compute bin range and scan only zone-map keys in that range
+4. Correctness: zone-map result must be a superset of exact-stats result (false positives OK; false negatives are bugs)
+
+**Conditional gate.** Only implement if v0.9 profiling shows amplification >10× and latency projection exceeds 3× PostgreSQL p99. Otherwise defer to v1.x.
+
+- [ ] Run v0.9 profiling benchmark: `list_data_files` at 10⁵ files measuring MVCC filter amplification
+- [ ] If amplification >10×, implement zone-map as above
+- [ ] Add correctness fuzz test: 10 000 random files, random predicates, verify zone-map superset property
+- [ ] Add performance test: zone-map scan latency <5% of full exact-stats scan at 10⁶ files
+- [ ] Verify S3 Express `list_data_files` p99 is within 3× of PostgreSQL after optimization
+
+### Additional DuckLake Clients: Spark and Trino
+
+Onboard the first non-DuckDB production clients using the wire-corpus onboarding process formalized in v0.6.
+
+**Spark-DuckLake:**
+- [ ] Capture the full SQL corpus from the Spark DuckLake connector against a PostgreSQL-backed DuckLake
+- [ ] Classify each statement family into category-a (already supported), category-b (trivial extension), or category-c (new operators)
+- [ ] Add category-b dispatcher extensions behind a feature flag gated on the Spark corpus
+- [ ] Add replay tests in CI covering all Spark corpus versions
+- [ ] Update `docs/compatibility.md` with Spark connector version support matrix
+
+**Trino-DuckLake:**
+- [ ] Same capture-and-classify process for the Trino connector
+- [ ] Add category-b dispatcher extensions behind a feature flag
+- [ ] Add replay tests in CI
+- [ ] Update `docs/compatibility.md` with Trino connector version support matrix
+
+**Acceptance criteria:** All startup probes, SQL shapes, transaction behavior, parameter/result format codes, and generated inlined-table operations captured in `tests/fixtures/wire-corpus/{spark,trino}-{version}.jsonl`; replay tests pass in CI for every captured version; no category-c statements required (if any arise, evaluate case-by-case and document decision).
+
+### DataFusion Parquet Scan Real Implementation (F-15 / F-32)
+
+`TableProvider::scan()` returns `EmptyExec`, silently producing zero rows for all queries. Implement real Parquet reading via DataFusion's native Parquet scanner.
+
+- [ ] Integrate DataFusion's built-in Parquet reader to execute scans against actual data files
+- [ ] Add a test verifying scan results match data files referenced by the catalog
+- [ ] Document in `docs/integration/datafusion.md` the full scan capability and performance characteristics
+- [ ] Add performance benchmark: DataFusion scan vs. DuckDB native scan on a TPC-H table
+
+### DataFusion pg-wire Mode
+
+The DataFusion `CatalogProvider` trait implementation from v0.7 exposes the catalog over Rust traits. Add a pg-wire-compatible mode so DataFusion-based query engines can also connect through the sidecar without a direct Rust dependency.
+
+- [ ] Add a new `--datafusion-pg-wire` mode flag to `slateduck serve` that listens on a separate port
+- [ ] When a DataFusion engine connects via pg-wire, treat it as a DuckLake client and dispatch SQL using the same bounded dispatcher
+- [ ] Add end-to-end test: DataFusion engine connects, runs full DuckLake tutorial queries, produces correct results
+- [ ] Document in `docs/integration/datafusion.md` the pg-wire mode and connection string format
+- [ ] Add performance benchmark: DataFusion pg-wire queries vs. native Rust trait queries
 
 ### Writer Session and MVCC Regression Tests (F-20)
 
@@ -1455,6 +1505,62 @@ FFI has four basic happy-path tests; DataFusion has five.
 - [ ] DataFusion: add test for `schema_names()`/`table_names()` called without a Tokio runtime
 - [ ] DataFusion: add test for concurrent calls to `schema_names()` from multiple threads
 - [ ] DataFusion: add test verifying the scan path returns the expected error or data, not silently empty
+
+### Read-Only Virtual Catalog SQL Tables
+
+Expose all 28 DuckLake catalog tables plus the `0xFD` inlined tables as read-only SQL views through the PG-wire sidecar:
+
+- `SELECT * FROM slateduck_catalog.ducklake_snapshot` — all snapshot rows (no MVCC filter; all versions)
+- `SELECT * FROM slateduck_catalog.ducklake_table WHERE begin_snapshot <= $1 AND (end_snapshot IS NULL OR $1 < end_snapshot)` — MVCC-filtered view at a specific snapshot
+- `SELECT * FROM slateduck_catalog.ducklake_file_column_stats WHERE table_id = $1` — raw stats rows for a table
+- `SELECT * FROM slateduck_catalog.slateduck_counters` — current counter values (next_snapshot_id, next_catalog_id, next_file_id)
+- `SELECT * FROM slateduck_catalog.slateduck_system` — writer epoch, endpoint, retain-from, catalog-format-version
+
+These are exposed under a `slateduck_catalog` schema prefix to avoid name collisions with DuckLake's own table names in the `public` schema. They are read-only: `INSERT`, `UPDATE`, and `DELETE` against `slateduck_catalog.*` return `SQLSTATE 25006`.
+
+**Implementation.** The PG-wire dispatcher already executes bounded SELECT shapes against the catalog tables. Virtual catalog SQL tables are an extension of the same dispatcher: add a new statement family that recognizes `SELECT * FROM slateduck_catalog.{table_name}` shapes and dispatches to full-table scans with optional MVCC filtering. No new storage layer changes are needed; this is entirely a dispatcher and result-encoding change.
+
+**Operator use cases.** An operator debugging a missing file can run:
+```sql
+SELECT data_file_id, path, begin_snapshot FROM slateduck_catalog.ducklake_data_file
+  WHERE table_id = 42 ORDER BY begin_snapshot DESC LIMIT 20;
+```
+An operator verifying time-travel coverage can run:
+```sql
+SELECT snapshot_id, snapshot_time, schema_version
+  FROM slateduck_catalog.ducklake_snapshot ORDER BY snapshot_id;
+```
+
+This feature makes `slateduck inspect` and `slateduck verify` less necessary for interactive debugging, and enables operators already familiar with DuckDB SQL to explore the catalog without learning a new CLI tool.
+
+- [ ] Implement `SELECT * FROM slateduck_catalog.*` statement family in the dispatcher
+- [ ] Add MVCC filtering support for time-travel queries: `WHERE begin_snapshot <= $1 AND (end_snapshot IS NULL OR $1 < end_snapshot)`
+- [ ] Add end-to-end tests verifying all 28 tables return correct results
+- [ ] Document in `docs/operations/operational-sql.md` with worked examples
+
+### Release and Versioning Policy
+
+Establish the policies that enable confident production upgrades and long-term compatibility.
+
+**Deprecation policy.** Six-month notice period before removing any CLI flag, metric name, SQLSTATE code, or public Rust API. Deprecation warnings are emitted in the binary and documented in `CHANGELOG.md` with the target removal version.
+
+**Semantic versioning policy.** `catalog-format-version` bumps require a major version bump of the SlateDuck binary. `encoding_version` bumps within the same `catalog-format-version` require a minor version bump. Patch versions are backward-compatible on both dimensions.
+
+**Release verification checklist.** Documented in `CONTRIBUTING.md`: run full benchmark suite (v1.0 requirement, placeholder here); run TPC-H SF10 golden test; check `mkdocs build --strict`; verify `slateduck migrate --dry-run` succeeds on a v0.x catalog; tag and push. No release may be tagged without all checklist items signed off.
+
+**Complete `docs/compatibility.md`.** DuckDB version matrix with verified patch versions; DuckLake spec version matrix; object-store backend status (LocalFS, MinIO, S3 Standard, S3 Express, GCS, Azure Blob); Spark connector matrix; Trino connector matrix; pg-tide-relay version matrix; DataFusion version matrix.
+
+- [ ] Define and document all four policies in `CONTRIBUTING.md`
+- [ ] Create `docs/compatibility.md` with all version matrices populated based on v0.9.4 client support
+- [ ] Add CI check that validates `CHANGELOG.md` has an entry for every tagged release
+
+### v0.9.4 Acceptance Criteria Definition
+
+Convert the notion of "GA Ready" from self-reported to criteria-driven:
+
+- [ ] Define measurable acceptance criteria for v0.9.4: specific test suites that must pass, CLI compatibility matrix, docs completeness, operational drill results
+- [ ] Add acceptance criteria to `docs/contributing/release-process.md`
+- [ ] No v0.9.4 release tag until every acceptance criterion is documented, automated, and green
 
 ### Remove or Gate `slateduck-sqlite-vfs` Placeholder (F-23 / F-10)
 
@@ -1544,7 +1650,12 @@ Convert roadmap Done status from self-reported to criteria-driven:
 - [ ] Concurrent PG-Wire read sessions do not block each other; confirmed by concurrency test and benchmark
 - [ ] `describe_table()` is O(1) or O(log n) for any catalog size
 - [ ] DataFusion `schema_names()`/`table_names()` do not spawn threads; return an explicit error or correct results outside a runtime
-- [ ] DataFusion `scan()` returns a clear unsupported error or real data, not `EmptyExec`
+- [ ] Zone-map index: v0.9 profiling report completed; if amplification >10×, zone-map implemented and tested
+- [ ] Spark-DuckLake corpus captured and replay tests green in CI; `docs/compatibility.md` updated
+- [ ] Trino-DuckLake corpus captured and replay tests green in CI; `docs/compatibility.md` updated
+- [ ] DataFusion Parquet scan implemented with real data reads and performance benchmarks
+- [ ] DataFusion pg-wire mode available; end-to-end integration tests pass
+- [ ] Virtual catalog SQL tables implemented and tested; all 28 tables queryable via `SELECT * FROM slateduck_catalog.*`
 - [ ] Writer session regression tests pass for ID monotonicity, `read_latest()` consistency, and aborted session isolation
 - [ ] Security protocol tests pass: valid/invalid auth, TLS handshake, tls-required plaintext rejection
 - [ ] FFI null/invalid-handle tests pass under address and leak sanitizers
@@ -1556,7 +1667,9 @@ Convert roadmap Done status from self-reported to criteria-driven:
 - [ ] MSRV declared and tested in CI
 - [ ] Coverage ≥ 80% for `slateduck-catalog` and `slateduck-core`
 - [ ] Release automation workflow present and documented
-- [ ] v1.0 acceptance criteria documented and automated
+- [ ] Deprecation, semantic versioning, and release verification policies documented in `CONTRIBUTING.md`
+- [ ] `docs/compatibility.md` complete with version matrices for DuckDB, Spark, Trino, DataFusion, pg-tide, object-store backends
+- [ ] v0.9.4 acceptance criteria documented and automated
 
 ---
 
@@ -1582,14 +1695,9 @@ Run all benchmarks on: LocalFS, MinIO (same host), S3 Standard (same region), S3
 
 **Benchmark methodology.** All benchmarks run three warm-up iterations followed by thirty measured iterations. Cold-start benchmarks restart the process for every measured iteration. The benchmark binary is checked in under `benches/` and is runnable by any contributor with `cargo bench`. Results must be reproducible within ±10% across three independent runs on the same hardware; if variance exceeds that, identify and document the source before publishing.
 
-### GA Polish
+### GA Sign-Off Success Criteria
 
-- **Deprecation policy.** Six-month notice period before removing any CLI flag, metric name, SQLSTATE code, or public Rust API. Deprecation warnings are emitted in the binary and documented in `CHANGELOG.md` with the target removal version.
-- **Release verification checklist.** Documented in `CONTRIBUTING.md`: run full benchmark suite; run TPC-H SF10 golden test; check `mkdocs build --strict`; verify `slateduck migrate --dry-run` succeeds on a v0.x catalog; tag and push. No release may be tagged without all checklist items signed off.
-- **Semantic versioning policy.** `catalog-format-version` bumps require a major version bump of the SlateDuck binary. `encoding_version` bumps within the same `catalog-format-version` require a minor version bump. Patch versions are backward-compatible on both dimensions.
-- **Complete `docs/compatibility.md`.** DuckDB version matrix with verified patch versions; DuckLake spec version matrix; object-store backend status (LocalFS, MinIO, S3 Standard, S3 Express, GCS, Azure Blob); pg-tide-relay version matrix; DataFusion version matrix.
-
-### Success Criteria
+Measurable acceptance criteria that must all be green before v1.0 is tagged:
 
 1. Full DuckLake tutorial runs end-to-end from the standard DuckDB `ducklake` extension through the SlateDuck PG-wire sidecar, with catalog in S3 and no PostgreSQL or SQLite database required.
 2. Concurrent reads from a second DuckDB process see consistent, snapshot-isolated catalog views.
@@ -1603,16 +1711,14 @@ Run all benchmarks on: LocalFS, MinIO (same host), S3 Standard (same region), S3
 ### Deliverables
 
 - v1.0 release tag and `CHANGELOG.md` entry
-- `slateduck serve` and all maintenance CLI subcommands production-ready
-- Native DuckDB extension available via community extension repository
 - Benchmark report `benchmarks/v1.0-tpch-sf10.json` published in the repository and linked from `docs/performance/`
-- `docs/compatibility.md` with fully verified version matrix
+- Final S3 Express acceptance decision documented in `docs/performance/s3-express-validation.md`
 
 ---
 
-## v1.x — Ecosystem Expansion
+## v0.10.0 — Streaming Ingest
 
-> Streaming ingest, additional DuckLake clients, large-scale pruning optimizations, async catalog FFI, read-only virtual catalog SQL, and Lambda/edge-function integration.
+> Kafka/NATS streaming pipelines, exactly-once delivery semantics, and pg-tide-relay integration for zero-infrastructure ingest paths from transactional sources to S3-backed data lakes.
 
 ### Streaming Ingest via pg-tide-relay
 
@@ -1639,36 +1745,22 @@ Multiple applications coexist by using distinct prefixes. Application metadata r
 
 **Exactly-once delivery guarantee.** Document and test the two-phase commit pattern: (1) write Parquet files to S3; (2) in one catalog transaction, register data files AND update the consumer offset key under `ducklake_metadata`. If the process dies between steps 1 and 2, the orphaned Parquet files are cleaned up by the orphan-file sweep after the grace period; the consumer re-reads from its last committed offset and re-registers the same data files. Because data file registration is idempotent for a given Parquet file path, the retry is safe.
 
-### Additional DuckLake Clients
+### Deliverables
 
-Using the established wire-corpus onboarding process (formalized in v0.6):
+- [ ] `SlateDuckSink` implementation in pg-tide registers without errors
+- [ ] End-to-end Kafka → SlateDuck → DuckDB query test passes with ≥100k records
+- [ ] NATS → SlateDuck → DuckDB query test passes with ≥100k records
+- [ ] Application metadata key namespace enforced: `{app}.{instance}.{key}` pattern validated in tests
+- [ ] Exactly-once delivery: process death between Parquet write and metadata commit is survivable; offset is not advanced on retry
+- [ ] Consumer offset tracking test: offset advances monotonically across 10 consecutive ingest batches
+- [ ] Performance test: Kafka ingest throughput ≥ 10k records/sec to S3 with catalog commit latency ≤ 50ms p95
+- [ ] Documentation: `docs/integration/streaming-ingest.md` with Kafka and NATS examples, offset recovery procedure, and failure mode handling
 
-- **Spark-DuckLake.** Capture the full SQL corpus from the Spark DuckLake connector against a PostgreSQL-backed DuckLake; classify each statement family; add category-a and category-b dispatcher extensions behind a feature flag gated on the Spark corpus.
-- **Trino-DuckLake.** Same capture-and-classify process for the Trino connector.
-- **DataFusion enhanced integration.** The DataFusion `CatalogProvider` trait implementation from v0.7 exposes the catalog over Rust traits; v1.x adds a pg-wire-compatible mode so DataFusion-based query engines can also connect through the sidecar without a direct Rust dependency.
+---
 
-Each new client is supported only after: (1) its startup probes, SQL shapes, transaction behavior, parameter/result format codes, and generated inlined-table operations are captured in `tests/fixtures/wire-corpus/{client}-{version}.jsonl`; (2) a replay test passes in CI for every captured version; and (3) `docs/compatibility.md` is updated with the client's name and tested version range.
+## v1.x — Ecosystem Expansion
 
-The dispatcher will not grow into a general SQL engine. Category-c statements (those requiring new SQL operator types beyond the bounded set) are evaluated case-by-case; most DuckLake clients issue the same spec-query families and will fit within category-a or category-b.
-
-### Coarse Zone-Map Index for Large-Scale Pruning
-
-For tables with >1 million data files and 100+ columns, even the correct `(table_id, column_id, data_file_id)` key layout from v0.2 produces 67 MB per-column pruning scans. The zone-map index deferred from v0.9 (if not already shipped there based on profiling evidence) lands here.
-
-**Full algorithm:**
-
-1. Divide the value range of each typed column into approximately 100 bins per column per table. Bin boundaries are computed from the first observed min/max values and adjusted lazily as new extremes are seen. Bin boundaries are stored as typed values (not strings) under a dedicated key prefix.
-2. When registering a data file's column stats, also write a zone-map key:
-   ```
-   0x13-zone | table_id_be (4B) | column_id_be (4B) | stats_bucket_be (4B) | data_file_id_be (8B)
-   ```
-   A single data file may span multiple adjacent bins; one zone-map key is written per bin it overlaps.
-3. For a pruning query `WHERE col >= X AND col <= Y`, compute the bin range `[bin(X), bin(Y)]` and scan only the corresponding zone-map prefix. The result is a set of candidate `data_file_id` values; the full exact-stats rows are then read only for those candidates.
-4. Correctness invariant: the zone-map prefix scan must be a superset of the exact-stats scan. False positives (files scanned unnecessarily) are acceptable; false negatives (files skipped that should match) are a correctness bug.
-
-**Bin boundary evolution.** When new extremes are observed beyond the initial bin boundaries, add new bin boundary keys and re-index any affected data files in a background task. The foreground write path never blocks on zone-map updates; the zone-map may be temporarily incomplete for recently registered files and must fall back to exact-stats scanning for any `data_file_id` not found in the zone-map index.
-
-**Test requirements.** Add a correctness fuzz test: generate random min/max stats for 10 000 files; apply random point and range predicates; verify that zone-map candidate set always contains the full exact-stats result. Add a performance test at 10⁶ files: zone-map scan latency must be under 5% of full-column exact-stats scan latency.
+> Async FFI v2 for concurrent catalog operations, Lambda/edge-function integration, and post-GA performance optimizations for extreme-scale deployments.
 
 ### Async Catalog FFI (Strategy C v2)
 
@@ -1700,35 +1792,6 @@ The extension starts a background thread running a Tokio runtime at load time. E
 
 **ABI versioning for v2 FFI.** Any change to function signatures, added callback parameters, or changed opaque handle layouts increments `slateduck_abi_version()`. The DuckDB extension checks the ABI version at load time and refuses to proceed on mismatch. Document in `extension/CMakeLists.txt`.
 
-### Read-Only Virtual Catalog SQL Tables
-
-One of the open questions in [plans/blueprint.md §12](plans/blueprint.md) is whether to expose the SlateDuck catalog tables as **read-only virtual SQL tables** so that operators and DuckDB users can run ad-hoc SQL over catalog metadata — the way DuckLake users can today when connected to a PostgreSQL or SQLite catalog (by running `SELECT * FROM ducklake_snapshot` directly against the backend).
-
-In v1.x, expose all 28 DuckLake catalog tables plus the `0xFD` inlined tables as read-only SQL views through the PG-wire sidecar:
-
-- `SELECT * FROM slateduck_catalog.ducklake_snapshot` — all snapshot rows (no MVCC filter; all versions)
-- `SELECT * FROM slateduck_catalog.ducklake_table WHERE begin_snapshot <= $1 AND (end_snapshot IS NULL OR $1 < end_snapshot)` — MVCC-filtered view at a specific snapshot
-- `SELECT * FROM slateduck_catalog.ducklake_file_column_stats WHERE table_id = $1` — raw stats rows for a table
-- `SELECT * FROM slateduck_catalog.slateduck_counters` — current counter values (next_snapshot_id, next_catalog_id, next_file_id)
-- `SELECT * FROM slateduck_catalog.slateduck_system` — writer epoch, endpoint, retain-from, catalog-format-version
-
-These are exposed under a `slateduck_catalog` schema prefix to avoid name collisions with DuckLake's own table names in the `public` schema. They are read-only: `INSERT`, `UPDATE`, and `DELETE` against `slateduck_catalog.*` return `SQLSTATE 25006`.
-
-**Implementation.** The PG-wire dispatcher already executes bounded SELECT shapes against the catalog tables. Virtual catalog SQL tables are an extension of the same dispatcher: add a new statement family that recognizes `SELECT * FROM slateduck_catalog.{table_name}` shapes and dispatches to full-table scans with optional MVCC filtering. No new storage layer changes are needed; this is entirely a dispatcher and result-encoding change.
-
-**Operator use cases.** An operator debugging a missing file can run:
-```sql
-SELECT data_file_id, path, begin_snapshot FROM slateduck_catalog.ducklake_data_file
-  WHERE table_id = 42 ORDER BY begin_snapshot DESC LIMIT 20;
-```
-An operator verifying time-travel coverage can run:
-```sql
-SELECT snapshot_id, snapshot_time, schema_version
-  FROM slateduck_catalog.ducklake_snapshot ORDER BY snapshot_id;
-```
-
-This feature makes `slateduck inspect` and `slateduck verify` less necessary for interactive debugging, and enables operators already familiar with DuckDB SQL to explore the catalog without learning a new CLI tool.
-
 ### Lambda and Edge-Function Integration
 
 Blueprint §1.4 identifies Lambda functions, container tasks, and CDN edge workers as first-class reader targets: because catalog-data keys are never overwritten, a `DbReader` opened at a known checkpoint can serve any historical `dl_snapshot_id` with no coordination with the writer.
@@ -1750,11 +1813,7 @@ The Lambda function uses the read-only `DbReader` API and requires only the cata
 
 ### Deliverables
 
-- pg-tide-relay `SlateDuckSink` passing full acceptance test suite; exactly-once delivery pattern documented and tested
-- At least two additional clients (Spark and Trino, or Spark and DataFusion-pg-wire) with full corpus coverage in CI
-- Zone-map index shipped with correctness fuzz test and 10⁶-file performance test (if not already in v0.9)
 - Async catalog FFI: scope decision recorded (Option 2 if DuckDB API available, Option 3 otherwise); implementation shipped and benchmarked
-- `slateduck_catalog` virtual SQL tables accessible from any PG-wire client; operator documentation and usage examples published
 - Lambda/edge reader pattern documented with example code and integration test
 - Checkpoint-pinned reader API shipped (`pin`, `unpin`, `list` subcommands)
 - DuckDB major version upgrade process documented step-by-step in `docs/contributing/release-process.md`

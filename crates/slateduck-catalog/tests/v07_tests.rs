@@ -20,6 +20,7 @@ fn test_opts(dir: &TempDir) -> OpenOptions {
     OpenOptions {
         object_store: store,
         path: ObjectPath::from("catalog"),
+        encryption: None,
     }
 }
 
@@ -29,6 +30,7 @@ fn test_opts_with_subpath(dir: &TempDir, subpath: &str) -> OpenOptions {
     OpenOptions {
         object_store: store,
         path: ObjectPath::from(subpath),
+        encryption: None,
     }
 }
 

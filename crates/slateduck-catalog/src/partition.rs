@@ -185,6 +185,7 @@ impl PartitionedWriter {
             let opts = OpenOptions {
                 object_store: self.object_store.clone(),
                 path,
+                encryption: None,
             };
             let store = CatalogStore::open(opts).await?;
             self.catalogs.insert(dataset_name.to_string(), store);

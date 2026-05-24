@@ -89,11 +89,21 @@ Options:
 
 async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let config = parse_serve_args(args)?;
-    let (catalog_path, object_store) = resolve_catalog(&config.catalog_url)?;
+    let s3_opts = S3Options {
+        endpoint: config.s3_endpoint.clone(),
+        path_style: config.s3_path_style,
+    };
+    let (catalog_path, object_store) = resolve_catalog_with_opts(&config.catalog_url, &s3_opts)?;
 
     let opts = OpenOptions {
         object_store: object_store.clone(),
         path: catalog_path,
+        encryption: config
+            .encryption_key
+            .as_deref()
+            .map(slateduck_catalog::EncryptionConfig::from_hex)
+            .transpose()
+            .map_err(|e| format!("--encryption-key: {e}"))?,
     };
 
     let store = CatalogStore::open(opts)
@@ -128,6 +138,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         tls: slateduck_pgwire::server::TlsConfig {
             cert_path: config.tls_cert,
             key_path: config.tls_key,
+            required: config.tls_required,
         },
         auth: slateduck_pgwire::server::AuthConfig {
             username: config.auth_username,
@@ -146,12 +157,19 @@ struct ServeConfig {
     metrics_port: Option<u16>,
     tls_cert: Option<String>,
     tls_key: Option<String>,
+    tls_required: bool,
     auth_username: Option<String>,
     auth_password: Option<String>,
     /// Serving mode: "writer" (accepts writes) or "reader" (read-only, returns 25006 on writes).
     mode: String,
     /// Cost/latency preset: "conservative", "balanced" (default), or "latency".
     cost_mode: slateduck_catalog::CostMode,
+    /// Optional S3-compatible endpoint URL (e.g. for MinIO).
+    s3_endpoint: Option<String>,
+    /// Use S3 path-style addressing (required for some S3-compatible stores).
+    s3_path_style: bool,
+    /// Optional AES-256 encryption key (64 hex digits).
+    encryption_key: Option<String>,
 }
 
 fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
@@ -161,10 +179,15 @@ fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
     let mut metrics_port = None;
     let mut tls_cert = None;
     let mut tls_key = None;
-    let mut auth_username = None;
-    let mut auth_password = None;
+    let mut tls_required = false;
+    // Read auth from env vars first; CLI flags override.
+    let mut auth_username: Option<String> = std::env::var("SLATEDUCK_AUTH_USER").ok();
+    let mut auth_password: Option<String> = std::env::var("SLATEDUCK_AUTH_PASSWORD").ok();
     let mut mode = "writer".to_string();
     let mut cost_mode = slateduck_catalog::CostMode::Balanced;
+    let mut s3_endpoint: Option<String> = None;
+    let mut s3_path_style = false;
+    let mut encryption_key: Option<String> = None;
 
     let mut i = 2;
     while i < args.len() {
@@ -197,9 +220,23 @@ fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
                         .map_err(|e| format!("invalid metrics-port: {e}"))?,
                 );
             }
+            "--metrics-bind" => {
+                i += 1;
+                let bind_str = args.get(i).ok_or("--metrics-bind requires a value")?;
+                // Parse as <host:port> and extract port for the metrics server.
+                let port: u16 = bind_str
+                    .rsplit_once(':')
+                    .ok_or("--metrics-bind must be in <host:port> format")
+                    .and_then(|(_, p)| p.parse().map_err(|_| "--metrics-bind port is invalid"))?;
+                metrics_port = Some(port);
+            }
             "--encryption-key" => {
                 i += 1;
-                let _key = args.get(i).ok_or("--encryption-key requires a value")?;
+                encryption_key = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("--encryption-key requires a value")?,
+                );
             }
             "--tls-cert" => {
                 i += 1;
@@ -209,6 +246,23 @@ fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
                 i += 1;
                 tls_key = Some(args.get(i).cloned().ok_or("--tls-key requires a value")?);
             }
+            "--tls-required" => {
+                tls_required = true;
+            }
+            // New canonical names for auth flags.
+            "--auth-user" => {
+                i += 1;
+                auth_username = Some(args.get(i).cloned().ok_or("--auth-user requires a value")?);
+            }
+            "--auth-password" => {
+                i += 1;
+                auth_password = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("--auth-password requires a value")?,
+                );
+            }
+            // Legacy aliases kept for backward compatibility.
             "--username" => {
                 i += 1;
                 auth_username = Some(args.get(i).cloned().ok_or("--username requires a value")?);
@@ -225,17 +279,48 @@ fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
                 }
                 mode = m;
             }
+            "--read-only" => {
+                mode = "reader".to_string();
+            }
             "--cost-mode" => {
                 i += 1;
                 let m = args.get(i).ok_or("--cost-mode requires a value")?;
                 cost_mode = m.parse::<slateduck_catalog::CostMode>()?;
             }
+            "--s3-endpoint" => {
+                i += 1;
+                s3_endpoint = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("--s3-endpoint requires a value")?,
+                );
+            }
+            "--s3-path-style" => {
+                s3_path_style = true;
+            }
             "--help" | "-h" => {
                 eprintln!(
                     "Usage: slateduck serve --catalog <path> \
-                    [--bind <addr>] [--max-sessions <n>] [--metrics-port <port>] \
-                    [--tls-cert <path>] [--tls-key <path>] [--username <user>] [--password <pass>] \
-                    [--mode writer|reader] [--cost-mode conservative|balanced|latency]"
+                    [--bind <addr>] [--max-sessions <n>] \
+                    [--metrics-port <port>] [--metrics-bind <host:port>] \
+                    [--tls-cert <path>] [--tls-key <path>] [--tls-required] \
+                    [--auth-user <user>] [--auth-password <pass>] \
+                    [--mode writer|reader] [--read-only] \
+                    [--cost-mode conservative|balanced|latency] \
+                    [--s3-endpoint <url>] [--s3-path-style] \
+                    [--encryption-key <hex>]"
+                );
+                eprintln!(
+                    "\nEnvironment variables:\
+                    \n  SLATEDUCK_AUTH_USER      Username for authentication\
+                    \n  SLATEDUCK_AUTH_PASSWORD  Password for authentication"
+                );
+                eprintln!(
+                    "\nSupported catalog URLs:\
+                    \n  s3://bucket/path         Amazon S3 or compatible\
+                    \n  gs://bucket/path         Google Cloud Storage\
+                    \n  az://container/path      Azure Blob Storage\
+                    \n  /local/path              Local filesystem"
                 );
                 std::process::exit(0);
             }
@@ -259,10 +344,14 @@ fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
         metrics_port,
         tls_cert,
         tls_key,
+        tls_required,
         auth_username,
         auth_password,
         mode,
         cost_mode,
+        s3_endpoint,
+        s3_path_style,
+        encryption_key,
     })
 }
 
@@ -885,17 +974,67 @@ fn extract_string_arg(args: &[String], flag: &str) -> Option<String> {
     None
 }
 
+/// Options for S3-compatible object store configuration.
+#[derive(Default)]
+struct S3Options {
+    endpoint: Option<String>,
+    path_style: bool,
+}
+
 fn resolve_catalog(url: &str) -> Result<(ObjectPath, Arc<dyn object_store::ObjectStore>), String> {
+    resolve_catalog_with_opts(url, &S3Options::default())
+}
+
+fn resolve_catalog_with_opts(
+    url: &str,
+    s3_opts: &S3Options,
+) -> Result<(ObjectPath, Arc<dyn object_store::ObjectStore>), String> {
     if let Some(without_scheme) = url.strip_prefix("s3://") {
         let (bucket, prefix) = match without_scheme.find('/') {
             Some(idx) => (&without_scheme[..idx], &without_scheme[idx + 1..]),
             None => (without_scheme, ""),
         };
 
-        let store = object_store::aws::AmazonS3Builder::from_env()
-            .with_bucket_name(bucket)
+        let mut builder = object_store::aws::AmazonS3Builder::from_env().with_bucket_name(bucket);
+        if let Some(ref endpoint) = s3_opts.endpoint {
+            builder = builder.with_endpoint(endpoint);
+        }
+        if s3_opts.path_style {
+            builder = builder.with_virtual_hosted_style_request(false);
+        }
+        let store = builder
             .build()
             .map_err(|e| format!("Failed to create S3 object store: {e}"))?;
+
+        let obj_path = ObjectPath::from(prefix);
+        Ok((obj_path, Arc::new(store)))
+    } else if let Some(without_scheme) = url.strip_prefix("gs://") {
+        let (bucket, prefix) = match without_scheme.find('/') {
+            Some(idx) => (&without_scheme[..idx], &without_scheme[idx + 1..]),
+            None => (without_scheme, ""),
+        };
+
+        let store = object_store::gcp::GoogleCloudStorageBuilder::from_env()
+            .with_bucket_name(bucket)
+            .build()
+            .map_err(|e| format!("Failed to create GCS object store: {e}"))?;
+
+        let obj_path = ObjectPath::from(prefix);
+        Ok((obj_path, Arc::new(store)))
+    } else if let Some(without_scheme) = url
+        .strip_prefix("az://")
+        .or_else(|| url.strip_prefix("azure://"))
+        .or_else(|| url.strip_prefix("abfss://"))
+    {
+        let (container, prefix) = match without_scheme.find('/') {
+            Some(idx) => (&without_scheme[..idx], &without_scheme[idx + 1..]),
+            None => (without_scheme, ""),
+        };
+
+        let store = object_store::azure::MicrosoftAzureBuilder::from_env()
+            .with_container_name(container)
+            .build()
+            .map_err(|e| format!("Failed to create Azure object store: {e}"))?;
 
         let obj_path = ObjectPath::from(prefix);
         Ok((obj_path, Arc::new(store)))

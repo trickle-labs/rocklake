@@ -20,6 +20,9 @@ pub struct TlsConfig {
     pub cert_path: Option<String>,
     /// Path to the TLS private key file (PEM format).
     pub key_path: Option<String>,
+    /// Reject plaintext connections when TLS is not configured.
+    /// Requires `cert_path` and `key_path` to be set.
+    pub required: bool,
 }
 
 impl TlsConfig {
@@ -123,6 +126,10 @@ pub async fn run_server(
 ) -> std::io::Result<()> {
     let tls_acceptor = if config.tls.is_enabled() {
         Some(build_tls_acceptor(&config.tls)?)
+    } else if config.tls.required {
+        return Err(std::io::Error::other(
+            "--tls-required is set but no TLS certificate/key were provided",
+        ));
     } else {
         None
     };
@@ -136,6 +143,7 @@ pub async fn run_server(
 
     let session_semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_sessions));
     let auth_config = Arc::new(config.auth);
+    let tls_required = config.tls.required;
 
     loop {
         let (socket, addr) = listener.accept().await?;
@@ -151,7 +159,7 @@ pub async fn run_server(
             };
 
             info!("New connection from {addr}");
-            let handlers = SlateDuckServerHandlers::new_with_auth(catalog, auth);
+            let handlers = SlateDuckServerHandlers::new_with_config(catalog, auth, tls_required);
 
             if let Err(e) = pgwire::tokio::process_socket(socket, tls, handlers).await {
                 error!("Connection error from {addr}: {e}");
@@ -168,6 +176,10 @@ pub async fn run_server_with_shutdown(
 ) -> std::io::Result<()> {
     let tls_acceptor = if config.tls.is_enabled() {
         Some(build_tls_acceptor(&config.tls)?)
+    } else if config.tls.required {
+        return Err(std::io::Error::other(
+            "--tls-required is set but no TLS certificate/key were provided",
+        ));
     } else {
         None
     };
@@ -177,6 +189,7 @@ pub async fn run_server_with_shutdown(
 
     let session_semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_sessions));
     let auth_config = Arc::new(config.auth);
+    let tls_required = config.tls.required;
 
     tokio::select! {
         _ = async {
@@ -200,7 +213,8 @@ pub async fn run_server_with_shutdown(
                     };
 
                     info!("New connection from {addr}");
-                    let handlers = SlateDuckServerHandlers::new_with_auth(catalog, auth);
+                    let handlers =
+                        SlateDuckServerHandlers::new_with_config(catalog, auth, tls_required);
 
                     if let Err(e) = pgwire::tokio::process_socket(socket, tls, handlers).await {
                         error!("Connection error from {addr}: {e}");

@@ -15,6 +15,7 @@ fn test_opts(dir: &TempDir) -> OpenOptions {
     OpenOptions {
         object_store: store,
         path: ObjectPath::from("catalog"),
+        encryption: None,
     }
 }
 

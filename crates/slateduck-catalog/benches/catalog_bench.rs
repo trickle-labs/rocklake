@@ -19,6 +19,7 @@ fn setup_catalog(rt: &Runtime) -> (CatalogStore, TempDir, u64, u64, u64) {
     let opts = OpenOptions {
         object_store: store,
         path: ObjectPath::from("catalog"),
+        encryption: None,
     };
 
     let mut catalog = rt.block_on(CatalogStore::open(opts)).unwrap();
@@ -142,6 +143,7 @@ fn bench_create_snapshot(c: &mut Criterion) {
     let opts = OpenOptions {
         object_store: store,
         path: ObjectPath::from("catalog"),
+        encryption: None,
     };
 
     let mut catalog = rt.block_on(CatalogStore::open(opts)).unwrap();
