@@ -162,9 +162,7 @@ async fn hide_post_checkpoint_facts(
         {
             let mut row: SchemaRow = values::decode_value(&kv.value)?;
             if row.begin_snapshot > checkpoint_snapshot_id
-                && row
-                    .end_snapshot
-                    .map_or(true, |e| e > checkpoint_snapshot_id)
+                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
             {
                 row.end_snapshot = Some(hide_snapshot);
                 db.put(&kv.key, &values::encode_value(&row)).await?;
@@ -183,9 +181,7 @@ async fn hide_post_checkpoint_facts(
         {
             let mut row: TableRow = values::decode_value(&kv.value)?;
             if row.begin_snapshot > checkpoint_snapshot_id
-                && row
-                    .end_snapshot
-                    .map_or(true, |e| e > checkpoint_snapshot_id)
+                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
             {
                 row.end_snapshot = Some(hide_snapshot);
                 db.put(&kv.key, &values::encode_value(&row)).await?;
@@ -204,9 +200,7 @@ async fn hide_post_checkpoint_facts(
         {
             let mut row: ColumnRow = values::decode_value(&kv.value)?;
             if row.begin_snapshot > checkpoint_snapshot_id
-                && row
-                    .end_snapshot
-                    .map_or(true, |e| e > checkpoint_snapshot_id)
+                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
             {
                 row.end_snapshot = Some(hide_snapshot);
                 db.put(&kv.key, &values::encode_value(&row)).await?;
@@ -225,9 +219,7 @@ async fn hide_post_checkpoint_facts(
         {
             let mut row: ViewRow = values::decode_value(&kv.value)?;
             if row.begin_snapshot > checkpoint_snapshot_id
-                && row
-                    .end_snapshot
-                    .map_or(true, |e| e > checkpoint_snapshot_id)
+                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
             {
                 row.end_snapshot = Some(hide_snapshot);
                 db.put(&kv.key, &values::encode_value(&row)).await?;
@@ -246,9 +238,7 @@ async fn hide_post_checkpoint_facts(
         {
             let mut row: MacroRow = values::decode_value(&kv.value)?;
             if row.begin_snapshot > checkpoint_snapshot_id
-                && row
-                    .end_snapshot
-                    .map_or(true, |e| e > checkpoint_snapshot_id)
+                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
             {
                 row.end_snapshot = Some(hide_snapshot);
                 db.put(&kv.key, &values::encode_value(&row)).await?;
@@ -267,9 +257,7 @@ async fn hide_post_checkpoint_facts(
         {
             let mut row: InlinedInsertRow = values::decode_value(&kv.value)?;
             if row.begin_snapshot > checkpoint_snapshot_id
-                && row
-                    .end_snapshot
-                    .map_or(true, |e| e > checkpoint_snapshot_id)
+                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
             {
                 row.end_snapshot = Some(hide_snapshot);
                 db.put(&kv.key, &values::encode_value(&row)).await?;
