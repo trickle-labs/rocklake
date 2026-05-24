@@ -8,10 +8,10 @@ Every command on this page is shown with its expected output. If your output dif
 
 You need two tools installed before you begin:
 
-**SlateDuck.** Either download a pre-built binary from the [releases page](https://github.com/geir-gronmo/slateduck/releases), or build from source:
+**SlateDuck.** Either download a pre-built binary from the [releases page](https://github.com/trickle-labs/slateduck/releases), or build from source:
 
 ```bash
-git clone https://github.com/geir-gronmo/slateduck.git
+git clone https://github.com/trickle-labs/slateduck.git
 cd slateduck
 cargo build --release
 ```
