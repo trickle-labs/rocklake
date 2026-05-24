@@ -54,7 +54,8 @@ binding on every roadmap release below.
 | **v0.6 — Multi-Client & Security** | pg-tide-relay onboarding, TLS/auth, audit log, GCS/Azure validation, compatibility matrix CI | **Done** |
 | **v0.7 — Performance & Ecosystem** | Hot-key reads, secondary indexes, SlateDB tuning, multi-writer partitioning, DataFusion integration | **Done** |
 | **v0.8 — Documentation** | MkDocs Material site, GitHub Pages, full conceptual, operational, and reference coverage | **Done** |
-| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, K8s deployment patterns, writer routing, S3 cost analysis, GA polish | Planning |
+| **v0.9 — Production Readiness** | K8s deployment, writer routing and failover, performance tuning, cost analysis, migration and corpus tooling | Planning |
+| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, GA sign-off | Planning |
 | **v1.x — Ecosystem Expansion** | Streaming ingest, additional DuckLake clients, zone-map index, async FFI v2, virtual catalog SQL, Lambda integration | Planning |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
 
@@ -947,45 +948,21 @@ The PR template includes a checkbox — "Documentation updated (if behavior chan
 
 ---
 
-## v1.0 — General Availability
+## v0.9 — Production Readiness
 
-> TPC-H @ SF10/SF100 benchmarks, production deployment patterns, complete operational story, and GA polish.
+> Kubernetes deployment architecture, writer routing and failover, credential separation, pre-benchmark performance tuning, cost analysis tooling, catalog migration subcommand, and wire-corpus validation — everything needed to run SlateDuck confidently in production before the v1.0 GA benchmark sign-off.
 
-### Full Benchmark Suite
+### Pre-Benchmark Performance Tuning
 
-TPC-H @ SF10 comparison across all three catalog backends — SlateDuck, DuckLake-on-PostgreSQL (RDS same AZ), and DuckLake-on-SQLite — for each operation family:
+Before the formal TPC-H benchmarks in v1.0, apply targeted optimizations based on profiling. All changes compare against `benchmarks/phase-2-baseline.json` and the v0.7 benchmark results.
 
-- `get_current_snapshot()` — 1 point read; cold-process and warm-cache
-- `list_data_files(table)` — at 10⁴, 10⁵, and 10⁶ files; MVCC filter ratio measured separately
-- `describe_table` — with 50, 100, 500 columns; measures MVCC amplification from historical versions
-- `create_snapshot` — at 1, 10, 100, 1 000 file additions; measures write batching efficiency
-- `prune_files` — single typed column predicate at 10⁵ files; measures zone-map vs. exact-stats path
-- Cold-start read latency — time from fresh process open to first `get_current_snapshot()` response
-- Concurrent reader throughput — 1, 4, 16 concurrent `DbReader` processes; linear scale expected
+**FlatBuffers evaluation.** The v0.2 decision to use Protobuf for value encoding was correct for correctness and schema evolution; FlatBuffers was deferred as a Phase 7 performance candidate. In v0.9, run a decode-overhead microbenchmark for the five highest-frequency row types (`ducklake_data_file`, `ducklake_file_column_stats`, `ducklake_column`, `ducklake_table`, `ducklake_snapshot`) across a cold-cache read of 10⁵ rows. If FlatBuffers reduces total decode overhead by more than 15% end-to-end and migration risk is contained, schedule the encoding migration gated behind a new `encoding_version` byte. If the savings are smaller, close this item and document the result in `docs/design-decisions/value-encoding.md`. The `encoding_version` byte means migration is forward-safe without a `catalog-format-version` bump.
 
-Run all benchmarks on: LocalFS, MinIO (same host), S3 Standard (same region), S3 Express One Zone. Publish p50/p95/p99/p99.9 for every combination. Store results in `benchmarks/v1.0-tpch-sf10.json`.
-
-**S3 Express acceptance gate.** If `get_current_snapshot()` on S3 Express is within 2× of PostgreSQL p99, declare S3 Express the recommended production tier and document it prominently. If common S3 Express planning operations exceed 3× PostgreSQL p99 after v0.7 optimizations, document the gap and defer the production-readiness claim; correctness milestones may still ship as beta.
-
-**Benchmark methodology.** All benchmarks run three warm-up iterations followed by thirty measured iterations. Cold-start benchmarks restart the process for every measured iteration. The benchmark binary is checked in under `benches/` and is runnable by any contributor with `cargo bench`. Results must be reproducible within ±10% across three independent runs on the same hardware; if variance exceeds that, identify and document the source before publishing.
-
-### Production Performance Tuning
-
-Based on TPC-H results, apply targeted optimizations to close remaining gaps against PostgreSQL. All changes compare against `benchmarks/phase-2-baseline.json` and the v0.7 benchmark results.
-
-**FlatBuffers evaluation.** The v0.2 decision to use Protobuf for value encoding was correct for correctness and schema evolution; FlatBuffers was deferred as a Phase 7 performance candidate. In v1.0, run a decode-overhead microbenchmark for the five highest-frequency row types (`ducklake_data_file`, `ducklake_file_column_stats`, `ducklake_column`, `ducklake_table`, `ducklake_snapshot`) across a cold-cache read of 10⁵ rows. If FlatBuffers reduces total decode overhead by more than 15% end-to-end and migration risk is contained, schedule the encoding migration gated behind a new `encoding_version` byte. If the savings are smaller, close this item and document the result in `docs/design-decisions/value-encoding.md`. The `encoding_version` byte means migration is forward-safe without a `catalog-format-version` bump.
-
-**Zone-map secondary index for large-scale pruning.** For tables with 10⁶+ data files and 100+ columns, the per-column scan reads approximately 67 MB per pruning query. If the TPC-H benchmarks confirm this is a bottleneck, add a coarse zone-map interval index:
-
-```
-key: 0x13-zone | table_id_be (4B) | column_id_be (4B) | stats_bucket_be (4B) | data_file_id_be (8B)
-```
-
-`stats_bucket` groups typed min/max values into approximately 100 fixed bins per column; a pre-filter identifies candidate buckets before reading the full stats rows. Correctness requirement: the approximate filter must be a strict superset of the exact filter (no false negatives). The exact min/max rows in `0x13` remain the authoritative source of truth; the zone-map is a performance hint only. Add an explicit test that confirms no files are incorrectly pruned when the zone-map and exact filters disagree on borderline values.
+**Zone-map readiness decision.** Profile `list_data_files` at 10⁵ and 10⁶ files using the exact-stats key layout from v0.2. If MVCC filter amplification exceeds 10× live-rows-returned on the reference workload, schedule the coarse zone-map index (full algorithm is in v1.x) for implementation in this release; otherwise defer to v1.x. Document the measurement and the decision in `docs/performance/pruning.md` so the v1.x team has a quantitative basis.
 
 **Block cache sizing guidance.** Add `slateduck inspect cache-utilization` that reports hit/miss ratio, eviction rate, and a recommended `--cache-size-mb` value based on the catalog's observed working-set size. Document the rule of thumb: a block cache sized to hold the last 30 days of active file stats reduces `list_data_files` latency to near-PostgreSQL levels even on S3 Standard.
 
-**On-disk cache persistence across pod restarts.** Test and document the `--cache-path` option for mounting a persistent volume for the SlateDB block cache in Kubernetes so a pod restarted on the same node retains its warm cache. Add a startup-time metric for cache-hit ratio on the first 100 reads so operators can verify whether the persisted cache is being loaded correctly.
+**On-disk cache persistence across pod restarts.** Test and document the `--cache-path` option for mounting a persistent volume for the SlateDB block cache in Kubernetes so a pod restarted on the same node retains its warm cache. Add a startup-time metric `slateduck_cache_warmup_hit_ratio` for cache-hit ratio on the first 100 reads so operators can verify whether the persisted cache is being loaded correctly.
 
 **SlateDB compaction tuning for the `end_snapshot` update pattern.** Every `DROP TABLE` or `ALTER TABLE` emits one `put(key, updated_value)` call that masks the previous SST entry until compaction merges them. For high-ingest workloads this accumulates dead entries in L0. Tune `l0_sst_count_threshold` to trigger compaction earlier and measure whether it reduces `list_data_files` scan amplification. Document the recommended value and the trade-off against write amplification in `docs/performance/slatedb-tuning.md`.
 
@@ -1141,7 +1118,7 @@ Three distinct credential planes must be documented with IAM policy templates fo
 
 The sidecar must not be given data-plane credentials by default. A sidecar that accidentally receives the data role should fail catalog startup with `SQLSTATE 42501` rather than silently operating with incorrect permissions. Add a startup credential validation check: attempt a catalog-prefix write and a data-prefix write at process start; the former must succeed and the latter must fail for the catalog credentials to be considered correct.
 
-The MinIO credential-isolation tests established in v0.1 are the local proof of this contract. The v1.0 acceptance suite must run equivalent tests against real AWS IAM policies.
+The MinIO credential-isolation tests established in v0.1 are the local proof of this contract. The v0.9 acceptance suite must run equivalent tests against real AWS IAM policies.
 
 #### Writer Failover SLOs
 
@@ -1156,20 +1133,93 @@ Acceptance tests must verify the following across all target backends:
 
 Each SLO is tested by: (1) starting a writer and writing 10 snapshots; (2) sending `SIGKILL`; (3) starting a second writer immediately; (4) measuring time until the second writer returns success for a new `create_snapshot` call; (5) verifying all 10 pre-kill snapshots are visible to a `DbReader` opened after the second writer's `flush()`.
 
-### S3 API Cost Analysis Tooling
+### S3 API Cost Analysis and Cost-Mode Configuration
 
-One of the open questions in [plans/blueprint.md §12](plans/blueprint.md) is: at what scale does SlateDB's WAL write cost become significant compared to PostgreSQL hosting cost? v1.0 provides concrete tooling and documented answers.
+One of the open questions in [plans/blueprint.md §12](plans/blueprint.md) is: at what scale does SlateDB's WAL write cost become significant compared to PostgreSQL hosting cost? v0.9 provides concrete tooling and documented answers.
 
 - `slateduck inspect api-costs [--estimate-monthly]` — emit a report of observed S3 API call counts per catalog operation category (PUT, GET, LIST), their estimated monthly cost at standard S3 pricing, and the equivalent RDS `db.t4g.medium` hourly cost. The report enables an operator to determine the crossover point for their specific ingest rate.
 - `slateduck inspect api-costs --compare-postgres --rds-instance db.t3.medium --region us-east-1` — fetch the current AWS pricing API for the specified RDS instance and emit a side-by-side cost comparison at the catalog's current ingest rate. Requires IAM permission to call `pricing:GetProducts`.
-- Document the cost crossover point (estimated and measured at TPC-H SF10 ingest rate) in `docs/performance/cost-analysis.md`. Include a worked example: at 100 Parquet files/minute registered, what is the monthly S3 API cost vs. a `db.t3.medium` RDS instance in the same region?
+- `slateduck inspect api-costs --stream` — run continuously (one report per minute) and output a time-series of API call rates. This enables operators to see cost spikes during burst ingest and tune buffer/compaction settings without waiting for a monthly invoice.
+- Document the cost crossover point (estimated and measured) in `docs/performance/cost-analysis.md`. Include a worked example: at 100 Parquet files/minute registered, what is the monthly S3 API cost vs. a `db.t3.medium` RDS instance in the same region?
 - `slateduck tune --target-cost-usd-per-month N` — output recommended settings (`--cache-size-mb`, `l0_sst_count_threshold`, compaction mode) that reduce API call volume toward the target cost envelope without degrading p99 latency by more than 50%.
+
+**Cost-mode configuration flag.** Add a `--cost-mode` flag with three named presets to make the cost/latency trade-off accessible without requiring operators to understand SlateDB `Settings` internals:
+
+| Mode | Profile | Use case |
+|------|---------|----------|
+| `conservative` | Larger memtable, lower L0 flush frequency, fewer S3 PUTs | Cost-sensitive workloads; accepts higher p99 write latency |
+| `balanced` (default) | Tuned for the TPC-H SF10 benchmark workload | General-purpose production |
+| `latency` | Frequent flushes, aggressive compaction, more S3 API calls | Interactive analyst workloads on S3 Express |
+
+Document the measured cost and latency profile for each mode in `docs/performance/cost-analysis.md`.
+
+### Catalog Migration and Corpus Tooling
+
+**`slateduck migrate` subcommand.** Automates the `export → reinitialize-at-new-format-version → import` sequence for forward-incompatible `catalog-format-version` bumps. Includes a `--dry-run` mode that reports the number of rows to migrate and estimated duration without making changes.
+
+**`slateduck corpus diff`.** Compare two wire-corpus fixture files and emit a structured diff of all statement families, handshake probes, and type OID requests that changed between versions:
+
+```
+slateduck corpus diff \
+  --old tests/fixtures/wire-corpus/duckdb-1.x.jsonl \
+  --new tests/fixtures/wire-corpus/duckdb-2.x.jsonl
+```
+
+Groups changes into: removed, added, modified parameter types, modified result columns.
+
+**`slateduck corpus validate`.** Replay a corpus fixture file against the current dispatcher and report which statement families are already handled, which need dispatcher updates (category-b), and which require new SQL operator types (category-c):
+
+```
+slateduck corpus validate --corpus tests/fixtures/wire-corpus/duckdb-2.x.jsonl
+```
+
+**CI workflow for corpus PRs.** On any PR that updates a `wire-corpus/*.jsonl` file, automatically run `corpus diff` and `corpus validate` and post the results as a PR comment. A major-version DuckDB upgrade requires two reviewers and an explicit sign-off on any category-c items.
+
+### Deliverables
+
+- All three K8s deployment patterns (Patterns 1–3) with tested manifests in `docs/deployment/kubernetes.md`
+- All four writer routing options (A–D) documented; Options A and B tested with integration tests
+- Writer failover SLOs verified for LocalFS, MinIO, S3 Standard, and S3 Express
+- IAM policy templates for AWS, GCP, and Azure in `docs/deployment/credential-isolation.md`; acceptance tests against real AWS IAM policies
+- `slateduck warmup` CLI subcommand shipping in the binary; init-container example in `docs/deployment/kubernetes.md`
+- `slateduck inspect api-costs` (with `--estimate-monthly`, `--compare-postgres`, `--stream`), `slateduck tune`, and `--cost-mode` flag shipped
+- Cost analysis and cost mode documentation in `docs/performance/cost-analysis.md`
+- `slateduck inspect cache-utilization` shipped; block cache sizing guide in `docs/performance/slatedb-tuning.md`
+- FlatBuffers evaluation complete; result documented in `docs/design-decisions/value-encoding.md`
+- Zone-map readiness decision documented with profiling data in `docs/performance/pruning.md`
+- Compaction tuning documented in `docs/performance/slatedb-tuning.md`
+- `slateduck migrate` subcommand tested with dry-run and apply modes on a v0.x catalog
+- `slateduck corpus diff` and `slateduck corpus validate` subcommands shipping in the binary
+- CI workflow for corpus PRs deployed and verified on a test corpus update
+
+---
+
+## v1.0 — General Availability
+
+> Formal TPC-H @ SF10/SF100 benchmark publication, S3 Express acceptance gate, and GA sign-off.
+
+### Full Benchmark Suite
+
+TPC-H @ SF10 comparison across all three catalog backends — SlateDuck, DuckLake-on-PostgreSQL (RDS same AZ), and DuckLake-on-SQLite — for each operation family:
+
+- `get_current_snapshot()` — 1 point read; cold-process and warm-cache
+- `list_data_files(table)` — at 10⁴, 10⁵, and 10⁶ files; MVCC filter ratio measured separately
+- `describe_table` — with 50, 100, 500 columns; measures MVCC amplification from historical versions
+- `create_snapshot` — at 1, 10, 100, 1 000 file additions; measures write batching efficiency
+- `prune_files` — single typed column predicate at 10⁵ files; measures zone-map vs. exact-stats path
+- Cold-start read latency — time from fresh process open to first `get_current_snapshot()` response
+- Concurrent reader throughput — 1, 4, 16 concurrent `DbReader` processes; linear scale expected
+
+Run all benchmarks on: LocalFS, MinIO (same host), S3 Standard (same region), S3 Express One Zone. Publish p50/p95/p99/p99.9 for every combination. Store results in `benchmarks/v1.0-tpch-sf10.json`.
+
+**S3 Express acceptance gate.** If `get_current_snapshot()` on S3 Express is within 2× of PostgreSQL p99, declare S3 Express the recommended production tier and document it prominently. If common S3 Express planning operations exceed 3× PostgreSQL p99 after v0.9 optimizations, document the gap and defer the production-readiness claim; correctness milestones may still ship as beta.
+
+**Benchmark methodology.** All benchmarks run three warm-up iterations followed by thirty measured iterations. Cold-start benchmarks restart the process for every measured iteration. The benchmark binary is checked in under `benches/` and is runnable by any contributor with `cargo bench`. Results must be reproducible within ±10% across three independent runs on the same hardware; if variance exceeds that, identify and document the source before publishing.
 
 ### GA Polish
 
-- **`slateduck migrate` subcommand.** Automates the `export → reinitialize-at-new-format-version → import` sequence for forward-incompatible `catalog-format-version` bumps. Includes a `--dry-run` mode that reports the number of rows to migrate and estimated duration without making changes.
 - **Deprecation policy.** Six-month notice period before removing any CLI flag, metric name, SQLSTATE code, or public Rust API. Deprecation warnings are emitted in the binary and documented in `CHANGELOG.md` with the target removal version.
-- **Release verification checklist.** Documented in `CONTRIBUTING.md`: run full benchmark suite; run TPC-H SF10 golden test; check `mkdocs build --strict`; verify `slateduck migrate --dry-run` succeeds on a v(N-1) catalog; tag and push. No release may be tagged without all checklist items signed off.
+- **Release verification checklist.** Documented in `CONTRIBUTING.md`: run full benchmark suite; run TPC-H SF10 golden test; check `mkdocs build --strict`; verify `slateduck migrate --dry-run` succeeds on a v0.x catalog; tag and push. No release may be tagged without all checklist items signed off.
 - **Semantic versioning policy.** `catalog-format-version` bumps require a major version bump of the SlateDuck binary. `encoding_version` bumps within the same `catalog-format-version` require a minor version bump. Patch versions are backward-compatible on both dimensions.
 - **Complete `docs/compatibility.md`.** DuckDB version matrix with verified patch versions; DuckLake spec version matrix; object-store backend status (LocalFS, MinIO, S3 Standard, S3 Express, GCS, Azure Blob); pg-tide-relay version matrix; DataFusion version matrix.
 
@@ -1177,28 +1227,20 @@ One of the open questions in [plans/blueprint.md §12](plans/blueprint.md) is: a
 
 1. Full DuckLake tutorial runs end-to-end from the standard DuckDB `ducklake` extension through the SlateDuck PG-wire sidecar, with catalog in S3 and no PostgreSQL or SQLite database required.
 2. Concurrent reads from a second DuckDB process see consistent, snapshot-isolated catalog views.
-3. `kill -9` on the writer mid-commit leaves the catalog readable and consistent; the next writer fences and takes over within the documented SLO.
-4. Benchmarks published: p50/p95/p99 catalog latency vs. PostgreSQL-backed DuckLake on RDS and SQLite-backed DuckLake; cost analysis at TPC-H SF10 ingest rate published.
-5. Common S3 Express planning operations are within 3× of PostgreSQL p99 latency; if not, the gap is clearly documented with a Phase 1.x optimization plan.
+3. `kill -9` on the writer mid-commit leaves the catalog readable and consistent; the next writer fences and takes over within the SLOs verified in v0.9.
+4. Benchmarks published: p50/p95/p99 catalog latency vs. PostgreSQL-backed DuckLake on RDS and SQLite-backed DuckLake; cost crossover point documented.
+5. Common S3 Express planning operations are within 3× of PostgreSQL p99 latency; if not, the gap is clearly documented with a v1.x optimization plan.
 6. All 28 DuckLake v1.0 catalog tables implemented, tag-allocated, fixture-covered, and explicitly status-tracked in `tags.rs`.
 7. Phase 0 validation gates pass on LocalFS, MinIO, S3 Standard, and S3 Express; results documented.
-8. Writer failover SLOs met for all target backends.
-9. IAM separation tested with dedicated policy roles; expected failures return correct SQLSTATEs.
-10. All K8s deployment patterns (Patterns 1–3) and all four routing options (A–D) tested and documented.
-11. `slateduck migrate` tested on a v0.x catalog; round-trip verified.
-12. `mkdocs build --strict` green; documentation site live with no stub pages.
+8. `mkdocs build --strict` green; documentation site live with no stub pages.
 
 ### Deliverables
 
-- v1.0 release tag, `CHANGELOG.md` entry, and `slateduck migrate` guide for any format changes
+- v1.0 release tag and `CHANGELOG.md` entry
 - `slateduck serve` and all maintenance CLI subcommands production-ready
 - Native DuckDB extension available via community extension repository
 - Benchmark report `benchmarks/v1.0-tpch-sf10.json` published in the repository and linked from `docs/performance/`
 - `docs/compatibility.md` with fully verified version matrix
-- K8s deployment manifests for all three patterns in `docs/deployment/kubernetes.md`
-- IAM policy templates for AWS, GCP, and Azure in `docs/deployment/credential-isolation.md`
-- `slateduck inspect api-costs` and `slateduck tune` subcommands shipped
-- `slateduck warmup` init-container subcommand shipped
 
 ---
 
@@ -1245,7 +1287,7 @@ The dispatcher will not grow into a general SQL engine. Category-c statements (t
 
 ### Coarse Zone-Map Index for Large-Scale Pruning
 
-For tables with >1 million data files and 100+ columns, even the correct `(table_id, column_id, data_file_id)` key layout from v0.2 produces 67 MB per-column pruning scans. The zone-map index deferred from v1.0 (if not already shipped there based on TPC-H evidence) lands here.
+For tables with >1 million data files and 100+ columns, even the correct `(table_id, column_id, data_file_id)` key layout from v0.2 produces 67 MB per-column pruning scans. The zone-map index deferred from v0.9 (if not already shipped there based on profiling evidence) lands here.
 
 **Full algorithm:**
 
@@ -1321,18 +1363,6 @@ SELECT snapshot_id, snapshot_time, schema_version
 
 This feature makes `slateduck inspect` and `slateduck verify` less necessary for interactive debugging, and enables operators already familiar with DuckDB SQL to explore the catalog without learning a new CLI tool.
 
-### S3 API Cost Optimization Mode
-
-Extending the v1.0 cost analysis tooling with an active optimization mode:
-
-- `--cost-mode conservative` — reduce L0 flush frequency and increase memtable size to batch more writes into fewer S3 PUT calls; increases p99 write latency but lowers monthly S3 API cost.
-- `--cost-mode balanced` (default) — the v1.0 defaults tuned for the TPC-H SF10 workload.
-- `--cost-mode latency` — minimize p50/p95 latency at the expense of more S3 API calls; recommended for interactive analyst workloads on S3 Express.
-
-Document the cost and latency trade-offs for each mode in `docs/performance/cost-analysis.md` with measured numbers from the TPC-H SF10 benchmark. Operators should be able to pick a mode based on their workload type without reading the SlateDB `Settings` documentation.
-
-Additionally, add `slateduck inspect api-costs --stream` which runs continuously (one report per minute) and outputs a time-series of API call rates. This enables operators to see cost spikes during burst ingest and tune buffer/compaction settings without waiting for a monthly invoice.
-
 ### Lambda and Edge-Function Integration
 
 Blueprint §1.4 identifies Lambda functions, container tasks, and CDN edge workers as first-class reader targets: because catalog-data keys are never overwritten, a `DbReader` opened at a known checkpoint can serve any historical `dl_snapshot_id` with no coordination with the writer.
@@ -1352,25 +1382,15 @@ The Lambda function uses the read-only `DbReader` API and requires only the cata
 
 **Test requirement.** Add an integration test that: (1) writes 100 snapshots; (2) creates a checkpoint; (3) starts a Lambda-style read-only process using only the checkpoint; (4) verifies the process returns correct `list_data_files` results at any `dl_snapshot_id` up to the checkpoint; (5) verifies the process cannot write to the catalog (write attempts return an error from the `DbReader` API).
 
-### DuckDB Major Version Migration Tooling
-
-DuckDB major version bumps are treated as a new client: full wire-corpus recapture is required. v1.x adds tooling to make this safer:
-
-- `slateduck corpus diff --old tests/fixtures/wire-corpus/duckdb-1.x.jsonl --new tests/fixtures/wire-corpus/duckdb-2.x.jsonl` — emit a structured diff of all statement families, handshake probes, and type OID requests that changed between versions. Groups changes into: removed, added, modified parameter types, modified result columns.
-- `slateduck corpus validate --corpus tests/fixtures/wire-corpus/duckdb-2.x.jsonl` — replay the new corpus against the current dispatcher and report which statement families are already handled, which need dispatcher updates (category-b), and which require new SQL operator types (category-c).
-- CI workflow: on any PR that updates a `wire-corpus/*.jsonl` file, automatically run `corpus diff` and `corpus validate` and post the results as a PR comment. A major-version upgrade requires two reviewers and an explicit sign-off on the category-c item list.
-
 ### Deliverables
 
 - pg-tide-relay `SlateDuckSink` passing full acceptance test suite; exactly-once delivery pattern documented and tested
 - At least two additional clients (Spark and Trino, or Spark and DataFusion-pg-wire) with full corpus coverage in CI
-- Zone-map index shipped with correctness fuzz test and 10⁶-file performance test (if not already in v1.0)
+- Zone-map index shipped with correctness fuzz test and 10⁶-file performance test (if not already in v0.9)
 - Async catalog FFI: scope decision recorded (Option 2 if DuckDB API available, Option 3 otherwise); implementation shipped and benchmarked
 - `slateduck_catalog` virtual SQL tables accessible from any PG-wire client; operator documentation and usage examples published
-- S3 cost optimization modes documented with measured trade-offs
 - Lambda/edge reader pattern documented with example code and integration test
 - Checkpoint-pinned reader API shipped (`pin`, `unpin`, `list` subcommands)
-- `slateduck corpus diff` and `slateduck corpus validate` subcommands shipped
 - DuckDB major version upgrade process documented step-by-step in `docs/contributing/release-process.md`
 
 ---
