@@ -255,7 +255,7 @@ pub fn parse_corpus<R: BufRead>(reader: R) -> Vec<CorpusRecord> {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!("corpus: line {} read error: {e}", lineno + 1);
-                continue;
+                break;
             }
         };
         let trimmed = line.trim();
