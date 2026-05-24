@@ -1,8 +1,11 @@
 //! SlateDuck Catalog: DuckLake catalog operations backed by SlateDB.
 
 pub mod audit;
+pub mod cache;
 pub mod checkpoint;
 pub mod cleanup;
+pub mod corpus;
+pub mod cost;
 pub mod encryption;
 pub mod error;
 pub mod excise;
@@ -11,19 +14,26 @@ pub mod gc;
 pub mod init;
 pub mod inspect;
 pub mod metrics;
+pub mod migrate;
 pub mod partition;
 pub mod performance;
 pub mod reader;
 pub mod repair;
 pub mod store;
 pub mod verify;
+pub mod warmup;
 pub mod writer;
 
 pub use audit::{AuditChange, AuditEntry};
+pub use cache::{cache_utilization, CacheStats};
+pub use corpus::{corpus_diff, corpus_validate, parse_corpus, CorpusRecord, ValidateResult};
+pub use cost::{tune_for_cost_target, ApiCostReport, CostMode};
 pub use error::{CatalogError, CatalogResult};
 pub use metrics::CatalogMetrics;
+pub use migrate::{migrate_apply, migrate_dry_run, MigrateDryRunResult, MigrateResult};
 pub use partition::{CatalogRegistry, DatasetEntry, PartitionedWriter};
 pub use performance::{BenchmarkReport, HotKeyState, SlateDbTuning};
 pub use reader::CatalogReader;
 pub use store::{CatalogStore, OpenOptions};
+pub use warmup::{publish_writer_endpoint, read_writer_endpoint, warmup_cache, WarmupResult};
 pub use writer::CatalogWriter;

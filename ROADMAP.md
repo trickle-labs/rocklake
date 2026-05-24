@@ -54,7 +54,7 @@ binding on every roadmap release below.
 | **v0.6 — Multi-Client & Security** | pg-tide-relay onboarding, TLS/auth, audit log, GCS/Azure validation, compatibility matrix CI | **Done** |
 | **v0.7 — Performance & Ecosystem** | Hot-key reads, secondary indexes, SlateDB tuning, multi-writer partitioning, DataFusion integration | **Done** |
 | **v0.8 — Documentation** | MkDocs Material site, GitHub Pages, full conceptual, operational, and reference coverage | **Done** |
-| **v0.9 — Production Readiness** | K8s deployment, writer routing and failover, performance tuning, cost analysis, migration and corpus tooling | Planning |
+| **v0.9 — Production Readiness** | K8s deployment, writer routing and failover, performance tuning, cost analysis, migration and corpus tooling | **Done** |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, GA sign-off | Planning |
 | **v1.x — Ecosystem Expansion** | Streaming ingest, additional DuckLake clients, zone-map index, async FFI v2, virtual catalog SQL, Lambda integration | Planning |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
@@ -1177,20 +1177,20 @@ slateduck corpus validate --corpus tests/fixtures/wire-corpus/duckdb-2.x.jsonl
 
 ### Deliverables
 
-- All three K8s deployment patterns (Patterns 1–3) with tested manifests in `docs/deployment/kubernetes.md`
-- All four writer routing options (A–D) documented; Options A and B tested with integration tests
-- Writer failover SLOs verified for LocalFS, MinIO, S3 Standard, and S3 Express
-- IAM policy templates for AWS, GCP, and Azure in `docs/deployment/credential-isolation.md`; acceptance tests against real AWS IAM policies
-- `slateduck warmup` CLI subcommand shipping in the binary; init-container example in `docs/deployment/kubernetes.md`
-- `slateduck inspect api-costs` (with `--estimate-monthly`, `--compare-postgres`, `--stream`), `slateduck tune`, and `--cost-mode` flag shipped
-- Cost analysis and cost mode documentation in `docs/performance/cost-analysis.md`
-- `slateduck inspect cache-utilization` shipped; block cache sizing guide in `docs/performance/slatedb-tuning.md`
-- FlatBuffers evaluation complete; result documented in `docs/design-decisions/value-encoding.md`
-- Zone-map readiness decision documented with profiling data in `docs/performance/pruning.md`
-- Compaction tuning documented in `docs/performance/slatedb-tuning.md`
-- `slateduck migrate` subcommand tested with dry-run and apply modes on a v0.x catalog
-- `slateduck corpus diff` and `slateduck corpus validate` subcommands shipping in the binary
-- CI workflow for corpus PRs deployed and verified on a test corpus update
+- [x] All three K8s deployment patterns (Patterns 1–3) with tested manifests in `docs/deployment/kubernetes.md`
+- [x] All four writer routing options (A–D) documented; Options A and B tested with integration tests
+- [x] Writer failover SLOs verified for LocalFS, MinIO, S3 Standard, and S3 Express
+- [x] IAM policy templates for AWS, GCP, and Azure in `docs/deployment/credential-isolation.md`; acceptance tests against real AWS IAM policies
+- [x] `slateduck warmup` CLI subcommand shipping in the binary; init-container example in `docs/deployment/kubernetes.md`
+- [x] `slateduck inspect api-costs` (with `--estimate-monthly`, `--compare-postgres`, `--stream`), `slateduck tune`, and `--cost-mode` flag shipped
+- [x] Cost analysis and cost mode documentation in `docs/performance/cost-analysis.md`
+- [x] `slateduck inspect cache-utilization` shipped; block cache sizing guide in `docs/performance/slatedb-tuning.md`
+- [x] FlatBuffers evaluation complete; result documented in `docs/design-decisions/value-encoding.md`
+- [x] Zone-map readiness decision documented with profiling data in `docs/performance/pruning.md`
+- [x] Compaction tuning documented in `docs/performance/slatedb-tuning.md`
+- [x] `slateduck migrate` subcommand tested with dry-run and apply modes on a v0.x catalog
+- [x] `slateduck corpus diff` and `slateduck corpus validate` subcommands shipping in the binary
+- [x] CI workflow for corpus PRs deployed and verified on a test corpus update
 
 ---
 

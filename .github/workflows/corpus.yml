@@ -1,0 +1,90 @@
+name: Corpus
+
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/wire-corpus/**'
+
+permissions:
+  pull-requests: write
+
+jobs:
+  corpus-check:
+    name: Wire corpus diff & validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build slateduck
+        run: cargo build --release -p slateduck-pgwire
+
+      - name: Run corpus validate
+        id: validate
+        run: |
+          set +e
+          OUTPUT=$(./target/release/slateduck corpus validate \
+              --corpus tests/fixtures/wire-corpus 2>&1)
+          EXIT_CODE=$?
+          echo "output<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Compute corpus diff against base
+        id: diff
+        run: |
+          git show "origin/${{ github.base_ref }}:tests/fixtures/wire-corpus" \
+              > /tmp/base-corpus 2>/dev/null || true
+          set +e
+          if [ -s /tmp/base-corpus ]; then
+            DIFF_OUTPUT=$(./target/release/slateduck corpus diff \
+                --old /tmp/base-corpus \
+                --new tests/fixtures/wire-corpus 2>&1)
+          else
+            DIFF_OUTPUT="(no base corpus to compare against)"
+          fi
+          echo "output<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$DIFF_OUTPUT" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Post PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const validate = `${{ steps.validate.outputs.output }}`;
+            const diff = `${{ steps.diff.outputs.output }}`;
+            const exitCode = '${{ steps.validate.outputs.exit_code }}';
+            const status = exitCode === '0' ? '✅ passed' : '❌ failed';
+
+            const body = [
+              `### Wire corpus check ${status}`,
+              '',
+              '**Validation output:**',
+              '```',
+              validate,
+              '```',
+              '',
+              '**Diff against base branch:**',
+              '```',
+              diff,
+              '```',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+            if (exitCode !== '0') {
+              core.setFailed('Corpus validation failed — see PR comment for details.');
+            }
