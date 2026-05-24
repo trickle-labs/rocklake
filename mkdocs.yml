@@ -64,7 +64,6 @@ plugins:
   - redirects:
       redirect_maps:
         quickstart.md: getting-started/quickstart.md
-        architecture.md: architecture/index.md
         compatibility.md: integration/duckdb-compatibility.md
 
 markdown_extensions:
