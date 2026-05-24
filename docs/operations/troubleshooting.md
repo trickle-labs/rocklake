@@ -1,70 +1,365 @@
 # Troubleshooting
 
-This page covers common problems encountered when running SlateDuck and their solutions.
+This page provides a comprehensive guide to diagnosing and resolving problems with SlateDuck. It is organized by symptom — start with what you observe, then follow the diagnostic steps to identify root causes and apply fixes.
+
+## Quick Diagnostic Checklist
+
+Before diving into specific symptoms, run these three commands to establish baseline context:
+
+```bash
+# 1. Can we reach the catalog at all?
+slateduck inspect --storage s3://bucket/catalog/
+
+# 2. What does the error log say?
+slateduck logs --last 50 --level error
+
+# 3. Is there a network/permission issue?
+aws s3 ls s3://bucket/catalog/ --region us-east-1
+```
+
+If `inspect` succeeds, the catalog is healthy and the problem is likely on the client side (DuckDB connection, query configuration, or application logic). If `inspect` fails, the problem is on the storage or server side.
 
 ## Connection Errors
 
-### "connection refused" when DuckDB tries to connect
+### "connection refused" When DuckDB Tries to Connect
 
-**Cause:** SlateDuck is not running or is listening on a different address/port.
+**Symptom:** DuckDB reports `connection refused` when attempting to attach a DuckLake catalog via the PostgreSQL wire protocol.
 
-**Solution:** Verify SlateDuck is running (`ps aux | grep slateduck`), check the bind address and port in the startup output, and ensure there is no firewall blocking the connection.
+**Possible Causes:**
 
-### "WriterFenced" error (SQLSTATE 57P04)
+1. SlateDuck is not running
+2. SlateDuck is listening on a different address or port
+3. A firewall or security group is blocking the connection
+4. The DuckDB extension is using the wrong host/port
 
-**Cause:** Another SlateDuck instance has taken over the writer role by incrementing the epoch.
+**Diagnostic Steps:**
 
-**Solution:** This is expected during failover. The old instance should be terminated. If you see this unexpectedly, check for duplicate SlateDuck processes pointing at the same catalog.
+```bash
+# Is SlateDuck running?
+ps aux | grep slateduck
 
-### "FormatVersionMismatch" on startup
+# What address is it listening on?
+ss -tlnp | grep slateduck
+# or on macOS:
+lsof -i -P | grep slateduck
 
-**Cause:** The SlateDuck binary does not recognize the catalog's format version. Either the catalog was created by a newer version, or it is corrupted.
+# Can we reach the port from the client?
+nc -zv <hostname> 5432
 
-**Solution:** Ensure you are running the correct SlateDuck version for your catalog. If you recently downgraded, you may need to upgrade back to the version that performed the migration.
+# Check SlateDuck's startup log for the actual bind address
+slateduck logs --last 10 | grep "listening"
+```
 
-## Performance Issues
+**Solutions:**
 
-### Slow catalog queries (> 500ms)
+- If SlateDuck is not running, start it: `slateduck serve --storage s3://bucket/catalog/`
+- If it is listening on `127.0.0.1`, change to `0.0.0.0` for remote access: `--bind 0.0.0.0:5432`
+- If a security group blocks port 5432, add an inbound rule for the client's IP range
+- Verify the DuckDB connection string matches: `ATTACH 'dbname=ducklake host=<correct-host> port=<correct-port>' AS lake (TYPE ducklake)`
 
-**Possible causes:**
-- High latency to object storage (check network, region mismatch)
-- Many superseded rows causing scan amplification (run GC + excision)
-- Large number of data files per table (expected for large tables; consider partitioning)
-- SlateDB compaction backlog (check compaction metrics)
+### "WriterFenced" Error (SQLSTATE 57P04)
 
-**Solution:** Run `slateduck inspect` to check row counts. If there are many more rows than expected, run GC. Check object store latency with a simple GET test.
+**Symptom:** DuckDB queries fail with `WriterFenced` error. SlateDuck logs show "fenced by newer epoch."
 
-### DuckDB queries are slow after connecting to SlateDuck
+**What This Means:**
 
-**Cause:** DuckDB's `ducklake` extension makes multiple catalog round-trips per query (list files, get stats, etc.). If each round-trip takes 50-100ms, a query with 10 catalog calls adds 500-1000ms of overhead.
+Another SlateDuck instance has taken over the writer role by incrementing the writer epoch in SlateDB. The fenced instance can no longer write — it is permanently blocked until restarted.
 
-**Solution:** This is inherent to the architecture when using S3 Standard. Options: use S3 Express One Zone for lower latency, switch to the native extension (Strategy C) for in-process catalog access, or batch data files into fewer, larger Parquet files.
+**Common Causes:**
 
-## Storage Errors
+1. **Intentional failover.** You deployed a new instance and the old one was fenced. Expected behavior.
+2. **Duplicate processes.** Two SlateDuck processes are pointing at the same catalog storage path.
+3. **Kubernetes pod restart.** A crashed pod restarted and the new pod fenced the old one (which hadn't fully terminated yet).
+4. **Misconfigured health check.** The orchestrator killed a "unhealthy" instance and started a replacement.
+
+**Diagnostic Steps:**
+
+```bash
+# Check the current epoch
+slateduck inspect --storage s3://bucket/catalog/ --format json | jq '.writer_epoch'
+
+# Check how many SlateDuck processes exist
+ps aux | grep slateduck | grep -v grep
+
+# In Kubernetes
+kubectl get pods -l app=slateduck
+```
+
+**Solutions:**
+
+- If this is an intentional failover: terminate the old instance. Clients will reconnect to the new one.
+- If duplicate processes: kill the older one (the one with the lower epoch).
+- If happening repeatedly: review your deployment configuration to ensure only ONE writer instance runs at a time. Use a Deployment with `replicas: 1` and `strategy: Recreate`.
+
+### "FormatVersionMismatch" on Startup
+
+**Symptom:** SlateDuck refuses to start, logging `FormatVersionMismatch: catalog requires format version 2, binary supports version 1`.
+
+**What This Means:**
+
+The catalog was created or migrated by a newer version of SlateDuck that uses a format version your current binary does not understand.
+
+**Solutions:**
+
+- **Upgrade** to the SlateDuck version that created the catalog (check release notes for format version changes)
+- **If you recently downgraded:** you cannot downgrade across format version boundaries without restoring from an NDJSON backup taken before the upgrade
 
 ### "ObjectStore: 403 Forbidden"
 
+**Symptom:** SlateDuck fails to start or intermittently fails with `ObjectStore: 403 Forbidden`.
+
 **Cause:** Insufficient IAM permissions for the configured storage path.
 
-**Solution:** Ensure the IAM role/user has `s3:GetObject`, `s3:PutObject`, `s3:ListBucket`, and `s3:DeleteObject` permissions on the catalog path prefix.
+**Required Permissions:**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:ListBucket"
+    ],
+    "Resource": [
+      "arn:aws:s3:::bucket",
+      "arn:aws:s3:::bucket/catalog/*"
+    ]
+  }]
+}
+```
+
+**Diagnostic Steps:**
+
+```bash
+# Test permissions directly
+aws s3 ls s3://bucket/catalog/ --region us-east-1
+aws s3 cp /dev/null s3://bucket/catalog/test-permissions --region us-east-1
+aws s3 rm s3://bucket/catalog/test-permissions --region us-east-1
+
+# Check which credentials are being used
+aws sts get-caller-identity
+```
 
 ### "ObjectStore: 429 Too Many Requests"
 
-**Cause:** S3 request rate limiting. This can happen during heavy compaction or when scanning very large catalogs.
+**Symptom:** Intermittent 429 errors in logs during heavy activity (bulk imports, compaction bursts).
 
-**Solution:** SlateDuck retries automatically with exponential backoff. If sustained, consider spreading catalog data across multiple S3 prefixes or reducing scan frequency.
+**What This Means:**
 
-## Data Integrity
+S3 is throttling requests. S3 supports 3,500 PUT/COPY/POST/DELETE and 5,500 GET/HEAD requests per second per partitioned prefix.
 
-### Verify reports errors
+**Solutions:**
 
-**Solution:** Run `slateduck repair --dry-run` to see what repairs are proposed. If repairs are available, apply them. If the error is unrecoverable, restore from an NDJSON backup or checkpoint.
+- SlateDuck retries automatically with exponential backoff (usually self-resolving)
+- If sustained: reduce concurrent readers, or restructure the catalog path to spread across prefixes
+- Consider S3 Express One Zone for higher throughput
 
-### Unexpected empty results from catalog queries
+## Performance Issues
 
-**Possible causes:**
-- Reading at a snapshot before the entities were created
-- GC has advanced `retain_from` past the target snapshot
-- Writer fencing: writes went to a different catalog instance
+### Slow Catalog Queries (> 500ms)
 
-**Solution:** Check the current snapshot with `slateduck inspect`. Verify `retain_from` is not too aggressive. Ensure all DuckDB instances connect to the same SlateDuck instance.
+**Symptom:** Queries that should be fast (SELECT * FROM a small table) take hundreds of milliseconds or seconds.
+
+**Diagnostic Steps:**
+
+```bash
+# Check network latency to object storage
+time aws s3api head-object --bucket bucket --key catalog/MANIFEST --region us-east-1
+
+# Check row counts (high superseded count = scan amplification)
+slateduck inspect --storage s3://bucket/catalog/ --format json | jq '.counts'
+
+# Check if GC is needed
+slateduck inspect --storage s3://bucket/catalog/ --format json | jq '.retention'
+```
+
+**Common Causes and Solutions:**
+
+| Cause | Diagnostic Sign | Solution |
+|-------|----------------|----------|
+| High storage latency | `head-object` > 50ms | Use S3 Express One Zone or same-region deployment |
+| Scan amplification | Many superseded rows | Run GC: `slateduck gc --retain-days 7` |
+| Large table (many files) | Thousands of data files | Expected; consider table partitioning |
+| Compaction backlog | Many small SST files | Wait for compaction or trigger manual compaction |
+| Cold cache | First query after restart slow | Expected; subsequent queries are faster |
+
+### DuckDB Queries Slow After Connecting
+
+**Symptom:** DuckDB's planning phase takes seconds even for simple queries.
+
+**What This Means:**
+
+DuckDB's `ducklake` extension makes multiple catalog round-trips per query: list schemas, list tables, list columns, list files, get statistics. If each round-trip takes 50–100ms (typical for S3 Standard), a query with 10 catalog calls adds 500–1000ms of overhead before execution even begins.
+
+**Solutions:**
+
+| Approach | Latency Improvement | Trade-off |
+|----------|-------------------|-----------|
+| S3 Express One Zone | 5–10x faster | Higher per-request cost |
+| Co-located deployment | Minimal network hops | Must deploy in same AZ |
+| Native extension (Strategy C) | In-process, no network | Early-stage, fewer features |
+| Fewer data files per table | Fewer catalog entries to scan | Larger individual files |
+
+### Writer Throughput Too Low
+
+**Symptom:** Bulk operations (registering thousands of files) take minutes.
+
+**Diagnostic:**
+
+```bash
+# Check how many snapshots per second are being created
+START=$(slateduck inspect --storage s3://bucket/catalog/ --format json | jq '.latest_snapshot')
+sleep 10
+END=$(slateduck inspect --storage s3://bucket/catalog/ --format json | jq '.latest_snapshot')
+echo "Snapshots/sec: $(( (END - START) / 10 ))"
+```
+
+**Solutions:**
+
+- Batch operations: register multiple files in a single transaction (single snapshot)
+- Ensure object storage latency is low (same region, S3 Express)
+- Check for lock contention if multiple writers are competing (single-writer architecture means only one can proceed)
+
+## Data Integrity Issues
+
+### Verify Reports Errors
+
+**Symptom:** `slateduck verify` reports errors.
+
+**Steps:**
+
+```bash
+# Run verify with verbose output
+slateduck verify --storage s3://bucket/catalog/ --verbose
+
+# Preview repairs
+slateduck repair --storage s3://bucket/catalog/ --dry-run
+
+# If repairs are available and safe, apply them
+slateduck repair --storage s3://bucket/catalog/
+```
+
+**If repair cannot fix the issue:**
+
+1. Restore from the most recent NDJSON backup
+2. If no backup: check if object storage versioning is enabled (you may recover previous SST files)
+3. Contact the SlateDuck maintainers with the verify output
+
+### Unexpected Empty Results
+
+**Symptom:** Queries return no rows for tables/schemas that should have data.
+
+**Diagnostic Steps:**
+
+```bash
+# What snapshot is the catalog at?
+slateduck inspect --storage s3://bucket/catalog/ --format json | jq '.latest_snapshot'
+
+# Is the table visible at the current snapshot?
+slateduck inspect --storage s3://bucket/catalog/ --prefix "t/" | grep "table_name"
+
+# Has GC advanced past the creation snapshot?
+slateduck inspect --storage s3://bucket/catalog/ --format json | jq '.retention.retain_from'
+```
+
+**Possible Causes:**
+
+1. **Reading at wrong snapshot:** The client is pinned to an old snapshot before the entities existed.
+2. **GC too aggressive:** `retain_from` has advanced past the target snapshot (data still exists but is inaccessible via time travel).
+3. **Writer fencing:** Writes went to a different catalog instance (check storage paths match).
+4. **Catalog path mismatch:** The client is connecting to a different catalog entirely.
+
+### Snapshot ID Not Advancing
+
+**Symptom:** The latest snapshot ID stays the same over time, even though writes should be occurring.
+
+**Possible Causes:**
+
+1. **Writer is fenced:** Check `slateduck inspect` for fencing status
+2. **Writer has crashed:** Check process status and logs
+3. **No writes happening:** The application may not be generating catalog mutations
+4. **Write errors:** The writer is attempting writes but they fail (check error logs)
+
+## Kubernetes-Specific Issues
+
+### Pod Restart Loop (CrashLoopBackOff)
+
+**Common Causes:**
+
+```bash
+# Check pod logs
+kubectl logs -l app=slateduck --previous
+
+# Check events
+kubectl describe pod <pod-name>
+```
+
+| Log Message | Cause | Solution |
+|------------|-------|----------|
+| `FormatVersionMismatch` | Wrong binary version | Update container image |
+| `ObjectStore: 403` | Missing IAM role | Check ServiceAccount/IRSA configuration |
+| `Address already in use` | Port conflict | Check for zombie processes or conflicting services |
+| `OOMKilled` | Insufficient memory | Increase memory limit in pod spec |
+
+### Leader Election Issues
+
+If using a Deployment with `replicas: 1`:
+
+```bash
+# Verify only one pod is running
+kubectl get pods -l app=slateduck
+
+# If multiple pods exist (during rollout), check rollout strategy
+kubectl get deployment slateduck -o yaml | grep -A5 strategy
+```
+
+**Solution:** Use `strategy: Recreate` to ensure the old pod is fully terminated before the new one starts.
+
+## Logging and Diagnostics
+
+### Enabling Debug Logging
+
+```bash
+# Set log level
+export SLATEDUCK_LOG=debug
+slateduck serve --storage s3://bucket/catalog/
+
+# Or for specific modules
+export SLATEDUCK_LOG=slateduck_pgwire=debug,slateduck_catalog=trace
+```
+
+### Useful Log Patterns to Search For
+
+```bash
+# Find all errors in the last hour
+slateduck logs --since 1h --level error
+
+# Find writer fencing events
+slateduck logs | grep -i "fenced\|epoch"
+
+# Find slow operations
+slateduck logs | grep -i "slow\|timeout\|retry"
+
+# Find permission errors
+slateduck logs | grep -i "403\|forbidden\|permission"
+```
+
+## Getting Help
+
+If the troubleshooting steps above do not resolve your issue:
+
+1. Run `slateduck inspect --storage <path> --format json` and save the output
+2. Run `slateduck verify --storage <path>` and save the output
+3. Collect the last 100 lines of error logs
+4. Open an issue on GitHub with this information
+
+## Further Reading
+
+- **[Inspect](inspect.md)** — Detailed catalog state examination
+- **[Verify & Repair](verify-repair.md)** — Integrity checking and repair
+- **[Monitoring](monitoring.md)** — Proactive issue detection
+- **[Health Checks](health-checks.md)** — Automated health verification
+- **[Logging](logging.md)** — Log configuration and analysis

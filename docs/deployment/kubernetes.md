@@ -1,28 +1,204 @@
 # Kubernetes Deployment
 
-Kubernetes is the recommended deployment platform for production SlateDuck instances. This page covers the deployment manifests, configuration patterns, and operational practices for running SlateDuck reliably on Kubernetes.
+Kubernetes is the recommended deployment platform for production SlateDuck instances that need automated restarts, health monitoring, and integration with cloud IAM. Because SlateDuck stores all state in object storage, it runs as a stateless Deployment — no PersistentVolumes, no StatefulSets, no operator required. This makes it one of the simplest database-adjacent services to deploy on Kubernetes.
 
-## Architecture
+This page covers complete deployment manifests, scaling patterns, IAM integration for all three major clouds, health probing strategies, and operational practices for running SlateDuck reliably in a cluster.
 
-SlateDuck runs as a Deployment (not a StatefulSet) because it has no local state — all data is in object storage. This simplifies rolling updates, scaling, and failure recovery.
+## Why Deployment, Not StatefulSet
+
+Traditional databases on Kubernetes need StatefulSets for stable network identifiers and persistent storage. SlateDuck needs neither:
+
+- **No persistent storage.** All data lives in object storage. The pod can be killed and rescheduled on any node without data loss.
+- **No stable identity.** The writer acquires its epoch on startup; it does not need to be "pod-0" or have a fixed hostname.
+- **Fast recovery.** A rescheduled pod starts accepting connections in <1 second after the image is pulled.
+
+This means standard Deployment semantics apply: rolling updates, pod disruption budgets, and horizontal pod autoscaling (for readers) all work as expected.
+
+## Core Manifests
+
+### Namespace and ConfigMap
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: slateduck
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slateduck-config
+  namespace: slateduck
+data:
+  storage: "s3://my-lakehouse-bucket/catalog/"
+  region: "us-east-1"
+  max-sessions: "100"
+  log-format: "json"
+  log-level: "info"
+```
+
+### Secret (for Password Authentication)
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: slateduck-auth
+  namespace: slateduck
+type: Opaque
+stringData:
+  password: "your-secure-password-here"
+```
+
+### Writer Deployment
+
+The primary (writer) deployment — always exactly 1 replica:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: slateduck
+  name: slateduck-writer
+  namespace: slateduck
   labels:
-    app: slateduck
+    app.kubernetes.io/name: slateduck
+    app.kubernetes.io/component: writer
 spec:
   replicas: 1
+  strategy:
+    type: Recreate  # Ensure old pod is gone before new one starts (single-writer)
   selector:
     matchLabels:
-      app: slateduck
+      app.kubernetes.io/name: slateduck
+      app.kubernetes.io/component: writer
   template:
     metadata:
       labels:
-        app: slateduck
+        app.kubernetes.io/name: slateduck
+        app.kubernetes.io/component: writer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
     spec:
+      serviceAccountName: slateduck
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: slateduck
+          image: ghcr.io/slateduck/slateduck:0.8.0
+          ports:
+            - containerPort: 5432
+              name: pgwire
+              protocol: TCP
+          args:
+            - "--storage"
+            - "$(SLATEDUCK_STORAGE)"
+            - "--bind"
+            - "0.0.0.0:5432"
+            - "--max-sessions"
+            - "$(SLATEDUCK_MAX_SESSIONS)"
+            - "--log-format"
+            - "$(SLATEDUCK_LOG_FORMAT)"
+            - "--log-level"
+            - "$(SLATEDUCK_LOG_LEVEL)"
+            - "--auth-user"
+            - "ducklake"
+          env:
+            - name: SLATEDUCK_STORAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: slateduck-config
+                  key: storage
+            - name: SLATEDUCK_MAX_SESSIONS
+              valueFrom:
+                configMapKeyRef:
+                  name: slateduck-config
+                  key: max-sessions
+            - name: SLATEDUCK_LOG_FORMAT
+              valueFrom:
+                configMapKeyRef:
+                  name: slateduck-config
+                  key: log-format
+            - name: SLATEDUCK_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: slateduck-config
+                  key: log-level
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: slateduck-config
+                  key: region
+            - name: SLATEDUCK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: slateduck-auth
+                  key: password
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "2000m"
+          livenessProbe:
+            tcpSocket:
+              port: pgwire
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: pgwire
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 2
+          startupProbe:
+            tcpSocket:
+              port: pgwire
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            failureThreshold: 15
+```
+
+### Reader Deployment (Optional)
+
+For read-heavy workloads, deploy additional read-only replicas that scale horizontally:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slateduck-reader
+  namespace: slateduck
+  labels:
+    app.kubernetes.io/name: slateduck
+    app.kubernetes.io/component: reader
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slateduck
+      app.kubernetes.io/component: reader
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: slateduck
+        app.kubernetes.io/component: reader
+    spec:
+      serviceAccountName: slateduck
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
       containers:
         - name: slateduck
           image: ghcr.io/slateduck/slateduck:0.8.0
@@ -31,51 +207,74 @@ spec:
               name: pgwire
           args:
             - "--storage"
-            - "s3://$(CATALOG_BUCKET)/catalog/"
+            - "$(SLATEDUCK_STORAGE)"
             - "--bind"
             - "0.0.0.0:5432"
+            - "--read-only"
+            - "--auth-user"
+            - "ducklake"
           env:
-            - name: CATALOG_BUCKET
+            - name: SLATEDUCK_STORAGE
               valueFrom:
                 configMapKeyRef:
                   name: slateduck-config
-                  key: bucket
+                  key: storage
             - name: AWS_REGION
-              value: us-east-1
-            - name: RUST_LOG
-              value: info
+              valueFrom:
+                configMapKeyRef:
+                  name: slateduck-config
+                  key: region
+            - name: SLATEDUCK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: slateduck-auth
+                  key: password
           resources:
             requests:
-              memory: "128Mi"
-              cpu: "100m"
+              memory: "64Mi"
+              cpu: "50m"
             limits:
-              memory: "512Mi"
+              memory: "256Mi"
               cpu: "1000m"
-          livenessProbe:
-            tcpSocket:
-              port: pgwire
-            initialDelaySeconds: 5
-            periodSeconds: 10
           readinessProbe:
             tcpSocket:
               port: pgwire
-            initialDelaySeconds: 10
             periodSeconds: 5
-      serviceAccountName: slateduck
 ```
 
-## Service
-
-Expose SlateDuck to other pods in the cluster:
+### Services
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: slateduck
+  name: slateduck-writer
+  namespace: slateduck
+  labels:
+    app.kubernetes.io/name: slateduck
+    app.kubernetes.io/component: writer
 spec:
   selector:
-    app: slateduck
+    app.kubernetes.io/name: slateduck
+    app.kubernetes.io/component: writer
+  ports:
+    - port: 5432
+      targetPort: pgwire
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: slateduck-reader
+  namespace: slateduck
+  labels:
+    app.kubernetes.io/name: slateduck
+    app.kubernetes.io/component: reader
+spec:
+  selector:
+    app.kubernetes.io/name: slateduck
+    app.kubernetes.io/component: reader
   ports:
     - port: 5432
       targetPort: pgwire
@@ -83,48 +282,432 @@ spec:
   type: ClusterIP
 ```
 
-DuckDB pods connect via: `host=slateduck.default.svc.cluster.local;port=5432`
+Connect from other pods:
 
-## IAM Authentication (AWS)
+```sql
+-- Writer (DDL, DML, and queries)
+ATTACH 'ducklake:host=slateduck-writer.slateduck.svc.cluster.local;port=5432;user=ducklake;password=...' AS lake;
 
-Use IAM Roles for Service Accounts (IRSA) to provide S3 access without static credentials:
+-- Reader (queries only, load-balanced across replicas)
+ATTACH 'ducklake:host=slateduck-reader.slateduck.svc.cluster.local;port=5432;user=ducklake;password=...' AS lake;
+```
+
+## IAM Integration
+
+### AWS: IAM Roles for Service Accounts (IRSA)
+
+On EKS, use IRSA to provide S3 credentials without static keys:
 
 ```yaml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: slateduck
+  namespace: slateduck
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/slateduck-role
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/slateduck-s3-access
 ```
 
-The IAM role needs permissions: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on the catalog prefix.
+The IAM role policy:
 
-## Scaling Considerations
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::my-lakehouse-bucket",
+        "arn:aws:s3:::my-lakehouse-bucket/catalog/*"
+      ]
+    }
+  ]
+}
+```
 
-SlateDuck's single-writer model means you cannot run multiple writer replicas. For read-only replicas (to distribute read load), you can run additional instances that connect to the same catalog in read-only mode. The writer instance is identified by the highest epoch.
+Trust policy (allow the service account to assume the role):
 
-For high availability, use a single replica with aggressive restart policies. Kubernetes will restart the pod within seconds on failure, and the new instance takes over the writer epoch immediately.
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE:sub": "system:serviceaccount:slateduck:slateduck"
+        }
+      }
+    }
+  ]
+}
+```
+
+### GCP: Workload Identity
+
+On GKE, use Workload Identity to bind a Kubernetes service account to a GCP service account:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: slateduck
+  namespace: slateduck
+  annotations:
+    iam.gke.io/gcp-service-account: slateduck@my-project.iam.gserviceaccount.com
+```
+
+Grant the GCP service account `roles/storage.objectAdmin` on the bucket.
+
+### Azure: Workload Identity
+
+On AKS with Azure AD Workload Identity:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: slateduck
+  namespace: slateduck
+  annotations:
+    azure.workload.identity/client-id: "12345678-1234-1234-1234-123456789012"
+  labels:
+    azure.workload.identity/use: "true"
+```
+
+## Horizontal Pod Autoscaler (Readers)
+
+Scale reader replicas based on CPU or connection count:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: slateduck-reader
+  namespace: slateduck
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: slateduck-reader
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+```
+
+## Pod Disruption Budget
+
+Protect the writer from accidental eviction during node maintenance:
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: slateduck-writer
+  namespace: slateduck
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slateduck
+      app.kubernetes.io/component: writer
+```
+
+For readers, allow one replica to be unavailable during rolling updates:
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: slateduck-reader
+  namespace: slateduck
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slateduck
+      app.kubernetes.io/component: reader
+```
+
+## Network Policy
+
+Restrict which pods can connect to SlateDuck:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: slateduck-ingress
+  namespace: slateduck
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: slateduck
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              slateduck-access: "true"
+      ports:
+        - protocol: TCP
+          port: 5432
+```
+
+Label namespaces that should have access:
+
+```bash
+kubectl label namespace analytics slateduck-access=true
+```
 
 ## GC CronJob
 
-Schedule garbage collection as a Kubernetes CronJob:
+Schedule garbage collection as a Kubernetes CronJob to clean up expired snapshots and compacted files:
 
 ```yaml
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: slateduck-gc
+  namespace: slateduck
 spec:
-  schedule: "0 3 * * *"  # Daily at 3am
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
   jobTemplate:
     spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 3600
       template:
         spec:
+          serviceAccountName: slateduck
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
           containers:
             - name: gc
               image: ghcr.io/slateduck/slateduck:0.8.0
-              command: ["slateduck", "gc", "--storage", "s3://bucket/catalog/", "--retain-days", "30"]
+              command:
+                - "slateduck"
+                - "gc"
+                - "--storage"
+                - "s3://my-lakehouse-bucket/catalog/"
+                - "--retain-days"
+                - "30"
+              env:
+                - name: AWS_REGION
+                  value: us-east-1
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "500m"
           restartPolicy: OnFailure
-          serviceAccountName: slateduck
 ```
+
+## Rolling Updates
+
+Because SlateDuck is stateless, rolling updates are straightforward:
+
+```bash
+# Update image tag
+kubectl set image deployment/slateduck-writer \
+  slateduck=ghcr.io/slateduck/slateduck:0.9.0 \
+  -n slateduck
+
+# Watch rollout
+kubectl rollout status deployment/slateduck-writer -n slateduck
+```
+
+For the writer deployment (`strategy: Recreate`), Kubernetes terminates the old pod before starting the new one. This ensures no split-brain scenario — only one writer exists at any time. The brief downtime (typically 2–5 seconds) is acceptable because SlateDuck starts fast and clients retry automatically.
+
+## Monitoring with Prometheus
+
+Add a ServiceMonitor for Prometheus Operator:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: slateduck
+  namespace: slateduck
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slateduck
+  endpoints:
+    - port: metrics
+      interval: 15s
+```
+
+## Troubleshooting
+
+### Pod stuck in CrashLoopBackOff
+
+Check logs: `kubectl logs -n slateduck deploy/slateduck-writer`. Common causes:
+
+- **Storage access denied:** IAM role not configured or trust policy incorrect
+- **Invalid storage path:** Bucket does not exist or prefix is misspelled
+- **Port conflict:** Another service using port 5432 in the pod
+
+### Pod healthy but clients cannot connect
+
+- Verify the Service selector matches pod labels
+- Check NetworkPolicy allows ingress from client namespace
+- Ensure DNS resolution works: `kubectl exec -it debug -- nslookup slateduck-writer.slateduck.svc.cluster.local`
+
+### Writer epoch conflict
+
+If you accidentally run two writer deployments against the same storage, the second one will be fenced and crash. Ensure only one writer Deployment exists per catalog.
+
+## Resource Tuning
+
+### Memory Sizing
+
+SlateDuck's memory usage is predictable:
+
+| Component | Memory | Notes |
+|-----------|--------|-------|
+| Base process | ~30 MB | Binary, runtime, static allocations |
+| SlateDB block cache | 10–50 MB | Configurable, caches hot SST blocks |
+| Per-session state | ~1 MB each | Grows with concurrent connections |
+| Protobuf decode buffers | ~5 MB | Temporary allocations during query processing |
+
+**Formula:** `Total ≈ 50 MB + (sessions × 1 MB) + block_cache_size`
+
+For a deployment with 50 max sessions and a 20 MB block cache: request 128 Mi, limit 256 Mi.
+
+### CPU Sizing
+
+SlateDuck's writer path is single-threaded (all writes serialize through the writer). The reader path can use multiple threads for concurrent sessions. For most deployments:
+
+- **1 writer pod:** 100m request, 500m limit (burst for write batches)
+- **Reader pods:** 100m request, 250m limit each (read-only workload is lighter)
+
+### Horizontal Pod Autoscaling (Readers)
+
+For read-heavy workloads, autoscale reader pods based on connection count:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: slateduck-reader
+  namespace: slateduck
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: slateduck-reader
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: slateduck_active_sessions
+        target:
+          type: AverageValue
+          averageValue: "20"
+```
+
+This scales out when the average session count per pod exceeds 20, ensuring each pod handles a manageable number of concurrent connections.
+
+## Network Policies
+
+Lock down SlateDuck's network access for defense in depth:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: slateduck-writer
+  namespace: slateduck
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: slateduck
+      app.kubernetes.io/component: writer
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow connections from DuckDB client pods
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              slateduck-access: "true"
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    # Allow access to S3 (HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+```
+
+## Upgrade Strategy
+
+For Kubernetes deployments, use the `Recreate` strategy (not `RollingUpdate`) for the writer pod:
+
+```yaml
+strategy:
+  type: Recreate
+```
+
+This ensures the old writer pod is fully terminated before the new one starts, preventing epoch conflicts. The downtime is typically 2–5 seconds (old pod termination + new pod startup).
+
+For reader pods, `RollingUpdate` is safe since readers do not hold exclusive leases:
+
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+```
+
+## Further Reading
+
+- **[Docker](docker.md)** — Simpler container deployment without orchestration
+- **[High Availability](high-availability.md)** — Failover strategies for uptime SLAs
+- **[Multi-Region](multi-region.md)** — Cross-region reader distribution
+- **[Configuration](configuration.md)** — Full configuration reference

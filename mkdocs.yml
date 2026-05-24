@@ -131,14 +131,15 @@ nav:
     - Your First Lakehouse: getting-started/first-lakehouse.md
   - Concepts:
     - concepts/index.md
-    - Bounded SQL: concepts/bounded-sql.md
-    - Catalog vs Data: concepts/catalog-vs-data.md
-    - Immutability: concepts/immutability.md
-    - Key-Value Mapping: concepts/key-value-mapping.md
-    - MVCC: concepts/mvcc.md
-    - Object Store Durability: concepts/object-store-durability.md
-    - Single Writer, Many Readers: concepts/single-writer-many-readers.md
-    - Snapshots: concepts/snapshots.md
+    - Lakehouse Primer: concepts/lakehouse-primer.md
+    - DuckLake Format: concepts/ducklake.md
+    - SlateDB Engine: concepts/slatedb.md
+    - Catalog Immutability: concepts/immutability.md
+    - MVCC & Snapshots: concepts/mvcc.md
+    - Time Travel: concepts/snapshots.md
+    - Horizontal Read Scale-Out: concepts/single-writer-many-readers.md
+    - Writer Fencing: concepts/writer-fencing.md
+    - Fact Store Vision: concepts/fact-store-vision.md
   - Architecture:
     - architecture/index.md
     - Overview: architecture/overview.md

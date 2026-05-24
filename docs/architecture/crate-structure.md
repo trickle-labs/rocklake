@@ -1,120 +1,194 @@
 # Crate Structure
 
-SlateDuck is organized as a Rust workspace with seven crates, each with a distinct responsibility and clear dependency boundaries. This structure enforces separation of concerns at the compilation level: a crate cannot accidentally depend on another crate's internals without an explicit dependency declaration in `Cargo.toml`.
+SlateDuck is organized as a Rust workspace with seven crates, each with a distinct responsibility and clear dependency boundaries. This structure is not merely organizational — it enforces separation of concerns at the compilation level. A crate cannot accidentally depend on another crate's internals without an explicit dependency declaration in `Cargo.toml`. If a developer tries to import the PG-Wire server's session type from within the catalog store, the code will not compile. This makes architectural violations impossible rather than merely discouraged.
 
-## Workspace Layout
+This page documents each crate's purpose, its key modules, its dependencies, and the layering rules that govern the overall workspace structure. Understanding the crate structure is essential for contributors who want to know where new code belongs, and valuable for users who want to embed specific SlateDuck functionality (like the catalog store) without pulling in the entire binary.
+
+## Workspace Dependency Graph
 
 ```mermaid
 graph TD
-    CORE[slateduck-core] --> |types, keys, values| CAT[slateduck-catalog]
-    CORE --> |types, keys| SQL[slateduck-sql]
-    CORE --> |types| FFI[slateduck-ffi]
-    CAT --> |CatalogStore| PG[slateduck-pgwire]
-    CAT --> |CatalogStore| DF[slateduck-datafusion]
-    CAT --> |CatalogStore| FFI
-    SQL --> |StatementKind| PG
-    PG --> |main binary| BIN[slateduck binary]
-    CORE --> |types| VFS[slateduck-sqlite-vfs]
+    CORE["slateduck-core<br/><small>Types, keys, values, MVCC</small>"] --> CAT["slateduck-catalog<br/><small>Persistence, GC, export</small>"]
+    CORE --> SQL["slateduck-sql<br/><small>SQL classification</small>"]
+    CORE --> FFI["slateduck-ffi<br/><small>C/C++ FFI for DuckDB</small>"]
+    CORE --> VFS["slateduck-sqlite-vfs<br/><small>SQLite VFS (experimental)</small>"]
+    CAT --> PG["slateduck-pgwire<br/><small>PG wire server + CLI binary</small>"]
+    CAT --> DF["slateduck-datafusion<br/><small>DataFusion integration</small>"]
+    CAT --> FFI
+    SQL --> PG
+
+    style CORE fill:#e8f5e9
+    style CAT fill:#e3f2fd
+    style SQL fill:#fff3e0
+    style PG fill:#fce4ec
+    style DF fill:#f3e5f5
+    style FFI fill:#e0f7fa
+    style VFS fill:#f5f5f5
 ```
+
+The arrows point from dependency to dependent. `slateduck-core` is the leaf (depends on no other workspace crate). `slateduck-pgwire` is the root (produces the main binary and depends on multiple crates). No circular dependencies exist — Cargo's resolver would reject them.
 
 ## slateduck-core
 
-**Role:** Foundation types shared across all other crates.
+**Role:** Foundation types shared across all other crates. This is the "vocabulary" of the system — every other crate speaks in terms of types defined here.
 
-**Key contents:**
-- `tags.rs` — The tag registry defining all 28 DuckLake catalog tables plus internal tables. This is the single source of truth for tag allocation, key shapes, MVCC behavior, and status.
-- `keys.rs` — Binary key encoding functions. All keys are constructed here to ensure consistent encoding across the codebase.
-- `values.rs` — Value envelope encoding (magic bytes, version prefix, protobuf serialization).
-- `rows.rs` — Protobuf message definitions for all row types (SnapshotRow, TableRow, ColumnRow, DataFileRow, etc.).
-- `mvcc.rs` — MVCC visibility functions (is_visible, latest_visible_version, GC eligibility).
-- `counters.rs` — Counter domains and allocation logic for snapshot IDs, catalog IDs, and file IDs.
-- `types.rs` — DuckLake type system mapping and type-aware statistical comparisons for predicate pushdown.
-- `path.rs` — Path canonicalization for resolving data file paths relative to catalog or data prefixes.
-- `validation.rs` — Integration tests validating assumptions about SlateDB's API behavior.
+**Why it exists separately:** By isolating types into their own crate with no heavy dependencies (no SlateDB, no Tokio, no async runtime), the types can be used anywhere: in the catalog store, in the SQL classifier, in the FFI layer, in test utilities, and in external tools. If these types were defined inside `slateduck-catalog`, then `slateduck-sql` would need to depend on the catalog (and transitively on SlateDB), which would defeat the separation.
 
-**Dependencies:** `prost` (protobuf), `thiserror` (error types). Notably, this crate does NOT depend on SlateDB or any async runtime. It is pure data types and logic.
+**Key modules:**
+
+| Module | Contents |
+|--------|----------|
+| `tags.rs` | The tag registry: defines all 28+ DuckLake catalog tables plus internal tables. Each tag entry specifies the tag byte value, key schema, MVCC behavior, and human-readable name. This is the single source of truth for key structure. |
+| `keys.rs` | Binary key encoding and decoding functions. Every key construction goes through this module to ensure consistent big-endian encoding. Provides both encoding (`encode_table_key(schema_id, table_id, begin_snapshot) -> Vec<u8>`) and decoding (`decode_table_key(bytes) -> (schema_id, table_id, begin_snapshot)`) functions. |
+| `values.rs` | Value envelope encoding: magic byte check, version prefix, protobuf serialization wrapper. The `encode_value(row) -> Vec<u8>` and `decode_value<T>(bytes) -> T` functions handle the envelope automatically. |
+| `rows.rs` | Protobuf message definitions (generated by `prost`) for all row types: `SnapshotRow`, `SchemaRow`, `TableRow`, `ColumnRow`, `DataFileRow`, `DeleteFileRow`, `TableStatsRow`, `FileColumnStatsRow`, `InlinedInsertRow`, `InlinedDeleteRow`, `HotKeyValue`, and many more. |
+| `mvcc.rs` | MVCC visibility functions: `is_visible(begin, end, target)`, `latest_visible_version(versions, target)`, `is_gc_eligible(end, retain_from)`. Pure logic with no I/O. |
+| `counters.rs` | Counter domain definitions and allocation logic. Defines which counters exist (snapshot, catalog, file, column-per-table) and how they are incremented. |
+| `types.rs` | DuckLake type system mapping. Maps DuckDB type strings to internal type representations and provides type-aware comparison functions for column statistics (how to compare min/max values of different types). |
+| `path.rs` | Path canonicalization and resolution. Handles the relationship between catalog paths, data paths, and file paths within those paths. |
+| `validation.rs` | Integration tests that validate assumptions about SlateDB's API behavior (e.g., that WriteBatch is truly atomic, that prefix scans are bounded correctly). |
+
+**External dependencies:** `prost` (protobuf code generation), `thiserror` (ergonomic error types), `bytes` (byte buffer utilities). Deliberately minimal — no async runtime, no network I/O, no file I/O.
 
 ## slateduck-catalog
 
-**Role:** The core catalog persistence layer. Manages the SlateDB database, handles writes, reads, garbage collection, excision, export, repair, verification, and metrics.
+**Role:** The core persistence and operational layer. This crate owns the SlateDB database handle and provides all catalog operations: reads, writes, garbage collection, excision, export, import, verification, repair, metrics, and more.
 
-**Key contents:**
-- `store.rs` — `CatalogStore`: the main entry point. Opens the catalog, registers the writer epoch, provides read and write handles.
-- `init.rs` — Safe concurrent initialization using serializable snapshot transactions.
-- `writer.rs` — `CatalogWriter`: all catalog mutation operations (create schema, add column, register data file, etc.).
-- `reader.rs` — `CatalogReader`: snapshot-bound read operations with MVCC filtering and file pruning.
-- `gc.rs` — Visibility garbage collection: planning and applying retention horizon changes.
-- `excise.rs` — Physical deletion of superseded rows, with safety checks and audit logging.
-- `checkpoint.rs` — Checkpoint creation and restoration for point-in-time recovery.
-- `export.rs` — NDJSON export/import for catalog backup and migration.
-- `repair.rs` — Conservative repair: fixes orphaned rows and stale counters, refuses on unrecoverable corruption.
-- `verify.rs` — Integrity verification: checks format version, counter consistency, MVCC invariants.
-- `audit.rs` — Audit log management: writing and reading audit entries per snapshot.
-- `metrics.rs` — Prometheus-compatible metrics: operation counts, latencies, resource usage.
-- `partition.rs` — `CatalogRegistry` and `PartitionedWriter` for multi-writer via dataset partitioning.
-- `encryption.rs` — AES-256 encryption configuration for at-rest encryption via SlateDB block transformers.
-- `performance.rs` — Hot key optimization, secondary indexes, packed metadata for cold-start performance.
-- `cleanup.rs` — Orphaned Parquet file detection and optional deletion.
+**Why it exists separately:** The catalog operations are useful independently of the network server. You might want to run garbage collection from a CLI tool, export a catalog from a script, verify integrity from a monitoring system, or embed the catalog directly in a Rust application (via DataFusion or FFI). By keeping the catalog separate from the PG-Wire server, all of these use cases are supported without pulling in network dependencies.
 
-**Dependencies:** `slateduck-core`, `slatedb`, `object_store`, `tokio`, `prost`, `serde_json`, `chrono`.
+**Key modules:**
+
+| Module | Contents |
+|--------|----------|
+| `store.rs` | `CatalogStore`: the primary entry point. Opens or creates a catalog, registers the writer epoch, provides `CatalogReader` and `CatalogWriter` handles. |
+| `init.rs` | First-time catalog initialization: creates system keys, sets format version, initializes counters. Handles concurrent initialization attempts safely. |
+| `reader.rs` | `CatalogReader`: snapshot-bound read operations. Prefix scans with MVCC filtering, point lookups, file listing with statistics, schema/table/column enumeration. All reads go through this struct. |
+| `writer.rs` | `CatalogWriter`: all mutation operations. Creates schemas, tables, columns, views, macros. Registers data files and delete files. Records snapshots. Updates statistics. All writes are accumulated into a `WriteBatch` and committed atomically. |
+| `gc.rs` | Garbage collection: plans retention horizon advancement, identifies GC-eligible rows, applies the new `retain_from` value. Does not physically delete rows (that is excision). |
+| `excise.rs` | Physical deletion of superseded rows. Identifies rows where `end_snapshot <= retain_from`, deletes them from SlateDB, and logs the excision for audit. Irreversible. |
+| `checkpoint.rs` | Checkpoint creation and restoration for point-in-time recovery. Creates a consistent snapshot of the catalog that can be stored separately for disaster recovery. |
+| `export.rs` | NDJSON export and import. Serializes the entire catalog (or a subset) to newline-delimited JSON for backup, migration, or debugging. |
+| `repair.rs` | Conservative repair: fixes orphaned rows (where a successor version is missing), stale counters, and minor inconsistencies. Refuses to proceed if corruption is unrecoverable. |
+| `verify.rs` | Integrity verification: checks format version, counter consistency, MVCC invariants (no overlapping versions, no orphaned supersessions), and key-value structural validity. |
+| `audit.rs` | Audit log management: writes per-snapshot audit entries recording what changed, reads audit entries for a snapshot range. |
+| `metrics.rs` | Prometheus-compatible metrics: operation counts (reads, writes, scans), latencies (p50, p99), resource usage (open SST files, cache hit rate). |
+| `partition.rs` | Multi-writer via dataset partitioning: `CatalogRegistry` manages multiple independent catalogs, `PartitionedWriter` routes writes to the correct catalog based on table metadata. |
+| `encryption.rs` | At-rest encryption configuration: AES-256-GCM encryption via SlateDB's block transformer interface. Encrypts/decrypts transparently during read and write. |
+| `performance.rs` | Performance optimizations: hot key maintenance (packed current state for cold-start), secondary index management, bloom filter hints. |
+| `cleanup.rs` | Orphaned file detection: identifies Parquet files in the data path that are not referenced by any catalog entry (possible after failed writes or excision). |
+
+**External dependencies:** `slateduck-core`, `slatedb`, `object_store`, `tokio`, `prost`, `serde_json`, `chrono`, `prometheus`. This crate has the heaviest dependency footprint because it orchestrates actual I/O.
 
 ## slateduck-sql
 
-**Role:** Bounded SQL classification. Parses SQL strings and maps them to structured `StatementKind` enum variants.
+**Role:** Bounded SQL classification. Takes a SQL string and produces a typed `StatementKind` enum variant. Pure function, no side effects, no I/O.
 
-**Key contents:**
-- `classifier.rs` — The main classification logic: ~50 match arms covering all supported DuckLake SQL patterns.
-- `lib.rs` — Public API: `classify_statement(sql) -> Result<StatementKind>`.
+**Why it exists separately:** SQL classification is a self-contained concern that does not need access to the catalog or network. Separating it:
 
-**Dependencies:** `slateduck-core` (for types), `sqlparser` (SQL parsing). Does NOT depend on `slateduck-catalog` — classification is purely syntactic, not semantic.
+- Allows the classifier to be tested independently (feed it SQL strings, assert on the classified output)
+- Prevents the classifier from accidentally performing I/O or state mutation
+- Makes the classifier reusable in contexts where the full catalog is not available (e.g., a SQL validation tool)
+
+**Key modules:**
+
+| Module | Contents |
+|--------|----------|
+| `classifier.rs` | The main classification logic: approximately 50 match arms covering all supported DuckLake SQL patterns. Each match arm extracts parameters from the AST and constructs a `StatementKind` variant. |
+| `lib.rs` | Public API: `classify_statement(sql, params) -> Result<StatementKind, SqlDispatchError>`. Single entry point for the entire crate. |
+
+**External dependencies:** `slateduck-core` (for types like `StatementKind`), `sqlparser` (SQL parsing with PostgreSQL dialect). Does NOT depend on `slateduck-catalog`.
 
 ## slateduck-pgwire
 
-**Role:** PostgreSQL wire protocol server. Accepts DuckDB connections, manages sessions, and dispatches classified SQL to the catalog store.
+**Role:** PostgreSQL wire protocol server. This crate produces the main `slateduck` binary. It accepts DuckDB connections, manages sessions, dispatches classified SQL to the catalog store, and encodes results as PG-Wire messages.
 
-**Key contents:**
-- `server.rs` — TCP accept loop with TLS and session limiting.
-- `handler.rs` — Protocol handler implementing `SimpleQueryHandler` and `ExtendedQueryHandler`.
-- `executor.rs` — Statement execution: maps `StatementKind` to catalog operations and constructs PG wire result sets.
-- `session.rs` — Per-connection state: transaction buffering, settings, pending operations.
-- `types.rs` — PostgreSQL type OID mapping.
-- `error.rs` — SQLSTATE error mapping from internal errors to PostgreSQL error responses.
-- `main.rs` — Binary entry point: CLI argument parsing, configuration loading, server startup.
+**Why it exists as the top-level binary crate:** It integrates all other crates into a running server. It is the only crate that "knows about" all the other crates simultaneously (core types, SQL classification, and catalog operations).
 
-**Dependencies:** `slateduck-core`, `slateduck-catalog`, `slateduck-sql`, `pgwire`, `tokio`, `tokio-rustls`.
+**Key modules:**
+
+| Module | Contents |
+|--------|----------|
+| `main.rs` | Binary entry point: CLI argument parsing (using `clap`), configuration loading, signal handling, server startup and graceful shutdown. |
+| `server.rs` | TCP accept loop with TLS negotiation, session count limiting, and task spawning. |
+| `handler.rs` | Protocol handler implementing `SimpleQueryHandler` and `ExtendedQueryHandler` traits from the `pgwire` crate. Routes messages to the appropriate session operations. |
+| `executor.rs` | Statement execution: maps each `StatementKind` variant to the corresponding `CatalogReader` or `CatalogWriter` operation and constructs PG-Wire result sets (RowDescription + DataRow messages). |
+| `session.rs` | Per-connection state: transaction buffering (`PendingCatalogTxn`), session settings, prepared statement cache, snapshot binding. |
+| `types.rs` | PostgreSQL OID mapping: converts internal types to PG type OIDs and formats values as text for wire transmission. |
+| `error.rs` | SQLSTATE error mapping: converts internal error types to PostgreSQL ErrorResponse messages with appropriate severity, code, and message. |
+
+**External dependencies:** `slateduck-core`, `slateduck-catalog`, `slateduck-sql`, `pgwire`, `tokio`, `tokio-rustls`, `clap`, `tracing`.
 
 ## slateduck-datafusion
 
-**Role:** Apache DataFusion integration. Exposes SlateDuck catalogs as DataFusion catalog/schema/table providers.
+**Role:** Apache DataFusion integration. Exposes SlateDuck catalogs as DataFusion catalog providers, enabling query planning against SlateDuck-managed tables from pure Rust applications.
 
-**Key contents:**
-- `catalog_provider.rs` — `SlateDuckCatalogProvider`, `SlateDuckSchemaProvider`, `SlateDuckTableProvider`: maps DuckLake types to Arrow DataTypes and exposes table schemas to DataFusion's query planner.
+**Why it exists:** DataFusion is a popular embeddable query engine for Rust applications. By providing a `CatalogProvider` implementation, any DataFusion-based application can read from SlateDuck catalogs without going through the PG-Wire protocol or depending on DuckDB.
 
-**Dependencies:** `slateduck-core`, `slateduck-catalog`, `datafusion`, `arrow`.
+**Key modules:**
+
+| Module | Contents |
+|--------|----------|
+| `catalog_provider.rs` | `SlateDuckCatalogProvider`: implements DataFusion's `CatalogProvider` trait. Lists schemas. |
+| `schema_provider.rs` | `SlateDuckSchemaProvider`: implements `SchemaProvider`. Lists tables within a schema and provides `TableProvider` instances. |
+| `table_provider.rs` | `SlateDuckTableProvider`: implements `TableProvider`. Returns the Arrow schema (mapped from DuckLake column types) and provides scan execution plans that read from the registered Parquet files. |
+
+**External dependencies:** `slateduck-core`, `slateduck-catalog`, `datafusion`, `arrow`.
 
 ## slateduck-ffi
 
-**Role:** C/C++ foreign function interface for the native DuckDB extension (Strategy C). Exposes catalog operations as `extern "C"` functions with opaque handles and C-compatible structs.
+**Role:** C/C++ foreign function interface for embedding SlateDuck directly in DuckDB as a native extension. Provides `extern "C"` functions with C-compatible types and opaque handle-based resource management.
 
-**Key contents:**
-- `lib.rs` — Complete FFI surface: `slateduck_open`, `slateduck_close`, `slateduck_list_schemas`, `slateduck_list_tables`, `slateduck_describe_table`, `slateduck_list_data_files`, plus error handling and memory management.
+**Why it exists:** The FFI crate enables "Strategy C" — running SlateDuck as a DuckDB extension rather than a network server. This eliminates network round-trips entirely, reducing catalog operation latency from milliseconds (network) to microseconds (in-process function calls).
 
-**Dependencies:** `slateduck-core`, `slateduck-catalog`, `tokio` (for async bridge).
+**Key modules:**
+
+| Module | Contents |
+|--------|----------|
+| `lib.rs` | Complete FFI surface: `slateduck_open(path) -> Handle`, `slateduck_close(handle)`, `slateduck_list_schemas(handle) -> SchemaArray`, `slateduck_list_tables(handle, schema_id) -> TableArray`, `slateduck_describe_table(handle, table_id) -> ColumnArray`, `slateduck_list_data_files(handle, table_id) -> FileArray`, plus error retrieval and memory deallocation functions. |
+
+**External dependencies:** `slateduck-core`, `slateduck-catalog`, `tokio` (for async bridge — the FFI creates a Tokio runtime internally to drive SlateDB's async operations).
 
 ## slateduck-sqlite-vfs
 
-**Role:** SQLite VFS (Virtual File System) implementation for potential SQLite compatibility layer. Currently experimental.
+**Role:** SQLite Virtual File System implementation for potential SQLite compatibility. Currently experimental and not used in production.
 
-**Dependencies:** `slateduck-core`.
+**Why it exists:** Exploratory work on using SQLite as an alternative catalog query interface. May be removed or substantially redesigned in future versions.
 
-## Dependency Rules
+**External dependencies:** `slateduck-core`.
 
-The crates follow strict layering rules:
+## Dependency Layering Rules
 
-1. `slateduck-core` depends on nothing workspace-internal (it's the leaf)
-2. `slateduck-catalog` depends only on `slateduck-core`
-3. `slateduck-sql` depends only on `slateduck-core`
-4. Higher-level crates (`pgwire`, `datafusion`, `ffi`) depend on `core`, `catalog`, and optionally `sql`
-5. No circular dependencies are possible (enforced by Cargo)
+The crates follow strict layering rules enforced by Cargo's dependency resolver:
 
-This layering means you can use `slateduck-core` and `slateduck-catalog` in a custom application without pulling in the PG wire server, DataFusion, or FFI code.
+1. **`slateduck-core`** — depends on no workspace crates (the foundation leaf)
+2. **`slateduck-catalog`** — depends only on `slateduck-core`
+3. **`slateduck-sql`** — depends only on `slateduck-core`
+4. **Higher-level crates** (`pgwire`, `datafusion`, `ffi`) — depend on `core` + `catalog` and optionally `sql`
+5. **No circular dependencies** — enforced by Cargo (compile error if violated)
+
+This layering provides concrete benefits:
+
+- You can use `slateduck-core` + `slateduck-catalog` in a custom application without the PG-Wire server
+- You can use `slateduck-sql` as a standalone SQL classifier without any catalog or network code
+- Changes to `slateduck-pgwire` never require recompiling `slateduck-catalog` or `slateduck-core`
+- Test suites for lower crates run faster because they don't compile higher-level dependencies
+
+## Build Characteristics
+
+| Crate | Lines of Code (approx) | Compile Time | Binary Contribution |
+|-------|----------------------|--------------|-------------------|
+| slateduck-core | ~5,000 | Fast (no proc macros except prost) | Shared types |
+| slateduck-catalog | ~8,000 | Medium (SlateDB + async) | Core logic |
+| slateduck-sql | ~3,000 | Fast (only sqlparser) | SQL classifier |
+| slateduck-pgwire | ~4,000 | Medium (network + TLS) | Binary entry point |
+| slateduck-datafusion | ~1,500 | Medium (DataFusion is large) | Optional feature |
+| slateduck-ffi | ~1,000 | Fast (thin wrapper) | Shared library |
+| slateduck-sqlite-vfs | ~500 | Fast (minimal) | Experimental |
+
+The total workspace compiles in approximately 60–90 seconds on a modern machine (M1/M2 Mac or equivalent). Incremental builds after changing a single file in `slateduck-pgwire` take 5–10 seconds because only the changed crate and its dependents need recompilation.
+
+## Further Reading
+
+- **[Contributing: Development Setup](../contributing/development-setup.md)** — How to clone, build, and test the workspace
+- **[Contributing: Architecture Guide](../contributing/architecture-guide.md)** — Guidelines for where new code belongs
+- **[Architecture Overview](overview.md)** — How the crates fit together at runtime

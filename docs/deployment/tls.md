@@ -1,68 +1,375 @@
 # TLS Configuration
 
-SlateDuck supports TLS encryption for client connections, protecting catalog data in transit between DuckDB and the SlateDuck server. This is essential for deployments where the network between DuckDB and SlateDuck is untrusted (cross-region, cross-VPC, or over the public internet).
+SlateDuck supports TLS encryption for all client connections, protecting catalog metadata in transit between DuckDB and the SlateDuck server. TLS is essential for any deployment where the network between client and server is not fully trusted — which in practice means every deployment except localhost development. Even within a VPC, defense in depth argues for encrypting the wire.
+
+This page covers enabling TLS, certificate management strategies, mutual TLS for zero-trust environments, TLS termination at load balancers, certificate rotation, and integration with DuckDB clients.
+
+## Why TLS Matters for SlateDuck
+
+The PostgreSQL wire protocol that SlateDuck implements transmits data in plaintext by default. Without TLS, an attacker with network access can:
+
+- Read catalog metadata (table names, schemas, column types) — information leakage
+- Capture authentication credentials (username/password) — credential theft
+- Modify queries in transit (man-in-the-middle) — data integrity risk
+- Replay captured sessions — unauthorized access
+
+TLS eliminates all of these attack vectors with standard, well-understood cryptography.
 
 ## Enabling TLS
+
+### Basic Configuration
 
 Provide a certificate and private key:
 
 ```bash
-slateduck --storage s3://bucket/catalog/ \
-  --bind 0.0.0.0:5432 \
-  --tls-cert /etc/slateduck/tls.crt \
-  --tls-key /etc/slateduck/tls.key
+slateduck \
+    --storage s3://bucket/catalog/ \
+    --bind 0.0.0.0:5432 \
+    --tls-cert /etc/slateduck/tls/server.crt \
+    --tls-key /etc/slateduck/tls/server.key
 ```
 
 Or via environment variables:
 
 ```bash
-SLATEDUCK_TLS_CERT=/etc/slateduck/tls.crt \
-SLATEDUCK_TLS_KEY=/etc/slateduck/tls.key \
-slateduck --storage s3://bucket/catalog/
+export SLATEDUCK_TLS_CERT=/etc/slateduck/tls/server.crt
+export SLATEDUCK_TLS_KEY=/etc/slateduck/tls/server.key
+slateduck --storage s3://bucket/catalog/ --bind 0.0.0.0:5432
 ```
 
-When TLS is enabled, SlateDuck negotiates TLS during the PostgreSQL startup sequence (it advertises `SupportSSL` in response to the client's `SSLRequest` message). Clients that do not request TLS can still connect in plaintext unless you also set `SLATEDUCK_REQUIRE_TLS=true`.
+### TLS Behavior
+
+When TLS is configured, SlateDuck implements the PostgreSQL SSL negotiation:
+
+1. Client sends `SSLRequest` message
+2. SlateDuck responds with `S` (SSL supported)
+3. TLS handshake occurs
+4. All subsequent protocol messages are encrypted
+
+Clients that do not request SSL receive `S` anyway — the server always advertises TLS availability. If you want to **require** TLS (reject plaintext connections), add:
+
+```bash
+slateduck --tls-cert ... --tls-key ... --tls-required
+```
+
+With `--tls-required`, clients that attempt plaintext connections receive an error and are disconnected.
+
+### Supported TLS Versions
+
+SlateDuck supports TLS 1.2 and TLS 1.3. TLS 1.0 and 1.1 are disabled (they have known vulnerabilities). The server uses `rustls` (a modern, memory-safe TLS library) rather than OpenSSL.
+
+### Cipher Suites
+
+SlateDuck uses rustls defaults, which prioritize:
+
+- TLS 1.3: `TLS_AES_256_GCM_SHA384`, `TLS_AES_128_GCM_SHA256`, `TLS_CHACHA20_POLY1305_SHA256`
+- TLS 1.2: `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`, `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`
+
+These are considered secure as of 2024. Weak ciphers (RC4, DES, export-grade) are not available.
 
 ## Certificate Sources
 
-### Self-Signed (Development)
+### Self-Signed Certificates (Development Only)
 
-Generate a self-signed certificate for development:
+Generate a self-signed certificate for local development and testing:
 
 ```bash
-openssl req -x509 -newkey rsa:4096 -keyout tls.key -out tls.crt \
-  -days 365 -nodes -subj '/CN=slateduck'
+# Generate private key and self-signed certificate
+openssl req -x509 -newkey rsa:4096 \
+    -keyout server.key \
+    -out server.crt \
+    -days 365 \
+    -nodes \
+    -subj '/CN=localhost' \
+    -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
 ```
 
-DuckDB must be configured to trust this certificate (or disable certificate verification, which is only acceptable for development).
+For development with Docker Compose (SAN includes service name):
 
-### Let's Encrypt (Production)
-
-Use certbot or similar ACME client to obtain a certificate from Let's Encrypt. This requires a DNS name that resolves to the SlateDuck instance.
-
-### Cloud Certificate Manager
-
-For cloud deployments, use your provider's certificate manager:
-- **AWS:** ACM certificates (terminate TLS at ALB, plain TCP to SlateDuck)
-- **GCP:** Google-managed certificates (via Cloud Load Balancer)
-- **Azure:** Azure Key Vault certificates
-
-## TLS at the Load Balancer
-
-For Kubernetes and cloud deployments, it is common to terminate TLS at a load balancer or ingress controller rather than in SlateDuck itself. This simplifies certificate management and offloads the cryptographic work:
-
-```
-DuckDB → (TLS) → Load Balancer → (plaintext) → SlateDuck
+```bash
+openssl req -x509 -newkey rsa:4096 \
+    -keyout server.key \
+    -out server.crt \
+    -days 365 \
+    -nodes \
+    -subj '/CN=slateduck' \
+    -addext 'subjectAltName=DNS:slateduck,DNS:localhost,IP:127.0.0.1'
 ```
 
-This is acceptable when the network between the load balancer and SlateDuck is trusted (same VPC, same node, service mesh with mTLS).
+DuckDB must trust this certificate. For development, you can set `sslmode=require` (which skips CA verification) rather than `sslmode=verify-full`.
 
-## DuckDB Connection with TLS
+### Let's Encrypt (Production — Public Endpoints)
 
-When connecting from DuckDB to a TLS-enabled SlateDuck instance:
+For internet-facing SlateDuck instances with a public DNS name:
+
+```bash
+# Using certbot standalone mode
+certbot certonly --standalone \
+    -d catalog.example.com \
+    --cert-path /etc/slateduck/tls/server.crt \
+    --key-path /etc/slateduck/tls/server.key
+```
+
+Configure automatic renewal:
+
+```bash
+# Crontab entry
+0 3 * * * certbot renew --quiet --deploy-hook "systemctl reload slateduck"
+```
+
+SlateDuck watches the certificate file for changes and reloads automatically without restarting (zero-downtime renewal).
+
+### Private CA (Enterprise / Internal)
+
+For organizations with an internal PKI:
+
+```bash
+# Generate server key
+openssl genrsa -out server.key 4096
+
+# Generate CSR
+openssl req -new -key server.key -out server.csr \
+    -subj '/CN=slateduck.internal.example.com/O=MyCompany'
+
+# Sign with internal CA
+openssl x509 -req -in server.csr \
+    -CA /etc/pki/ca.crt \
+    -CAkey /etc/pki/ca.key \
+    -CAcreateserial \
+    -out server.crt \
+    -days 365 \
+    -extfile <(printf "subjectAltName=DNS:slateduck.internal.example.com")
+```
+
+### Cloud Certificate Managers
+
+For managed certificate lifecycle:
+
+**AWS Certificate Manager (ACM):**
+ACM certificates cannot be exported for direct use. Instead, terminate TLS at an NLB/ALB with the ACM certificate, and run SlateDuck in plaintext behind it. See [TLS Termination at Load Balancer](#tls-termination-at-load-balancer).
+
+**HashiCorp Vault PKI:**
+```bash
+# Issue a certificate from Vault
+vault write pki/issue/slateduck-role \
+    common_name="slateduck.internal" \
+    ttl="720h" \
+    -format=json | jq -r '.data.certificate' > server.crt
+```
+
+**cert-manager (Kubernetes):**
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: slateduck-tls
+  namespace: slateduck
+spec:
+  secretName: slateduck-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - slateduck.example.com
+    - slateduck.internal.svc.cluster.local
+```
+
+Mount the secret into the pod:
+
+```yaml
+volumes:
+  - name: tls
+    secret:
+      secretName: slateduck-tls
+containers:
+  - name: slateduck
+    volumeMounts:
+      - name: tls
+        mountPath: /etc/slateduck/tls
+        readOnly: true
+```
+
+## Mutual TLS (mTLS)
+
+Mutual TLS requires clients to present a certificate that the server verifies. This provides strong client authentication without passwords — the client proves its identity cryptographically.
+
+### Enabling mTLS
+
+```bash
+slateduck \
+    --storage s3://bucket/catalog/ \
+    --bind 0.0.0.0:5432 \
+    --tls-cert /etc/slateduck/tls/server.crt \
+    --tls-key /etc/slateduck/tls/server.key \
+    --tls-ca /etc/slateduck/tls/client-ca.crt
+```
+
+The `--tls-ca` flag specifies the Certificate Authority that signed the client certificates. Only clients presenting a certificate signed by this CA will be allowed to connect.
+
+### Generating Client Certificates
+
+```bash
+# Generate client key
+openssl genrsa -out client.key 4096
+
+# Generate client CSR
+openssl req -new -key client.key -out client.csr \
+    -subj '/CN=analytics-team/O=MyCompany'
+
+# Sign with client CA
+openssl x509 -req -in client.csr \
+    -CA client-ca.crt \
+    -CAkey client-ca.key \
+    -CAcreateserial \
+    -out client.crt \
+    -days 365
+```
+
+### Connecting with Client Certificate (DuckDB)
 
 ```sql
-ATTACH 'ducklake:host=slateduck.example.com;port=5432;sslmode=require' AS my_lake;
+ATTACH 'ducklake:host=slateduck.example.com;port=5432;sslmode=verify-full;sslcert=/path/to/client.crt;sslkey=/path/to/client.key;sslrootcert=/path/to/server-ca.crt' AS lake;
 ```
 
-The `sslmode=require` parameter tells DuckDB's PostgreSQL client to negotiate TLS. Other modes (`verify-ca`, `verify-full`) provide additional certificate validation.
+### Use Cases for mTLS
+
+- **Zero-trust networks** — where password-based auth is insufficient
+- **Service-to-service** — automated systems (ETL pipelines, CI/CD) with rotatable certificates
+- **Multi-tenant isolation** — different teams get different client certificates, enabling audit trails
+- **Compliance** — regulations requiring strong authentication (PCI-DSS, SOC2)
+
+## TLS Termination at Load Balancer
+
+For deployments behind a load balancer or reverse proxy, it is common to terminate TLS at the load balancer and run plaintext between the LB and SlateDuck:
+
+```
+DuckDB ──(TLS)──→ Load Balancer ──(plaintext)──→ SlateDuck
+```
+
+This is acceptable when:
+
+- The LB-to-SlateDuck network is trusted (same host, same pod, service mesh)
+- The load balancer handles certificate management and renewal
+- You want to offload cryptographic work from SlateDuck
+
+### AWS NLB with TLS Termination
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: slateduck
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:us-east-1:123456:certificate/abc-123
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "5432"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 5432
+      targetPort: 5432
+```
+
+### End-to-End TLS (Preferred for Compliance)
+
+For environments requiring end-to-end encryption, run TLS both at the LB and within SlateDuck:
+
+```
+DuckDB ──(TLS)──→ Load Balancer ──(TLS)──→ SlateDuck
+```
+
+The LB performs TLS pass-through (Layer 4 forwarding) and SlateDuck handles the TLS handshake directly.
+
+## Certificate Rotation
+
+### Zero-Downtime Rotation
+
+SlateDuck monitors certificate files for changes. When the certificate or key file is modified:
+
+1. SlateDuck detects the file change (via filesystem notification)
+2. New connections use the new certificate
+3. Existing connections continue with the old certificate until they disconnect
+4. No restart required
+
+### Rotation Procedure
+
+```bash
+# 1. Obtain new certificate
+certbot renew
+
+# 2. Copy to SlateDuck's certificate directory
+cp /etc/letsencrypt/live/catalog.example.com/fullchain.pem /etc/slateduck/tls/server.crt
+cp /etc/letsencrypt/live/catalog.example.com/privkey.pem /etc/slateduck/tls/server.key
+
+# 3. SlateDuck picks up the change automatically (no restart needed)
+```
+
+### Kubernetes Secret Rotation
+
+With cert-manager, certificate rotation is fully automatic:
+
+1. cert-manager renews the certificate before expiry
+2. Kubernetes updates the Secret
+3. The kubelet updates the mounted file in the pod
+4. SlateDuck detects the file change and loads the new certificate
+
+## DuckDB Client Configuration
+
+### SSL Modes
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `disable` | No TLS | Local development only |
+| `allow` | Try TLS, fall back to plaintext | Not recommended |
+| `prefer` | Try TLS, fall back to plaintext | Default in many clients |
+| `require` | TLS required, no CA verification | Development with self-signed certs |
+| `verify-ca` | TLS + verify server certificate CA | Internal PKI |
+| `verify-full` | TLS + verify CA + hostname match | Production (recommended) |
+
+### Connection Strings
+
+```sql
+-- Require TLS (no certificate verification)
+ATTACH 'ducklake:host=slateduck.example.com;port=5432;sslmode=require' AS lake;
+
+-- Full verification (production recommended)
+ATTACH 'ducklake:host=slateduck.example.com;port=5432;sslmode=verify-full;sslrootcert=/path/to/ca.crt' AS lake;
+
+-- Mutual TLS
+ATTACH 'ducklake:host=slateduck.example.com;port=5432;sslmode=verify-full;sslrootcert=/path/to/ca.crt;sslcert=/path/to/client.crt;sslkey=/path/to/client.key' AS lake;
+```
+
+## Troubleshooting TLS
+
+### "SSL connection has been closed unexpectedly"
+
+- Server certificate expired — check with `openssl x509 -in cert.pem -noout -dates`
+- Key does not match certificate — verify with `openssl x509 -in cert.pem -modulus -noout | md5` vs `openssl rsa -in key.pem -modulus -noout | md5`
+
+### "certificate verify failed"
+
+- Client does not trust the server's CA — add the CA to the client's trust store or use `sslrootcert`
+- Hostname mismatch — ensure the certificate's SAN includes the hostname used in the connection string
+
+### "no suitable TLS certificate found for client"
+
+- mTLS is configured but client did not provide a certificate
+- Client certificate not signed by the expected CA
+
+### Checking TLS Status
+
+```bash
+# Verify TLS is working
+openssl s_client -connect slateduck.example.com:5432 -starttls postgres
+
+# Check certificate details
+echo | openssl s_client -connect slateduck.example.com:5432 -starttls postgres 2>/dev/null | openssl x509 -noout -text
+```
+
+## Further Reading
+
+- **[Networking](networking.md)** — Network topology and firewall configuration
+- **[Configuration](configuration.md)** — TLS-related configuration options
+- **[Kubernetes](kubernetes.md)** — cert-manager integration
+- **[High Availability](high-availability.md)** — TLS with load balancers and failover

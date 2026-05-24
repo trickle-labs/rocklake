@@ -1,25 +1,37 @@
 # Concepts
 
-This section explains the foundational ideas behind SlateDuck. Understanding these concepts will help you reason about the system's behavior, predict its performance characteristics, and make informed decisions about configuration and operations.
+The Concepts section is the intellectual backbone of the SlateDuck documentation. Where the Getting Started section shows you what SlateDuck does, this section explains why it works the way it does — the principles, the constraints, the deliberate trade-offs that shaped every aspect of the system's design. These pages are written as flowing technical essays, not reference lists. They build from first principles (what is a lakehouse? what is a catalog?) through to the distinctive architectural properties that make SlateDuck unique (immutability, time travel, horizontal read scale-out, writer fencing).
 
-SlateDuck sits at the intersection of several well-understood ideas from database systems and distributed storage: immutable append-only data structures, multi-version concurrency control, LSM-tree storage engines, and the lakehouse architecture pattern. Each concept page takes one of these ideas and explains how SlateDuck applies it, what trade-offs result, and what that means for you as an operator or developer.
+You do not need to read these pages to operate SlateDuck. The Getting Started and Deployment sections give you everything you need to deploy and run the system. But you will find that understanding the concepts makes the rest of the documentation clearer — error messages will make more sense, configuration choices will feel less arbitrary, and the design decisions will feel like logical conclusions rather than unexplained preferences.
 
-## Core Concepts
+## Reading Order
 
-The concepts are organized from general to specific. Start with the high-level architectural ideas and work your way down to the implementation details:
+The pages in this section are ordered from most foundational to most advanced. If you are new to the lakehouse concept entirely, start at the top and work down. If you already understand DuckLake and SlateDB, skip to the pages that interest you.
 
-- **[Bounded SQL](bounded-sql.md)** explains why SlateDuck does not implement a general SQL engine, what "bounded" means in practice, and how this design choice affects security, correctness, and performance.
+1. **[The Lakehouse Model](lakehouse-primer.md)** — What is a lakehouse, what is a catalog, and why does the catalog turn out to be the hard part? This page makes the documentation self-contained for readers who are new to the space.
 
-- **[Catalog vs Data](catalog-vs-data.md)** draws the line between what SlateDuck manages (metadata) and what DuckDB manages (data), and explains why this separation matters for scalability and operational simplicity.
+2. **[The DuckLake Format](ducklake.md)** — The format SlateDuck implements. 28 catalog tables, snapshot-based versioning, a bounded SQL query set, and separation between catalog plane and data plane. Understanding DuckLake is prerequisite to understanding SlateDuck.
 
-- **[Immutability](immutability.md)** describes the append-only data model that underpins time travel, crash safety, and horizontal read scale-out.
+3. **[The SlateDB Storage Engine](slatedb.md)** — The embedded key-value store that provides SlateDuck's durability and transaction guarantees. LSM trees, atomic write batches, single-writer enforcement, and the object-store-native persistence model.
 
-- **[Key-Value Mapping](key-value-mapping.md)** explains how relational catalog concepts (schemas, tables, columns) are encoded into a key-value store with lexicographically ordered keys.
+4. **[Catalog Immutability](immutability.md)** — The most distinctive architectural commitment. Why committed catalog facts are never physically deleted by normal operation, and how that single decision enables time travel, read scale-out, and crash safety simultaneously.
 
-- **[MVCC](mvcc.md)** covers multi-version concurrency control as applied to catalog entries: how visibility is determined, how versions accumulate, and how garbage collection reclaims space.
+5. **[MVCC and Snapshot Isolation](mvcc.md)** — How DuckLake's versioning model maps to SlateDB's key-value layout. The `begin_snapshot` / `end_snapshot` visibility filter, the difference between `dl_snapshot_id` and SlateDB's internal read views, and what snapshot isolation means in practice.
 
-- **[Object Store Durability](object-store-durability.md)** explains why object storage is a good fit for catalog persistence, what durability guarantees you get, and how SlateDB bridges the gap between a key-value API and object storage semantics.
+6. **[Time Travel](snapshots.md)** — Not a feature layered on top, but the natural consequence of the storage model. How to query historical states, how retention policies limit query depth, and how time travel interacts with garbage collection.
 
-- **[Single Writer, Many Readers](single-writer-many-readers.md)** describes the concurrency model, why it was chosen, and how to work around its limitations through dataset partitioning.
+7. **[Horizontal Read Scale-Out](single-writer-many-readers.md)** — Why immutability enables unlimited concurrent readers with zero coordination, and how this is fundamentally different from traditional read replicas.
 
-- **[Snapshots](snapshots.md)** explains the snapshot model in detail: what a snapshot represents, how they are created, how they enable time travel, and how they interact with garbage collection.
+8. **[Writer Fencing](writer-fencing.md)** — The single-writer constraint, why it simplifies consistency, how the fencing protocol works when a writer fails over, and the recovery latency you should expect.
+
+9. **[The Fact Store Vision](fact-store-vision.md)** — A forward-looking page about where SlateDuck is headed. The storage substrate is not specific to DuckLake — it can host any relational schema as an immutable fact log.
+
+## Key Themes
+
+Several themes recur across these pages. Watch for them — they connect the individual concepts into a coherent whole:
+
+**Constraints that enable.** The single-writer constraint sounds like a limitation, but it is what enables unlimited reader scale-out. The immutability constraint sounds like it would consume unbounded storage, but it is what enables time travel as a zero-cost feature. Many of SlateDuck's most powerful properties are direct consequences of constraints that initially seem restrictive.
+
+**Layer separation.** SlateDuck carefully separates concerns across layers: DuckLake defines the catalog model, SlateDB provides the storage engine, SlateDuck maps one onto the other. Understanding which layer owns which responsibility prevents confusion when diagnosing problems or reasoning about behavior.
+
+**Honest trade-offs.** No architectural decision is free. Every page in this section discusses both the benefits and the costs of the choices SlateDuck makes. If you want a deeper dive into the reasoning behind specific decisions (including the alternatives that were considered), the [Design Decisions](../design-decisions/index.md) section provides that analysis.

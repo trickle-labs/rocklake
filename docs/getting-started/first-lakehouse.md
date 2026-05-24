@@ -1,148 +1,430 @@
 # Your First Lakehouse
 
-This guide walks through a realistic lakehouse scenario that exercises the core features of SlateDuck: multiple tables with relationships, schema evolution over time, time travel queries, garbage collection, and basic operational tasks. By the end, you will have a solid mental model of how SlateDuck behaves in production.
+The quickstart guides showed you how to start SlateDuck and create a table. But a single table is not a lakehouse. A lakehouse is an evolving system — schemas change as business requirements shift, data accumulates across dozens or hundreds of tables, multiple teams query the same catalog concurrently, and operational tasks like garbage collection and inspection become part of the daily rhythm. This tutorial builds a realistic lakehouse from scratch and exercises every major feature of SlateDuck along the way.
 
-## Scenario
+By the end of this guide, you will have created a multi-table schema, loaded data, evolved the schema over time, performed time travel queries, run garbage collection, inspected internal state, and configured retention policies. More importantly, you will have developed the mental model of how SlateDuck behaves in production — not as a toy with one table, but as a system managing real-world complexity.
 
-You are building an analytics platform for an e-commerce company. The lakehouse tracks customers, orders, and order items. Over time, the schema evolves as business requirements change, and you need to query historical states for audit and debugging purposes.
+## The Scenario
 
-## Setting Up
+You are building the analytics infrastructure for a mid-size e-commerce company called "TechMart." The company sells electronics online and has three main data domains:
 
-Start SlateDuck and connect DuckDB as described in the quickstart guides. We will use local storage for simplicity, but everything works identically on cloud storage.
+- **Customers** — who buys products, their contact information, and when they joined
+- **Products** — the catalog of items for sale with pricing and categories
+- **Orders** — purchase transactions linking customers to products
+
+Over the next several months, the business will evolve: new columns will be needed, tables will be renamed, new data will arrive continuously, and various teams will need to query the catalog at different points in time for auditing and debugging purposes.
+
+## Setting Up the Environment
+
+Start SlateDuck with local storage for this tutorial. Everything you learn here applies identically to cloud storage — the only difference is the `--storage` path:
 
 ```bash
-slateduck --storage file:///tmp/ecommerce-lakehouse --bind 127.0.0.1:5432
+slateduck --storage file:///tmp/techmart-lakehouse --bind 127.0.0.1:5432
 ```
 
+In a separate terminal, open DuckDB and connect:
+
 ```sql
+INSTALL ducklake;
 LOAD ducklake;
-ATTACH '' AS ecom (TYPE ducklake, PG 'host=127.0.0.1 port=5432');
-USE ecom;
+ATTACH '' AS techmart (TYPE ducklake, PG 'host=127.0.0.1 port=5432');
+USE techmart;
 ```
 
-## Creating the Initial Schema
+You are now connected to an empty catalog. The initial snapshot (snapshot 1) has been created automatically and represents the "empty catalog" state.
+
+## Phase 1: Building the Initial Schema
+
+A well-organized lakehouse separates concerns into schemas. Let's create two: one for raw ingested data and one for curated analytics tables:
 
 ```sql
-CREATE SCHEMA store;
+-- Create schemas (snapshot 2)
+CREATE SCHEMA raw;
+CREATE SCHEMA analytics;
+```
 
-CREATE TABLE store.customers (
+Now create the initial tables in the `raw` schema:
+
+```sql
+-- Customer master data (snapshot 3)
+CREATE TABLE raw.customers (
     customer_id BIGINT,
     email VARCHAR,
-    name VARCHAR,
-    created_at TIMESTAMP
+    full_name VARCHAR,
+    signup_date DATE,
+    country VARCHAR
 );
 
-CREATE TABLE store.orders (
+-- Product catalog (snapshot 4)
+CREATE TABLE raw.products (
+    product_id BIGINT,
+    name VARCHAR,
+    category VARCHAR,
+    price DECIMAL(10, 2),
+    in_stock BOOLEAN
+);
+
+-- Order transactions (snapshot 5)
+CREATE TABLE raw.orders (
     order_id BIGINT,
     customer_id BIGINT,
-    total_amount DECIMAL(12, 2),
-    order_date DATE,
-    status VARCHAR
+    order_date TIMESTAMP,
+    status VARCHAR,
+    total_amount DECIMAL(12, 2)
 );
 
-CREATE TABLE store.order_items (
+-- Order line items (snapshot 6)
+CREATE TABLE raw.order_items (
     item_id BIGINT,
     order_id BIGINT,
-    product_name VARCHAR,
+    product_id BIGINT,
     quantity INTEGER,
     unit_price DECIMAL(10, 2)
 );
 ```
 
-At this point, SlateDuck has created snapshot 1 (initial empty catalog), snapshot 2 (schema created), and snapshots 3-5 (one per table creation). Each snapshot is an immutable record of the catalog state at that moment.
-
-## Loading Data
+Each DDL statement creates a new snapshot. You can verify this:
 
 ```sql
-INSERT INTO store.customers VALUES
-    (1, 'alice@example.com', 'Alice Johnson', '2024-01-01 00:00:00'),
-    (2, 'bob@example.com', 'Bob Smith', '2024-01-15 00:00:00'),
-    (3, 'carol@example.com', 'Carol Williams', '2024-02-01 00:00:00');
-
-INSERT INTO store.orders VALUES
-    (101, 1, 299.99, '2024-03-01', 'completed'),
-    (102, 1, 149.50, '2024-03-15', 'completed'),
-    (103, 2, 89.99, '2024-03-20', 'shipped'),
-    (104, 3, 450.00, '2024-04-01', 'pending');
-
-INSERT INTO store.order_items VALUES
-    (1001, 101, 'Wireless Headphones', 1, 199.99),
-    (1002, 101, 'USB-C Cable', 2, 49.99),
-    (1003, 102, 'Keyboard', 1, 149.50),
-    (1004, 103, 'Mouse Pad', 3, 29.99),
-    (1005, 104, 'Monitor Stand', 1, 450.00);
+SELECT snapshot_id, snapshot_time FROM ducklake_snapshots() ORDER BY snapshot_id;
 ```
 
-Each INSERT causes DuckDB to write a Parquet file and register it with SlateDuck. The catalog now contains data file entries with paths, row counts, file sizes, and column statistics for predicate pushdown.
+You should see 6 snapshots, each representing a state transition in the catalog. Snapshot 1 is the empty catalog, snapshot 2 has the schemas, and snapshots 3–6 each add a table.
 
-## Schema Evolution
+### What Happened Internally
 
-A month later, the business needs a `phone` column on customers and wants to rename `total_amount` to `order_total` on orders. DuckLake handles schema evolution through versioned columns:
+When you created `raw.customers`, SlateDuck:
+
+1. Allocated a unique `schema_id` for `raw` and a unique `table_id` for `customers`
+2. Created column rows for each of the 5 columns, each with a unique `column_id`
+3. Set `begin_snapshot` on every new row to the current snapshot ID
+4. Recorded the new snapshot in `ducklake_snapshot` with the current timestamp
+5. Wrote all of this as a single atomic batch to SlateDB
+
+The entire operation — even though it involves multiple catalog rows — is a single atomic write. If the process crashes mid-way, nothing is visible to any reader.
+
+## Phase 2: Loading Initial Data
+
+In a real lakehouse, data arrives from external systems — CSV exports, API responses, streaming events. DuckDB makes it easy to load data from many sources. For this tutorial, we'll use inline VALUES to keep things self-contained:
 
 ```sql
-ALTER TABLE store.customers ADD COLUMN phone VARCHAR;
-ALTER TABLE store.orders RENAME COLUMN total_amount TO order_total;
+-- Load customer data (snapshot 7)
+INSERT INTO raw.customers VALUES
+    (1, 'alice@techmart.com', 'Alice Johnson', '2024-01-05', 'US'),
+    (2, 'bob@techmart.com', 'Bob Chen', '2024-01-12', 'CA'),
+    (3, 'carol@techmart.com', 'Carol Okafor', '2024-02-01', 'UK'),
+    (4, 'dave@techmart.com', 'Dave Mueller', '2024-02-15', 'DE'),
+    (5, 'eve@techmart.com', 'Eve Santos', '2024-03-01', 'BR');
+
+-- Load product catalog (snapshot 8)
+INSERT INTO raw.products VALUES
+    (101, 'Wireless Headphones', 'Audio', 89.99, true),
+    (102, 'Mechanical Keyboard', 'Peripherals', 149.99, true),
+    (103, '4K Monitor', 'Displays', 449.99, true),
+    (104, 'USB-C Hub', 'Accessories', 59.99, true),
+    (105, 'Webcam HD', 'Video', 79.99, false);
+
+-- Load order data (snapshot 9)
+INSERT INTO raw.orders VALUES
+    (1001, 1, '2024-03-01 10:30:00', 'completed', 239.98),
+    (1002, 1, '2024-03-15 14:22:00', 'completed', 149.99),
+    (1003, 2, '2024-03-20 09:15:00', 'shipped', 509.98),
+    (1004, 3, '2024-04-01 16:45:00', 'completed', 89.99),
+    (1005, 4, '2024-04-10 11:00:00', 'pending', 209.98);
+
+-- Load order items (snapshot 10)
+INSERT INTO raw.order_items VALUES
+    (1, 1001, 101, 1, 89.99),
+    (2, 1001, 102, 1, 149.99),
+    (3, 1002, 102, 1, 149.99),
+    (4, 1003, 103, 1, 449.99),
+    (5, 1003, 104, 1, 59.99),
+    (6, 1004, 101, 1, 89.99),
+    (7, 1005, 104, 2, 59.99),
+    (8, 1005, 101, 1, 89.99);
 ```
 
-In SlateDuck's catalog model, adding a column creates a new `ColumnRow` with a `begin_snapshot` set to the current snapshot. Renaming creates a new version of the column row (old one gets `end_snapshot`, new one with updated name gets `begin_snapshot`). Historical queries still see the old schema because they read at older snapshot IDs where the new column does not exist and the old name is still active.
+Each INSERT causes DuckDB to write one or more Parquet files and register them with SlateDuck. The catalog now stores not just the schema but also the metadata for each data file: its path, row count, file size, and column-level statistics (min/max values) that enable predicate pushdown during query planning.
 
-## Time Travel
-
-Now you can query the catalog at different points in history:
+Let's verify the data is accessible:
 
 ```sql
--- Current state: customers has 4 columns (including phone)
+SELECT c.full_name, COUNT(o.order_id) as total_orders, SUM(o.total_amount) as lifetime_value
+FROM raw.customers c
+JOIN raw.orders o ON c.customer_id = o.customer_id
+GROUP BY c.full_name
+ORDER BY lifetime_value DESC;
+```
+
+You should see Alice at the top with 2 orders totaling $389.97, followed by Bob with 1 order at $509.98 (a single expensive order for a monitor and hub).
+
+## Phase 3: Schema Evolution
+
+Two months pass. The business has new requirements:
+
+1. The marketing team needs a `phone` column on customers for SMS campaigns
+2. The operations team wants to track `shipping_address` on orders
+3. The product team realized `in_stock` should be an integer (stock quantity) not a boolean
+4. Analytics wants to rename `raw.orders` to `raw.order_transactions` for clarity
+
+Let's evolve the schema:
+
+```sql
+-- Add phone column (snapshot 11)
+ALTER TABLE raw.customers ADD COLUMN phone VARCHAR;
+
+-- Add shipping address (snapshot 12)
+ALTER TABLE raw.orders ADD COLUMN shipping_address VARCHAR;
+
+-- The product team's request is more involved: DuckLake doesn't support ALTER COLUMN TYPE,
+-- so we'll add a new column and keep the old one for backward compatibility (snapshot 13)
+ALTER TABLE raw.products ADD COLUMN stock_quantity INTEGER;
+
+-- Rename the table (snapshot 14)
+ALTER TABLE raw.orders RENAME TO raw.order_transactions;
+```
+
+Now update some data with the new columns:
+
+```sql
+-- Update customer phone numbers (snapshot 15)
+UPDATE raw.customers SET phone = '+1-555-0101' WHERE customer_id = 1;
+UPDATE raw.customers SET phone = '+1-416-555-0102' WHERE customer_id = 2;
+
+-- Add stock quantities (snapshot 16)
+UPDATE raw.products SET stock_quantity = 150 WHERE product_id = 101;
+UPDATE raw.products SET stock_quantity = 75 WHERE product_id = 102;
+UPDATE raw.products SET stock_quantity = 30 WHERE product_id = 103;
+UPDATE raw.products SET stock_quantity = 200 WHERE product_id = 104;
+UPDATE raw.products SET stock_quantity = 0 WHERE product_id = 105;
+```
+
+### What Happened to the Schema
+
+Let's look at what SlateDuck did internally during these schema changes:
+
+- **ADD COLUMN** created a new `ColumnRow` with `begin_snapshot = current`. Queries at older snapshots do not see this column because their snapshot ID is less than the column's `begin_snapshot`.
+
+- **RENAME TABLE** created a new version of the table name: the old `TableRow` received an `end_snapshot`, and a new `TableRow` was created with the new name and `begin_snapshot = current`. Queries at older snapshots still see the old name.
+
+- **UPDATE** in DuckLake creates a delete file (marking old rows as removed) and a new data file (with updated values). The catalog registers both files with appropriate snapshot IDs.
+
+The critical insight: nothing was overwritten. Every previous state of the catalog is still accessible because all changes are additive.
+
+## Phase 4: Time Travel
+
+Now let's use time travel to see the catalog at different points in history. First, find out what snapshots exist:
+
+```sql
+SELECT snapshot_id, snapshot_time FROM ducklake_snapshots() ORDER BY snapshot_id;
+```
+
+### Querying Before Schema Evolution
+
+To see the catalog as it was before any schema changes (before snapshot 11), open a new DuckDB connection with a snapshot parameter:
+
+```sql
+-- In a new DuckDB session:
+LOAD ducklake;
+ATTACH '' AS techmart_v10 (TYPE ducklake, PG 'host=127.0.0.1 port=5432', SNAPSHOT '10');
+
+-- The table is still called "orders" (not "order_transactions")
+SELECT * FROM techmart_v10.raw.orders LIMIT 2;
+
+-- The customers table has only 5 columns (no phone)
 SELECT column_name FROM information_schema.columns
-WHERE table_name = 'customers' ORDER BY ordinal_position;
-
--- State before the ALTER: customers has 3 columns
--- (Use the snapshot ID from before the ALTER)
-SELECT * FROM ducklake_snapshots();
+WHERE table_schema = 'raw' AND table_name = 'customers';
 ```
 
-Time travel in SlateDuck is not a special feature bolted on after the fact. It is the natural consequence of the immutability model: every row has visibility bounds, and reading at a specific snapshot simply means applying those bounds as a filter. There is no extra storage cost because old versions are never copied or moved.
+This is invaluable for debugging. If a report produced different results last month, you can query at the exact snapshot that was current at that time and see exactly what the catalog looked like.
 
-## Garbage Collection
+### Reproducible Analytics
 
-Over time, you may accumulate snapshots that are no longer needed for auditing. SlateDuck's garbage collection is a two-phase process that gives you full control:
+Time travel enables reproducible analytics. Suppose you ran a quarterly report at snapshot 10:
 
-**Phase 1: Advance the retention horizon.** This marks old snapshots as "logically deleted" but does not remove any data:
+```sql
+-- Reproduce the exact same query at the exact same catalog state
+ATTACH '' AS q1_report (TYPE ducklake, PG 'host=127.0.0.1 port=5432', SNAPSHOT '10');
+
+SELECT 
+    p.category,
+    COUNT(DISTINCT oi.order_id) as orders,
+    SUM(oi.quantity * oi.unit_price) as revenue
+FROM q1_report.raw.order_items oi
+JOIN q1_report.raw.products p ON oi.product_id = p.product_id
+GROUP BY p.category
+ORDER BY revenue DESC;
+```
+
+No matter how much the schema has evolved since snapshot 10, this query returns the same results it would have returned on the day the snapshot was created. The catalog state at snapshot 10 is immutable — it cannot be changed by any subsequent operation.
+
+## Phase 5: Building Analytics Views
+
+Now let's use the `analytics` schema for curated views:
+
+```sql
+-- Create a customer lifetime value view (snapshot 17)
+CREATE VIEW analytics.customer_ltv AS
+SELECT 
+    c.customer_id,
+    c.full_name,
+    c.country,
+    COUNT(o.order_id) as total_orders,
+    SUM(o.total_amount) as lifetime_value,
+    MIN(o.order_date) as first_order,
+    MAX(o.order_date) as last_order
+FROM raw.customers c
+LEFT JOIN raw.order_transactions o ON c.customer_id = o.customer_id
+GROUP BY c.customer_id, c.full_name, c.country;
+
+-- Create a product performance view (snapshot 18)
+CREATE VIEW analytics.product_performance AS
+SELECT 
+    p.product_id,
+    p.name as product_name,
+    p.category,
+    p.price as current_price,
+    COUNT(oi.item_id) as times_ordered,
+    SUM(oi.quantity) as total_units_sold,
+    SUM(oi.quantity * oi.unit_price) as total_revenue
+FROM raw.products p
+LEFT JOIN raw.order_items oi ON p.product_id = oi.product_id
+GROUP BY p.product_id, p.name, p.category, p.price;
+```
+
+Views in DuckLake are stored as SQL text in the catalog. They do not materialize data — DuckDB expands them at query time. But they are versioned like everything else: if you drop or modify a view, the old definition is still visible at older snapshots.
+
+```sql
+-- Query the analytics views
+SELECT * FROM analytics.customer_ltv ORDER BY lifetime_value DESC;
+SELECT * FROM analytics.product_performance ORDER BY total_revenue DESC;
+```
+
+## Phase 6: Continuous Data Loading
+
+In production, data arrives continuously. Let's simulate a new batch of orders:
+
+```sql
+-- New orders arrive (snapshot 19)
+INSERT INTO raw.order_transactions VALUES
+    (1006, 5, '2024-04-15 08:30:00', 'completed', 149.99, '123 Main St, São Paulo'),
+    (1007, 1, '2024-04-20 19:00:00', 'shipped', 449.99, '456 Oak Ave, Portland'),
+    (1008, 3, '2024-04-25 12:15:00', 'pending', 209.98, '789 High St, London');
+
+-- New order items (snapshot 20)
+INSERT INTO raw.order_items VALUES
+    (9, 1006, 102, 1, 149.99),
+    (10, 1007, 103, 1, 449.99),
+    (11, 1008, 104, 2, 59.99),
+    (12, 1008, 101, 1, 89.99);
+
+-- A new customer signs up (snapshot 21)
+INSERT INTO raw.customers VALUES
+    (6, 'frank@techmart.com', 'Frank Yamamoto', '2024-04-20', 'JP', '+81-3-5555-0106');
+```
+
+Each batch of inserts creates a new snapshot. The catalog now contains 21 snapshots, each representing a distinct state of the lakehouse. Any analytics query can be pinned to any of these 21 states.
+
+## Phase 7: Garbage Collection
+
+After several months of operation, the catalog has accumulated many snapshots. Most are no longer needed for auditing — you only need the last 30 days of history. Let's configure garbage collection:
 
 ```bash
-slateduck gc --storage file:///tmp/ecommerce-lakehouse --retain-days 30
+# Check current state
+slateduck inspect --storage file:///tmp/techmart-lakehouse
 ```
 
-After this command, snapshots older than 30 days are no longer visible to time travel queries. However, the actual key-value pairs are still present in SlateDB.
-
-**Phase 2 (optional): Excise.** This physically removes the superseded rows from the catalog:
+This shows you the current snapshot count, storage usage, and retention configuration.
 
 ```bash
-slateduck excise --storage file:///tmp/ecommerce-lakehouse --before-snapshot 5
+# Advance the retention horizon to 30 days
+slateduck gc advance --storage file:///tmp/techmart-lakehouse --retain-days 30
 ```
 
-Excision is a destructive operation that permanently removes historical data. It is optional and only needed if you have compliance requirements (data deletion mandates) or want to reduce storage costs for very large catalogs.
+After this command:
 
-## Inspecting Catalog State
+- Snapshots older than 30 days are no longer queryable via time travel
+- The catalog data is still physically present (nothing has been deleted)
+- Future queries specifying a snapshot older than the horizon receive an error
 
-At any point, you can inspect the internal state of the catalog:
+If you also want to reclaim storage (optional and irreversible):
 
 ```bash
-slateduck inspect --storage file:///tmp/ecommerce-lakehouse
+# Physically remove superseded rows older than the horizon
+slateduck excise --storage file:///tmp/techmart-lakehouse
 ```
 
-This shows you the current snapshot ID, the number of schemas, tables, columns, data files, and delete files, the writer epoch, the retention horizon, and the format version. It is an invaluable tool for understanding what is happening inside your catalog.
+Excision deletes key-value pairs from SlateDB that are no longer needed — old versions of columns that have been superseded, data file entries that have been deleted, and snapshot records older than the horizon. This is the only destructive operation in SlateDuck, and it requires explicit invocation.
+
+### Pinning Important Snapshots
+
+Before running GC, you might want to pin specific snapshots that should never be garbage collected — for example, the snapshot at the end of each fiscal quarter:
+
+```bash
+slateduck pin-snapshot --storage file:///tmp/techmart-lakehouse --snapshot-id 10 --reason "Q1 2024 close"
+slateduck pin-snapshot --storage file:///tmp/techmart-lakehouse --snapshot-id 18 --reason "Q2 2024 close"
+```
+
+Pinned snapshots are protected from both horizon advancement and excision. They remain queryable indefinitely until explicitly unpinned.
+
+## Phase 8: Inspecting the Catalog
+
+At any point, you can inspect the internal state of the catalog to understand its health and contents:
+
+```bash
+slateduck inspect --storage file:///tmp/techmart-lakehouse
+```
+
+Expected output (approximately):
+
+```
+SlateDuck Catalog Inspector
+============================
+Storage:        file:///tmp/techmart-lakehouse
+Format version: 8
+Writer epoch:   1
+Current snapshot: 21
+Retention from: 0 (no GC applied)
+Pinned snapshots: 10, 18
+
+Schemas:    2 (raw, analytics)
+Tables:     4 (raw.customers, raw.products, raw.order_transactions, raw.order_items)
+Views:      2 (analytics.customer_ltv, analytics.product_performance)
+Columns:    25 (across all tables)
+Data files: 12
+Delete files: 5
+
+Storage breakdown:
+  Manifest:  1.2 KB
+  WAL:       15.4 KB
+  SST files: 48.7 KB
+  Total:     65.3 KB
+```
+
+The catalog for this tutorial — with 4 tables, 2 views, 21 snapshots, and all their historical versions — occupies about 65 KB. This illustrates why catalog storage cost is never a concern: even a catalog tracking thousands of tables and millions of data files typically occupies less than 100 MB.
 
 ## What You Have Learned
 
-1. **Schema creation** allocates unique IDs and creates versioned rows in the catalog
-2. **Data loading** writes Parquet files and registers them with path, size, and statistics
-3. **Schema evolution** creates new row versions with visibility bounds, preserving history
-4. **Time travel** reads at a specific snapshot by filtering on begin/end bounds
-5. **Garbage collection** is a two-phase process: advance retention, then optionally excise
-6. **Inspection** gives you full visibility into the catalog's internal state
+This tutorial exercised the complete lifecycle of a SlateDuck lakehouse:
+
+1. **Schema design** — Creating schemas to organize tables by domain (raw vs. analytics)
+2. **Table creation** — Each DDL creates a new snapshot, tables are fully versioned from birth
+3. **Data loading** — INSERT writes Parquet files and registers them with the catalog including statistics
+4. **Schema evolution** — ADD COLUMN, RENAME TABLE, and UPDATE all create versioned state without destroying history
+5. **Time travel** — Any historical snapshot is directly queryable by specifying its ID in the ATTACH statement
+6. **Reproducible analytics** — Pinning queries to specific snapshots guarantees identical results over time
+7. **Views** — SQL views are catalog objects, versioned and time-travel-capable like everything else
+8. **Garbage collection** — Two-phase process (advance horizon, then optionally excise) with full operator control
+9. **Snapshot pinning** — Protect important snapshots from GC for compliance or audit requirements
+10. **Inspection** — Full visibility into catalog internals at any time
+
+The key mental model: SlateDuck is an append-only catalog where every mutation creates a new version. History accumulates naturally. You choose how much history to keep through retention policies. Readers can query any retained snapshot without coordination with the writer.
 
 ## Next Steps
 
-- [Concepts](../concepts/index.md) — Deep understanding of immutability, MVCC, and the single-writer model
-- [Operations](../operations/index.md) — Production operational procedures
-- [Architecture](../architecture/index.md) — How the crates fit together
+You now have a solid foundation for working with SlateDuck. Here are the recommended paths depending on your role:
+
+- **For architects:** [Concepts](../concepts/index.md) — Deep understanding of immutability, MVCC, time travel, and scale-out
+- **For operators:** [Operations](../operations/index.md) — Production operational procedures for GC, monitoring, backup, and troubleshooting
+- **For developers:** [Architecture](../architecture/index.md) — How the Rust crates fit together and where to contribute
+- **For deployers:** [Deployment](../deployment/index.md) — Docker, Kubernetes, Lambda, and multi-region patterns

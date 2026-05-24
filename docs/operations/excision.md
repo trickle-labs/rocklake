@@ -1,69 +1,316 @@
 # Excision
 
-Excision is the physical deletion of catalog entries that are no longer visible to any valid reader. It is the second phase of garbage collection (after advancing the retention horizon) and is the only operation in SlateDuck that permanently destroys data. Because of its destructive nature, excision includes multiple safety checks and produces an audit trail.
+Excision is the physical deletion of catalog entries that are no longer visible to any valid reader. It is the second phase of garbage collection (after advancing the retention horizon) and represents the only operation in SlateDuck that permanently destroys data. Because of its destructive and irreversible nature, excision includes multiple safety checks, requires explicit confirmation, and produces a permanent audit trail.
+
+Think of it this way: garbage collection (Phase 1) closes the blinds — old snapshots become invisible to readers, but the data still exists behind the blinds. Excision tears out the walls — the data is gone forever. Most operators never need excision. Those who do should treat it with the same caution as `DROP DATABASE`.
 
 ## When to Use Excision
 
-Excision is appropriate when:
+### Appropriate Uses
 
-- Storage costs for historical catalog data are significant (rare, but possible for very large catalogs)
-- Compliance requirements mandate physical deletion of superseded metadata (GDPR, data retention policies)
-- You want to reduce scan amplification from many superseded versions
+- **Compliance: GDPR right-to-erasure.** A data subject requests deletion. Their metadata appears in historical catalog snapshots. Excision physically removes those entries.
+- **Compliance: Data retention policies.** Regulatory requirements mandate that metadata older than N days must be physically purged (not just made inaccessible).
+- **Storage cost optimization.** Very high-churn catalogs (thousands of schema changes per day over years) may accumulate enough superseded versions that storage costs become noticeable.
+- **Scan performance.** In extreme cases (millions of superseded versions), excision reduces the number of SST blocks that prefix scans must traverse.
 
-Excision is NOT needed for:
+### NOT Appropriate Uses
 
-- Hiding old snapshots from time travel (that is what `gc --retain-days` does)
-- Routine maintenance of a normal-sized catalog (the storage cost of keeping old versions is negligible)
-- Performance optimization (SlateDB's compaction handles storage efficiency at the LSM level)
+- **Hiding old snapshots.** Use `slateduck gc --retain-days N` instead — this is reversible.
+- **Routine maintenance.** Normal catalogs accumulate negligible storage overhead.
+- **"Cleaning up."** If you cannot articulate why the data must be physically gone, you do not need excision.
+- **Performance tuning.** SlateDB's compaction handles storage efficiency at the LSM level. Excision is about compliance, not performance.
 
-## How It Works
+## How Excision Works
 
-Excision scans all keys in the catalog and identifies rows that meet ALL of these criteria:
+### Eligibility Criteria
 
-1. The row has an `end_snapshot` set (it has been superseded)
-2. The `end_snapshot` is before the specified `--before-snapshot` threshold
-3. The `retain_from` system key is >= the specified threshold (safety check)
+Excision scans all keys and identifies rows that meet ALL of these criteria simultaneously:
 
-Rows meeting all criteria are physically deleted from SlateDB via tombstone writes.
+1. **Superseded:** The row has an `end_snapshot_id` set (a newer version exists)
+2. **Beyond horizon:** The `end_snapshot_id` is before the `--before-snapshot` threshold
+3. **GC-approved:** The `retain_from` system key is >= the excision threshold (safety interlock)
+4. **Not pinned:** No pinned snapshot references the row
+
+If any criterion is not met, the row is preserved.
+
+### Execution Mechanics
+
+```mermaid
+flowchart TD
+    A[Start Excision] --> B{retain_from >= threshold?}
+    B -->|No| C[ABORT: Run GC first]
+    B -->|Yes| D{Any pins in range?}
+    D -->|Yes| E[ABORT: Unpin or reduce threshold]
+    D -->|No| F[Scan all keys]
+    F --> G{Row superseded before threshold?}
+    G -->|No| H[Skip - still visible]
+    G -->|Yes| I[Write tombstone to SlateDB]
+    I --> J[Record in audit log]
+    J --> K[Continue scan]
+    K --> F
+    F -->|Scan complete| L[Commit audit entry]
+    L --> M[Report results]
+```
+
+Technically, excision writes tombstones to SlateDB for each deleted key. The tombstones are resolved during subsequent compaction, which physically removes the key-value pairs from SST files. The storage space is not reclaimed immediately — it is reclaimed when the affected SST files are compacted.
 
 ## Safety Checks
 
-Excision refuses to proceed if:
+Excision refuses to proceed if any of these conditions are true:
 
-- `retain_from` has not been advanced past the excision target (you must run GC first)
-- Any pinned snapshot would be affected by the deletion
-- The specified `--before-snapshot` is in the future relative to `retain_from`
+| Check | Condition | Error Message |
+|-------|-----------|---------------|
+| GC interlock | `retain_from` < `--before-snapshot` | "Retention horizon not advanced. Run GC first." |
+| Pin protection | Pinned snapshot in affected range | "Pinned snapshot {id} blocks excision. Unpin first." |
+| Future threshold | `--before-snapshot` > latest snapshot | "Cannot excise future snapshots." |
+| Confirmation | `--confirm` not provided (interactive) | "Excision is irreversible. Add --confirm to proceed." |
 
-These checks prevent the accidental deletion of data that readers might still need.
+These checks ensure you cannot accidentally delete data that readers still need.
 
 ## Running Excision
 
-```bash
-# Preview what would be deleted (dry-run)
-slateduck excise --storage s3://bucket/catalog/ --before-snapshot 1000 --dry-run
+### Step 1: Preview (Dry Run)
 
-# Execute the deletion
-slateduck excise --storage s3://bucket/catalog/ --before-snapshot 1000 --operator "admin@company.com"
+Always start with a dry run to understand the impact:
+
+```bash
+slateduck excise --storage s3://bucket/catalog/ --before-snapshot 1000 --dry-run
 ```
 
-The `--operator` flag records who authorized the excision in the audit log.
+Output:
+
+```
+Excision Dry Run:
+  Target: all rows superseded before snapshot 1000
+  Current retain_from: 1200 (safety check PASSED)
+  Pinned snapshots in range: 0 (safety check PASSED)
+  
+  Rows eligible for excision:
+    ducklake_schemas:    12 rows
+    ducklake_tables:     45 rows
+    ducklake_columns:   234 rows
+    ducklake_files:     890 rows
+    ducklake_stats:     450 rows
+    Total:             1631 rows
+    
+  Estimated storage freed: 312 KB (after compaction)
+  
+  This operation is IRREVERSIBLE. Run without --dry-run and with --confirm to proceed.
+```
+
+### Step 2: Create Backup
+
+Before excision, create an NDJSON export as a safety net:
+
+```bash
+slateduck export --storage s3://bucket/catalog/ --output pre-excision-backup.ndjson
+```
+
+### Step 3: Execute
+
+```bash
+slateduck excise \
+    --storage s3://bucket/catalog/ \
+    --before-snapshot 1000 \
+    --operator "ops-team@company.com" \
+    --reason "GDPR compliance request #12345" \
+    --confirm
+```
+
+Output:
+
+```
+Excision completed:
+  Rows deleted: 1631
+  Tombstones written: 1631
+  Audit entry created: excision-20241216T143022Z
+  Duration: 4.2 seconds
+  
+  Note: Storage will be reclaimed after next SlateDB compaction.
+```
+
+### Step 4: Verify
+
+```bash
+# Confirm the excised data is gone
+slateduck inspect --storage s3://bucket/catalog/ --key "t/5/v/800"
+# Key not found (expected)
+
+# Confirm live data is unaffected
+slateduck inspect --storage s3://bucket/catalog/ --key "t/5/latest"
+# Found: table_id=5, name="events", ...
+```
 
 ## Audit Trail
 
-Every excision creates an audit entry recording:
-- Timestamp of the excision
-- The `before_snapshot` threshold used
-- Number of keys deleted
-- Operator identity (if provided)
+Every excision creates a permanent audit entry stored under the `0xFF|audit` prefix in the catalog. Audit entries are never themselves subject to excision — they are retained forever.
 
-This audit entry is stored in the catalog itself (under `0xFF | "audit"`) and survives the excision (audit entries are never themselves excised).
+### Audit Entry Format
 
-## Recovery
+```json
+{
+  "type": "excision",
+  "timestamp": "2024-12-16T14:30:22Z",
+  "before_snapshot": 1000,
+  "rows_deleted": 1631,
+  "operator": "ops-team@company.com",
+  "reason": "GDPR compliance request #12345",
+  "duration_ms": 4200,
+  "safety_checks": {
+    "retain_from_at_time": 1200,
+    "pinned_snapshots_checked": 0
+  }
+}
+```
 
-Excision is irreversible. Once rows are deleted, they cannot be recovered from SlateDuck. Your recovery options are:
+### Viewing Audit History
 
-1. **NDJSON backup:** If you exported the catalog before excision, you can reimport the full state
-2. **Object storage versioning:** If bucket versioning was enabled, you can recover the deleted objects at the SlateDB level (advanced procedure, requires SlateDB expertise)
-3. **Cross-region replica:** If the excision has not yet replicated, you may be able to recover from the replica
+```bash
+slateduck audit --storage s3://bucket/catalog/
 
-For these reasons, always take an NDJSON export before running excision on production catalogs.
+# Output:
+# Timestamp            Type       Rows    Operator
+# 2024-12-16T14:30:22  excision   1631    ops-team@company.com
+# 2024-11-15T10:00:00  excision    482    admin@company.com
+```
+
+## Targeted Excision (GDPR)
+
+For GDPR right-to-erasure requests targeting specific entities:
+
+```bash
+# Excise all versions of a specific table's metadata
+slateduck excise \
+    --storage s3://bucket/catalog/ \
+    --table-id 42 \
+    --all-versions \
+    --operator "privacy@company.com" \
+    --reason "GDPR erasure request: user_profiles table" \
+    --confirm
+```
+
+This removes all historical versions of a specific table's catalog entries without affecting other tables.
+
+## Recovery After Accidental Excision
+
+Excision is irreversible from SlateDuck's perspective. Recovery options:
+
+| Recovery Method | Availability | Completeness | Complexity |
+|----------------|-------------|--------------|------------|
+| NDJSON backup import | If backup exists | Full | Low |
+| Object versioning recovery | If versioning enabled | Full | High (requires SlateDB expertise) |
+| Cross-region replica | If CRR and not yet replicated | Partial | Medium |
+| No recovery | Default | — | — |
+
+**Recommendation:** Always take an NDJSON export before excision and retain it for at least 30 days.
+
+## Scheduling Excision
+
+Unlike GC (which runs daily), excision should run infrequently:
+
+| Frequency | Appropriate When |
+|-----------|-----------------|
+| Never | Most catalogs — storage overhead is negligible |
+| Monthly | High-churn catalogs with thousands of daily changes |
+| On-demand | Compliance requests (GDPR, retention policy) |
+| Weekly | Only for extreme cases (10k+ changes/day for years) |
+
+Kubernetes CronJob for monthly excision:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: slateduck-excise
+spec:
+  schedule: "0 4 1 * *"  # First of every month at 4 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: excise
+              image: ghcr.io/slateduck/slateduck:0.8.0
+              command:
+                - "slateduck"
+                - "excise"
+                - "--storage"
+                - "s3://bucket/catalog/"
+                - "--before-snapshot"
+                - "$(EXCISION_THRESHOLD)"
+                - "--operator"
+                - "automated-monthly-gc"
+                - "--confirm"
+          restartPolicy: OnFailure
+```
+
+## Interaction with Other Operations
+
+| Operation | Interaction with Excision |
+|-----------|--------------------------|
+| GC (Phase 1) | Must run BEFORE excision (sets retain_from) |
+| Backup | Should run BEFORE excision (creates recovery point) |
+| Checkpoint restore | Fails if excision deleted the checkpoint's data |
+| Time travel | Cannot access excised snapshots (even manually) |
+| Compaction | Physically removes tombstones written by excision |
+| Verify & Repair | Reports excised ranges as intentionally empty |
+
+## Performance and Resource Impact
+
+### Execution Time
+
+Excision performance scales linearly with the number of eligible rows. The operation is I/O-bound — each tombstone write requires a SlateDB write operation, and the entire excision commits as a single WriteBatch:
+
+| Rows to Excise | Approximate Time | Notes |
+|----------------|-----------------|-------|
+| < 1,000 | 1–3 seconds | Negligible impact |
+| 1,000–10,000 | 5–30 seconds | Moderate I/O pressure |
+| 10,000–100,000 | 30 seconds–5 minutes | Consider off-peak scheduling |
+| > 100,000 | 5–30 minutes | Monitor storage throughput |
+
+### Storage Behavior
+
+Immediately after excision, storage usage actually *increases* slightly because tombstones are additional entries in the LSM tree. Storage decreases only after SlateDB compaction merges the affected SST files and drops the tombstoned entries. This compaction happens automatically but may take minutes to hours depending on compaction configuration and write load.
+
+For operators planning excision of large row counts, it is advisable to trigger a manual compaction afterward:
+
+```bash
+# After excision, force compaction to reclaim space immediately
+slateduck compact --storage s3://bucket/catalog/ --full
+```
+
+### Concurrent Operations During Excision
+
+Excision holds the writer lease for its entire duration. During execution:
+
+- **Reads**: Unaffected. Readers operate on their existing snapshots.
+- **Writes**: Blocked. Any DuckDB client attempting a catalog modification will wait until excision completes.
+- **Inspect**: Works normally (read-only operation).
+- **Other GC/excision**: Will fail with a lease conflict.
+
+For large excision operations, schedule during maintenance windows to avoid blocking write traffic.
+
+## Frequently Asked Questions
+
+**Q: Does excision delete the actual data files (Parquet files in the data lake)?**
+
+No. Excision removes only catalog metadata — the entries in SlateDuck that describe the data files. The Parquet files themselves remain in the data lake untouched. If you need to delete the actual data files for compliance, you must do so separately after identifying them via the export or inspect commands.
+
+**Q: Can I excise a single row without affecting everything before a snapshot?**
+
+Yes, use targeted excision with `--table-id` to remove all versions of specific entities. For finer-grained control (individual rows), use `--key` to target specific SlateDB keys, though this is an advanced operation that requires understanding the key layout.
+
+**Q: What happens if I run excision on a catalog that has not had GC run?**
+
+The safety interlock prevents this. Excision checks that `retain_from` is at least as high as the `--before-snapshot` threshold. If it is not, excision aborts with an error telling you to run GC first. This prevents accidentally deleting data that readers might still be able to access via time travel.
+
+**Q: Is excision replicated in multi-region setups?**
+
+The tombstones written by excision are normal SlateDB writes, so they replicate through whatever mechanism replicates the underlying object store (CRR, rsync, etc.). After replication and compaction on the replica, the excised data will be physically gone from all copies.
+
+## Further Reading
+
+- **[Garbage Collection](garbage-collection.md)** — Phase 1 (retention horizon advancement)
+- **[Backup & Restore](backup-restore.md)** — Creating pre-excision safety copies
+- **[Verify & Repair](verify-repair.md)** — Post-excision integrity verification
+- **[Concepts: Immutability](../concepts/immutability.md)** — Why excision exists in an append-only system

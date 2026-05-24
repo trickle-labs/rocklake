@@ -1,74 +1,396 @@
 # Networking
 
-This page covers network topology considerations, firewall rules, and service discovery for SlateDuck deployments.
+SlateDuck has minimal networking requirements compared to traditional databases. It needs exactly two network paths: inbound connections from DuckDB clients, and outbound HTTPS to object storage. There is no replication traffic between nodes, no gossip protocol, no membership discovery, no inter-node communication of any kind. This simplicity makes firewall rules straightforward and security posture easy to reason about.
+
+This page covers network topology options, firewall configuration, VPC endpoints for cost and latency optimization, service discovery patterns, load balancing, and connection management.
 
 ## Network Requirements
 
-SlateDuck needs two network paths:
+SlateDuck requires precisely two network paths:
 
-1. **Inbound:** TCP connections from DuckDB clients to SlateDuck's PG-wire port (default 5432)
-2. **Outbound:** HTTPS connections from SlateDuck to object storage (S3, GCS, Azure Blob)
+```mermaid
+flowchart LR
+    subgraph "Client Network"
+        D[DuckDB Clients]
+    end
+    
+    subgraph "SlateDuck"
+        S[SlateDuck Process<br/>Port 5432]
+    end
+    
+    subgraph "Storage Network"
+        O[(Object Storage<br/>Port 443)]
+    end
+    
+    D -->|"TCP 5432<br/>PG wire protocol"| S
+    S -->|"HTTPS 443<br/>S3/GCS/Azure API"| O
+```
 
-No other network access is required. SlateDuck does not communicate with external services, does not phone home, and does not require internet access beyond reaching your object storage endpoint.
+| Direction | Protocol | Port | Purpose |
+|-----------|----------|------|---------|
+| **Inbound** | TCP | 5432 (default) | DuckDB client connections (PG wire protocol) |
+| **Outbound** | HTTPS | 443 | Object storage API (S3, GCS, Azure Blob) |
 
-## Topology Options
+No other network access is required. SlateDuck does not:
 
-### Same-Host (Development)
+- Phone home or send telemetry
+- Communicate with other SlateDuck instances
+- Require DNS resolution beyond object storage endpoints
+- Open listening ports beyond the configured bind address
+- Use UDP for anything
 
-DuckDB and SlateDuck run on the same machine. Connection is via localhost. No network security needed.
+## Network Topologies
+
+### Topology 1: Same-Host (Development)
+
+The simplest setup — DuckDB and SlateDuck on the same machine:
 
 ```
 DuckDB → localhost:5432 → SlateDuck → (internet) → S3
 ```
 
-### Same-VPC (Production)
-
-DuckDB and SlateDuck run in the same VPC/VNET. Connection is via private IP. Firewall allows port 5432 from DuckDB security group to SlateDuck security group.
-
-```
-DuckDB (10.0.1.x) → slateduck.internal:5432 → SlateDuck (10.0.2.x) → (VPC endpoint) → S3
+**Configuration:**
+```bash
+slateduck --storage s3://bucket/catalog/ --bind 127.0.0.1:5432
 ```
 
-### Cross-VPC / Cross-Region
+**Security:** No network exposure. Only processes on the same machine can connect. Ideal for development and testing.
 
-DuckDB and SlateDuck are in different VPCs or regions. Use VPC peering, Transit Gateway, or PrivateLink. Enable TLS.
+**Latency:** Sub-millisecond (loopback).
 
-### Public Internet
+### Topology 2: Same-VPC (Recommended for Production)
 
-SlateDuck accessible over the public internet. Requires TLS, authentication (password), and ideally IP allowlisting or a VPN.
+DuckDB and SlateDuck in the same VPC with private networking:
+
+```
+DuckDB (10.0.1.x) → slateduck.internal:5432 → SlateDuck (10.0.2.x) → VPC Endpoint → S3
+```
+
+**Configuration:**
+```bash
+slateduck --storage s3://bucket/catalog/ --bind 0.0.0.0:5432
+```
+
+**Security:** Security group rules restrict inbound to port 5432 from the DuckDB client subnet. Outbound restricted to the VPC endpoint for S3.
+
+**Latency:** <1ms within the same AZ, 1–3ms cross-AZ.
+
+### Topology 3: Cross-VPC (Hub-and-Spoke)
+
+SlateDuck in a shared-services VPC, DuckDB clients in application VPCs:
+
+```
+App VPC A ──┐
+            ├──→ Transit Gateway → Shared VPC → SlateDuck → VPC Endpoint → S3
+App VPC B ──┘
+```
+
+**When to use:** Multi-team environments where each team has their own VPC but shares the lakehouse catalog.
+
+**Configuration:** Same as same-VPC, but routing goes through Transit Gateway or VPC peering.
+
+### Topology 4: Public Internet
+
+SlateDuck accessible over the internet (for remote teams, multi-cloud, or hybrid setups):
+
+```
+DuckDB (anywhere) → (internet) → [LB] → SlateDuck → S3
+```
+
+**Requirements:**
+- TLS mandatory (to encrypt credentials and catalog data in transit)
+- Password authentication required
+- IP allowlisting or VPN strongly recommended
+- DDoS protection (cloud provider's WAF/Shield)
+
+**Configuration:**
+```bash
+slateduck \
+    --storage s3://bucket/catalog/ \
+    --bind 0.0.0.0:5432 \
+    --tls-cert /etc/slateduck/cert.pem \
+    --tls-key /etc/slateduck/key.pem \
+    --auth-user ducklake
+```
 
 ## Firewall Rules
 
-### Inbound (to SlateDuck)
+### Inbound Rules (to SlateDuck)
 
-| Source | Port | Protocol | Purpose |
-|--------|------|----------|---------|
-| DuckDB clients | 5432/tcp | PostgreSQL wire | Catalog queries |
-| Monitoring | (metrics port)/tcp | HTTP | Prometheus scraping |
+| Source | Port | Protocol | Action | Purpose |
+|--------|------|----------|--------|---------|
+| DuckDB client CIDR / security group | 5432/tcp | TCP | Allow | Catalog connections |
+| Monitoring system | 9090/tcp | TCP | Allow | Prometheus metrics (if enabled) |
+| All other | * | * | Deny | Default deny |
 
-### Outbound (from SlateDuck)
+### Outbound Rules (from SlateDuck)
 
-| Destination | Port | Protocol | Purpose |
-|-------------|------|----------|---------|
-| S3/GCS/Azure | 443/tcp | HTTPS | Object storage access |
+| Destination | Port | Protocol | Action | Purpose |
+|-------------|------|----------|--------|---------|
+| S3 VPC endpoint / storage CIDR | 443/tcp | HTTPS | Allow | Object storage |
+| DNS resolver | 53/udp+tcp | DNS | Allow | Name resolution |
+| All other | * | * | Deny | Default deny |
 
-## VPC Endpoints (AWS)
+### AWS Security Group Example
 
-For S3 access without traversing the public internet, use a VPC endpoint:
+```bash
+# Create SlateDuck security group
+aws ec2 create-security-group \
+    --group-name slateduck-sg \
+    --description "SlateDuck catalog server" \
+    --vpc-id vpc-12345
+
+# Allow inbound from DuckDB clients
+aws ec2 authorize-security-group-ingress \
+    --group-id sg-slateduck \
+    --protocol tcp \
+    --port 5432 \
+    --source-group sg-duckdb-clients
+
+# Allow outbound to S3 (via VPC endpoint, no explicit rule needed with Gateway endpoint)
+```
+
+## VPC Endpoints (Private Storage Access)
+
+VPC endpoints let SlateDuck reach object storage without traversing the public internet. This provides three benefits:
+
+1. **Lower latency** — no NAT gateway hop, traffic stays on AWS backbone
+2. **No data transfer cost** — Gateway endpoints are free, Interface endpoints cost less than NAT
+3. **Better security** — traffic never leaves the cloud provider's network
+
+### AWS: S3 Gateway Endpoint
 
 ```bash
 aws ec2 create-vpc-endpoint \
-  --vpc-id vpc-xxxxx \
-  --service-name com.amazonaws.us-east-1.s3 \
-  --route-table-ids rtb-xxxxx
+    --vpc-id vpc-12345 \
+    --service-name com.amazonaws.us-east-1.s3 \
+    --route-table-ids rtb-12345 \
+    --policy-document '{
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+            "Resource": ["arn:aws:s3:::my-lakehouse-bucket", "arn:aws:s3:::my-lakehouse-bucket/*"]
+        }]
+    }'
 ```
 
-This reduces latency (no NAT gateway hop), eliminates data transfer costs, and improves security (traffic stays on the AWS backbone).
+Gateway endpoints are free and add no additional hops. They should always be used for S3 access from VPCs.
+
+### AWS: S3 Interface Endpoint (PrivateLink)
+
+For more control (DNS resolution, security group attachment):
+
+```bash
+aws ec2 create-vpc-endpoint \
+    --vpc-id vpc-12345 \
+    --vpc-endpoint-type Interface \
+    --service-name com.amazonaws.us-east-1.s3 \
+    --subnet-ids subnet-12345 \
+    --security-group-ids sg-12345
+```
+
+### GCP: Private Google Access
+
+Enable Private Google Access on the subnet where SlateDuck runs:
+
+```bash
+gcloud compute networks subnets update my-subnet \
+    --region=us-east1 \
+    --enable-private-ip-google-access
+```
+
+### Azure: Private Endpoint
+
+```bash
+az network private-endpoint create \
+    --name slateduck-storage-pe \
+    --resource-group rg-analytics \
+    --vnet-name vnet-analytics \
+    --subnet subnet-slateduck \
+    --private-connection-resource-id /subscriptions/.../storageAccounts/mylakehouse \
+    --group-id blob \
+    --connection-name slateduck-storage
+```
+
+## Load Balancing
+
+### TCP Load Balancer (Recommended)
+
+SlateDuck uses the PostgreSQL wire protocol (TCP-based, not HTTP). Use a TCP/Layer 4 load balancer:
+
+**AWS NLB:**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: slateduck
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+```
+
+**GCP Internal TCP/UDP Load Balancer:**
+```bash
+gcloud compute forwarding-rules create slateduck-lb \
+    --region=us-east1 \
+    --load-balancing-scheme=INTERNAL \
+    --ports=5432 \
+    --backend-service=slateduck-backend
+```
+
+### Health Checks for Load Balancers
+
+Configure the load balancer health check to probe the SlateDuck port:
+
+| Provider | Health Check Type | Configuration |
+|----------|------------------|---------------|
+| AWS NLB | TCP | Port 5432, interval 10s, threshold 3 |
+| GCP | TCP | Port 5432, interval 10s, threshold 3 |
+| Azure LB | TCP | Port 5432, interval 5s, threshold 2 |
+
+### Load Balancing Strategy for Read Replicas
+
+For read replicas, round-robin or least-connections works well — all readers serve the same data (at a given snapshot):
+
+```
+DuckDB clients
+      │
+      ▼
+ ┌─────────┐
+ │   NLB   │  Round-robin across readers
+ └────┬────┘
+      │
+ ┌────┼────┐
+ ▼    ▼    ▼
+R1   R2   R3   (read-only SlateDuck instances)
+```
+
+### Do NOT Use HTTP Load Balancers
+
+Application load balancers (ALB in AWS, Application Gateway in Azure) operate at Layer 7 (HTTP). SlateDuck speaks the PostgreSQL wire protocol, not HTTP. Using an HTTP load balancer will fail silently.
 
 ## Service Discovery
 
-In Kubernetes, SlateDuck is discoverable via DNS: `slateduck.<namespace>.svc.cluster.local`. For non-Kubernetes deployments, use your preferred service discovery mechanism (Consul, Cloud Map, DNS).
+### Kubernetes DNS
+
+In Kubernetes, SlateDuck is automatically discoverable via cluster DNS:
+
+```
+slateduck-writer.slateduck.svc.cluster.local:5432
+slateduck-reader.slateduck.svc.cluster.local:5432
+```
+
+### AWS Cloud Map
+
+```bash
+aws servicediscovery create-service \
+    --name slateduck \
+    --namespace-id ns-12345 \
+    --dns-config "RoutingPolicy=MULTIVALUE,DnsRecords=[{Type=A,TTL=10}]"
+```
+
+### Consul
+
+```json
+{
+  "service": {
+    "name": "slateduck",
+    "port": 5432,
+    "check": {
+      "tcp": "localhost:5432",
+      "interval": "10s"
+    }
+  }
+}
+```
 
 ## Connection Pooling
 
-SlateDuck supports up to `--max-sessions` concurrent connections (default 64). If you have more DuckDB instances than the session limit, place a TCP connection pooler (like PgBouncer in TCP mode) in front of SlateDuck. Note that PgBouncer's transaction-mode pooling does not work because DuckDB's ducklake extension maintains session state.
+SlateDuck supports up to `--max-sessions` concurrent connections (default 64). If you have more DuckDB instances than the session limit, you need connection management.
+
+### Important: Session State Matters
+
+DuckDB's `ducklake` extension maintains per-session state (attached databases, transaction context). This means:
+
+- **Session-level pooling works** (one connection per client session)
+- **Transaction-level pooling does NOT work** (PgBouncer transaction mode is incompatible)
+- **Statement-level pooling does NOT work** (breaks session state)
+
+### PgBouncer (Session Mode Only)
+
+```ini
+[databases]
+* = host=slateduck port=5432
+
+[pgbouncer]
+pool_mode = session
+max_client_conn = 200
+default_pool_size = 64
+```
+
+### Connection Limits Sizing
+
+| Deployment | Recommended `--max-sessions` | Reasoning |
+|-----------|------------------------------|-----------|
+| Single developer | 10 | Only a few DuckDB sessions |
+| Small team (5-10) | 50 | Default is fine |
+| Large team (50+) | 200 | Or use read replicas |
+| Public-facing API | 500+ | With PgBouncer in front |
+
+Each session uses approximately 1 MB of memory. 200 sessions = 200 MB additional memory.
+
+## Latency Optimization
+
+### Client-to-SlateDuck Latency
+
+| Topology | Expected Latency | Impact on DuckDB |
+|----------|-----------------|------------------|
+| Same host | <0.1ms | Negligible |
+| Same AZ | <1ms | Negligible |
+| Cross-AZ (same region) | 1–3ms | Minor (adds to query planning) |
+| Cross-region | 50–150ms | Significant (avoid for interactive queries) |
+| Public internet | 10–200ms | Use only when necessary |
+
+### SlateDuck-to-Storage Latency
+
+| Configuration | Expected Latency | Notes |
+|---------------|-----------------|-------|
+| VPC endpoint (same region) | 5–15ms | Optimal |
+| NAT gateway (same region) | 10–25ms | Adds NAT hop |
+| Cross-region to storage | 50–150ms | Avoid — use same-region storage |
+| Public internet to storage | 20–100ms | For S3-compatible (MinIO) |
+
+### Optimizing for Low Latency
+
+1. **Deploy SlateDuck in the same region as your object storage bucket** — this is the single most important optimization.
+2. **Use VPC endpoints** — eliminates the NAT gateway hop.
+3. **Deploy in the same AZ** — reduces cross-AZ latency from 1-3ms to <0.5ms.
+4. **Enable hot key cache** — `--hot-key-cache true` (default) reduces repeated storage reads.
+
+## MTU and TCP Tuning
+
+For high-throughput deployments (large catalog scans), ensure jumbo frames are enabled:
+
+```bash
+# Check MTU on the SlateDuck host
+ip link show eth0 | grep mtu
+
+# AWS: VPC supports 9001 MTU by default for instances in the same AZ
+# GCP: Supports 8896 MTU with jumbo frames enabled on the VPC
+```
+
+SlateDuck does not require special TCP tuning. The default Linux/macOS TCP settings work well for the typical catalog operation size (small request/response pairs).
+
+## Further Reading
+
+- **[TLS](tls.md)** — Encrypting connections
+- **[Configuration](configuration.md)** — Bind address and session limits
+- **[Kubernetes](kubernetes.md)** — Service and NetworkPolicy configuration
+- **[Multi-Region](multi-region.md)** — Cross-region networking

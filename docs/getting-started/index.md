@@ -1,30 +1,45 @@
 # Getting Started
 
-Welcome to SlateDuck. This section takes you from zero to a working lakehouse catalog in minutes, whether you are experimenting on your laptop or deploying to production cloud storage. Each guide builds on the previous one, but you can jump directly to whichever matches your situation.
+Welcome to SlateDuck. This section takes you from knowing nothing about the project to running a fully functional lakehouse catalog backed by object storage. Whether you are evaluating SlateDuck for a production data platform, exploring it for a side project, or just curious about how a database catalog can live in an S3 bucket, you will find your entry point here.
 
 ## Choose Your Path
 
-If you have never used SlateDuck before, start with **What is SlateDuck?** for a high-level orientation. It explains what problem SlateDuck solves, how it fits into the DuckLake ecosystem, and what makes it different from PostgreSQL-backed catalogs.
+The Getting Started section is organized as a progressive sequence. Each page builds on the previous one, but you can jump to whichever matches your current level of familiarity:
 
-Once you understand the concept, **Quickstart (Local)** walks you through a complete workflow on your local machine using the filesystem as the object store. You will create a catalog, register tables, insert data, and query it through DuckDB in under five minutes. No cloud credentials required.
+### :material-help-circle: [What is SlateDuck?](what-is-slateduck.md)
 
-**Quickstart (Cloud)** extends the local workflow to real object storage. You will provision an S3 bucket (or GCS, or Azure Blob), configure credentials, and see the same workflow running against durable cloud storage. This is what production looks like.
+Start here if you have never heard of SlateDuck before, or if you know the name but are not sure what problem it solves. This page explains the landscape — what a lakehouse catalog is, why existing solutions require infrastructure you might not want, and how SlateDuck eliminates that infrastructure by putting everything in object storage. No code, no commands, just a clear explanation of what this project is and why it exists.
 
-Finally, **Your First Lakehouse** ties everything together into a realistic scenario: multiple tables, schema evolution, time travel queries, and garbage collection. By the end you will have a solid mental model of how SlateDuck operates day-to-day.
+### :material-rocket-launch: [Quickstart — Local](quickstart.md)
+
+Start here if you want to get your hands dirty immediately. This page takes you from zero to a working catalog in under five minutes using your local filesystem as the storage backend. You will build SlateDuck from source (or download a release binary), start the server, connect DuckDB, create a table, insert data, and query it. Every command is shown with its expected output so you can verify each step succeeded.
+
+### :material-cloud-outline: [Quickstart — Cloud](quickstart-cloud.md)
+
+Start here if you already have an AWS, GCS, or Azure account and want to see SlateDuck running against a real object store. This page provides parallel tracks for each major cloud provider, covering bucket creation, IAM configuration, environment variable setup, and verification. By the end, your catalog will be living in the cloud with the same durability guarantees as your production data.
+
+### :material-school: [Your First Lakehouse](first-lakehouse.md)
+
+Start here if you have completed the quickstart and want to understand what SlateDuck actually does at a deeper level. This tutorial walks through a realistic scenario — building a product analytics lakehouse from scratch — at a deliberate pace, explaining what happens in the catalog at each step. You will create schemas, define tables, evolve schemas, insert data across multiple transactions, and then use time travel to query historical states of your catalog. By the end, you will have a genuine mental model of how DuckLake catalogs work and what makes SlateDuck's approach distinctive.
 
 ## Prerequisites
 
-SlateDuck requires:
+Before you begin, you will need:
 
-- **Rust 1.75+** (if building from source) or a pre-built binary from the releases page
-- **DuckDB 1.2+** with the `ducklake` extension installed
-- For cloud deployments: appropriate credentials (AWS IAM, GCP service account, or Azure SPN)
+- **A Rust toolchain** (for building from source) or a **pre-built binary** from the [releases page](https://github.com/geir-gronmo/slateduck/releases). SlateDuck is a single static binary with no runtime dependencies beyond libc.
+- **DuckDB 1.2 or later** with the `ducklake` extension installed. You can install the extension from within DuckDB by running `INSTALL ducklake;` followed by `LOAD ducklake;`.
+- **For cloud deployments:** credentials for your object-store provider (AWS access keys, GCS service account, or Azure connection string). The cloud quickstart covers the minimum permissions needed.
 
 ## What You Will Learn
 
-By the end of this section you will be able to:
+By the time you finish this section, you will understand:
 
-1. Explain what SlateDuck does and why it exists
-2. Run a local catalog and execute DuckLake queries against it
-3. Deploy to S3/GCS/Azure with proper credential configuration
-4. Perform schema evolution, time travel, and basic operational tasks
+1. What problem SlateDuck solves and where it fits in the modern data stack
+2. How to start and stop the SlateDuck server process
+3. How to connect DuckDB to a SlateDuck-backed catalog
+4. How to create schemas, tables, and insert data through DuckDB
+5. How time travel works — querying the catalog at any historical point
+6. How to deploy against a real cloud object store with proper credentials
+7. What the catalog looks like from the inside — which tables are written, which counters advance, which snapshots are created
+
+This foundation prepares you for the [Concepts](../concepts/index.md) section, which explains the engineering principles behind what you have just seen in practice, and the [Deployment](../deployment/index.md) section, which covers production-ready configurations for every major cloud provider.
