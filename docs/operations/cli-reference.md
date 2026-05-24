@@ -534,7 +534,7 @@ Object-store credentials are configured through the standard SDK environment var
 
 ## Further Reading
 
-- **[Configuration Reference](configuration.md)** — All configuration options in depth
+- **[Configuration Reference](../deployment/configuration.md)** — All configuration options in depth
 - **[Garbage Collection](garbage-collection.md)** — How GC and retention policies work
 - **[Excision](excision.md)** — When and how to use physical data deletion
 - **[Checkpoints](../operations/backup-restore.md)** — Using checkpoints for backup and recovery
