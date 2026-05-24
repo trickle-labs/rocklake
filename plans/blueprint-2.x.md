@@ -246,9 +246,7 @@ as a single key-value pair, rather than one physical key per entity. A query
 followed by an in-memory bitmap scan. Multi-attribute conditions (`AND`)
 become bitmap intersections — far cheaper than two range scans joined after
 the fact. RoaringBitmaps provide efficient compression and fast set
-operations (intersection, union), and they are already used for exactly this
-purpose by [OpenData's Timeseries and Vector
-databases](https://opendata.dev/docs/overview/storage) on SlateDB.
+operations (intersection, union).
 
 **Merge operators for secondary index writes.** Every AVET or VAET write
 would naively require a read-modify-write cycle: read the current posting
@@ -292,8 +290,24 @@ today. No new compaction policy is needed.
 **Merge operators** — AVET and VAET secondary indexes write `AddEntity(eid)`
 merge operands rather than performing read-modify-write cycles. The LSM
 merges them lazily at compaction time into the RoaringBitmap posting list
-(§3.3). This is the same technique OpenData Timeseries and Vector use for
-their inverted indexes on SlateDB.
+(§3.3).
+
+**Hybrid block cache (memory + NVMe disk tier)** — Readers and the writer
+use a two-tier block cache: a fast in-memory tier (default 1–4 GiB) backed
+by a larger on-disk NVMe tier (default 50–100 GiB). Decoded SST blocks
+are written to disk on first access, so the effective working set that
+avoids S3 round-trips is the *disk* size, not RAM. Configuration:
+
+| Parameter | Default | Purpose |
+|-----------|---------|------------------|
+| `memory_capacity` | 1 GiB | Hot blocks in RAM |
+| `disk_capacity` | 90 GiB | Warm blocks on NVMe |
+| `disk_path` | `/var/cache/slateduck` | On-disk tier location |
+| `write_policy` | `WriteOnInsertion` | When to promote to disk tier |
+
+The disk tier is ephemeral — the system operates correctly without it (pure
+S3 fallback). This makes PVCs optional for development and mandatory only
+for production latency targets.
 
 **Writer fencing** — The single-writer guarantee on the substrate carries
 over; multi-writer exploration (§10) builds *on top* of fencing rather than
@@ -339,10 +353,9 @@ range itself is durable; only the in-memory cursor is volatile. After a
 crash the unallocated tail of the range is permanently skipped — a price
 worth paying for batched allocation.
 
-This is the same *block-based sequence allocation* pattern used by [OpenData
-Log](https://opendata.dev/docs/log/storage-design): a `SeqBlock` record
-captures the allocated range; crash recovery reads the last block and skips
-forward, preserving monotonicity with O(1) recovery cost.
+This is *block-based sequence allocation*: a `SeqBlock` record captures
+the allocated range; crash recovery reads the last block and skips forward,
+preserving monotonicity with O(1) recovery cost.
 
 ### 3.7 Proposed SST enhancements (upstream to SlateDB)
 
@@ -353,14 +366,14 @@ worth contributing upstream rather than working around:
 composite key (e.g. the complete EAVT tuple). A probe “does entity `E` have
 *any* fact in this SST?” cannot answer without enumerating every possible
 attribute+version combination. If bloom filters were keyed on the entity-ID
-prefix alone, a single probe skips entire SSTs for absent entities. OpenData
-Log [proposes the same enhancement](https://opendata.dev/docs/log/storage-design)
-for log-key-level bloom filters (keyed on user key, not composite key).
+prefix alone, a single probe skips entire SSTs for absent entities. The same
+approach works for any structured key model that uses a shared prefix: key
+the bloom filter on the logical key, not the full composite key.
 
 **Block-level record counts.** Including a cumulative record count in each
 SST block-index entry enables `COUNT(entity)` and cardinality-estimation
-queries at the block-index level, without reading block data. OpenData Log
-uses this for O(1) range counting within a segment.
+queries at the block-index level, without reading block data. This gives
+O(1) range counting within a key-prefix range.
 
 Both are *proposed* enhancements, not requirements for Phase 2.0. Tracked
 as open questions in §18.
@@ -686,7 +699,47 @@ Documented patterns:
 - The manifest URL is published by the writer to a tiny "current-tip"
   pointer; readers tail it.
 
-### 6.5 Scale targets
+### 6.5 Read freshness model
+
+Read freshness is measured in object-storage round-trips between a write
+being accepted and it becoming visible to a query:
+
+| Write path | Reader | Extra RTs | Freshness |
+|------------|--------|-----------|---------------------|
+| Direct write to writer | Writer itself | 0 | Immediate (in-memory Delta) |
+| Direct write to writer | Read replica | +1 | Manifest poll interval (~1 s) |
+| Buffered ingestion (§8.5) | Writer | +1 | Batch flush + consumer poll (~1–2 s) |
+| Buffered ingestion (§8.5) | Read replica | +2 | Batch flush + consumer poll + manifest poll |
+
+Each object-storage round-trip adds ~100 ms of latency plus the polling
+interval. The polling interval dominates: a reader configured to poll the
+manifest every second sees facts within ~1.1 s of commit. For the writer
+itself on the direct path, facts are visible immediately because they enter
+an in-memory read buffer (the **Delta**) before the SlateDB WAL flush
+completes.
+
+### 6.6 Cache warmer
+
+On startup, a cold reader (Lambda, new pod, post-crash restart) pays full
+S3 latency on every block until the hybrid cache (§3.4) is warm. A
+**startup cache warmer** eliminates this penalty:
+
+```yaml
+cache_warmer:
+  warm_range: 24h        # how far back to pre-scan
+  include_data: true     # warm raw fact blocks, not just indexes
+```
+
+The warmer runs once at startup: it scans recent EAVT key ranges through
+the storage reader, and the block cache picks up those blocks as a side
+effect. First queries after restart see local-cache performance rather
+than cold-S3 latency. The warmer exits after the scan completes; it does
+not consume ongoing resources.
+
+Disable the warmer for Lambda mode or short-lived readers that only serve
+a single request.
+
+### 6.7 Scale targets
 
 v2.x ships with reproducible benchmarks demonstrating:
 
@@ -790,7 +843,42 @@ caller                writer                  SlateDB                 audit
   │ ◄─── version (V) ───┤                        │                      │
 ```
 
-### 8.2 Validation pipeline
+### 8.2 Flexible durability levels
+
+The writer supports three durability levels, selectable per transaction:
+
+| Level | Acknowledges when | Risk window | Latency |
+|-------|-------------------|-------------|---------|
+| **Buffered** | Data written to in-memory Delta | Writes since last WAL flush (bounded by `wal_flush_interval`, default 100 ms) | Lowest (~1 ms) |
+| **WAL-durable** (default) | WAL flushed to object storage | None — survives process crash | Higher (~50–150 ms) |
+| **Queue-durable** | Batch flushed to object storage via §8.5 | None — survives writer crash | Highest (~200–500 ms) |
+
+```rust
+// Per-transaction durability selection
+txn.commit_with(Durability::Buffered).await?;    // fire-and-forget
+txn.commit_with(Durability::WalDurable).await?;  // default
+txn.commit_with(Durability::QueueDurable).await?; // via buffer front-end
+```
+
+`Buffered` mode is appropriate for high-throughput ingestion where losing
+the last 100 ms of writes on a crash is acceptable (e.g. metrics, counters).
+The default (`WalDurable`) guarantees that a committed version survives
+arbitrary process failures.
+
+### 8.3 Backpressure
+
+When writes arrive faster than the writer can flush Deltas to SlateDB, the
+system applies backpressure to prevent unbounded memory growth. Once the
+number of unflushed in-memory Deltas exceeds a configurable threshold
+(default: 4), new `commit()` calls are stalled until a flush completes and
+frees memory.
+
+This ensures the system degrades gracefully under load rather than running
+out of memory. The backpressure threshold is tuned alongside the Delta size
+(`max_unflushed_bytes`, default 128 MiB) and flush interval to balance
+write throughput against memory usage.
+
+### 8.4 Validation pipeline
 
 Before a transaction commits, the writer runs three validators in order
 of increasing cost:
@@ -805,7 +893,7 @@ of increasing cost:
 Each validator can be disabled per-namespace for performance-sensitive
 workloads, but the default is "all on".
 
-### 8.3 Batched commits
+### 8.5 Batched commits
 
 For high-throughput ingestion, the writer accepts multiple `begin → commit`
 calls and groups them into one durable batch. The group commit returns
@@ -813,14 +901,14 @@ when SlateDB has flushed the batch; until then, callers see a "pending"
 result. Group-commit window is tunable (default 10 ms or 1000 facts,
 whichever comes first).
 
-### 8.4 Idempotency
+### 8.6 Idempotency
 
 Every transaction carries an optional **idempotency token**. The writer
 maintains a small LRU of recently-seen tokens; replays return the original
 version without re-committing. This makes the write path safe for clients
 behind a load balancer where retries are routine.
 
-### 8.5 Stateless multi-producer ingestion (Buffer pattern)
+### 8.7 Stateless multi-producer ingestion (Buffer pattern)
 
 The direct write path routes all clients through the single SlateDuck writer
 process. For deployments with application instances spread across
@@ -828,8 +916,7 @@ availability zones this means cross-zone transfer costs and write
 unavailability during writer restarts.
 
 An optional **Buffer front-end** decouples write availability from writer
-availability, following the same object-storage queue pattern used by
-[OpenData Buffer](https://opendata.dev/docs/buffer):
+availability using an object-storage queue:
 
 ```
   ┌────────────────────────────────────────────────────────────┐
@@ -861,7 +948,7 @@ Key properties:
   writer exclusivity.
 - **At-least-once delivery with idempotent replay.** If the consumer
   crashes between processing a batch and acknowledging it, the batch is
-  re-processed on restart. Idempotency tokens (§8.4) make replay safe.
+  re-processed on restart. Idempotency tokens (§8.6) make replay safe.
 - **Write availability decoupled from writer availability.** Apps continue
   writing to object storage even while SlateDuck is down or deploying.
 
@@ -869,11 +956,40 @@ Trade-off: a fact is not queryable until the producer flushes its batch
 (default 100 ms), the consumer polls the manifest (default 1 s), and the
 writer commits to SlateDB. For audit, compliance, and metadata workloads
 — the primary targets for v2.x — this is acceptable. For sub-second
-freshness, use the direct write path (§8.1–§8.4).
+freshness, use the direct write path (§8.1–§8.6).
 
 This pattern is directly related to the multi-writer exploration in §10 but
 implemented as a **single-consumer** queue, which keeps the single-writer
 guarantee intact. It is evaluated in Phase 2.3.
+
+### 8.8 Graceful shutdown and deployment strategy
+
+**Graceful shutdown.** On `SIGTERM` / `SIGINT`, the writer:
+
+1. Stops accepting new transactions.
+2. Drains in-flight transactions (those already past validation).
+3. Flushes the current Delta and pending WAL entries to durable storage.
+4. Acknowledges the buffer consumer’s last processed batch.
+5. Exits cleanly.
+
+Kubernetes deployments should set `terminationGracePeriodSeconds: 60` to
+give the flush time to complete before the kubelet force-kills the pod.
+
+**Recreate strategy.** Because the writer holds an exclusive epoch lock
+(writer fencing, §3.4), a `RollingUpdate` creates a window where the new
+pod attempts to acquire the epoch while the old pod still holds it —
+causing the new pod to be fenced and never become ready. The correct
+Kubernetes deployment strategy is `Recreate`: the old pod terminates fully
+before the new one starts.
+
+```yaml
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+```
+
+Read replicas have no such constraint and can use `RollingUpdate` freely.
 
 ---
 
@@ -894,10 +1010,21 @@ The reader exposes per-query metrics:
 
 - Query latency by interface (typed / SQL / rules).
 - Scan width per index per query class.
-- Cache hit rate at the SST level.
+- Cache hit rate at the SST level (memory tier, disk tier, S3 fallback).
 - Materialised-view freshness lag.
 
-### 9.3 Audit query interface
+### 9.3 Storage-layer metrics
+
+Both the writer and readers expose the underlying SlateDB metrics under
+the `slatedb_*` prefix. These are essential for debugging storage-level
+performance and compaction behaviour:
+
+- `slatedb_compaction_*` — compaction throughput, SST sizes, duration.
+- `slatedb_cache_*` — hit/miss rates for memory and disk tiers.
+- `slatedb_wal_*` — WAL flush latency, WAL file count.
+- `slatedb_manifest_*` — manifest update frequency, generation count.
+
+### 9.4 Audit query interface
 
 A SQL view `_audit.transactions` exposes the transaction log:
 
@@ -1255,9 +1382,10 @@ v2.x succeeds when:
   proposed as upstream SlateDB enhancements, or implemented via a
   SlateDuck-specific SST extension? The former is the right long-term path
   but requires coordination with SlateDB maintainers.
-- Should the Buffer front-end (§8.5) depend on the `opendata-buffer` crate
-  (lower maintenance, proven) or be re-implemented in-house (tighter
-  integration, no transitive SlateDB version constraint)?
+- Should the Buffer front-end (§8.7) use an existing open-source
+  object-storage queue crate (lower maintenance, proven) or be
+  re-implemented in-house (tighter integration, no transitive SlateDB
+  version constraint)?
 
 ---
 
@@ -1270,11 +1398,5 @@ v2.x succeeds when:
 - [`docs/architecture/key-layout.md`](../docs/architecture/key-layout.md) —
   Current tag namespace allocation and reservations.
 - [`docs/architecture/mvcc-implementation.md`](../docs/architecture/mvcc-implementation.md) —
-- [OpenData](https://opendata.dev/docs) — A family of object-storage-native
-  databases built on SlateDB. The Buffer, Log, Timeseries, and Vector
-  databases demonstrate the structured-key model, merge operators for
-  inverted indexes, RoaringBitmap posting lists, block-level record counts,
-  entity-level bloom filter proposals, and the stateless zonal ingestion
-  pattern — all directly applicable to the v2.x fact store.
   v1.x MVCC mechanics that v2.x generalises.
 - [`ROADMAP.md`](../ROADMAP.md) — v2.x roadmap entry (Exploration).
