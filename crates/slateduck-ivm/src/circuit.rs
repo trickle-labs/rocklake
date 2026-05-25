@@ -11,14 +11,17 @@
 //! sequence of ZDeltas to a trace incrementally produces the same result as
 //! recomputing from scratch over the full history.
 //!
-//! ## Why a shim instead of the full DBSP API?
-//! The `dbsp` crate (Feldera 0.299.0) provides a rich streaming circuit API
-//! that requires specifying the full dataflow graph at construction time.
-//! For v0.11 SlateDuck uses append-only tables, so retraction is not needed.
-//! This shim exposes the minimal subset needed: `push_batch` + `step`.
+//! ## Why a standalone engine instead of the full DBSP/Feldera API?
+//! The `dbsp` crate (Feldera 0.299.0) is a full streaming platform runtime
+//! that spawns its own worker threads, requires rkyv serialization on all data
+//! types, and couples persistence to `feldera-storage`.  SlateDuck uses
+//! SlateDB-native persistence, lease-based single-writer shards, and
+//! protobuf/serde_json encoding — making DBSP integration infeasible without
+//! forking.  See `docs/design-decisions/ivm-architecture.md` for the full
+//! analysis.
 //!
-//! The workspace-level `dbsp` dependency is preserved for future use when
-//! full retraction support is added.
+//! This engine implements the DBSP *algebraic model* (Z-differences over
+//! multisets) directly, without depending on the Feldera runtime.
 //!
 //! ## v0.13 additions
 //! `IvmJoinCircuit` adds:

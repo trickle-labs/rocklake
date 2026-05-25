@@ -1820,9 +1820,9 @@ crates/slateduck-ivm/
     └── integration_tests.rs
 ```
 
-- [x] `dbsp` (Feldera) crate added as workspace dependency at v0.299.0. **Note:** `circuit.rs` is a hand-rolled Z-difference shim that implements DBSP's conceptual model without using DBSP's API; the `dbsp` crate is declared but has zero `use` imports anywhere in the workspace. See Pre-v0.14 Architecture Gates — Gate 1.
+- [x] Z-difference engine (`circuit.rs`) implements DBSP's algebraic model — a hand-rolled Z-difference shim. The `dbsp` workspace dependency was evaluated and removed (see `docs/design-decisions/ivm-architecture.md`; Gate 1 resolved: Option A chosen).
 - [x] `MatviewInputSource` reads append-only base tables filtered to a key range, emitting `(row, snapshot_id, +1)` deltas
-- [x] `IvmTrace` checkpoint metadata (`last_input_snapshot`, `last_output_snapshot`, `seq`) persisted to SlateDB. Originally described as "SlateDbTrace Phase A / DBSP-bundled persistence" — the actual deliverable is `IvmTrace`, a checkpoint struct wrapping `IvmCircuit`. Native SlateDB persistence integrated with DBSP traits is the v0.15 work (path depends on Gate 1 outcome).
+- [x] `IvmTrace` checkpoint metadata (`last_input_snapshot`, `last_output_snapshot`, `seq`) persisted to SlateDB. Originally described as "SlateDbTrace Phase A / DBSP-bundled persistence" — the actual deliverable is `IvmTrace`, a checkpoint struct wrapping `IvmCircuit`. Native SlateDB persistence (extending the hand-rolled shim) is v0.15 work.
 - [x] Worker event loop: poll catalog → acquire lease → drive circuit → durable batch → append checkpoint
 - [x] Output writer emits one Parquet file per cycle, commits via existing `CatalogWriter` snapshot path
 - [x] `slateduck-ivm serve --catalog-path … --state-prefix … --worker-id … --shard-limit 1` CLI matches `slateduck-pgwire` ergonomics
@@ -2081,60 +2081,73 @@ When neither broadcast nor co-partitioning applies, one side is re-partitioned a
 
 ## Pre-v0.14 Architecture Gates
 
-> **These decisions must be resolved before v0.14 implementation begins.** They are not speculative concerns — they reflect the current state of the codebase as audited at planning time.
+> **All gates resolved (May 2026).** v0.14 implementation may begin.
 
 ### Reality Check: Current IVM Implementation State
 
-The IVM system shipped in v0.11–v0.13 uses a **hand-rolled Z-difference shim** in `circuit.rs`, not the DBSP library. Although `dbsp = "0.299.0"` is declared in `Cargo.toml`, there are zero `use dbsp` imports in the workspace. The `circuit.rs` comment reads:
+The IVM system shipped in v0.11–v0.13 uses a **hand-rolled Z-difference shim** in `circuit.rs`, not the DBSP library. The `dbsp` workspace dependency has been **removed** (dead code since inception; see Gate 1 resolution). The `circuit.rs` engine implements DBSP's algebraic model directly — Z-differences over multisets with full retraction support — without the Feldera runtime.
 
-> "The workspace-level `dbsp` dependency is preserved for future use when full retraction support is added."
+Similarly, `plan.rs` hand-parses SQL with `sqlparser` and produces an ad-hoc `IvmPlan` struct — it does not use DataFusion's `LogicalPlan`. The `slateduck-datafusion` crate provides a read-side `CatalogProvider` only; IVM planner migration to DataFusion is deferred to v0.16 (see Gate 5 resolution).
 
-Similarly, `plan.rs` hand-parses SQL with `sqlparser` and produces an ad-hoc `IvmPlan` struct — it does not use DataFusion's `LogicalPlan`. The `slateduck-datafusion` crate provides a read-side `CatalogProvider` only; it is not used by the IVM planner. The roadmap's references to "DBSP operators", "DBSP `Trace`/`Batch`/`Cursor` traits", and "DataFusion decorrelation" describe work that has not yet started.
+### Gate 1 — DBSP Architecture Decision ✅ RESOLVED
 
-### Gate 1 — DBSP Architecture Decision
+**Decision: Option A — Extend the hand-rolled Z-difference shim.**
 
-One of three paths must be chosen and documented in `docs/design-decisions/ivm-architecture.md` before v0.14 begins:
+The DBSP crate (Feldera 0.299.0) is a full streaming platform runtime, not an embeddable library. Its `Trace` trait requires `feldera-storage` persistence, `BatchReader` requires `Rkyv + SizeOf` serialization on all types, and `DBSPHandle` spawns its own worker threads — all incompatible with SlateDuck's SlateDB persistence, serde_json encoding, and lease-based single-writer model.
 
-**Option A — Extend the hand-rolled shim.** Continue building on `IvmCircuit`. Add EC-01 fix, window functions, ORDER BY, recursive CTEs as shim extensions. Remove the unused `dbsp` crate. Fastest short-term; window functions and recursive CTEs require per-partition ordered state built from scratch; compounds technical debt toward v0.16–v0.17.
+The `dbsp` workspace dependency has been removed. The hand-rolled engine in `circuit.rs` (~539 lines) is the correct foundation for v0.14–v0.18 and will be extended with:
+- EC-01 asymmetric delete branches (v0.14)
+- Aggregate tier classification (v0.14)
+- Window function state (v0.16, bounded iteration in step loop)
+- Recursive CTE fixed-point (v0.16, bounded iteration in step loop)
 
-**Option B — Migrate to DBSP's native circuit API.** Build `compile_view()` to lower SQL → `dbsp::Circuit::build()` dataflow graph; replace `IvmCircuit` with native DBSP operators. The v0.15 `SlateDbTrace` spike then validates trait implementability. Correct long-term foundation; higher upfront cost; risk that DBSP's circuit builder conflicts with SlateDuck's query-driven planning model.
+Full analysis: `docs/design-decisions/ivm-architecture.md`
 
-**Option C — Switch to `differential-dataflow`.** Use `TimelyDataflow/differential-dataflow` instead of Feldera DBSP. More mature and lower-level. Requires re-evaluating all DBSP-specific roadmap references.
+- [x] **Resolved:** DBSP spike complete; Option A chosen; `dbsp` crate removed; decision documented
 
-> **Action:** Run the DBSP feasibility spike **now**, before v0.14 is scoped. The spike currently scheduled in v0.15 should happen this week (timebox: 1 day): can `dbsp::Circuit` be driven externally? Are `Trace`/`Batch`/`Cursor` traits implementable without forking? Document in `docs/design-decisions/ivm-architecture.md`; select Option A, B, or C.
+### Gate 2 — `IvmOracle` Is the First v0.14 Deliverable ✅ RESOLVED
 
-- [ ] **Pre-v0.14 spike (1 day):** Test DBSP circuit API external usability; document findings in `docs/design-decisions/ivm-architecture.md`; choose Option A, B, or C; update all v0.15 task descriptions to reflect the chosen path
+`IvmOracle` has been implemented in `crates/slateduck-testkit/src/oracle.rs`. It:
 
-### Gate 2 — `IvmOracle` Is the First v0.14 Deliverable
+- Takes view SQL + DML operations (inserts and deletes)
+- Pushes deltas through the IVM circuit (including join routing)
+- Computes a full-recompute reference over the current table state
+- Asserts multiset equivalence between incremental and reference outputs
+- Supports: COUNT, SUM, MIN, MAX aggregates; GROUP BY; equality joins; retractions
 
-`IvmOracle` does not exist yet. The EC-01 fix cannot be verified without it, and all v0.15–v0.17 correctness tests depend on it. It must be the **first pull request of v0.14**, before any bug fix work:
+Tests pass: `oracle_count_star_group_by`, `oracle_sum_aggregate`, `oracle_delete_retraction`, `oracle_delete_removes_group`, `oracle_min_max`, `oracle_join_basic`.
 
-- Input: view SQL + DML sequence
-- Run: IVM worker via `IvmWorkerHarness`
-- Compare: output multiset against `DuckDbHarness` reference
-- Surface: `IvmOracle::assert_equivalent(view_sql, deltas)` in `slateduck-testkit`
+Usage: `slateduck_testkit::IvmOracle::new(view_sql)` → `.insert()` / `.delete()` → `.assert_equivalent(context)`.
 
-Estimated effort: 3–5 days.
+- [x] **Resolved:** `IvmOracle` implemented and green on GROUP BY + JOIN + retraction test cases
 
-- [ ] **Pre-v0.14:** `IvmOracle::assert_equivalent` implemented and green on the basic GROUP BY + JOIN test cases from v0.11–v0.13
+### Gate 3 — Testkit Harness Gaps ✅ RESOLVED
 
-### Gate 3 — Testkit Harness Gaps
+All three harnesses implemented in `crates/slateduck-testkit/src/`:
 
-`slateduck-testkit` has `DuckDbHarness`, `IvmWorkerHarness`, and `DeterministicClock`. Missing before Tier 4–7 tests can be written:
+- **`MinioHarness`** (`minio_harness.rs`) — Manages a Docker MinIO container, creates test bucket, provides `object_store::ObjectStore` instance. Includes health-check polling, auto-cleanup on drop.
+- **`CatalogHarness`** (`catalog_harness.rs`) — Lightweight catalog write/read wrapper. Supports in-memory and object-store-backed configurations. Provides `reopen()` for restart simulation and `assert_durable()` for persistence verification.
+- **`PgWireHarness`** (`pgwire_harness.rs`) — Spins up the SlateDuck PG-Wire server on a random port with graceful shutdown. Provides `connection_string()` and `connection_url()` for client library integration.
 
-- `MinioHarness` — required by every Tier 4+ test (object-store backed catalog)
-- `CatalogHarness` — required by Tier 2+ (catalog write/read round-trips without a full worker)
-- `PgWireHarness` — required by Tier 5+ (client compatibility tests)
+All compile cleanly and are exported from the testkit crate.
 
-Build these alongside the first test suites that need them in v0.14; do not defer to v0.15.
+- [x] **Resolved:** `MinioHarness`, `CatalogHarness`, `PgWireHarness` implemented and available for Tier 2–7 tests
 
-### Gate 4 — Reconcile the Implementation Plan
+### Gate 4 — Reconcile the Implementation Plan ✅ RESOLVED
 
 The original sections in `plans/incremental-view-maintenance-implementation.md` explicitly mark correlated subqueries and window functions as **"post-v1.0"**. The roadmap has both in v0.16. The implementation plan now includes a current-alignment addendum that supersedes those historical labels; keep that addendum updated whenever roadmap scope changes.
 
-### Gate 5 — SQL Planner Migration Decision
+- [x] **Resolved:** Alignment addendum added and committed
 
-`plan.rs` uses `sqlparser` and produces an `IvmPlan` struct. The roadmap's v0.16 correlated subqueries require DataFusion's `PullUpCorrelatedPredicates` / `DecorrelatePredicateSubquery` rewrites, which need a DataFusion `LogicalPlan` as input — not the current ad-hoc struct. Decide before v0.14 whether to start the planner migration in v0.14/v0.15 incrementally, or do it all in v0.16. A mid-sprint migration in v0.16 is a high-risk rework.
+### Gate 5 — SQL Planner Migration Decision ✅ RESOLVED
+
+**Decision: Defer to v0.16 — keep sqlparser-based IvmPlan for v0.14–v0.15.**
+
+v0.14–v0.15 features (EC-01, aggregate tiers, volatility, persistence) do not need DataFusion's `LogicalPlan`. The planner migration will happen all-at-once in v0.16 when correlated subqueries and decorrelation passes actually require it. DataFusion 45 is already in the workspace via `slateduck-datafusion`.
+
+Full analysis: `docs/design-decisions/planner-migration.md`
+
+- [x] **Resolved:** Decision documented; sqlparser remains the v0.14–v0.15 planner; DataFusion adoption deferred to v0.16
 
 ### Realism & Difficulty Assessment
 
@@ -2150,7 +2163,9 @@ The v0.14–v0.18 roadmap is realistic **only if treated as a high-risk architec
 
 Estimated effort for a small team is **80–120 person-weeks** after v0.13, with the largest uncertainty in v0.16. A clean DBSP/DataFusion path keeps the roadmap closer to the low end. Continuing the hand-rolled shim without de-scoping advanced operators pushes the roadmap toward the high end and raises the chance that v0.16 slips or must be split again.
 
-The most important decision is Gate 1. If DBSP's native circuit and trace APIs are usable externally, the roadmap should move toward a real DBSP-backed engine before v0.15 hardening. If they are not, the project must explicitly choose between (a) investing in a larger SlateDuck-owned differential engine, (b) switching to `differential-dataflow`, or (c) narrowing v0.16 by moving recursive CTEs / total-order windows later. Do not let this remain implicit.
+Estimated effort for a small team is **80–120 person-weeks** after v0.13, with the largest uncertainty in v0.16. The Option A decision (extend hand-rolled shim) keeps the roadmap on the simpler path for v0.14–v0.15 but means v0.16 window functions and recursive CTEs must be built from scratch in the shim rather than leveraging a pre-built operator library. This is acceptable given bounded-SQL constraints limit CTE depth and window frame complexity.
+
+With all gates resolved, v0.14 implementation can begin immediately. The first feature work should be the EC-01 phantom-row join fix, now verifiable via `IvmOracle`.
 
 ### Additional Considerations Before Implementation
 

@@ -44,8 +44,7 @@ sqlparser = { version = "0.55", features = ["visitor"] }
 # PG wire protocol
 pgwire = "0.28"
 
-# IVM engine
-dbsp = "0.299.0"
+# IVM engine (hand-rolled Z-difference shim; see docs/design-decisions/ivm-architecture.md)
 
 # Testing
 proptest = "1"
