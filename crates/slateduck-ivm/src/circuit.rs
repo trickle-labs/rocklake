@@ -444,6 +444,12 @@ impl IvmCircuit {
         self.state.len()
     }
 
+    /// Restore a group from persisted state (used by SlateDbTrace restore).
+    pub fn push_restored_group(&mut self, _key: Vec<Value>, _values: HashMap<String, Value>) {
+        // In a full implementation, this would rebuild the AggState from persisted values.
+        // For the v0.15 implementation, restore is handled by replaying from the frontier.
+    }
+
     // ─── Helpers ───────────────────────────────────────────────────────────
 
     fn group_key(&self, fields: &HashMap<String, Value>) -> String {

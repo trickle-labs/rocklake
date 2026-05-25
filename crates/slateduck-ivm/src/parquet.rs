@@ -21,10 +21,20 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 /// Parquet output policy for a matview.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum CompactionPolicy {
+    #[default]
     Never,
     After(std::time::Duration),
+}
+
+/// Parquet output configuration including sort keys for optimized reads.
+#[derive(Debug, Clone, Default)]
+pub struct ParquetOutputConfig {
+    /// Sort keys for Parquet row-group ordering (auto-populated from GROUP BY / join keys).
+    pub sort_keys: Vec<String>,
+    /// Compaction policy.
+    pub compaction: CompactionPolicy,
 }
 
 impl CompactionPolicy {
