@@ -20,7 +20,7 @@ async fn main() {
                 max_rows_per_tick: args.max_rows_per_tick,
                 shard_limit: args.shard_limit,
                 max_drain_time_ms: args.max_drain_time_ms,
-                cost_mode: slateduck_ivm::config::CostMode::from_str(&args.cost_mode),
+                cost_mode: args.cost_mode.parse().unwrap_or_default(),
             };
 
             eprintln!(

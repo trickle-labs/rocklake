@@ -34,12 +34,14 @@ pub enum CostMode {
     Spot,
 }
 
-impl CostMode {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+impl std::str::FromStr for CostMode {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "spot" => Self::Spot,
             _ => Self::Standard,
-        }
+        })
     }
 }
 
