@@ -65,7 +65,8 @@ binding on every roadmap release below.
 | **v0.13 — IVM Joins** | Broadcast, co-partitioned, and re-shuffle join strategies; TPC-H Q3/Q4/Q5 | Done |
 | **v0.13.1 — IVM Join Correctness** | EC-01 phantom-row fix, aggregate tier classification (BOOL_AND/OR semi-algebraic), volatility validation (hardcoded table), property-based \"differential ≡ full\" oracle. **Blocks v0.14+** | Planning |
 | **v0.14 — IVM Operational Hardening** | Multi-view DAG (first), native `SlateDbTrace`, cost optimization, cost guardrails (opt-in freshness degradation), observability, fault injection, rate limiting, 24 h soak | Planning |
-| **v0.15 — IVM Feature Completeness** | Window functions, ORDER BY, LIMIT/top-N, correlated subqueries (DataFusion dep), recursive CTEs (single-shard coordinator), non-det capture, WASM UDFs (wasmtime pooled), adaptive cost-mode (empirically calibrated), ref-counted DISTINCT (MAX semantics) | Planning |
+| **v0.15a — IVM Operator Completeness** | Window functions, ORDER BY, LIMIT/top-N, correlated subqueries (DataFusion dep), recursive CTEs (single-shard coordinator + spike gate), non-det capture | Planning |
+| **v0.15b — IVM Feature Hardening** | WASM UDFs (wasmtime pooled), adaptive cost-mode (empirically calibrated against full matrix), ref-counted DISTINCT (MAX semantics), Tier 8 24h soak (IVM GA gate) | Planning |
 | **v0.16 — pg-trickle Compatibility** | `table_changes()` CDC function, stable `rowid`, snapshot lease, `NOTIFY` event-driven, extension schema (first-class catalog tag `0x23`), opaque mixed frontiers | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, IVM feature-complete GA sign-off, real-world validation gate | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
@@ -2405,15 +2406,19 @@ The toxiproxy Testcontainers network fault injection tests require Docker. This 
 
 ---
 
-## v0.15 — IVM Feature Completeness
+## v0.15a — IVM Operator Completeness
 
-> **Dependency:** Requires v0.14 merged to `main`. `SlateDbOrderedTrace` extends `SlateDbTrace` (or the fallback adapter) from v0.14; `CostMode::Adaptive` builds on v0.14's cost infrastructure and observability metrics.
+> **Dependency:** Requires v0.14 merged to `main`. `SlateDbOrderedTrace` extends `SlateDbTrace` (or the fallback adapter) from v0.14.
 
-> Expand the IVM SQL surface to full feature-parity with a general-purpose streaming SQL engine: window functions, ordered results, top-N materialization, correlated subqueries, recursive computation, non-deterministic functions with deterministic capture semantics, and WASM user-defined functions. After v0.15 the answer to "what SQL can a materialized view use?" is: anything you can write against a static DuckDB table.
+> Ships the core operator surface: window functions, total-order output, top-N, correlated subqueries, recursive CTEs, and non-deterministic function capture. After v0.15a every commonly requested streaming SQL pattern works. v0.15b completes the runtime with WASM UDFs, adaptive cost mode, and correctness-hardened DISTINCT.
 
 ### Why feature completeness before v1.0
 
-SlateDuck's goal is to be the only lakehouse that materializes *any* SQL view without leaving S3. A restricted SQL surface invites the question "what can't it do?" v0.15 closes that gap. Each feature adds real implementation complexity, but the architectural seams — ordered traces, UDF registry, deterministic timestamp capture — are far cheaper to design before GA than to retrofit afterward. v1.0 should mean something complete.
+SlateDuck's goal is to be the only lakehouse that materializes *any* SQL view without leaving S3. A restricted SQL surface invites the question "what can't it do?" v0.15a/v0.15b close that gap. The architectural seams — ordered traces, UDF registry, deterministic timestamp capture — are far cheaper to design before GA than to retrofit afterward. v1.0 should mean something complete.
+
+### Why two phases
+
+The original v0.15 bundled eight major features. The structural risk: if DBSP `iterate` (recursive CTEs) hits a multi-week blocker, WASM UDF work that shares no code dependency also slips. The split follows a natural seam: **v0.15a** delivers the operator surface (what SQL can be written in a view), **v0.15b** delivers the runtime extensions (WASM execution engine, adaptive cost calibration, DISTINCT ref-counting) and the Tier 8 24-hour soak gate. No features are deferred — the full operator surface remains the same across both phases.
 
 ### Window Functions
 
@@ -2424,7 +2429,7 @@ SlateDuck's goal is to be the only lakehouse that materializes *any* SQL view wi
 - [ ] `PARTITION BY` windows where partition key = shard key: fully parallel, same throughput as aggregation
 - [ ] `PARTITION BY` windows where partition key ≠ shard key: route to single-shard merge stage
 - [ ] Full-table windows (no PARTITION BY): `shard_count = 1` enforced at create time with a clear error message if user attempts sharded
-- [ ] `SlateDbOrderedTrace` extending `SlateDbTrace` (or the fallback adapter from v0.14 — the ordered extension must work with whichever persistence layer v0.14 shipped) with per-partition sort order
+- [ ] `SlateDbOrderedTrace` extending `SlateDbTrace` (or the fallback adapter from v0.14 — the ordered extension must work with whichever persistence layer v0.14 shipped) with per-partition sort order. **Contingency:** if v0.14 ships the `SlateDbBatch` adapter rather than native trait implementation, the ordered trace maintains per-partition sort keys in a separate SlateDB key prefix (`{state_prefix}/ordered/{partition_key}/{sequence}`) layered on top of the adapter, keeping the adapter unmodified
 - [ ] Output plane `merge_sorted_parquet_writer` for total-ordered output tables
 - [ ] Supported window frames: `ROWS BETWEEN`, `RANGE BETWEEN`, `GROUPS BETWEEN`
 - [ ] Navigation functions: `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`
@@ -2477,8 +2482,11 @@ A top-level `ORDER BY` implies a total order on the output; Parquet is physicall
 
 **Cross-shard convergence.** DBSP's `iterate` computes a local fixed point per shard. For recursive queries whose fixed point depends on global properties (e.g., transitive closure of a graph partitioned across shards), local ≠ global fixed point. Solution: recursive CTEs run on a **single coordinator shard** that receives a global shuffle of all edges/rows participating in the recursion. This is the same approach DBSP's distributed runtime uses. For large graphs, `shard_count = 1` is auto-enforced at view creation with a clear message; for bounded-depth recursions (`CONNECT BY` with `max_depth ≤ D`), sharded execution is allowed because each iteration only needs local + 1-hop-neighbour data (communicated via the existing reshuffle join path).
 
+> **Required spike (1 day timebox) — do before committing to schedule.** DBSP's `iterate` computes a local fixed point within DBSP's own time domain. SlateDuck uses a snapshot-frontier model. Before building, verify: (1) that `iterate`'s termination detection (output = input at fixed point) maps cleanly onto SlateDuck's frontier advancement — specifically, when does `iterate` know the fixed point has been reached for a given input snapshot? (2) that the DBSP `iterate` operator is callable from outside DBSP's circuit builder without forking. Document findings in `docs/design-decisions/ivm-recursive-spike.md`. If either answer is "no without forking", the fallback is a hand-rolled fixed-point loop in `worker.rs` using the existing differential circuit as the iteration body.
+
+- [ ] **Spike (1 day):** Verify DBSP `iterate` operator is callable externally and that its fixed-point detection maps to SlateDuck's snapshot frontier; document findings in `docs/design-decisions/ivm-recursive-spike.md`
 - [ ] Recursive CTEs identified in the SQL plan (cycles in CTE dependency graph)
-- [ ] Lowered to DBSP `iterate` operators
+- [ ] Lowered to DBSP `iterate` operators (or hand-rolled fixed-point loop if spike shows `iterate` not usable externally)
 - [ ] **Global convergence:** unbounded recursive CTEs enforce `shard_count = 1` (coordinator receives global shuffle); clear error if user specifies `shard_count > 1`
 - [ ] **Bounded recursion fast path:** `CONNECT BY`-style depth-bounded expansion (org-chart / BOM queries) with `max_depth` may use sharded execution via per-hop reshuffle
 - [ ] Bounded iteration: configurable `max_iterations` (default 100); exceeding it sets view to `Stale` and alerts
@@ -2560,58 +2568,153 @@ Items not moved to v0.14 because they require the full operator surface or are c
 | `now()` / `random()` (capture semantics) | — | — | — | — | ✓ |
 | User-defined functions (WASM) | — | — | — | — | ✓ |
 
-### Testing: Tier 8 (Scale & Soak)
+### Testing: Tier 8 (Scale Benchmarks)
 
-- [ ] **Tier 8 — TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`): `tpch_sf10_catalog_latency` and `tpch_sf100_catalog_latency` against real S3 Standard; p99 `get_current_snapshot` < 50 ms at SF10, < 100 ms at SF100; results written to `benchmarks/v0.15-tpch-{date}.json`
+The 24-hour soak test and 16-shard benchmark are in v0.15b — they require the full operator matrix (including WASM and Adaptive mode) for a meaningful GA-gate soak.
+
+- [ ] **Tier 8 — TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`): `tpch_sf10_catalog_latency` and `tpch_sf100_catalog_latency` against real S3 Standard; p99 `get_current_snapshot` < 50 ms at SF10, < 100 ms at SF100; results written to `benchmarks/v0.15a-tpch-{date}.json`
 - [ ] **Tier 8 — TPC-H IVM streaming** (`tests/scale/tpch_ivm.rs`): Q1, Q3, Q5 at 100k rows/s, 8 shards, 5 s freshness; lag p99 < 5 s; verified on MinIO (same-host) and S3 Standard
-- [ ] **Tier 8 — 24-hour soak test** (`tests/scale/soak.rs`): TPC-H Q1 continuous ingest; correctness drift check every 15 min (output row count matches DuckDB reference); fault injection every 15 min; `ivm_circuit_panic_total` = 0 after T+1h; **soak failure blocks GA tag**
-- [ ] **Tier 8 — 16-shard scale-out benchmark**: 16 workers on 16 separate instances, 1M rows/s ingest, aggregate throughput ≥ 500k rows/s, lag p99 ≤ 3 s
-- [ ] Scale and soak tests run on dedicated EC2 `c6i.4xlarge` via self-hosted GitHub Actions runner; triggered manually and on `v*` release tags
-- [ ] CI comparison job alerts if any Tier 8 metric regresses > 10% vs previous run
+- [ ] Scale tests run on dedicated EC2 `c6i.4xlarge` via self-hosted GitHub Actions runner; triggered manually and on `v*` release tags
 - [ ] Scale test setup documented in `docs/contributing/testing.md` under "Scale Testing Infrastructure"
 
 ### Acceptance Criteria
 
-- [ ] Every operator in the matrix passes a correctness test against a DuckDB single-shot reference query over the same input data
+- [ ] Every operator in the v0.15a matrix passes a correctness test against a DuckDB single-shot reference query over the same input data
 - [ ] Partition-local `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)` maintained correctly for 1000 input snapshots; throughput within 15% of equivalent aggregation
 - [ ] Transitive closure over 1M edges processes 10k-edge incremental batches in ≤ 10 s (single-shard coordinator; global shuffle)
 - [ ] `LIMIT 100 ORDER BY value DESC` view correctly maintains the global top-100 across 1000 input snapshots
 - [ ] `now()` capture: repaired shard re-uses stored captured value, not re-sampled; output is bit-identical to original
-- [ ] WASM UDF exceeding fuel/memory limit returns a clean error; no worker panic, no view corruption
+- [ ] Unbounded recursive CTE rejects `shard_count > 1` at view creation with clear error
 - [ ] All v0.11–v0.14 acceptance tests still pass
+- [ ] **Tier 8 TPC-H p99 within targets**: SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
+
+### Deliverables
+
+- [ ] `SlateDbOrderedTrace` implementation (extending v0.14's persistence layer; contingency noted in Window Functions section)
+- [ ] Merge-sort output writer in the output plane
+- [ ] Decorrelation pass in `plan.rs` (using `datafusion-optimizer` pinned in workspace deps)
+- [ ] DBSP `iterate` integration for recursive CTEs (or fixed-point loop fallback per spike findings)
+- [ ] `docs/design-decisions/ivm-recursive-spike.md` recording spike findings
+- [ ] Non-deterministic function capture with per-batch seed storage
+- [ ] Tier 8 TPC-H catalog and IVM streaming benchmark suite (`tests/scale/`)
+- [ ] Self-hosted EC2 runner configuration documented in `docs/contributing/testing.md`
+- [ ] `benchmarks/v0.15a-operator-complete.json` published
+- [ ] `docs/reference/sql-ivm.md` updated to reflect v0.15a operator coverage
+
+---
+
+## v0.15b — IVM Feature Hardening
+
+> **Dependency:** Requires v0.15a merged to `main`. `CostMode::Adaptive` requires the full v0.15a operator matrix to calibrate multipliers correctly (Window 3.0× and Recursive 5.0× cannot be empirically validated without those operators shipped). The 24-hour soak test is the IVM GA gate and belongs here — it tests the complete system.
+
+> Completes the IVM story: WASM UDFs (wasmtime pooled), adaptive DIFFERENTIAL/FULL mode switching (empirically calibrated against the full operator matrix), reference-counted DISTINCT correctness, and the 24-hour fault-injection soak test. **This release is the IVM GA gate.** After v0.15b the answer to "what SQL can a materialized view use?" is: anything you can write against a static DuckDB table.
+
+### User-Defined Functions (WASM)
+
+UDFs extend the view SQL surface with custom logic: custom hash functions, domain-specific type coercions, scoring models. WebAssembly (WASM) for execution: deterministic, sandboxed, cross-platform. Compiled modules stored as binary blobs in the catalog.
+
+- [ ] New catalog table `matview_udfs` (tag `0x21`): `(udf_id, name, schema_name, wasm_blob, signature, deterministic, created_at_snapshot)`
+- [ ] `CREATE FUNCTION name(arg_type, …) RETURNS type LANGUAGE WASM AS '…'` DDL surface
+- [ ] `DROP FUNCTION`, `ALTER FUNCTION … REPLACE` (bumps `udf_id`; views pin to specific `udf_id` at creation)
+- [ ] WASM execution via `wasmtime` embedded in `slateduck-ivm`; sandboxed (no I/O, no network, bounded fuel + memory)
+- [ ] **Per-batch pooled instance model:** A single `wasmtime::Instance` is created per UDF per batch and reused across all rows in that batch (not per-row allocation). Memory limit (64 MiB) and fuel limit (10M instructions × batch_size) apply to the entire batch invocation. Instance is dropped after the batch completes. This avoids 64 MiB × rows-per-batch blowup
+- [ ] Pin `wasmtime` to a specific major version in `Cargo.toml` (fuel API breaks between wasmtime majors); document version constraint
+- [ ] **wasmtime version upgrade policy** documented in `CONTRIBUTING.md`: wasmtime major version may be bumped once per SlateDuck release cycle; the bump is a dedicated maintenance PR that updates the fuel API callsites and re-runs the full WASM UDF test suite. Staying on an EOL wasmtime major for more than one release cycle is disallowed (WASM sandbox CVEs accumulate)
+- [ ] `deterministic = true` annotation required; non-deterministic UDFs rejected at view creation with a clear error
+- [ ] UDF versioning: view pins to `udf_id` at creation; `ALTER INCREMENTAL MATERIALIZED VIEW v USING FUNCTION f VERSION N` migrates and triggers `REFRESH … FULL`
+- [ ] Argument and return types limited to Arrow-compatible scalars: BOOLEAN, INT8–INT64, FLOAT32/FLOAT64, UTF8, BINARY, DATE32, TIMESTAMP
+- [ ] Per-row fuel sub-budget: 10M instructions; if any single row exhausts its fuel slice, clean error naming the row and UDF — batch aborted, no partial output
+- [ ] WASM module validates against a whitelist of allowed WASI imports (none for pure functions)
+- [ ] Tested with a custom tokenizer UDF over event strings maintained incrementally
+- [ ] `docs/reference/udfs.md`: authoring guide, WASM compilation instructions (Rust → wasm32-unknown-unknown), determinism contract, version migration
+
+### Remaining Optimizations (Adaptive Mode + DISTINCT Correctness)
+
+Items deferred from v0.14 because they require the full operator surface or are correctness fixes tied to new v0.15a features.
+
+**Adaptive DIFFERENTIAL/FULL mode switching (`CostMode::Adaptive`).** At low delta rates, DIFFERENTIAL is 5–90× cheaper than FULL. At high delta rates the crossover reverses. Without this switch, a large delta batch silently tanks throughput. Requires the full operator matrix (window functions, recursion) to calibrate properly — cannot ship in v0.14 or v0.15a with partial operator coverage.
+
+- [ ] `CostMode::Adaptive` variant in `config.rs`
+- [ ] Per-view rolling statistics tracked in the state store and surfaced via `observability.rs`: `rows_in`, `rows_out`, `ms_spent`, `last_full_cost`
+- [ ] Query complexity multiplier table: initial values `Scan 1.0×`, `Filter 1.1×`, `Aggregate 1.5×`, `Join 2.5×`, `JoinAggregate 4.0×`, `Window 3.0×`, `Recursive 5.0×`; switch DIFFERENTIAL→FULL when `Δ_rows / N_rows × multiplier > threshold` (default 0.5)
+- [ ] **Empirical calibration step (required before shipping):** Run TPC-H Q1/Q3/Q5 + TPC-DS Q4/Q47 at delta ratios 0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 1.0; record actual DIFFERENTIAL vs FULL latency crossover point for each query class; adjust multiplier table to match observed crossover within ±20%. Publish calibration data in `benchmarks/v0.15b-adaptive-calibration.json`
+- [ ] `WITH (cost_mode = 'adaptive', adaptive_threshold = 0.3)` per-view override; documented in `docs/operations/ivm-cost-control.md`
+
+**Reference-counted DISTINCT and set operators.** The current DISTINCT implementation does not track duplicate counts, producing incorrect output when the same row is inserted multiple times and then partially deleted.
+
+- [ ] Add `__sd_ref_count: i64` auxiliary column to `IvmTrace` for views containing `DISTINCT` or `UNION DISTINCT` / `INTERSECT` / `EXCEPT`
+- [ ] INSERT increments `__sd_ref_count`; DELETE decrements; row visible in output only when `__sd_ref_count > 0`
+- [ ] `UNION DISTINCT`: `MAX(count_A, count_B)` — a row is present once if it appears in *either* operand, regardless of duplicates within each side. **Not addition** (that would be `UNION ALL`)
+- [ ] `INTERSECT`: `MIN(count_A, count_B)` — row present only when both sides contribute
+- [ ] `EXCEPT`: `count_A - count_B`, clamped to 0 — row present when left contributes more than right subtracts
+- [ ] Correctness test: insert same row 3×, delete 2×; confirm exactly one output row
+- [ ] Correctness test: `UNION DISTINCT` of two relations both containing the same row → exactly one output row (not two)
+
+### Extended Operator Support Matrix
+
+| Operator | v0.11 | v0.12 | v0.13 | v0.14 | v0.15a | v0.15b |
+|---|---|---|---|---|---|---|
+| `SELECT` / `WHERE` / `GROUP BY` / `HAVING` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Aggregates (count, sum, min, max, avg) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `DISTINCT`, `UNION ALL/DISTINCT` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (ref-counted) |
+| `JOIN` (broadcast, co-partition, reshuffle) | — | — | ✓ | ✓ | ✓ | ✓ |
+| Uncorrelated subqueries | — | — | ✓ | ✓ | ✓ | ✓ |
+| `ORDER BY` (total-order output) | — | — | — | — | ✓ | ✓ |
+| `LIMIT` / `OFFSET` (top-N) | — | — | — | — | ✓ | ✓ |
+| Window functions (partitioned) | — | — | — | — | ✓ | ✓ |
+| Window functions (total-order) | — | — | — | — | ✓ | ✓ |
+| Correlated subqueries (`EXISTS`, `IN`, scalar) | — | — | — | — | ✓ | ✓ |
+| `CONNECT BY` / depth-bounded recursion | — | — | — | — | ✓ | ✓ |
+| Recursive CTEs | — | — | — | — | ✓ | ✓ |
+| `now()` / `random()` (capture semantics) | — | — | — | — | ✓ | ✓ |
+| `DISTINCT` (ref-counted, correct under delete) | — | — | — | — | partial | ✓ |
+| User-defined functions (WASM) | — | — | — | — | — | ✓ |
+| Adaptive DIFFERENTIAL/FULL switching | — | — | — | — | — | ✓ |
+
+### Testing: Tier 8 (Scale & Soak — IVM GA Gate)
+
+- [ ] **Tier 8 — TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`): re-run against v0.15b to confirm no regression; results written to `benchmarks/v0.15b-tpch-{date}.json`
+- [ ] **Tier 8 — TPC-H IVM streaming** (`tests/scale/tpch_ivm.rs`): Q1, Q3, Q5 at 100k rows/s, 8 shards, 5 s freshness; re-verified with full operator surface
+- [ ] **Tier 8 — 24-hour soak test** (`tests/scale/soak.rs`): TPC-H Q1 continuous ingest; correctness drift check every 15 min (output row count matches DuckDB reference); fault injection every 15 min; `ivm_circuit_panic_total` = 0 after T+1h; **soak failure blocks GA tag**
+- [ ] **Tier 8 — 16-shard scale-out benchmark**: 16 workers on 16 separate instances, 1M rows/s ingest, aggregate throughput ≥ 500k rows/s, lag p99 ≤ 3 s
+- [ ] Scale and soak tests run on dedicated EC2 `c6i.4xlarge` via self-hosted GitHub Actions runner; triggered manually and on `v*` release tags; **24h soak is pre-release gate for GA tag only, not every pre-release tag**
+- [ ] CI comparison job alerts if any Tier 8 metric regresses > 10% vs previous run
+
+### Acceptance Criteria
+
+- [ ] Every operator in the full matrix (including WASM and DISTINCT ref-counting) passes a correctness test against a DuckDB single-shot reference query
+- [ ] WASM UDF exceeding fuel/memory limit returns a clean error; no worker panic, no view corruption
+- [ ] All v0.11–v0.15a acceptance tests still pass
 - [ ] Extended benchmark: TPC-DS Q14, Q47, Q49 maintained incrementally with correctness verified (Q47/Q49 exercise window functions; Q14 exercises cross-join)
 - [ ] **Tier 8 soak test passes**: 24 h with zero correctness drift and fault injection recovery within SLO on every pre-release run
-- [ ] **Tier 8 TPC-H p99 within targets**: SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
+- [ ] **Tier 8 TPC-H p99 within targets** (re-verified): SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
 - [ ] **16-shard scale benchmark**: aggregate throughput ≥ 500k rows/s, lag p99 ≤ 3 s
 - [ ] `CostMode::Adaptive` correctly switches DIFFERENTIAL→FULL when `Δ_rows/N_rows × complexity > 0.5`; verified on TPC-H Q1 with synthetic 60%-delta batches
 - [ ] DISTINCT reference counting correct: insert-3×-delete-2× produces exactly one output row
 - [ ] `UNION DISTINCT` reference counting correct: same row in both operands → exactly one output row (MAX semantics, not addition)
-- [ ] Unbounded recursive CTE rejects `shard_count > 1` at view creation with clear error
 - [ ] All 10 test tiers green (Tiers 1–7 and 9–10 from prior phases; Tier 8 from this phase)
 
 ### Deliverables
 
-- [ ] `SlateDbOrderedTrace` implementation (extending v0.14's persistence layer)
-- [ ] Merge-sort output writer in the output plane
-- [ ] Decorrelation pass in `plan.rs` (using `datafusion-optimizer` pinned in workspace deps)
-- [ ] DBSP `iterate` integration for recursive CTEs (single-shard coordinator for unbounded; sharded for bounded-depth)
-- [ ] Non-deterministic function capture with per-batch seed storage
 - [ ] `matview_udfs` catalog table (tag `0x21`) and `CREATE/DROP/ALTER FUNCTION` SQL surface
 - [ ] `wasmtime` integration in `slateduck-ivm` with per-batch pooled instances, fuel + memory sandboxing (pinned wasmtime major version)
-- [ ] Tier 8 scale + soak test suite (`tests/scale/`) with TPC-H catalog, IVM streaming, and 24 h soak tests
-- [ ] Self-hosted EC2 runner configuration documented in `docs/contributing/testing.md`
+- [ ] wasmtime major-version upgrade policy in `CONTRIBUTING.md`
+- [ ] Tier 8 soak test (`tests/scale/soak.rs`) with 24 h fault-injection soak
+- [ ] Tier 8 16-shard scale benchmark
 - [ ] TPC-DS Q14/Q47/Q49 streaming benchmark suite in `benches/`
-- [ ] `benchmarks/v0.15-ivm-feature-complete.json` published
+- [ ] `benchmarks/v0.15b-ivm-hardening.json` published
 - [ ] `docs/reference/udfs.md` authoring guide
-- [ ] All SQL reference docs in `docs/reference/sql-ivm.md` updated to reflect full operator coverage
+- [ ] All SQL reference docs in `docs/reference/sql-ivm.md` updated to reflect full operator coverage (including WASM and Adaptive)
 - [ ] `CostMode::Adaptive` with per-view rolling cost statistics in `config.rs` and `worker.rs`
-- [ ] `benchmarks/v0.15-adaptive-calibration.json` with empirical crossover data for multiplier table
+- [ ] `benchmarks/v0.15b-adaptive-calibration.json` with empirical crossover data for multiplier table
 - [ ] `__sd_ref_count` auxiliary column for DISTINCT and set operators in `trace.rs`
-- [ ] Implementation plan [plans/incremental-view-maintenance-implementation.md](plans/incremental-view-maintenance-implementation.md) updated to reflect v0.15 additions
+- [ ] Implementation plan [plans/incremental-view-maintenance-implementation.md](plans/incremental-view-maintenance-implementation.md) updated to reflect v0.15b additions
 
 ---
 
 ## v0.16 — pg-trickle Compatibility
+
+> **Dependency:** Requires v0.15b merged to `main` (the IVM GA gate). pg-trickle integration testing exercises the full operator surface.
 
 > Make SlateDuck a 100% drop-in replacement for PostgreSQL as the DuckLake catalog backend that pg-trickle targets. pg-trickle is a production-grade PostgreSQL IVM extension that can both *read from* DuckLake tables (O(Δ) via `table_changes()`) and *write IVM results back to* DuckLake (Parquet sink + snapshot commit). All of that traffic goes through the DuckLake catalog SQL API — exactly the PG-wire surface SlateDuck exposes. See [plans/pg-trickle-ducklake-support.md](plans/pg-trickle-ducklake-support.md) for the full gap analysis.
 
