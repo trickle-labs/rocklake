@@ -289,9 +289,8 @@ impl IvmCircuit {
                             } else {
                                 // Remove matching values.
                                 for _ in 0..(-delta.weight) {
-                                    if let Some(pos) = entry.rescan_inputs[i]
-                                        .iter()
-                                        .position(|v| v == &val)
+                                    if let Some(pos) =
+                                        entry.rescan_inputs[i].iter().position(|v| v == &val)
                                     {
                                         entry.rescan_inputs[i].remove(pos);
                                     }
@@ -586,16 +585,10 @@ impl IvmJoinCircuit {
         }
 
         // EC-01: Split into insert and delete branches.
-        let inserts: Vec<(HashMap<String, Value>, i64)> = rows
-            .iter()
-            .filter(|(_, w)| *w > 0)
-            .cloned()
-            .collect();
-        let deletes: Vec<(HashMap<String, Value>, i64)> = rows
-            .iter()
-            .filter(|(_, w)| *w < 0)
-            .cloned()
-            .collect();
+        let inserts: Vec<(HashMap<String, Value>, i64)> =
+            rows.iter().filter(|(_, w)| *w > 0).cloned().collect();
+        let deletes: Vec<(HashMap<String, Value>, i64)> =
+            rows.iter().filter(|(_, w)| *w < 0).cloned().collect();
 
         // Part 1a: ΔR_insert ⋈ S_post (current join state is the post-change snapshot).
         let mut joined_inserts: Vec<(HashMap<String, Value>, i64)> = inserts.clone();
@@ -688,11 +681,7 @@ impl IvmJoinCircuit {
     /// Call this at the beginning of each refresh window before
     /// `push_right_delta` to enable correct EC-01 asymmetric delete branches.
     pub fn snapshot_pre_state(&mut self) {
-        self.pre_snapshot_states = self
-            .join_states
-            .iter()
-            .map(|s| Some(s.clone()))
-            .collect();
+        self.pre_snapshot_states = self.join_states.iter().map(|s| Some(s.clone())).collect();
     }
 
     /// Clear the pre-snapshot states after a refresh window completes.

@@ -339,9 +339,21 @@ fn check_expr_volatility(expr: &sqlparser::ast::Expr, allow_unknown: bool) -> Re
             let fn_name = f.name.to_string().to_lowercase();
             // Skip known aggregate functions (handled separately).
             let aggregates = [
-                "count", "sum", "avg", "min", "max", "stddev", "stddev_pop",
-                "stddev_samp", "bool_and", "bool_or", "bit_and", "bit_or",
-                "bit_xor", "string_agg", "array_agg",
+                "count",
+                "sum",
+                "avg",
+                "min",
+                "max",
+                "stddev",
+                "stddev_pop",
+                "stddev_samp",
+                "bool_and",
+                "bool_or",
+                "bit_and",
+                "bit_or",
+                "bit_xor",
+                "string_agg",
+                "array_agg",
             ];
             if !aggregates.contains(&fn_name.as_str()) {
                 let vol = volatility::volatility_of(&fn_name);
@@ -381,14 +393,9 @@ fn check_expr_volatility(expr: &sqlparser::ast::Expr, allow_unknown: bool) -> Re
         }
         Expr::UnaryOp { expr: inner, .. } => check_expr_volatility(inner, allow_unknown),
         Expr::Nested(inner) => check_expr_volatility(inner, allow_unknown),
-        Expr::IsNull(inner) | Expr::IsNotNull(inner) => {
-            check_expr_volatility(inner, allow_unknown)
-        }
+        Expr::IsNull(inner) | Expr::IsNotNull(inner) => check_expr_volatility(inner, allow_unknown),
         Expr::Between {
-            expr: e,
-            low,
-            high,
-            ..
+            expr: e, low, high, ..
         } => {
             check_expr_volatility(e, allow_unknown)?;
             check_expr_volatility(low, allow_unknown)?;

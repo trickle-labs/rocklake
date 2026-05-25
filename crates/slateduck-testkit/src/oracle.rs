@@ -36,8 +36,14 @@ use slateduck_ivm::{IvmCircuit, IvmJoinCircuit, JoinStrategy};
 /// A DML operation recorded by the oracle.
 #[derive(Debug, Clone)]
 enum DmlOp {
-    Insert { table: String, row: HashMap<String, Value> },
-    Delete { table: String, row: HashMap<String, Value> },
+    Insert {
+        table: String,
+        row: HashMap<String, Value>,
+    },
+    Delete {
+        table: String,
+        row: HashMap<String, Value>,
+    },
 }
 
 /// IVM correctness oracle: compares incremental output against batch recompute.
@@ -219,7 +225,12 @@ impl IvmOracle {
                             }
 
                             // Update the join state (for future left-side lookups).
-                            join_circuit.push_right_delta(idx, row.clone(), &join.right_col, weight);
+                            join_circuit.push_right_delta(
+                                idx,
+                                row.clone(),
+                                &join.right_col,
+                                weight,
+                            );
                         }
                     }
                 }
@@ -513,11 +524,7 @@ fn compute_aggregate(
         }
         AggregateKind::ArrayAgg => {
             let col = agg.input_col.as_deref().unwrap_or("");
-            let values: Vec<Value> = rows
-                .iter()
-                .filter_map(|r| r.get(col))
-                .cloned()
-                .collect();
+            let values: Vec<Value> = rows.iter().filter_map(|r| r.get(col)).cloned().collect();
             if values.is_empty() {
                 Value::Null
             } else {
@@ -650,8 +657,9 @@ mod tests {
 
     #[test]
     fn oracle_min_max() {
-        let mut oracle =
-            IvmOracle::new("SELECT dept, MIN(salary) AS lo, MAX(salary) AS hi FROM emp GROUP BY dept");
+        let mut oracle = IvmOracle::new(
+            "SELECT dept, MIN(salary) AS lo, MAX(salary) AS hi FROM emp GROUP BY dept",
+        );
 
         oracle.insert("emp", row! {"dept" => "eng", "salary" => 100});
         oracle.insert("emp", row! {"dept" => "eng", "salary" => 300});
@@ -672,7 +680,10 @@ mod tests {
         );
 
         // Insert right side first (departments).
-        oracle.insert("departments", row! {"dept_id" => 1, "name" => "Engineering"});
+        oracle.insert(
+            "departments",
+            row! {"dept_id" => 1, "name" => "Engineering"},
+        );
         oracle.insert("departments", row! {"dept_id" => 2, "name" => "Sales"});
 
         // Insert left side (employees).

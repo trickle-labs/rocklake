@@ -69,7 +69,8 @@ impl PgWireHarness {
         let server_catalog = catalog.clone();
         let server_handle = tokio::spawn(async move {
             if let Err(e) =
-                slateduck_pgwire::run_server_with_shutdown(config, server_catalog, shutdown_rx).await
+                slateduck_pgwire::run_server_with_shutdown(config, server_catalog, shutdown_rx)
+                    .await
             {
                 tracing::error!("PgWire test server error: {e}");
             }
@@ -102,7 +103,11 @@ impl PgWireHarness {
 
     /// Connection string as a URL (for libraries that prefer URL format).
     pub fn connection_url(&self) -> String {
-        format!("postgresql://{}:{}/slateduck", self.addr.ip(), self.addr.port())
+        format!(
+            "postgresql://{}:{}/slateduck",
+            self.addr.ip(),
+            self.addr.port()
+        )
     }
 
     /// Get a reference to the catalog behind the server.

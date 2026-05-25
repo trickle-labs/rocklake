@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use proptest::prelude::*;
 use serde_json::Value;
-use slateduck_ivm::plan::{AggregateTier, AggregateKind, IvmPlan};
+use slateduck_ivm::plan::{AggregateKind, AggregateTier, IvmPlan};
 use slateduck_ivm::{IvmJoinCircuit, JoinStrategy};
 use slateduck_testkit::{row, IvmOracle};
 
@@ -39,7 +39,10 @@ fn ec01_phantom_row_regression() {
     );
 
     // Setup: departments and employees.
-    oracle.insert("departments", row! {"dept_id" => 1, "name" => "Engineering"});
+    oracle.insert(
+        "departments",
+        row! {"dept_id" => 1, "name" => "Engineering"},
+    );
     oracle.insert("departments", row! {"dept_id" => 2, "name" => "Sales"});
     oracle.insert("employees", row! {"dept_id" => 1, "name" => "Alice"});
     oracle.insert("employees", row! {"dept_id" => 1, "name" => "Bob"});
@@ -54,7 +57,9 @@ fn ec01_phantom_row_regression() {
     // Further verify: dept_id=2 group should be completely gone.
     let output = oracle.incremental_output();
     assert!(
-        !output.iter().any(|r| r.get("dept_id") == Some(&Value::Number(2.into()))),
+        !output
+            .iter()
+            .any(|r| r.get("dept_id") == Some(&Value::Number(2.into()))),
         "phantom row: dept_id=2 group should not exist after deleting from both sides"
     );
 }
@@ -64,9 +69,8 @@ fn ec01_phantom_row_regression() {
 #[test]
 fn aggregate_tier_avg_no_drift() {
     // AVG over many rows with many updates: verify zero floating-point drift.
-    let mut oracle = IvmOracle::new(
-        "SELECT dept, AVG(amount) AS avg_amount FROM orders GROUP BY dept",
-    );
+    let mut oracle =
+        IvmOracle::new("SELECT dept, AVG(amount) AS avg_amount FROM orders GROUP BY dept");
 
     // Insert 10_000 rows with known values.
     for i in 0..10_000 {
@@ -88,9 +92,8 @@ fn aggregate_tier_avg_no_drift() {
 
 #[test]
 fn aggregate_tier_min_max_delete_extremum() {
-    let mut oracle = IvmOracle::new(
-        "SELECT dept, MIN(salary) AS lo, MAX(salary) AS hi FROM emp GROUP BY dept",
-    );
+    let mut oracle =
+        IvmOracle::new("SELECT dept, MIN(salary) AS lo, MAX(salary) AS hi FROM emp GROUP BY dept");
 
     oracle.insert("emp", row! {"dept" => "eng", "salary" => 50});
     oracle.insert("emp", row! {"dept" => "eng", "salary" => 100});
@@ -108,7 +111,10 @@ fn aggregate_tier_min_max_delete_extremum() {
 
     // Verify exact values.
     let output = oracle.incremental_output();
-    let eng = output.iter().find(|r| r["dept"] == Value::String("eng".into())).unwrap();
+    let eng = output
+        .iter()
+        .find(|r| r["dept"] == Value::String("eng".into()))
+        .unwrap();
     assert_eq!(eng["lo"], serde_json::json!(100.0));
     assert_eq!(eng["hi"], serde_json::json!(200.0));
 }
@@ -132,7 +138,10 @@ fn bool_and_or_delete_deciding_input() {
     oracle.assert_equivalent("after removing the false: BOOL_AND=true");
 
     let output = oracle.incremental_output();
-    let grp_a = output.iter().find(|r| r["grp"] == Value::String("a".into())).unwrap();
+    let grp_a = output
+        .iter()
+        .find(|r| r["grp"] == Value::String("a".into()))
+        .unwrap();
     assert_eq!(grp_a["all_true"], Value::Bool(true));
     assert_eq!(grp_a["any_true"], Value::Bool(true));
 
@@ -181,14 +190,21 @@ fn volatility_gate_stable_acceptance() {
         false,
     );
     // STABLE functions are accepted (just warned), not rejected.
-    assert!(result.is_ok(), "STABLE function now() should be accepted: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "STABLE function now() should be accepted: {:?}",
+        result.err()
+    );
 
     // Simple query without any function calls should also pass.
     let result2 = IvmPlan::compile(
         "SELECT dept, COUNT(*) AS cnt FROM orders GROUP BY dept",
         false,
     );
-    assert!(result2.is_ok(), "simple query without volatile functions should pass");
+    assert!(
+        result2.is_ok(),
+        "simple query without volatile functions should pass"
+    );
 }
 
 // ─── Test 7: Volatility Gate — Unknown Rejection ──────────────────────────
@@ -200,7 +216,10 @@ fn volatility_gate_unknown_rejection() {
         "SELECT my_custom_udf(amount) AS x, dept FROM orders GROUP BY dept",
         false,
     );
-    assert!(result.is_err(), "unknown function should be rejected by default");
+    assert!(
+        result.is_err(),
+        "unknown function should be rejected by default"
+    );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("my_custom_udf"));
 
@@ -209,7 +228,10 @@ fn volatility_gate_unknown_rejection() {
         "SELECT my_custom_udf(amount) AS x, dept FROM orders GROUP BY dept",
         true,
     );
-    assert!(result.is_ok(), "unknown function should be accepted with override");
+    assert!(
+        result.is_ok(),
+        "unknown function should be accepted with override"
+    );
 }
 
 // ─── Test 8: Volatility Gate — IMMUTABLE Acceptance ───────────────────────
@@ -221,7 +243,10 @@ fn volatility_gate_immutable_acceptance() {
         "SELECT dept, SUM(abs(amount)) AS total FROM orders GROUP BY dept",
         false,
     );
-    assert!(result.is_ok(), "IMMUTABLE function abs() should be accepted");
+    assert!(
+        result.is_ok(),
+        "IMMUTABLE function abs() should be accepted"
+    );
 
     let result = IvmPlan::compile(
         "SELECT dept, COUNT(*) AS cnt FROM orders GROUP BY dept",
@@ -319,12 +344,14 @@ fn coalesced_batch_s_pre_reconstruction() {
 
     // Verify initial state.
     let output = jc.read_output();
-    let c1_count = output.iter()
+    let c1_count = output
+        .iter()
         .find(|r| r.get("customer_id") == Some(&Value::Number(1.into())))
         .and_then(|r| r.get("cnt"))
         .and_then(|v| v.as_i64());
     assert_eq!(c1_count, Some(1));
-    let c2_count = output.iter()
+    let c2_count = output
+        .iter()
         .find(|r| r.get("customer_id") == Some(&Value::Number(2.into())))
         .and_then(|r| r.get("cnt"))
         .and_then(|v| v.as_i64());
@@ -332,13 +359,17 @@ fn coalesced_batch_s_pre_reconstruction() {
 
     // Now snapshot pre-state and do a batch: delete customer 2, add customer 3.
     jc.snapshot_pre_state();
-    jc.push_right_delta(0, row! {"customer_id" => 2, "name" => "Bob"}, "customer_id", -1);
+    jc.push_right_delta(
+        0,
+        row! {"customer_id" => 2, "name" => "Bob"},
+        "customer_id",
+        -1,
+    );
 
     // Delete an order that was joined with customer 2.
     // This delete should use S_pre (which still has customer 2).
-    let delete_order: Vec<(HashMap<String, Value>, i64)> = vec![
-        (row! {"customer_id" => 2, "order_id" => 201}, -1),
-    ];
+    let delete_order: Vec<(HashMap<String, Value>, i64)> =
+        vec![(row! {"customer_id" => 2, "order_id" => 201}, -1)];
     jc.push_left_batch(&delete_order);
     jc.clear_pre_state();
 
@@ -408,7 +439,9 @@ fn ec01_multiple_join_delete_both_sides() {
     // Verify product_id=2 group is gone.
     let output = oracle.incremental_output();
     assert!(
-        !output.iter().any(|r| r.get("product_id") == Some(&Value::Number(2.into()))),
+        !output
+            .iter()
+            .any(|r| r.get("product_id") == Some(&Value::Number(2.into()))),
         "EC-01 violation: product_id=2 should be gone"
     );
 }
