@@ -59,7 +59,7 @@ binding on every roadmap release below.
 | **v0.9.2 — Security Enforcement** | Real PG-Wire auth, CLI/env-var alignment, encryption wired into storage, FFI null safety | **Done** |
 | **v0.9.3 — Operational Safety** | GC retention enforcement, excision guards, checkpoint restore, typed import validation, rebuild fix | **Done** |
 | **v0.9.4 — GA Ready** | Concurrent reads, zone-map (conditional), Spark/Trino clients, DataFusion scan/pg-wire, virtual catalog SQL, test coverage, CI gates, docs complete, versioning policy, release automation | **Done** |
-| **v0.10 — Streaming Ingest** | pg-tide-relay integration, Kafka/NATS support, exactly-once delivery, CDC output (snapshot diffs, S3/Kafka/webhook) | **Done** |
+| **v0.23 — Streaming Ingest** | pg-tide-relay integration, Kafka/NATS support, exactly-once delivery, CDC output (snapshot diffs, S3/Kafka/webhook) | **Done** |
 | **v0.11 — IVM Foundations** | Catalog schema additions (tags 0x1D–0x20), `slateduck-ivm` crate, single-shard GROUP BY views, end-to-end demo | Done |
 | **v0.12 — IVM Scale-Out** | Shard lease management, per-shard SlateDB state stores, multi-shard scale-out, re-sharding | Done |
 | **v0.13 — IVM Joins** | Broadcast, co-partitioned, and re-shuffle join strategies; TPC-H Q3/Q4/Q5 | Done |
@@ -3443,7 +3443,7 @@ Delete IVM test fixtures:
 - [ ] Remove "IVM Worker Deployment Model" from Cross-Cutting Concerns
 - [ ] Remove "Graceful Shutdown & Rolling Updates (IVM Workers)" from Cross-Cutting Concerns
 - [ ] Remove `IvmWorkerHarness` and `IvmOracle` from `slateduck-testkit` harness list
-- [ ] Update the v0.10.0 note that says "its CDC output primitives feed into IVM" — remove IVM reference
+- [ ] Update the v0.23 note that says "its CDC output primitives feed into IVM" — remove IVM reference
 
 ### Phase 12 — CI Cleanup
 
@@ -3538,9 +3538,9 @@ Measurable acceptance criteria that must all be green before v1.0 is tagged:
 
 ---
 
-## v0.10.0 — Streaming Ingest
+## v0.23 — Streaming Ingest
 
-> **Note:** v0.10 is documented after v1.0 because it is an independent, parallel workstream. It does not block or depend on other workstreams. Its CDC output primitives provide change-stream capabilities that can feed downstream consumers.
+> **Note:** v0.23 is documented after v1.0 because it is an independent, parallel workstream. It does not block or depend on other workstreams. Its CDC output primitives provide change-stream capabilities that can feed downstream consumers.
 
 > Kafka/NATS streaming pipelines, exactly-once delivery semantics, and pg-tide-relay integration for zero-infrastructure ingest paths from transactional sources to S3-backed data lakes.
 
@@ -3603,7 +3603,7 @@ The complement to ingest: when a DuckLake snapshot is committed, the *diff* betw
 
 ### Streaming Ingest + IVM Integration
 
-When v0.10 (streaming ingest) and v0.11+ (IVM) are both deployed, the end-to-end story is:
+When v0.23 (streaming ingest) is deployed, the end-to-end story is:
 
 ```
 Kafka/NATS → pg-tide-relay → SlateDuck snapshot → IVM worker → materialized view update → CDC export
