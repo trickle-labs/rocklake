@@ -34,31 +34,6 @@ fn classify_quoted_name_with_embedded_dot() {
     );
 }
 
-// ─── AS keyword edge cases ───────────────────────────────────────────────────
-
-#[test]
-fn classify_ivm_create_as_no_surrounding_spaces() {
-    // "CREATE INCREMENTAL MATERIALIZED VIEW v1 AS SELECT …"
-    // The AS keyword should be detected even without surrounding spaces.
-    let sql = "CREATE INCREMENTAL MATERIALIZED VIEW v1 AS(SELECT region, COUNT(*) AS cnt FROM sales GROUP BY region)";
-    let kind = classify_statement(sql).unwrap();
-    assert!(
-        matches!(kind, StatementKind::CreateIncrementalMatview { .. }),
-        "expected CreateIncrementalMatview, got {kind:?}"
-    );
-}
-
-#[test]
-fn classify_ivm_create_as_with_newline() {
-    // AS on a new line should still be found.
-    let sql = "CREATE INCREMENTAL MATERIALIZED VIEW v1\nAS\nSELECT region, COUNT(*) FROM sales GROUP BY region";
-    let kind = classify_statement(sql).unwrap();
-    assert!(
-        matches!(kind, StatementKind::CreateIncrementalMatview { .. }),
-        "expected CreateIncrementalMatview, got {kind:?}"
-    );
-}
-
 // ─── LISTEN channel validation tests ─────────────────────────────────────────
 
 #[test]

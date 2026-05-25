@@ -394,51 +394,18 @@ cargo tarpaulin --out html
 
 ## v0.15 Test Additions
 
-v0.15 (IVM Operational Hardening) added several new test categories:
-
-### Tier 6d — IVM Hardening Tests
-
-Located in `crates/slateduck-ivm/tests/`:
-
-- **`hardening_tests.rs`** — Repair shard rebuild, REFRESH FULL, doctor diagnostics,
-  exactly-once output deduplication, backup/restore frontier tracking.
-- **`schema_evolution_tests.rs`** — Schema change impact on views (add/rename/drop
-  column, type change), REFRESH FULL recovery, broken view error messages.
-- **`durability_tests.rs`** — Frontier persistence across SIGKILL at T=0, T=100,
-  T=500; restart from checkpoint; skip processed events.
-- **`trace_property_tests.rs`** — 500-sequence proptest comparing SlateDbTrace
-  output against in-memory reference trace.
-
 ### Tier 7 — Fault Injection Tests
 
-- **`crates/slateduck-ivm/tests/fault_injection_tests.rs`** — Kill after DBSP
-  before flush, kill after flush before checkpoint, Parquet write without catalog
-  commit, S3 GetObject 503 retry.
 - **`crates/slateduck-catalog/tests/fault_injection_tests.rs`** — Kill after SST
   before manifest, corrupted WAL recovery, kill during compaction, concurrent
   writer fencing.
 
 ### Tier 10 — Security Tests
 
-- **`crates/slateduck-pgwire/tests/security_tests.rs`** — 14 tests covering
-  invalid auth, SQL injection, rate limiting, connection flood, oversized queries,
-  schema isolation, privilege escalation, TLS enforcement, timing attacks,
-  session hijacking, parameter injection, error message leaks, idle timeout,
-  auth failure lockout.
-
-### Tier 6e — IVM Operator Correctness (v0.16)
-
-- **`crates/slateduck-ivm/tests/operator_tests.rs`** — 12 tests covering all
-  v0.16 operator categories:
-  - Window functions: `ROW_NUMBER` over 1000 snapshots (partitioned and total-order),
-    `LAG`/`LEAD` navigation with row deletion, aggregate window `SUM OVER` with frames
-  - ORDER BY: output in declared order without runtime sort
-  - LIMIT/OFFSET: top-100 across 1000 snapshots, state bound assertion, large-offset WARN
-  - Correlated subqueries: `EXISTS` (semi-join), `IN` (semi-join), scalar (NULL on empty)
-  - Recursive CTEs: transitive closure with incremental batches
-  - Non-det capture: repair idempotency with stored seed
-  - DISTINCT: ref-counted insert/delete correctness
-  - UNION DISTINCT: MAX semantics (same row in both → exactly one output)
+- **`crates/slateduck-pgwire/tests/security_tests.rs`** — Tests covering
+  invalid auth, SQL injection, oversized queries, schema isolation, privilege
+  escalation, TLS enforcement, timing attacks, session hijacking, parameter
+  injection, error message leaks, and idle timeout.
 
 ### Scale Testing Infrastructure (Tier 8)
 
@@ -456,7 +423,3 @@ Actions runners. They are triggered:
 **TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`):
 - Targets: `get_current_snapshot` p99 < 50 ms (SF10), < 100 ms (SF100)
 - Requires MinIO or real S3 endpoint
-
-**TPC-H IVM streaming** (`tests/scale/tpch_ivm.rs`):
-- Queries: Q1, Q3, Q5 at 100k rows/s, 8 shards
-- Target: lag p99 < 5 s with 5 s freshness target

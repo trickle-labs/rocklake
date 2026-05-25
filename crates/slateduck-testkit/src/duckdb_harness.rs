@@ -2,8 +2,7 @@
 //!
 //! `DuckDbHarness` provides a lightweight in-process reference implementation
 //! that computes the expected result of GROUP BY aggregations over in-memory
-//! rows.  IVM join tests use this to compare SlateDuck's incremental output
-//! against the ground-truth batch result.
+//! rows, used to validate SQL correctness against a ground-truth batch result.
 //!
 //! ## Design
 //! Rather than spawning an external DuckDB process (which would require a
@@ -15,13 +14,13 @@
 //! - `run_group_by_count(rows, group_cols)` — COUNT(*) per group
 //! - `run_group_by_sum(rows, group_cols, sum_col)` — SUM per group
 //! - `assert_result_sets_equal` — order-independent comparison helper
-//! - `join_rows` — cross product / equality join for pre-loading join state
+//! - `join_rows` — cross product / equality join
 
 use std::collections::HashMap;
 
 use serde_json::Value;
 
-/// Reference SQL execution harness for IVM correctness assertions.
+/// Reference SQL execution harness for correctness assertions.
 pub struct DuckDbHarness;
 
 impl DuckDbHarness {

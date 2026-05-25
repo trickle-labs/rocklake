@@ -2,45 +2,6 @@
 
 use super::StatementKind;
 
-pub(super) fn find_as_keyword(s: &str) -> Option<usize> {
-    use sqlparser::dialect::PostgreSqlDialect;
-    use sqlparser::tokenizer::{Token, Tokenizer};
-
-    let dialect = PostgreSqlDialect {};
-    let tokens = Tokenizer::new(&dialect, s).tokenize().ok()?;
-
-    // Track byte offset through the token stream.
-    let mut byte_offset = 0usize;
-    let s_bytes = s.as_bytes();
-
-    for tok in &tokens {
-        // Advance byte_offset past whitespace.
-        while byte_offset < s.len()
-            && (s_bytes[byte_offset] == b' '
-                || s_bytes[byte_offset] == b'\t'
-                || s_bytes[byte_offset] == b'\n'
-                || s_bytes[byte_offset] == b'\r')
-        {
-            byte_offset += 1;
-        }
-
-        match tok {
-            Token::Word(w) if w.value.eq_ignore_ascii_case("AS") && w.quote_style.is_none() => {
-                // Ensure there is a non-AS token after this one (so AS is not
-                // the last token) — a trailing AS is not a valid alias marker.
-                return Some(byte_offset);
-            }
-            _ => {
-                // Skip past this token's characters.
-                let tok_str = tok.to_string();
-                byte_offset += tok_str.len();
-            }
-        }
-    }
-
-    None
-}
-
 /// Split "schema.name" or just "name" from a name fragment.
 /// Handles double-quoted identifiers correctly.
 /// Returns `(schema, name)`.

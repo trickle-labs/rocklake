@@ -1,20 +1,19 @@
 //! Deterministic clock for time-dependent tests.
 //!
 //! Wraps `tokio::time` to allow test code to advance time without wall-clock
-//! sleeps.  All IVM tests that involve lease TTL, heartbeat intervals, or
-//! lag measurements use this clock so that CI is fast and deterministic.
+//! sleeps. Tests that involve TTL, timeout intervals, or lag measurements
+//! use this clock so that CI is fast and deterministic.
 //!
 //! ## Usage
 //! ```ignore
 //! #[tokio::test]
-//! async fn lease_expires() {
+//! async fn timeout_expires() {
 //!     let clock = DeterministicClock::new();
 //!     // Pause the Tokio time source.
 //!     clock.pause();
-//!     // … start worker, acquire lease …
-//!     // Advance time past the lease TTL.
+//!     // Advance time past the TTL.
 //!     clock.advance_ms(35_000).await;
-//!     // Now assert that the second worker can claim the shard.
+//!     // Now assert that the timeout fired.
 //! }
 //! ```
 

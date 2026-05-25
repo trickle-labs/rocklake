@@ -54,5 +54,5 @@ pub use warmup::{publish_writer_endpoint, read_writer_endpoint, warmup_cache, Wa
 pub use writer::{
     next_rowid_range,
     stats::{FileColumnStatsInput, FileVariantStatsInput},
-    validate_app_metadata_key, CatalogWriter, ClaimOutcome,
+    validate_app_metadata_key, CatalogWriter,
 };

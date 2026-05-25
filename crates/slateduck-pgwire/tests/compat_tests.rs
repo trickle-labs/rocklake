@@ -12,9 +12,6 @@
 //! The test uses the in-process `executor::execute_sql` rather than a live TCP
 //! socket to avoid port binding in CI, while exercising the same code paths as
 //! a real DuckDB client connected via PG-Wire.
-//!
-//! ## v0.13 additions
-//! Also verifies the v0.13 IVM-join workflow against the same catalog store.
 
 use std::sync::Arc;
 

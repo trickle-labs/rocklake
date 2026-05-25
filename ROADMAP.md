@@ -71,7 +71,7 @@ binding on every roadmap release below.
 | **v0.19 — CDC Correctness & Catalog Transaction Hardening** | Real row-level `table_changes()` with Parquet scan, versioned `DataFileRow` / `SnapshotDiff` windows, CAS writer epoch, transactional extension row-ID allocation, atomic GC lease + retain-from, staged write discipline, overflow-safe counters | Done |
 | **v0.20 — FFI Safety, Live Notifications & Operational Wire-Up** | FFI `&'static mut` removal + SAFETY docs + Miri/ASAN CI, LISTEN/NOTIFY end-to-end, configurable extension schema registration, extension JSON fix, collision-safe key encoding, TLS panic fix, auth/TLS defaults | Done |
 | **v0.21 — Performance, Scalability & Code Quality** | `list_data_files()` secondary index, O(1) aggregate deletions, SQL classifier hardening, module decomposition, MSRV + license CI, metrics path alignment, dead-code + dependency cleanup | Done |
-| **v0.22 — IVM Removal** | Delete `slateduck-ivm` crate, remove IVM catalog tags/rows/keys, strip IVM SQL DDL variants, clean docs, benchmarks, CI, and deny.toml | Planning |
+| **v0.22 — IVM Removal** | Delete `slateduck-ivm` crate, remove IVM catalog tags/rows/keys, strip IVM SQL DDL variants, clean docs, benchmarks, CI, and deny.toml | **Done** |
 | **v0.24 — DuckLake v1.0 Conformance Harness & Interop-Critical Schema** | Conformance test harness for all 28 spec tables; fix snapshot/snapshot_changes schema; spec-complete data file fields; spec-complete delete file model; row ID tracking; table stats `next_row_id`; DROP TABLE cascade retirement | Planning |
 | **v0.25 — DuckLake v1.0 SQL Catalog Facade** | Full PgWire/virtual-table facade with exact spec column names and types for all 28 tables; views, macros, and inlined data tables through PgWire; scoped metadata; schema/table UUID and path fields; nested column model | Planning |
 | **v0.26 — DuckLake v1.0 Stats, Types, Partitioning & Sorting** | Full file and table column stats; variant stats and `extra_stats`; geometry stats; column mapping and name mapping parity; sort expression spec parity; partition column lifecycle; DuckLake type parser; nested and `variant` type model | Planning |
@@ -1689,1191 +1689,6 @@ Convert roadmap Done status from self-reported to criteria-driven:
 
 ---
 
-## v0.11 — Incremental View Maintenance (Foundations)
-
-> **The defining feature.** Bring first-class incremental materialized views to a lakehouse-on-object-storage. No external streaming system, no Kubernetes operator, no separate database — just stateless workers writing more DuckLake into the same bucket. Companion design documents: [plans/slateduck-differential-dataflow.md](plans/slateduck-differential-dataflow.md) (architecture), [plans/slatedb-differential-dataflow.md](plans/slatedb-differential-dataflow.md) (substrate analysis), and [plans/incremental-view-maintenance-implementation.md](plans/incremental-view-maintenance-implementation.md) (engineering plan).
-
-### Thesis
-
-DuckLake snapshots, SlateDB SSTs, SlateDuck catalog facts, and differential-dataflow (DD/DBSP) batches are all immutable. Stacking them yields an IVM system whose compute workers are stateless, whose state is content-addressable in object storage, whose sharding is trivial because nothing ever moves between shards, and whose read fan-out is the same as for base tables. This is a capability Iceberg and Delta achieve only with external streaming systems; SlateDuck delivers it as a single binary against an S3 bucket.
-
-v0.11 lands the *foundations* end-to-end at single-shard scope. v0.12 generalizes to sharded scale-out. v0.13 covers joins. v0.15 is operational hardening. After v0.15 the system is ready to be included in the v1.0 GA story.
-
-### Why pre-1.0
-
-Three reasons IVM ships before GA rather than as a v1.x add-on:
-
-1. **It is the defining feature.** SlateDuck without IVM is one of several lakehouse-on-object-storage implementations. SlateDuck with IVM is the only one that materializes derived views without leaving the bucket.
-2. **The architectural seams must be right at GA.** The catalog change-log shape, per-warehouse layout, and snapshot metadata fields that IVM depends on are cheap to design now and expensive to retrofit. Shipping GA without those seams locks in a more painful upgrade path.
-3. **No rush on GA.** Correctness, security, and operational tracks (v0.9.x) take priority for ship readiness; once those land, adding the defining feature before declaring "general availability" produces a v1.0 that means something stronger.
-
-### Catalog Schema Additions
-
-Four new MVCC-versioned tables under freshly allocated tag bytes in [crates/slateduck-core/src/tags.rs](crates/slateduck-core/src/tags.rs):
-
-| Table | Tag (proposed) | MVCC behaviour | Purpose |
-|---|---|---|---|
-| `matviews` | `0x1D` | `Versioned` | View definitions (name, SQL, output table, shard count, freshness target, state URI, lifecycle snapshots) |
-| `matview_deps` | `0x1E` | `AppendOnly` | `(matview_id, base_table_id, used_columns)` — input subscription graph |
-| `matview_checkpoints` | `0x1F` | `AppendOnly` | `(matview_id, shard_id, last_input_snapshot, last_output_snapshot, frontier_time, durable_at)` — per-shard watermark log |
-| `matview_shards` | `0x20` | `MutableSingleton` per `(matview_id, shard_id)` | Lease state (`owner_worker`, `lease_expires_at`, `key_range_lo`, `key_range_hi`) updated via SlateDB CAS |
-
-- [x] Tag descriptors added to `tags.rs` with documentation, MVCC behaviour, and `status: Implemented`
-- [x] Protobuf row schemas added to `slateduck-core/src/rows.rs` with `encoding_version = 1`
-- [x] Wire-level fixtures captured under `tests/fixtures/matview/` for each table
-- [x] Key-encoding test corpus extended for the new tag bytes (round-trip, ordering, prefix isolation)
-
-### Catalog Format Compatibility
-
-Adding tags `0x1D`–`0x21` must NOT require a `catalog-format-version` bump. The design already handles unknown tags: older binaries encountering an unknown tag byte return an explicit error rather than silent data loss (§ v0.2 Key Layout). This means:
-
-- [x] Tags `0x1D`–`0x21` are additive: a v0.9.4 binary opening a v0.11 catalog ignores matview rows (they are not in any scan prefix it uses) and operates normally on the 28 base tables
-- [x] A v0.11 binary opening a v0.9.4 catalog (no matview rows) operates normally; `list_matviews()` returns empty
-- [x] No `catalog-format-version` increment required for v0.11; the existing format accommodates new tags by construction
-- [x] Document this in `docs/architecture/key-layout.md`: "tag bytes are an extensibility mechanism; unknown tags are skipped during prefix scans and error on direct access"
-- [x] Add a cross-version integration test: v0.9 binary reads a catalog that contains `0x1D`–`0x21` rows without error
-
-### Matview Output Table Semantics
-
-A materialized view's output is a **normal DuckLake table** — the same Parquet files, same catalog rows, same query path. The magic is that IVM workers write to it instead of a user INSERT.
-
-**User-facing contract:**
-
-- `CREATE INCREMENTAL MATERIALIZED VIEW v AS <select>` creates both a `MatviewRow` (under `0x1D`) and a regular `TableRow` (under `0x05`) for the output. The output table is named `_matview_{name}` by convention (e.g. `_matview_events_by_day`)
-- Users query the view by its logical name: `SELECT * FROM events_by_day`. The pg-wire dispatcher resolves `events_by_day` to the output table `_matview_events_by_day` via a name-mapping lookup in the matview registry
-- Unmodified DuckDB (via Strategy B or Strategy C) queries the output table like any other DuckLake table — no client-side changes required
-- The output table is read-only for users; `INSERT`/`UPDATE`/`DELETE` against it returns `SQLSTATE 25006`
-- `DROP INCREMENTAL MATERIALIZED VIEW v` drops both the `MatviewRow` and the output `TableRow` (cascading logical delete via `end_snapshot`)
-
-**Output table lifecycle:**
-
-- [x] Output table created atomically with the matview definition in one catalog snapshot
-- [x] Output table schema derived from the view SELECT's output columns
-- [x] Output table marked with a `managed_by = 'ivm'` metadata key preventing user writes
-- [x] `DROP … CASCADE` drops the matview, its output table, and all output data files (scheduled for GC)
-- [x] Stale matviews (schema change on base table) surface a `status = 'stale'` marker in `SHOW MATERIALIZED VIEWS` but output table remains queryable at its last-valid state
-
-**Query semantics during backfill, stale, and time-travel:**
-
-- During initial backfill (matview status `backfilling`), `SELECT * FROM v` returns whatever rows the output table currently contains — **partial results from completed batches, never an error**. The matview's `status` and `last_output_snapshot` are exposed via `SHOW MATERIALIZED VIEWS` and the helper function `matview_status('v') -> ('backfilling'|'fresh'|'stale'|'dropped_dependency', last_output_snapshot, lag_ms)` so applications can gate on readiness without polling
-- `SELECT * FROM v AT SNAPSHOT <id>` resolves to a snapshotted read of the output table at the *catalog* snapshot `<id>`. If `<id>` predates the matview's first output snapshot, the query returns an empty result (the matview did not exist yet) — never an error. Operators are warned in docs that time-travel against a matview reflects when the *materialization* observed the data, not when the underlying input was first written
-- Schema-change-induced staleness (column added/renamed in the view's output projection) makes the matview `stale`; the output table remains readable at its prior schema until a successful `REFRESH ... FULL`. A schema change that *reorders or retypes* output columns rewrites the output table under a new `(output_table_id, schema_version)` pair so existing Parquet readers are not misaligned mid-flight (see v0.15: Schema Evolution)
-- [x] `matview_status()` helper available from v0.11; documented in `docs/reference/sql-ivm.md`
-- [x] Time-travel against a matview before its first output snapshot returns empty (regression test)
-- [x] During-backfill query returns monotonically growing partial result (regression test)
-
-### View Dependency Cascades
-
-The `matview_deps` table tracks which base tables each view reads. This enables:
-
-**DROP behavior:**
-- `DROP TABLE t` where `t` is a dependency of matview `v`: reject with `SQLSTATE 2BP01` (dependent objects exist) unless `CASCADE` specified
-- `DROP TABLE t CASCADE`: mark all dependent matviews as `status = 'dropped_dependency'`; IVM workers stop processing; output tables remain queryable at their last state (stale but not deleted)
-- `DROP INCREMENTAL MATERIALIZED VIEW v CASCADE`: also drops matviews that depend on `v`'s output table
-
-**Cascading views (view-on-view):**
-- A matview can reference another matview's output table as a base input: `CREATE INCREMENTAL MATERIALIZED VIEW summary AS SELECT … FROM events_by_day`
-- `matview_deps` records the dependency on the output table; the dependency graph is a DAG (cycles rejected at creation time with `SQLSTATE 42P19`)
-- IVM workers process views in topological order: upstream views must publish before downstream views read
-- `SHOW MATERIALIZED VIEWS` includes a `depth` column (0 = directly on base tables, 1 = depends on one matview, etc.)
-- Documented maximum depth: 10 levels (configurable via `WITH (max_cascade_depth = N)`)
-
-- [x] `DROP TABLE` with dependent matviews returns `SQLSTATE 2BP01` unless CASCADE
-- [x] View-on-view creation validates DAG property (no cycles)
-- [x] IVM scheduler respects topological ordering for cascading views
-- [x] `matview_deps` populated for both base-table and matview-output-table dependencies
-- [x] Test: three-level cascade (base → view_a → view_b → view_c) maintains correctness end-to-end
-
-### SQL Surface
-
-Bounded SQL extension in `slateduck-sql` — the inner `<select>` is parsed but stored verbatim; only the new statement shells are validated by pgwire.
-
-```sql
-CREATE INCREMENTAL MATERIALIZED VIEW v
-  WITH (shard_count = 1, freshness = '5s')
-  AS <select>;
-
-DROP    INCREMENTAL MATERIALIZED VIEW v;
-ALTER   INCREMENTAL MATERIALIZED VIEW v SET (freshness = '10s');
-REFRESH INCREMENTAL MATERIALIZED VIEW v FULL;
-
-SHOW    MATERIALIZED VIEWS;
-SHOW    MATVIEW SHARDS FOR v;
-EXPLAIN MATERIALIZED VIEW v;             -- shows compiled DBSP plan
-SELECT  matview_lag('v');                -- freshness lag in ms
-```
-
-- [x] Grammar additions to `slateduck-sql` with happy-path and error-path tests
-- [x] PG-wire dispatcher routes each new statement to a `CatalogWriter` method
-- [x] `EXPLAIN MATERIALIZED VIEW` returns the DBSP operator tree as a textual plan
-- [x] All new statement shapes covered by the v0.6.x wire-corpus replay harness
-
-### `slateduck-ivm` Crate (New)
-
-A new workspace crate hosting the IVM runtime. Single-shard scope in v0.11.
-
-```
-crates/slateduck-ivm/
-├── Cargo.toml
-├── src/
-│   ├── lib.rs
-│   ├── source.rs        # MatviewInputSource over DuckLake data files
-│   ├── circuit.rs       # DBSP circuit compilation from stored view SQL
-│   ├── trace.rs         # Persistent trace adapter (DBSP-bundled object-store backend in v0.11)
-│   ├── worker.rs        # Lease acquisition, circuit driver, checkpoint advance
-│   ├── output.rs        # Per-shard Parquet writer + catalog commit
-│   └── bin/
-│       └── slateduck-ivm.rs
-└── tests/
-    └── integration_tests.rs
-```
-
-- [x] Z-difference engine (`circuit.rs`) implements DBSP's algebraic model — a hand-rolled Z-difference shim. The `dbsp` workspace dependency was evaluated and removed (see `docs/design-decisions/ivm-architecture.md`; Gate 1 resolved: Option A chosen).
-- [x] `MatviewInputSource` reads append-only base tables filtered to a key range, emitting `(row, snapshot_id, +1)` deltas
-- [x] `IvmTrace` checkpoint metadata (`last_input_snapshot`, `last_output_snapshot`, `seq`) persisted to SlateDB. Originally described as "SlateDbTrace Phase A / DBSP-bundled persistence" — the actual deliverable is `IvmTrace`, a checkpoint struct wrapping `IvmCircuit`. Native SlateDB persistence (extending the hand-rolled shim) is v0.15 work.
-- [x] Worker event loop: poll catalog → acquire lease → drive circuit → durable batch → append checkpoint
-- [x] Output writer emits one Parquet file per cycle, commits via existing `CatalogWriter` snapshot path
-- [x] `slateduck-ivm serve --catalog-path … --state-prefix … --worker-id … --shard-limit 1` CLI matches `slateduck-pgwire` ergonomics
-
-**Worker startup (discovery → claim → drive) protocol:**
-
-At boot, the worker has no in-memory state. It must transparently rejoin a running fleet without colliding with peers.
-
-1. **Discover.** Call `list_matviews()` and for each non-dropped matview, `list_shards_for_worker(matview_id)` filtered by status `unowned` or `lease_expired`
-2. **Sort by oldest lag.** Prefer shards with the largest `now - last_output_snapshot.committed_at` so under-served work is picked up first
-3. **Claim (bounded).** For each candidate shard, call `claim_matview_shard(matview_id, shard_id, worker_id, lease_ttl)` until `--shard-limit` is reached. CAS via `DbTransaction` + `SerializableSnapshot` guarantees that two workers booting simultaneously cannot both win the same `(matview_id, shard_id)`; the loser receives `LeaseTaken` and skips to the next candidate
-4. **Drive.** Once at quorum (or candidate list exhausted), enter the standard event loop. A background ticker every `lease_ttl/3` re-scans for newly-orphaned shards and tries to grow the held set up to `--shard-limit`
-5. **Renew.** Each shard's lease is renewed at `lease_ttl/3` cadence by the worker that owns it; failure to renew (e.g. catalog write outage) releases the shard locally before the lease expires server-side, preventing split-brain
-
-- [x] Two-worker race test: both boot within 100 ms, claim the same matview; CAS resolves deterministically and no shard is double-owned
-- [x] Discovery is idempotent — restarting a worker with the same `--worker-id` re-acquires its prior shards without recompute
-- [x] `slateduck-ivm doctor` (v0.15) reports any shard that has been `unowned` for more than `2 × lease_ttl`
-
-### Catalog API Additions
-
-In `slateduck-catalog`:
-
-- [x] `CatalogWriter::create_matview(name, view_sql, output_table_id, shard_count, freshness_ms) -> MatviewId`
-- [x] `CatalogWriter::drop_matview(matview_id)` (logical drop via `dropped_at_snapshot`)
-- [x] `CatalogWriter::update_matview_checkpoint(matview_id, shard_id, input_snapshot, output_snapshot, frontier)`
-- [x] `CatalogWriter::claim_matview_shard(matview_id, shard_id, worker_id, lease_ttl) -> ClaimResult` (CAS via `DbTransaction` + `SerializableSnapshot`)
-- [x] `CatalogReader::list_matviews()`, `get_matview(id)`, `list_shards_for_worker(worker_id)`, `read_checkpoint_history(matview_id)`
-- [x] All new methods covered by property tests (creation idempotence, lease exclusivity, checkpoint monotonicity)
-
-### End-to-End Demo
-
-Acceptance demo encoded as a single test:
-
-1. Open a fresh SlateDuck warehouse on LocalFS.
-2. Create base table `events(id BIGINT, occurred_at TIMESTAMP, event_type VARCHAR)`.
-3. Bulk-insert 1M rows across 30 catalog snapshots.
-4. Execute `CREATE INCREMENTAL MATERIALIZED VIEW events_by_day AS SELECT date_trunc('day', occurred_at) AS day, event_type, count(*) AS n FROM events GROUP BY 1, 2 WITH (shard_count = 1, freshness = '2s');`.
-5. Start one `slateduck-ivm` worker.
-6. Verify backfill completes; `SELECT * FROM events_by_day` returns correct counts.
-7. Insert another 10k events across 5 snapshots.
-8. Within 5 s, `events_by_day` reflects the new counts.
-9. Kill the worker; restart; verify it resumes from checkpoint without recomputing the backfill.
-
-- [x] Test passes deterministically on LocalFS, MinIO, and S3 Standard
-- [x] Documented in `docs/operations/incremental-materialized-views.md`
-
-### Documentation
-
-- [x] `docs/concepts/incremental-views.md` — what an IVM is, freshness semantics, snapshot alignment
-- [x] `docs/architecture/ivm-plane.md` — three-plane architecture diagram and explanation
-- [x] `docs/operations/incremental-materialized-views.md` — operator playbook: create, drop, refresh, monitor
-- [x] `docs/reference/sql-ivm.md` — full SQL grammar reference for the new statements
-- [x] `docs/design-decisions/ivm-on-immutable-substrate.md` — the immutability argument and why this is the right place to build IVM
-
-### Testing Infrastructure (Tier 1–3 + Testkit Bootstrap)
-
-v0.11 lays the testing foundation for the entire IVM track. Every subsequent phase adds tiers on top of this base. Reference: [plans/e2e-integration-tests.md](plans/e2e-integration-tests.md).
-
-- [x] Create `crates/slateduck-testkit/` crate with shared test harnesses: `CatalogHarness`, `PgWireHarness`, `DeterministicClock`, `IvmWorkerHarness` stubs
-- [x] `MinioHarness` (Testcontainers MinIO) with `OnceLock` container lifecycle — one container per test binary, pinned to a digest for reproducibility
-- [x] Add workspace feature flags: `minio-tests`, `fault-injection`, `scale-tests`; `cargo test` without flags runs only `LocalFileSystem`-based tests
-- [x] **Tier 6a — Single-shard IVM integration tests** (`crates/slateduck-ivm/tests/integration_tests.rs`): 11 tests covering GROUP BY, deletion, DISTINCT, UNION ALL, HAVING, filter+project, restart recovery, stale detection on schema change, time-travel-before-first-output, lag bound, and two-worker CAS race
-- [x] **Tier 3 extension** — `v011_pgwire_tests.rs`: full SQL surface for `CREATE/DROP/ALTER/REFRESH/SHOW/EXPLAIN INCREMENTAL MATERIALIZED VIEW`; `matview_lag()`, `matview_status()`, `matview_shard_count()` functions; `DROP TABLE` on dep table returns `SQLSTATE 2BP01`
-- [x] **Tier 2 extension** — `v011_catalog_tests.rs`: all 19 IVM catalog method tests (happy path, conflict, idempotence, wrong-state) for `create_matview`, `drop_matview`, `claim_matview_shard`, `extend_matview_lease`, `release_matview_lease`, `update_matview_checkpoint`
-- [x] Add fixture files: `tests/fixtures/matview/{create_view,multi_shard,lease_acquired,checkpoint_history,dropped}.dat`
-- [x] Update CI `ci.yml`: add `minio-tests` large-runner job (`ubuntu-latest-8-core`) triggered on every merge to `main`; standard-runner job (Tiers 1–3) on every PR
-
-### Acceptance Criteria
-
-- [x] Single-shard `GROUP BY` IVM holds correct contents across 100 catalog snapshots of input
-- [x] Worker restart without checkpoint loss: kill -9 followed by restart resumes from `last_output_snapshot` without recomputing prior work
-- [x] Freshness target honoured: median publish-to-visible lag ≤ target on LocalFS and S3 Express
-- [x] TPC-H Q1 maintained against a streaming `lineitem` source with sub-second freshness for batches of ≤ 100 rows
-- [x] All v0.11 tests pass under MinIO and on S3 Standard
-- [x] Wire corpus regenerated to include the four new statement shapes
-- [x] **Tier 6a test suite green**: all 11 single-shard IVM integration tests pass on `LocalFileSystem`; subset passes on MinIO in large-runner CI job
-- [x] **`slateduck-testkit` crate compiles** with `--features local-only` on every PR and with `--features minio-tests` on the large-runner job
-- [x] Implementation doc [plans/incremental-view-maintenance-implementation.md](plans/incremental-view-maintenance-implementation.md) reflects the shipped design
-
-### Deliverables
-
-- [x] `slateduck-ivm` crate published in the workspace
-- [x] `slateduck-testkit` crate published in the workspace (dev-only, `publish = false`)
-- [x] Catalog schema additions and tag-allocation update
-- [x] SQL grammar extension and pgwire routing
-- [x] End-to-end single-shard demo test green
-- [x] Tier 6a test suite (`integration_tests.rs`) with 11 passing tests
-- [x] Tier 2 + 3 IVM extensions (`v011_catalog_tests.rs`, `v011_pgwire_tests.rs`)
-- [x] CI large-runner `minio-and-ivm` job green
-- [x] Documentation set published under `docs/`
-
----
-
-## v0.12 — IVM Scale-Out (Sharding & Lease Management)
-
-> Generalize v0.11's single-shard runtime to N-shard horizontal scale-out within a single view. This phase pays off the central claim of the IVM design: that immutability makes sharded streaming computation cheap.
-
-### Sharding Model
-
-Each matview owns `shard_count` shards. A shard is identified by `(matview_id, shard_id)` where `shard_id ∈ [0, shard_count)`. Shards are assigned a *key range* over the matview's shard key — typically the first GROUP BY column or a hash thereof. The shard owner reads only base-table rows whose shard-key value falls in `[key_range_lo, key_range_hi)`.
-
-- [x] Key range computed deterministically from `shard_count` and shard-key column statistics at view creation
-- [x] `matview_shards` populated atomically with the view's first catalog snapshot
-- [x] Shard-key column auto-detected from view SQL; explicit override via `WITH (shard_key = '<column>')`
-- [x] Per-shard SlateDB state store at `{state_prefix}/matviews/{matview_id}/shards/{shard_id}/`
-
-### Lease & Heartbeat Protocol
-
-- [x] `claim_matview_shard` CAS protocol with TTL (default 30 s)
-- [x] Worker heartbeat extends lease every TTL/3; missed heartbeat lets another worker claim
-- [x] Worker IDs are durable across restarts via `--worker-id` (no random UUIDs in production)
-- [x] Lease history retained for 24 h for forensic debugging
-- [x] Test: kill -9 a worker holding 4 shards; verify a second worker acquires all 4 within 2× TTL
-
-### Per-Shard Checkpoint Independence
-
-- [x] Each shard advances `last_input_snapshot` independently
-- [x] Output mode `consistent` (default): output snapshot waits for all shards
-- [x] Output mode `per_shard`: shards publish independently; reader merges
-- [x] `MATVIEW_LAG('v')` returns max lag across shards
-- [x] `SHOW MATVIEW SHARDS FOR v` returns per-shard owner, lease expiry, last input snapshot, lag
-
-### Per-Shard Parquet Output
-
-- [x] Each shard writes one Parquet file per output cycle; data files registered to the output table
-- [x] Output table partitioning aligned with shard key when possible (pruning benefit at read time)
-- [x] Compaction policy for output data files: configurable via `WITH (output_compaction = '1h' | 'never')`
-- [x] Cleanup of superseded per-shard data files via existing DuckLake GC
-
-### Sharded Scale-Out Demo
-
-- [x] TPC-H Q1 with `shard_count = 8` maintained against streaming `lineitem`, achieving ≥ 6× ingest throughput vs v0.11 single-shard baseline
-- [x] Linear scaling demonstrated for 1 → 2 → 4 → 8 → 16 shards on a 1 TB synthetic input
-- [x] Cost report: S3 PUT volume per million input rows at each shard count
-- [x] Documented sweet-spot recommendations in `docs/operations/incremental-materialized-views.md`
-
-### Re-Sharding
-
-- [x] `ALTER INCREMENTAL MATERIALIZED VIEW v SET (shard_count = 16)` triggers a parallel rebuild of the view at the new shard count; cutover when caught up
-- [x] Old and new view versions coexist until cutover; old version GC'd after retention window
-- [x] Tested across snapshot boundaries: re-sharding during active ingest does not lose updates
-
-### Graceful Shutdown & Rolling Updates
-
-- [x] SIGTERM triggers graceful drain: finish current batch (bounded by `--max-drain-time`), checkpoint all shards, release leases, exit 0
-- [x] Rolling update with `maxSurge: 1, maxUnavailable: 0` achieves zero-downtime shard handoff
-- [x] `terminationGracePeriodSeconds` guidance documented (must exceed drain + checkpoint flush)
-- [x] Test: rolling restart of a 4-worker pool holding 16 shards results in zero dropped batches and ≤ lease_ttl handoff window
-
-### Testing: Tier 4 (MinIO Catalog) & Tier 6b (Multi-Shard IVM)
-
-- [x] **Tier 4 — MinIO catalog integration tests** (`crates/slateduck-catalog/tests/minio_catalog_tests.rs`): 9 tests covering `open`, `reopen`, `flush` visibility barrier, concurrent init convergence, sequential snapshot IDs, reader snapshot isolation, 10k file registration, zone-map pruning — all against a live MinIO container
-- [x] **Tier 4 — Writer failover on MinIO** (3 tests): `writer_failover_on_minio_within_slo`, stale epoch returns `SQLSTATE 57P04`, new writer sees all committed state
-- [x] **Tier 4 — Flush visibility barrier latency assertion**: p99 of 100 measured `flush()` → `read_latest()` round-trips < 1 s; measured and recorded in CI output
-- [x] **Tier 6b — Multi-shard IVM tests** (`crates/slateduck-ivm/tests/sharded_tests.rs`): 7 tests — 8-shard GROUP BY throughput + union correctness, re-sharding content preservation, lease heartbeat generation increment, lease expiry handoff, 1M-row backfill rate, `--shard-limit` enforcement, consistent output min-frontier check
-- [x] `DeterministicClock` implemented in `slateduck-testkit`: all timing tests use `tokio::time::pause()` — no wall-clock sleeps
-- [x] `IvmWorkerHarness` fully implemented: spawn/kill `slateduck-ivm` processes, poll lag via catalog reader, assert output Parquet row counts
-
-### Acceptance Criteria
-
-- [x] 8-shard `GROUP BY` view maintains correctness across 1000 input snapshots
-- [x] Kill-and-restart of a worker holding multiple shards results in zero data loss and ≤ 2× TTL recovery latency
-- [x] Linear ingest scaling 1 → 16 shards within ±15%
-- [x] Re-sharding from 1 → 8 shards completes for a 100 GB base table without service interruption
-- [x] Graceful shutdown releases all leases within `max_drain_time + 5s`
-- [x] No regression in v0.11 single-shard tests
-- [x] Per-shard observability surfaces visible in `SHOW MATVIEW SHARDS` and exported metrics
-- [x] **Tier 4 catalog tests green on MinIO**: all 12 tests pass in large-runner CI job on every merge to `main`
-- [x] **Tier 6b test suite green**: all 7 sharded IVM tests pass; lease heartbeat and expiry tests are clock-driven (no sleeps)
-- [x] **Flush visibility barrier p99 < 1 s** on MinIO (same-host container) measured and recorded
-
-### Deliverables
-
-- [x] Lease + heartbeat protocol shipped and stress-tested
-- [x] Per-shard SlateDB state stores under `{state_prefix}/matviews/.../shards/.../`
-- [x] Re-sharding via `ALTER` shipped
-- [x] Tier 4 MinIO catalog test suite (`minio_catalog_tests.rs`) with 12 passing tests
-- [x] Tier 6b multi-shard IVM test suite (`sharded_tests.rs`) with 7 passing tests
-- [x] `IvmWorkerHarness` and `DeterministicClock` fully implemented in `slateduck-testkit`
-- [x] Sharded scale-out benchmark report in `benchmarks/v0.12-ivm-scaleout.json`
-- [x] Operator playbook expanded with sharding guidance
-
----
-
-## v0.13 — IVM Joins
-
-> Extend the IVM runtime from single-input aggregations to multi-input joins. Covers the three join strategies described in the design document: broadcast small-side, co-partitioned, and re-shuffled.
-
-### Broadcast Join Support
-
-The common case: join a large fact table with one or more dimension tables. Dimension tables are broadcast to every shard.
-
-- [x] Detect broadcast candidates at view creation: input estimated row count below `WITH (broadcast_threshold = N)` (default 1M rows)
-- [x] Replicate broadcast inputs into each shard's state store at backfill; incremental updates propagated to all shards
-- [x] Bounded memory: broadcast inputs above threshold reject view creation with a clear error message
-- [x] Tested with TPC-H Q3 (`orders ⋈ lineitem ⋈ customer`) where `customer` and `nation` are broadcast
-
-### Co-Partitioned Join Support
-
-When both inputs share the same shard key, joins are local. No exchange required.
-
-- [x] Detect co-partitioned joins via shard-key analysis in the SQL plan
-- [x] Both inputs read filtered to the same key range
-- [x] Local hash join via DBSP's join operator
-- [x] Tested with TPC-H Q4 (`orders ⋈ lineitem` on `o_orderkey = l_orderkey` with `shard_key = orderkey`)
-
-### Re-Shuffle Exchange
-
-When neither broadcast nor co-partitioning applies, one side is re-partitioned at the join boundary.
-
-- [x] Insert exchange operator that writes intermediate state to a temporary SlateDB region keyed by the join key
-- [x] Reader on the other side reads the matching key range from the intermediate region
-- [x] Cost: one extra round-trip through SlateDB per join input; documented as the most expensive option
-- [x] Tested with TPC-H Q5 (`customer ⋈ orders ⋈ lineitem ⋈ supplier ⋈ nation ⋈ region`)
-
-### Join Plan Selection
-
-- [x] `EXPLAIN MATERIALIZED VIEW v` shows chosen join strategy per operator
-- [x] `WITH (join_strategy = 'broadcast' | 'co_partition' | 'reshuffle')` overrides per-view default
-- [x] Cost-based planner selects strategy automatically when not overridden
-
-### Delete Propagation in Joins
-
-- [x] `(-1)` updates from delete files propagate correctly through join operators
-- [x] Documented limitation: high-volume delete campaigns over joined views may require `REFRESH ... FULL`
-
-### Testing: Tier 6c (IVM Joins) & Tier 5 Extension (Live Client Compat)
-
-- [x] **Tier 6c — IVM join tests** (`crates/slateduck-ivm/tests/join_tests.rs`): 7 tests — broadcast join (events × categories), co-partition join (shared shard key), reshuffle join (non-collocated), TPC-H Q1 streaming correctness, TPC-H Q3 broadcast correctness, TPC-H Q5 co-partition correctness, `EXPLAIN MATERIALIZED VIEW` returns correct `join_strategy`
-- [x] All Tier 6c tests use `IvmWorkerHarness` against MinIO; correctness verified by comparing output Parquet to DuckDB single-shot reference via `DuckDbHarness`
-- [x] **`DuckDbHarness`** implemented in `slateduck-testkit`: spawns a DuckDB process (Testcontainers `duckdb/duckdb` image), runs SQL, returns rows — used for join correctness assertions
-- [x] **Tier 5 extension** — `crates/slateduck-pgwire/tests/compat_tests.rs`: live DuckDB E2E test `duckdb_full_ducklake_tutorial_against_minio` (create schema + table + INSERT + SELECT + time-travel + ALTER + DROP against a live PgWire server backed by MinIO)
-- [x] `EXPLAIN MATERIALIZED VIEW` output format documented and golden-tested
-
-### Acceptance Criteria
-
-- [x] TPC-H Q3 maintained incrementally with broadcast `nation`/`region`
-- [x] TPC-H Q5 maintained incrementally with explicit `WITH (shard_key = …)` on co-partitionable side
-- [x] Re-shuffle exchange operator correctness verified by golden-output comparison against DuckDB single-shot execution
-- [x] No correctness regression for v0.11/v0.12 single-input views
-- [x] **Tier 6c test suite green**: all 7 join strategy tests pass in large-runner CI on every merge
-- [x] **Live DuckDB E2E test** (`duckdb_full_ducklake_tutorial_against_minio`) green in large-runner CI
-- [x] Per-join-strategy cost numbers published in `benchmarks/v0.13-ivm-joins.json`
-
-### Deliverables
-
-- [x] Three join strategies shipped behind a common DBSP join operator interface
-- [x] Plan-selection logic in `slateduck-ivm/src/circuit.rs`
-- [x] Tier 6c join test suite (`join_tests.rs`) with 7 passing tests
-- [x] `DuckDbHarness` implemented in `slateduck-testkit`
-- [x] Tier 5 live DuckDB E2E test (`compat_tests.rs`)
-- [x] TPC-H Q3 / Q4 / Q5 maintained as continuous integration tests
-- [x] Documentation updated with join sizing guidance
-
----
-
-## Pre-v0.14 Architecture Gates
-
-> **All gates resolved (May 2026).** v0.14 implementation may begin.
-
-### Reality Check: Current IVM Implementation State
-
-The IVM system shipped in v0.11–v0.13 uses a **hand-rolled Z-difference shim** in `circuit.rs`, not the DBSP library. The `dbsp` workspace dependency has been **removed** (dead code since inception; see Gate 1 resolution). The `circuit.rs` engine implements DBSP's algebraic model directly — Z-differences over multisets with full retraction support — without the Feldera runtime.
-
-Similarly, `plan.rs` hand-parses SQL with `sqlparser` and produces an ad-hoc `IvmPlan` struct — it does not use DataFusion's `LogicalPlan`. The `slateduck-datafusion` crate provides a read-side `CatalogProvider` only; IVM planner migration to DataFusion is deferred to v0.16 (see Gate 5 resolution).
-
-### Gate 1 — DBSP Architecture Decision ✅ RESOLVED
-
-**Decision: Option A — Extend the hand-rolled Z-difference shim.**
-
-The DBSP crate (Feldera 0.299.0) is a full streaming platform runtime, not an embeddable library. Its `Trace` trait requires `feldera-storage` persistence, `BatchReader` requires `Rkyv + SizeOf` serialization on all types, and `DBSPHandle` spawns its own worker threads — all incompatible with SlateDuck's SlateDB persistence, serde_json encoding, and lease-based single-writer model.
-
-The `dbsp` workspace dependency has been removed. The hand-rolled engine in `circuit.rs` (~539 lines) is the correct foundation for v0.14–v0.18 and will be extended with:
-- EC-01 asymmetric delete branches (v0.14)
-- Aggregate tier classification (v0.14)
-- Window function state (v0.16, bounded iteration in step loop)
-- Recursive CTE fixed-point (v0.16, bounded iteration in step loop)
-
-Full analysis: `docs/design-decisions/ivm-architecture.md`
-
-- [x] **Resolved:** DBSP spike complete; Option A chosen; `dbsp` crate removed; decision documented
-
-### Gate 2 — `IvmOracle` Is the First v0.14 Deliverable ✅ RESOLVED
-
-`IvmOracle` has been implemented in `crates/slateduck-testkit/src/oracle.rs`. It:
-
-- Takes view SQL + DML operations (inserts and deletes)
-- Pushes deltas through the IVM circuit (including join routing)
-- Computes a full-recompute reference over the current table state
-- Asserts multiset equivalence between incremental and reference outputs
-- Supports: COUNT, SUM, MIN, MAX aggregates; GROUP BY; equality joins; retractions
-
-Tests pass: `oracle_count_star_group_by`, `oracle_sum_aggregate`, `oracle_delete_retraction`, `oracle_delete_removes_group`, `oracle_min_max`, `oracle_join_basic`.
-
-Usage: `slateduck_testkit::IvmOracle::new(view_sql)` → `.insert()` / `.delete()` → `.assert_equivalent(context)`.
-
-- [x] **Resolved:** `IvmOracle` implemented and green on GROUP BY + JOIN + retraction test cases
-
-### Gate 3 — Testkit Harness Gaps ✅ RESOLVED
-
-All three harnesses implemented in `crates/slateduck-testkit/src/`:
-
-- **`MinioHarness`** (`minio_harness.rs`) — Manages a Docker MinIO container, creates test bucket, provides `object_store::ObjectStore` instance. Includes health-check polling, auto-cleanup on drop.
-- **`CatalogHarness`** (`catalog_harness.rs`) — Lightweight catalog write/read wrapper. Supports in-memory and object-store-backed configurations. Provides `reopen()` for restart simulation and `assert_durable()` for persistence verification.
-- **`PgWireHarness`** (`pgwire_harness.rs`) — Spins up the SlateDuck PG-Wire server on a random port with graceful shutdown. Provides `connection_string()` and `connection_url()` for client library integration.
-
-All compile cleanly and are exported from the testkit crate.
-
-- [x] **Resolved:** `MinioHarness`, `CatalogHarness`, `PgWireHarness` implemented and available for Tier 2–7 tests
-
-### Gate 4 — Reconcile the Implementation Plan ✅ RESOLVED
-
-The original sections in `plans/incremental-view-maintenance-implementation.md` explicitly mark correlated subqueries and window functions as **"post-v1.0"**. The roadmap has both in v0.16. The implementation plan now includes a current-alignment addendum that supersedes those historical labels; keep that addendum updated whenever roadmap scope changes.
-
-- [x] **Resolved:** Alignment addendum added and committed
-
-### Gate 5 — SQL Planner Migration Decision ✅ RESOLVED
-
-**Decision: Defer to v0.16 — keep sqlparser-based IvmPlan for v0.14–v0.15.**
-
-v0.14–v0.15 features (EC-01, aggregate tiers, volatility, persistence) do not need DataFusion's `LogicalPlan`. The planner migration will happen all-at-once in v0.16 when correlated subqueries and decorrelation passes actually require it. DataFusion 45 is already in the workspace via `slateduck-datafusion`.
-
-Full analysis: `docs/design-decisions/planner-migration.md`
-
-- [x] **Resolved:** Decision documented; sqlparser remains the v0.14–v0.15 planner; DataFusion adoption deferred to v0.16
-
-### Realism & Difficulty Assessment
-
-The v0.14–v0.18 roadmap is realistic **only if treated as a high-risk architecture track**, not as a sequence of ordinary feature tickets. The current codebase proves the product shape is viable — v0.11–v0.13 shipped enough IVM machinery to validate the direction — but the remaining work crosses from a focused hand-rolled engine into a general streaming SQL maintenance system. The hard part is not any single checklist item; it is making every item share one coherent execution model, planner model, state-store model, and test oracle.
-
-| Phase | Difficulty | Realism | Primary risk |
-|---|---|---|---|
-| v0.14 — Join Correctness | High | Realistic once `IvmOracle` exists | EC-01, aggregate tiering, and volatility checks are tractable, but unverified without the oracle |
-| v0.15 — Operational Hardening | Very high | Realistic after Gate 1 | Multi-view DAG + durable frontiers + native state persistence depend on the chosen computation backend |
-| v0.16 — Operator Completeness | Extreme | Conditional | Window functions, correlated subqueries, and recursive CTEs require either real DBSP/DataFusion integration or a much larger hand-rolled engine |
-| v0.17 — Feature Hardening | Very high | Conditional | WASM is self-contained; adaptive mode and 24 h soak depend on v0.14–v0.16 correctness being stable |
-| v0.18 — DuckLake Standard Interface | High | Realistic and mostly decoupled | Contract surface is clear, but `table_changes()` is a real row-level scan operator, not simple catalog plumbing |
-
-Estimated effort for a small team is **80–120 person-weeks** after v0.13, with the largest uncertainty in v0.16. A clean DBSP/DataFusion path keeps the roadmap closer to the low end. Continuing the hand-rolled shim without de-scoping advanced operators pushes the roadmap toward the high end and raises the chance that v0.16 slips or must be split again.
-
-Estimated effort for a small team is **80–120 person-weeks** after v0.13, with the largest uncertainty in v0.16. The Option A decision (extend hand-rolled shim) keeps the roadmap on the simpler path for v0.14–v0.15 but means v0.16 window functions and recursive CTEs must be built from scratch in the shim rather than leveraging a pre-built operator library. This is acceptable given bounded-SQL constraints limit CTE depth and window frame complexity.
-
-With all gates resolved, v0.14 implementation can begin immediately. The first feature work should be the EC-01 phantom-row join fix, now verifiable via `IvmOracle`.
-
-### Additional Considerations Before Implementation
-
-- **Implementation plan alignment:** `plans/incremental-view-maintenance-implementation.md` now has a current-alignment addendum that maps the historical v0.11–v0.14 plan onto the current v0.14–v0.18 roadmap. Treat that addendum as binding for new work and keep it current as decisions land.
-- **Contract boundary:** v0.18 is a DuckLake catalog interface contract, not a pg-trickle dependency. pg-trickle is the first validator; SlateDuck should keep the interface test suite independent enough that another client can validate the same contract.
-- **CI and runner budget:** Tier 7–8 tests require Docker, MinIO, toxiproxy, and dedicated EC2 runners. Provision the runners and failure-artifact retention before writing the tests, or the test plan will look complete but be operationally unusable.
-- **Dogfood workload:** Pick one realistic workload before v0.15 and run shortened soak tests continuously. Waiting until v0.17 for the first serious soak creates too much late-cycle risk.
-- **Docs as design locks:** Every spike outcome should land as a design decision before implementation proceeds. The risky parts here are architectural, and unresolved architecture should not be hidden inside PR review.
-
----
-
-## v0.14 — IVM Join Correctness
-
-> **Dependency:** v0.15+ depend on the `IvmOracle` shipped here. Merge to `main` before v0.15 work begins.
-> **Architecture gate:** The five Pre-v0.14 gates above must be resolved before sprint planning for this release: DBSP migration path chosen, `IvmOracle` built first, testkit harnesses scoped.
-
-> Correctness release: fixes the EC-01 phantom-row bug in join deltas, formalises aggregate tier classification with auxiliary columns (BOOL_AND/OR reclassified as semi-algebraic), adds function-volatility validation at view-creation time via hardcoded lookup table, and ships the property-based "differential ≡ full" test oracle that all future IVM correctness tests depend on. See [plans/pg-trickle.md](plans/pg-trickle.md) §4, §6, §9, §11.
-
-### EC-01 Phantom-Row Fix in Joins
-
-The v0.13 bilinear join expansion uses the post-change snapshot for both the insert and delete branches. When a row is deleted from the right side *in the same refresh window* as a deletion on the left side, the match is lost and the stale joined row survives in the materialized view indefinitely.
-
-**Fix:** split both Part 1 and Part 2 of the join delta into insert- and delete-asymmetric branches:
-- **Part 1a:** `ΔR_insert ⋈ S_post` — new positive contributions from R
-- **Part 1b:** `ΔR_delete ⋈ S_pre` — negatives from R must use the *pre-change* snapshot of S
-- **Part 2a:** `R_post ⋈ ΔS_insert` — new positive contributions from S
-- **Part 2b:** `R_pre ⋈ ΔS_delete` — negatives from S must use the *pre-change* snapshot of R
-- **Part 3:** `−(ΔR ⋈ ΔS)` — correction term; subtracts double-counted intersections
-
-`S_pre` and `R_pre` reconstructed as `X_post EXCEPT ALL ΔX_insert UNION ALL ΔX_delete`; cached as L₀ CTEs to avoid repeated EXCEPT ALL per join per refresh.
-
-- [x] Enumerate `(ΔL_ins, ΔL_del, ΔR_ins, ΔR_del)` cases explicitly in `crates/slateduck-ivm/src/join.rs`
-- [x] Reconstruct and cache both `S_pre` and `R_pre` (L₀ CTEs) for the delete branches in each join operator
-- [x] Add Part-3 correction term
-- [x] Regression test: delete matching rows from both sides of a join in the same refresh window; output must match `DuckDbHarness` full recompute
-
-### Aggregate Tier Classification
-
-Annotate every `AggregateKind` variant with one of three tiers and wire up the corresponding auxiliary state in `IvmTrace`. Without this, AVG/STDDEV drift on large update workloads and MIN/MAX correctness breaks on deletes.
-
-| Tier | Aggregates | Auxiliary state | Δ computation |
-|------|-----------|-----------------|---------------|
-| **Algebraic** | COUNT, SUM, AVG, STDDEV, VAR, CORR, REGR_* | `sum_arg`, `count_arg`, `M2`, `nonnull_count` | Fully invertible; no source rescan needed |
-| **Semi-algebraic** | MIN, MAX, BOOL_AND, BOOL_OR, BIT_AND, BIT_OR, BIT_XOR | Current extremum + `count_true`/`count_nonnull` (boolean); per-bit position counts (bitwise) | LEAST/GREATEST or boolean reconstruction on insert; rescan group on delete of current extremum or deciding input |
-| **Group-rescan** | STRING_AGG, ARRAY_AGG, JSON_AGG, MODE, PERCENTILE_* | Current value only | Re-aggregate entire affected group on each delta |
-
-> **Why BOOL_AND/OR are semi-algebraic:** `BOOL_AND(true, false) = false`; removing `true` can’t recover the result without knowing the remaining `true` count. BIT_XOR is not invertible without per-bit parity counts per row.
-
-- [x] `AggregateKind` variants in `plan.rs` carry a `tier: AggregateTier` annotation
-- [x] Algebraic aggregates persist auxiliary columns in `IvmTrace`: `sum_arg` + `count_arg` for AVG; `M2` / `sum` / `count` for STDDEV
-- [x] AVG delta: `new_result = (old_sum_arg ± Δsum) / (old_count_arg ± Δcount)`; no floating-point drift, fully invertible
-- [x] Semi-algebraic MIN/MAX: on delete of current extremum, issue a group-rescan from source; otherwise merge with LEAST/GREATEST
-- [x] Group-rescan path implemented in `trace.rs`: re-reads all rows for affected group keys from the input source
-- [x] Group-rescan aggregates accepted but documented as higher-latency; clear error if input source is unavailable for rescan
-
-### Volatility Validation (Correctness Gate)
-
-DuckDB functions fall into `IMMUTABLE`, `STABLE`, and `VOLATILE` categories. Without this gate, views using `random()` or `clock_timestamp()` produce silently wrong incremental results.
-
-**Implementation:** Hardcoded volatility lookup table in `crates/slateduck-ivm/src/volatility.rs` (SlateDuck has no embedded DuckDB in the production path). Covers all ~300 DuckDB scalar functions. Unknown functions default to VOLATILE (safe-by-default). Generated from `duckdb_functions()` output, version-pinned.
-
-> **Forward-compatibility note:** v0.16 introduces capture semantics that *allow-lists* specific volatile functions (`random()`, `gen_random_uuid()`, `now()`) with deterministic per-batch sampling. At that point, `volatility.rs` gains a `CaptureEligible` category. Views created in v0.14 that are rejected for using `random()` will become valid after upgrading to v0.16. This is an intentional backwards-compatible expansion (reject→accept), not a breaking change.
-
-- [x] `crates/slateduck-ivm/src/volatility.rs`: hardcoded `fn volatility_of(name: &str) -> Volatility` lookup; generated from DuckDB `duckdb_functions()` at build time or committed as a static table
-- [x] Walk the view SQL expression tree at `IvmPlan::compile`; look up each function via the static table
-- [x] VOLATILE functions: return `SQLSTATE 0A000` at view creation with a message naming the offending function
-- [x] STABLE functions (`now()`, `current_timestamp`): emit `WARN`-level log; accept but recommend capture-semantics path (v0.16)
-- [x] IMMUTABLE: always accepted silently
-- [x] Unknown functions (not in static table): treated as VOLATILE with message suggesting `WITH (allow_unknown_functions = true)` override
-
-### Property-Based "Differential ≡ Full" Oracle
-
-The foundational correctness harness that all future IVM tests depend on: after each DML mutation, compare the IVM worker's output multiset to a DuckDB single-shot reference execution of the same view SQL.
-
-- [x] `slateduck-testkit` gains an `IvmOracle` helper: given view SQL + DML sequence → run IVM worker → compare output to `DuckDbHarness` reference via multiset equality
-- [x] `proptest` strategies for random `INSERT` / `UPDATE` / `DELETE` sequences with realistic key distributions; includes phantom-delete edge cases (both-sides delete in same refresh window)
-- [x] TPC-H Q1 end-to-end correctness test: 1 000 random input snapshots, zero correctness drift, exercises aggregate auxiliary columns and EC-01 join fix simultaneously
-
-### Acceptance Criteria
-
-- [x] EC-01 regression test passes: concurrent same-window delete from both join sides produces correct output matching DuckDB full recompute
-- [x] AVG over 1M rows with 100k updates shows zero floating-point drift vs. DuckDB reference
-- [x] `VOLATILE` function at view creation returns `SQLSTATE 0A000`
-- [x] Property-based oracle passes 1 000 random DML sequences against TPC-H Q1
-
-### Testing: Tier 6b-correctness
-
-- [x] **Tier 6b-correctness — IVM correctness tests** (`crates/slateduck-ivm/tests/correctness_tests.rs`): EC-01 phantom-row regression, aggregate tier AVG drift, aggregate tier MIN/MAX delete-of-extremum, BOOL_AND/OR delete-of-deciding-input, volatility gate VOLATILE rejection, volatility gate STABLE acceptance, property-based oracle 1000-sequence TPC-H Q1, coalesced-batch S_pre reconstruction
-- [x] All Tier 6b-correctness tests run on every PR (standard runner)
-
-### Deliverables
-
-- [x] `join.rs` EC-01 Part 1a/1b/2/3 split with L₀ CTE caching (includes per-window provenance assertion)
-- [x] `plan.rs` `AggregateTier` enum and per-`AggregateKind` tier annotation
-- [x] `trace.rs` auxiliary column storage for algebraic aggregates (AVG/STDDEV)
-- [x] `trace.rs` semi-algebraic auxiliary columns: `count_true`/`count_nonnull` for BOOL_AND/OR, per-bit counts for BIT_AND/OR/XOR
-- [x] `trace.rs` group-rescan path for semi-algebraic (on extremum/deciding-input delete) and group-rescan tier aggregates
-- [x] `volatility.rs` hardcoded volatility lookup table (generated from DuckDB `duckdb_functions()`)
-- [x] `plan.rs` `IvmPlan::compile` volatility gate (VOLATILE reject / STABLE warn / unknown → VOLATILE)
-- [x] `slateduck-testkit` `IvmOracle` helper + `proptest` DML strategies (`proptest` added as dev-dependency in `slateduck-testkit/Cargo.toml`)
-- [x] Tier 6b-correctness test suite green in CI
-- [x] TPC-H Q1 property-based correctness test green in CI
-
----
-
-## v0.15 — IVM Operational Hardening
-
-> **Dependency:** Requires v0.14 (IvmOracle correctness harness) merged to `main` before this work begins. All correctness acceptance criteria in v0.15 use the `IvmOracle` to verify differential ≡ full.
-
-> Production-ready IVM. Multi-view DAG coordination (first), cost optimization, fault injection, native persistence backend, observability, and operator tooling. After v0.15 the IVM track is folded into the v1.0 GA story.
-
-### Multi-View DAG and Frontier Coordination
-
-> **Must be implemented first.** The DAG and frontier coordination layer is foundational to correctness for all multi-view workloads — including the 24-hour soak test and the cost-mode regression suite later in this release. All subsequent v0.15 sections may assume DAG ordering is in place.
-
-Foundation for views that read from other materialized views (`CREATE INCREMENTAL MATERIALIZED VIEW b AS SELECT … FROM a` where `a` is itself a materialized view). Without topological ordering and diamond detection, convergent views compute deltas against inconsistent intermediate state. See [plans/pg-trickle.md](plans/pg-trickle.md) §5.
-
-- [x] New `crates/slateduck-ivm/src/dag.rs`: Kahn's topological sort (O(V+E)) over the view dependency graph; guarantees upstream views are fully refreshed before any downstream consumer reads their delta
-- [x] Diamond detection: during topo-sort, track the set of ancestor root nodes per node; a node reachable from the same root via two or more paths is a diamond apex; O(V+E)
-- [x] Persist view dependency edges in `slateduck-catalog` (tag in existing matview key range; see `plans/blueprint.md` §9.1)
-- [x] Frontier vector clocks in `state_store.rs`: `BTreeMap<SourceId, Sequence>` per view per shard, persisted durably; worker reads on (re)start and skips CDC events with `seq ≤ frontier[source]`
-- [x] Diamond `Slowest` consistency policy: a convergence view (diamond apex D) refreshes only when **all** upstream views have advertised `frontier ≥ F` via their state stores; purely frontier-driven, no SAVEPOINT or advisory lock needed
-- [x] `EXPLAIN MATERIALIZED VIEW v` extended to show dependency graph, detected diamonds, and current frontier per source
-- [x] Unit test: diamond topology (A→B, A→C, B→D, C→D); assert D never refreshes with mismatched B/C frontiers
-- [x] Unit test: linear chain (A→B→C); assert C output matches DuckDB full recompute at each step after updates to A propagate through B
-- [x] Unit test: concurrent base-table updates (A and B both updated in the same refresh window; C depends on both); assert C never reads A's new frontier with B's old frontier or vice versa
-- [x] Unit test: view drop cascade; dropping B (when C depends on B) returns a clear error naming the dependent views; C remains intact
-
-### Native `SlateDbTrace` Implementation
-
-Implement native SlateDB persistence for the IVM trace layer. The v0.11 deliverable was `IvmTrace` (checkpoint metadata only); this release integrates SlateDB durability with the computation layer. **Implementation path depends on the Gate 1 architecture decision made pre-v0.14:**
-
-- **Option B (DBSP native):** implement `SlateDbTrace` conforming to DBSP's `Trace`/`Batch`/`Cursor` traits, validated by the pre-v0.14 spike.
-- **Option A (extend shim):** extend `IvmTrace` with SlateDB-backed state serialization and compaction policies; no DBSP trait work.
-
-> **Risk: DBSP trait stability (Option B only).** DBSP uses GATs internally; some traits may not be object-safe in stable Rust. The pre-v0.14 spike resolves this. If traits are not externally implementable, the fallback is a `SlateDbBatch` adapter wrapping DBSP's in-memory batch with SlateDB-backed spill-to-disk on memory pressure.
-
-- [x] Implement based on the DBSP spike outcome recorded in `docs/design-decisions/ivm-architecture.md` (spike runs pre-v0.14; do not re-run here)
-- [x] `SlateDbTrace` implements DBSP's persistent `Trace`, `Batch`, and `Cursor` traits (or fallback adapter if spike shows infeasibility)
-- [x] Frontier advancement mapped to SlateDB compaction
-- [x] Direct mapping of DBSP batch boundaries to SlateDB SST flushes
-- [x] Benchmark: native trace ≥ 1.5× faster than v0.11 baseline at equal correctness
-- [x] Property-tested against DBSP's reference in-memory trace: 500 random DML sequences against TPC-H Q1; `SlateDbTrace` output multiset must be identical to the in-memory reference trace at every snapshot; tests in `crates/slateduck-ivm/tests/trace_property_tests.rs`
-
-### Cost Optimization
-
-The naive implementation flushes a SlateDB batch on every input snapshot, generating thousands of small SSTs per day per shard. Mitigations:
-
-- [x] Coalesce flushes: only flush when `time-since-last-flush > freshness/2` *and* buffered work exists
-- [x] `await_durable = false` for non-checkpoint writes; `await_durable = true` only at checkpoint boundaries
-- [x] Aggressive compaction policy for matview state stores (configurable per matview)
-- [x] Documented cost model: API calls per million input rows × shard count × freshness × state amplification factor (accumulated state size / delta size), with empirical numbers on S3 Standard, S3 Express, GCS, R2. State amplification matters because compaction reads/writes accumulated state, not just the delta
-
-**`--cost-mode` propagation to IVM workers.** v0.9's `--cost-mode {conservative|balanced|latency}` flag (originally scoped to `slateduck-pgwire`) is extended to `slateduck-ivm serve`. Mode-to-default mapping:
-
-| Knob | conservative | balanced (default) | latency |
-|------|-------------|--------------------|---------|
-| Flush coalescing window | `freshness` | `freshness/2` | `freshness/4` |
-| `await_durable` for non-checkpoint writes | false | false | false |
-| `await_durable` at checkpoint | true | true | true |
-| State-store compaction trigger | aggressive | default | lazy |
-| Cost budget warning threshold | 1.0× budget | 1.5× budget | 2.0× budget |
-
-Per-view `WITH (...)` options always override mode defaults. Documented in `docs/operations/ivm-cost-control.md`.
-
-- [x] `slateduck-ivm serve --cost-mode=...` accepted and honoured
-- [x] Mode defaults documented per knob; per-view overrides take precedence
-- [x] Cost-mode interaction matrix tested in cost-model regression suite
-- [x] **S3 API call count gate**: after TPC-H Q1 SF1 at balanced mode for 1000 input batches, assert `ivm_s3_puts_total + ivm_s3_gets_total` per million input rows ≤ documented cost model upper bound from `benchmarks/v0.15-ivm-hardening.json`; a regression > 20% vs baseline fails CI
-
-### State Store Backup & Restore
-
-The v0.4 checkpoint API backs up the catalog. Per-shard IVM state stores under `--state-prefix` are **not** included in catalog checkpoints (they are derivative state, recomputable from base data) but operators still need a backup procedure to avoid expensive full rebuilds after object-store corruption or accidental prefix deletion.
-
-> **Design note:** State stores *are already* in object storage (S3/GCS/R2). A "backup" is not a copy to a separate location — it's a **compaction pin** (preventing SlateDB from advancing past a known-good restore point) plus a manifest recording the pinned SST set. Restore means pointing a new state store at the pinned SSTs.
-
-- [x] `slateduck-ivm backup --matview v --shard N` issues SlateDB's native `Checkpoint` against the shard's state store and writes a manifest (JSON listing pinned SSTs + frontier) to `{state_prefix}/backups/{matview}/{shard}/{timestamp}.json`
-- [x] Compaction respects pinned SSTs: pinned files not deleted until the pin is released
-- [x] `slateduck-ivm restore --matview v --shard N --from {timestamp}` resets the shard's active state to the pinned checkpoint; the next worker to claim the shard's lease resumes from the restored frontier
-- [x] If a state store is missing entirely at lease-claim time, the worker emits `WARN`-level `state_store_missing` and waits for an operator decision (auto-rebuild gated behind `--auto-rebuild-on-loss` flag, default off) — never silently recomputes terabytes of state
-- [x] Documented backup cadence guidance: daily for large matviews; on-demand before any infra migration
-- [x] `docs/operations/ivm-backup-restore.md` published
-- [x] **Backup/restore correctness test**: run 1000 CDC events; take backup; inject 200 more events; restore from backup; restart worker; assert the worker processes exactly the 200 post-backup events (not the pre-backup 1000) and final output matches DuckDB reference — the persisted frontier prevents re-processing
-
-### Cost Guardrails (User-Facing)
-
-IVM can generate real S3 API costs at scale. Users need visibility and protection *before* they get an unexpected bill.
-
-- [x] **Cost estimator at view creation.** `EXPLAIN MATERIALIZED VIEW v` includes estimated monthly S3 API cost based on: input rate (from recent snapshot commit frequency), shard count, freshness target, and empirical cost-per-million-rows from the v0.15 cost model
-- [x] **Per-view cost budget.** `WITH (monthly_cost_limit = '$50')` option; when projected cost exceeds budget, surface warning in `SHOW MATERIALIZED VIEWS` and emit Prometheus alert
-- [x] **Opt-in freshness degradation.** `WITH (degrade_freshness_on_budget = true)` (default **false**); when enabled AND cost exceeds budget, freshness widens gracefully (from 5 s toward 60 s) rather than stopping the view. Workers reduce flush frequency proportionally. View remains correct, just staler. **Default behaviour without this flag: view continues at declared freshness and operator is alerted; no silent SLA change**
-- [x] **Per-worker cost tracking.** `slateduck_ivm_estimated_monthly_cost{matview, shard}` metric; `slateduck-ivm doctor` reports per-view projected monthly cost
-- [x] **Cost ceiling alert.** If any view's projected monthly cost exceeds the budget by 2× (burst scenario), emit `WARN`-level log and Prometheus alert. No automatic stop (correctness over cost), but operator visibility is immediate
-- [x] **Documentation.** `docs/operations/ivm-cost-control.md`: how to estimate costs before creating views, how budgets work, how to diagnose cost spikes, rules of thumb (freshness↑ = cost↓, shards↓ = cost↓)
-
-### Incremental Delta Optimizations (Performance)
-
-Performance optimizations needed to meet the "steady-state S3 PUT cost ≤ 2×" acceptance criterion. Each is a self-contained PR. Derived from pg-trickle's production experience (see [plans/pg-trickle.md](plans/pg-trickle.md) §7–§8).
-
-**Change-buffer compaction.** Consecutive INSERT/DELETE pairs on the same `row_id` cancel out; applying this before writing to the trace cuts buffer size 50–90% on high-update workloads.
-
-- [x] In `source.rs`: coalesce delta batches before landing in `IvmTrace`; cancel `(INSERT row_id=X) + (DELETE row_id=X)` pairs within the same batch
-- [x] Expose compaction ratio (`pairs_cancelled / total_events`) per refresh cycle in metrics
-
-**Predicate pushdown into delta scan.** When a `Filter` sits directly above a `Scan`, push the WHERE predicate into the CDC fetch so unfiltered delta rows are never materialised.
-
-- [x] In `plan.rs`: detect `Filter(Scan(R))` pattern; pass predicate as parameter to the CDC source read
-- [x] For UPDATE rows: apply predicate to both `old_` and `new_` column values
-- [x] Correctness test: view with selective WHERE; confirm delta bytes read ∝ matching rows, not total delta size
-
-**Semi-join key pre-filter.** For `delta_orders ⋈ customers`, project `DISTINCT join_key` from the delta side first and use it as the probe set; turns a full probe-side scan into an indexed lookup.
-
-- [x] In `join.rs`: when probe side is a full-table scan and build side is a delta, inject a `DISTINCT join_key` pre-filter on the probe side before `hash_join_batch`
-- [x] Benchmark: join throughput with and without pre-filter on TPC-H Q3 at varying delta sizes
-
-**Append-only fast path.** For INSERT-only views, skip the negative-multiplicity path entirely (~30% throughput gain).
-
-- [x] Detect INSERT-only workload automatically (no DELETE or UPDATE events in last N batches; N configurable)
-- [x] Skip negative-multiplicity accumulation in `IvmTrace`; use plain INSERT accumulation
-- [x] Automatically revert to full bidirectional mode on first DELETE or UPDATE event
-
-**Auto sort-by on join and group-by keys.** Layout Parquet output files sorted by GROUP BY and equi-join keys so downstream DuckDB scans can use sorted-file skip-scan.
-
-- [x] `parquet.rs::CompactionPolicy`: add `sort_keys: Vec<ColumnName>` field
-- [x] At view creation, auto-populate `sort_keys` from the SQL plan's GROUP BY and equi-join key columns
-- [x] Write output Parquet with `sorting_columns` metadata
-
-### Backpressure & Per-Shard Publication Modes
-
-- [x] Backpressure protocol: workers stall ingest when output plane is N snapshots behind (default N = 100)
-- [x] Per-shard `output_mode = 'per_shard'` publishes individual shard frontiers; query layer merges
-- [x] Skewed-shard detection: emit warning when one shard's lag exceeds 5× the median
-- [x] Hot-key mitigation guidance in operator playbook
-
-### Delete-File Support
-
-- [x] Input source emits `(row, -1)` updates for rows newly covered by delete files
-- [x] Aggregations over deletable base tables correctly subtract deleted rows
-- [x] Documented constraint: large delete campaigns may require `REFRESH ... FULL` for non-monoidal aggregates
-- [x] Tested with DuckLake delete files at various scales
-
-### Schema Evolution
-
-- [x] Adding a column to a base table the view does not reference: no-op
-- [x] Adding a column the view does reference: view marked stale, requires `REFRESH ... FULL`
-- [x] Column type change: view marked stale
-- [x] Renaming a column referenced by a view: view marked stale (re-creation required)
-- [x] **Dropping a column referenced by a view: view marked `broken` (distinct from `stale`)**; `REFRESH ... FULL` cannot fix it because the SQL is un-parseable. Operator must `DROP` and re-create the view with corrected SQL. `SHOW MATERIALIZED VIEWS` shows `status = 'broken'` with the missing column named in the status message
-- [x] All stale/broken states surfaced in `SHOW MATERIALIZED VIEWS` with a clear `status` column and human-readable reason
-- [x] **Schema evolution tests** (`crates/slateduck-ivm/tests/schema_evolution_tests.rs`): 5 tests — add column not referenced by view (no-op; view stays fresh); add column referenced by view (stale; `REFRESH FULL` recovers); type-change on referenced column (stale); rename referenced column (stale; re-creation required); drop referenced column (broken; `REFRESH FULL` returns clear error naming the missing column)
-
-### Exactly-Once Output Snapshots
-
-- [x] Each output snapshot tagged with `(matview_id, target_frontier)` in its catalog metadata
-- [x] `CatalogWriter` CAS prevents a duplicate snapshot for the same `(matview_id, target_frontier)`
-- [x] Worker restart mid-output-commit cannot produce duplicate data files
-- [x] Tested under fault injection: kill -9 during every Parquet write and catalog commit step
-
-### Observability
-
-- [x] Per-matview metrics: `ivm_lag_ms`, `ivm_throughput_rps`, `ivm_state_size_bytes`, `ivm_s3_puts_total`, `ivm_s3_gets_total`, per shard
-- [x] OpenTelemetry traces from input read → DBSP circuit → state write → output commit
-- [x] `slateduck-ivm doctor` CLI: reports stuck shards, expired leases, lagging frontiers, cost outliers
-- [x] Prometheus exporter compatible with existing `slateduck-pgwire` observability story
-
-### `REFRESH ... FULL` & Repair
-
-- [x] `REFRESH INCREMENTAL MATERIALIZED VIEW v FULL` drops state stores, rebuilds from scratch in parallel
-- [x] `slateduck-ivm repair --matview v --shard N` recomputes a single shard from base data
-- [x] Repair operations leave a durable audit trail in `matview_checkpoints`
-
-### Fault Injection Test Suite
-
-- [x] `fail` crate (`fail_point!` macros) harness covers: worker death mid-batch, mid-commit, mid-output; lease expiry races; S3 partial failures; SlateDB compaction during checkpoint
-- [x] All scenarios survive a 1-hour soak test without correctness loss
-- [x] Documented in `docs/contributing/testing.md`
-
-### Testing: Tier 6d (Hardening), Tier 7 (Fault Injection), Tier 9 (Security) & Tier 10 (Benchmark Regression)
-
-- [x] **Tier 6d — IVM hardening tests** (`crates/slateduck-ivm/tests/hardening_tests.rs`): 5 tests — repair shard rebuilds from base, `REFRESH ... FULL` rebuilds all shards, `doctor` identifies stuck/expired shards, exactly-once output under output-plane restart, backup/restore (restored frontier prevents event re-processing)
-- [x] **Tier 6d — Schema evolution tests** (`crates/slateduck-ivm/tests/schema_evolution_tests.rs`): 5 tests — add-column no-op, add-referenced-column stale, type-change stale, rename stale, drop-referenced broken + clear error on `REFRESH FULL`
-- [x] **Tier 6d — Frontier durability tests** (`crates/slateduck-ivm/tests/durability_tests.rs`): 3 tests — SIGKILL worker at T=0 (before any CDC), T=100 events, T=500 events; restart worker; assert loaded frontier skips already-processed events and final output is identical to uninterrupted run (no duplicate rows, no missing rows). Note: this is distinct from fault-injection tests — those test crashes mid-batch; these test that the frontier itself is durable across clean restarts
-- [x] **Tier 7 — IVM fault injection** (`crates/slateduck-ivm/tests/fault_injection_tests.rs`): 4 `fail_point!` tests — kill after DBSP before flush, kill after flush before checkpoint, kill output plane after Parquet write before catalog commit, S3 `GetObject` 503 with retry; gated behind `--features fault-injection`
-- [x] **Tier 7 — Catalog fault injection** (`crates/slateduck-catalog/tests/fault_injection_tests.rs`): 4 tests — `create_snapshot` panic before commit, IO error after `put` before `flush`, `extend_lease` CAS conflict, `CounterCache` panic with reload verification
-- [x] **Tier 7 — Network fault injection** via `toxiproxy` Testcontainers proxy in front of MinIO: S3 PUT 503, GET truncated, heartbeat partition, 10 s latency degradation — all confirming no data loss and graceful degradation
-- [x] **Tier 9 — Security tests** (`crates/slateduck-pgwire/tests/security_tests.rs`): MinIO ACL credential-isolation (4 tests), TLS expired cert rejection, TLS CA validation, SCRAM-SHA-256 auth, brute-force rate limiting, SQL injection guard (3 tests), non-deterministic function blocked in view SQL
-- [x] **Tier 10 — Benchmark regression CI** (weekly scheduled job): extended `catalog_bench.rs` with 5 new benchmarks; `scripts/check_benchmark_regression.py` compares against `benchmarks/phase-2-baseline.json`; job fails if any metric regresses > 10%
-- [x] All Tier 7 tests are pre-release gate (run on tag push, not every PR)
-- [x] All Tier 9 security tests run on the standard large runner (MinIO covers credential isolation; no real AWS required)
-
-### PG-Wire Rate Limiting
-
-The Tier 9 security tests include a brute-force rate limiting check. This section provides the corresponding implementation.
-
-- [x] Per-IP connection rate limiter in `slateduck-pgwire`: token-bucket with configurable burst (default 10 connections/s, burst 20)
-- [x] Per-IP failed-auth rate limiter: after 5 consecutive failed authentication attempts from the same IP within 60 s, reject with `SQLSTATE 08004` and `WARN`-level log for 5 minutes
-- [x] Configurable via `--rate-limit-connections-per-sec` and `--rate-limit-auth-failures` CLI flags
-- [x] Rate limit state is per-process (in-memory `DashMap<IpAddr, TokenBucket>`); not shared across replicas
-
-### CI Infrastructure for Tier 7 Network Tests
-
-The toxiproxy Testcontainers network fault injection tests require Docker. This section tracks the infrastructure prerequisite.
-
-- [x] `.github/workflows/ci.yml` Tier 7 job uses `ubuntu-latest` with Docker (native, no DinD needed — GitHub Actions ubuntu runners have Docker pre-installed)
-- [x] Tier 7 network tests gated behind `--features fault-injection` AND `cfg(target_os = "linux")` — skipped on macOS CI (no Testcontainers Docker socket on macOS Actions runners)
-- [x] Document in `docs/contributing/testing.md`: Tier 7 network tests require Linux CI runner with Docker; local macOS developers can run them with Docker Desktop
-
-### Acceptance Criteria
-
-- [x] Native `SlateDbTrace` 1.5× faster than v0.11 on TPC-H Q1 streaming benchmark
-- [x] Steady-state S3 PUT cost ≤ 2× SlateDB's bare-substrate cost for the same write volume
-- [x] All fault-injection scenarios pass deterministically
-- [x] `slateduck-ivm doctor` correctly identifies every fault class in the test suite
-- [x] Continuous-soak test: TPC-H Q1 maintained for 24 h with zero correctness drift; **no fault injection in v0.15 soak** (fault-injection soak is Tier 8 in v0.17); correctness checked via `IvmOracle` every 15 min; runs on scale-test infrastructure
-- [x] All v0.11–v0.13 acceptance tests still pass
-- [x] IVM worker K8s deployment pattern tested with 4-worker pool and rolling updates
-- [x] **Tier 6d hardening tests green** (5 tests including repair, exactly-once output, and backup/restore)
-- [x] **Tier 6d schema evolution tests green** (5 tests; all stale/broken state transitions verified in CI)
-- [x] **Tier 6d frontier durability tests green**: crash + restart at T=0, T=100, T=500 all produce output identical to uninterrupted run
-- [x] **DAG multi-hop, concurrent update, and drop-cascade tests green** (4 DAG unit tests total)
-- [x] **S3 API call count ≤ cost model upper bound** (call count regression gate green)
-- [x] **Tier 7 fault injection suite green** on every pre-release tag: catalog faults (4), IVM worker faults (4), network faults via toxiproxy (4)
-- [x] **Tier 9 security suite green**: credential isolation, TLS, auth, SQL injection guards, rate limiting — 14 tests total
-- [x] **Tier 10 benchmark regression < 10%** on weekly CI run vs `benchmarks/phase-2-baseline.json`
-- [x] **Multi-View DAG:** diamond topology test passes; D never refreshes with inconsistent upstream frontiers
-- [x] **Rate limiting:** 6th failed auth from same IP within 60 s rejected with `SQLSTATE 08004`
-- [x] **Change-buffer compaction** reduces CDC event count by ≥ 50% on a 100%-update synthetic workload
-- [x] **Predicate-pushdown** confirmed: CDC bytes read proportional to WHERE-matching rows, not total delta size
-- [x] **Append-only fast path** shows ≥ 25% throughput improvement on a pure-INSERT TPC-H Q1 variant
-
-### Deliverables
-
-- [x] Native `SlateDbTrace` shipped (or fallback adapter if DBSP traits not externally implementable)
-- [x] `dag.rs` Multi-View DAG with Kahn topo-sort, diamond detection, and `Slowest` policy
-- [x] Frontier vector clocks in `state_store.rs` with durable persistence
-- [x] PG-wire rate limiter (connection + auth failure) in `slateduck-pgwire`
-- [x] Cost-optimization knobs documented and defaulted sensibly
-- [x] Observability surface complete (metrics, traces, `doctor` CLI)
-- [x] `REFRESH ... FULL` and per-shard repair shipped
-- [x] Tier 6d hardening tests (`hardening_tests.rs`) with 5 passing tests
-- [x] Tier 6d schema evolution tests (`schema_evolution_tests.rs`) with 5 passing tests
-- [x] Tier 6d frontier durability tests (`durability_tests.rs`) with 3 passing tests
-- [x] Tier 6d SlateDbTrace property tests (`trace_property_tests.rs`) with 500-sequence suite green
-- [x] Tier 7 fault injection suites (`fault_injection_tests.rs` in catalog + ivm) with 12 passing tests
-- [x] Tier 9 security test suite (`security_tests.rs`) with 14 passing tests
-- [x] Tier 10 benchmark regression job in `.github/workflows/ci.yml` (weekly cron)
-- [x] `scripts/check_benchmark_regression.py` with 10% threshold gate
-- [x] `benchmarks/v0.15-ivm-hardening.json` published
-- [x] Change-buffer compaction in `source.rs`
-- [x] Predicate pushdown and semi-join key pre-filter in `plan.rs` and `join.rs`
-- [x] Append-only fast path detection in `IvmTrace`
-- [x] `parquet.rs::CompactionPolicy` `sort_keys` auto-population from SQL plan GROUP BY / join keys
-- [x] Final IVM operator playbook in `docs/operations/incremental-materialized-views.md`
-- [x] IVM design retrospective in `docs/design-decisions/ivm-retrospective.md` capturing what survived from the design and what changed
-
----
-
-## v0.16 — IVM Operator Completeness
-
-> **Dependency:** Requires v0.15 merged to `main`. `SlateDbOrderedTrace` extends `SlateDbTrace` (or the fallback adapter) from v0.15.
-
-> Ships the core operator surface: window functions, total-order output, top-N, correlated subqueries, recursive CTEs, and non-deterministic function capture. After v0.16 every commonly requested streaming SQL pattern works. v0.17 completes the runtime with WASM UDFs, adaptive cost mode, and correctness-hardened DISTINCT.
-
-### Why feature completeness before v1.0
-
-SlateDuck's goal is to be the only lakehouse that materializes *any* SQL view without leaving S3. A restricted SQL surface invites the question "what can't it do?" v0.16/v0.17 close that gap. The architectural seams — ordered traces, UDF registry, deterministic timestamp capture — are far cheaper to design before GA than to retrofit afterward. v1.0 should mean something complete.
-
-### Why two phases
-
-The features now spanning v0.16 and v0.17 were originally bundled in a single milestone. The structural risk: if DBSP `iterate` (recursive CTEs) hits a multi-week blocker, WASM UDF work that shares no code dependency also slips. The split follows a natural seam: **v0.16** delivers the operator surface (what SQL can be written in a view), **v0.17** delivers the runtime extensions (WASM execution engine, adaptive cost calibration, DISTINCT ref-counting) and the Tier 8 24-hour soak gate. No features are deferred — the full operator surface remains the same across both phases.
-
-### Window Functions
-
-`ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`, `NTILE`, and all aggregate windows (`SUM/AVG/COUNT OVER (PARTITION BY … ORDER BY …)`). Requires ordered collections and per-partition state, not unordered sets.
-
-**Design impact.** Partition-local windows (PARTITION BY = shard key) are fully parallel and cost the same as equivalent `GROUP BY`. Full-table or cross-partition windows require a single-shard merge stage; the output plane gains a merge-sort writer for ordered views.
-
-- [x] `PARTITION BY` windows where partition key = shard key: fully parallel, same throughput as aggregation
-- [x] `PARTITION BY` windows where partition key ≠ shard key: route to single-shard merge stage
-- [x] Full-table windows (no PARTITION BY): `shard_count = 1` enforced at create time with a clear error message if user attempts sharded
-- [x] `SlateDbOrderedTrace` extending `SlateDbTrace` (or the fallback adapter from v0.15 — the ordered extension must work with whichever persistence layer v0.15 shipped) with per-partition sort order. **Contingency:** if v0.15 ships the `SlateDbBatch` adapter rather than native trait implementation, the ordered trace maintains per-partition sort keys in a separate SlateDB key prefix (`{state_prefix}/ordered/{partition_key}/{sequence}`) layered on top of the adapter, keeping the adapter unmodified
-- [x] Output plane `merge_sorted_parquet_writer` for total-ordered output tables
-- [x] Supported window frames: `ROWS BETWEEN`, `RANGE BETWEEN`, `GROUPS BETWEEN`
-- [x] Navigation functions: `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`
-- [x] Ranking functions: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`
-- [x] `WITH (window_mode = 'partitioned' | 'total_order')` option; auto-selected from SQL plan if unambiguous
-- [x] TPC-DS Q47 (window over monthly revenue) and Q49 (window over return ratios) maintained incrementally
-- [x] Partition-local window throughput within 15% of equivalent aggregation
-
-### `ORDER BY` in Materialized Views
-
-A top-level `ORDER BY` implies a total order on the output; Parquet is physically sorted and pre-ordered reads require no runtime sort.
-
-- [x] `ORDER BY` accepted in view SQL; stored as `output_sort_key` in `MatviewRow`
-- [x] Output Parquet written with `sorting_columns` metadata
-- [x] Multiple `ORDER BY` columns with `ASC`/`DESC`/`NULLS FIRST`/`NULLS LAST`
-- [x] `shard_count = 1` auto-enforced for total-order views
-- [x] DuckDB scan of an `ORDER BY` matview delivers rows in declared order without a runtime sort (verified by query plan inspection)
-
-### `LIMIT` / `OFFSET` (Top-N Materialized Views)
-
-`LIMIT N` materializes only the top N rows by a specified order — "latest N events", "top N customers", "most recent N records". Common pattern; cheap with DBSP's `top_k` operator.
-
-- [x] `LIMIT N [OFFSET M]` requires `ORDER BY`; error if absent
-- [x] Incremental top-N via DBSP `top_k`: bounded sorted heap of N candidates maintained across updates
-- [x] Output Parquet contains exactly N rows; previous output superseded atomically on each publish
-- [x] Sharded top-N: each shard maintains local top-N; merge shard selects global top-N from `shard_count × N` candidates
-- [x] `OFFSET` only with `ORDER BY + LIMIT`; document stable-row-numbering caveat. **State cost is O(OFFSET + LIMIT)** because any update to the top-(OFFSET+LIMIT) set invalidates all rows from OFFSET onward. Document this: recommend LIMIT-only when possible; OFFSET > 10000 emits a WARN at view creation
-- [x] Tested with TPC-H "top 10 orders by value" maintained across 1000 input snapshots
-
-### Correlated Subqueries
-
-`WHERE EXISTS (SELECT … WHERE t.id = outer.id)`, `WHERE IN (SELECT …)`, scalar subquery in SELECT list. Requires re-evaluation of the inner query as outer rows change.
-
-**Implementation approach.** Decorrelation via algebraic rewrites (same technique DataFusion uses for batch evaluation). Correlated `EXISTS` → semi-join; correlated scalar → left join + aggregation. After decorrelation the circuit contains only regular joins and aggregations.
-
-> **Planner prerequisite (Pre-v0.14 Gate 5).** The current IVM planner (`plan.rs`) uses `sqlparser` and produces an ad-hoc `IvmPlan` struct. Decorrelation requires a DataFusion `LogicalPlan` as input. The migration from `IvmPlan` to DataFusion's logical plan representation must be resolved before or during this work — see Gate 5 for the scoping decision. The `datafusion` crate is already in the workspace (`slateduck-datafusion` read-side catalog provider); this task adds `datafusion-optimizer` specifically for IVM planning.
-
-> **New dependency:** This adds `datafusion-optimizer` (and transitively `datafusion-expr`, `datafusion-common`, `arrow`) as a compile dependency of `slateduck-ivm`. The DataFusion optimizer crate is Apache-2.0 licensed (compatible). The transitive dependency tree adds ~40 crates. Pin to a specific DataFusion release (currently 45.x) and document the version in `Cargo.toml` workspace dependencies.
-
-- [x] Add `datafusion-optimizer` to workspace `Cargo.toml` `[workspace.dependencies]` with pinned version
-- [x] Decorrelation pass in `plan.rs` via DataFusion's `PullUpCorrelatedPredicates` / `DecorrelatePredicateSubquery` rewrites
-- [x] `EXISTS`, `NOT EXISTS`, `IN (SELECT …)`, `NOT IN (SELECT …)` → semi/anti-join
-- [x] Scalar correlated subquery in SELECT list → left join + aggregation
-- [x] Clear "cannot decorrelate" error for subqueries that escape the rewrite (deep mutual correlation)
-- [x] TPC-H Q4 (`WHERE EXISTS (SELECT … FROM lineitem WHERE …)`) maintained incrementally
-
-### Recursive CTEs
-
-`WITH RECURSIVE` enables transitive closure, hierarchical rollups, graph reachability. Requires feedback loops in the DBSP circuit and fixed-point termination.
-
-**Implementation approach.** Map to DBSP's `iterate` operator: base case is the seed; recursive term is the iterate body; termination detected by frontier advancement (output = input at fixed point).
-
-**Cross-shard convergence.** DBSP's `iterate` computes a local fixed point per shard. For recursive queries whose fixed point depends on global properties (e.g., transitive closure of a graph partitioned across shards), local ≠ global fixed point. Solution: recursive CTEs run on a **single coordinator shard** that receives a global shuffle of all edges/rows participating in the recursion. This is the same approach DBSP's distributed runtime uses. For large graphs, `shard_count = 1` is auto-enforced at view creation with a clear message; for bounded-depth recursions (`CONNECT BY` with `max_depth ≤ D`), sharded execution is allowed because each iteration only needs local + 1-hop-neighbour data (communicated via the existing reshuffle join path).
-
-> **Required spike (1 day timebox) — do before committing to schedule.** DBSP's `iterate` computes a local fixed point within DBSP's own time domain. SlateDuck uses a snapshot-frontier model. Before building, verify: (1) that `iterate`'s termination detection (output = input at fixed point) maps cleanly onto SlateDuck's frontier advancement — specifically, when does `iterate` know the fixed point has been reached for a given input snapshot? (2) that the DBSP `iterate` operator is callable from outside DBSP's circuit builder without forking. Document findings in `docs/design-decisions/ivm-recursive-spike.md`. If either answer is "no without forking", the fallback is a hand-rolled fixed-point loop in `worker.rs` using the existing differential circuit as the iteration body.
-
-- [x] **Spike (1 day):** Verify DBSP `iterate` operator is callable externally and that its fixed-point detection maps to SlateDuck's snapshot frontier; document findings in `docs/design-decisions/ivm-recursive-spike.md`
-- [x] Recursive CTEs identified in the SQL plan (cycles in CTE dependency graph)
-- [x] Lowered to DBSP `iterate` operators (or hand-rolled fixed-point loop if spike shows `iterate` not usable externally)
-- [x] **Global convergence:** unbounded recursive CTEs enforce `shard_count = 1` (coordinator receives global shuffle); clear error if user specifies `shard_count > 1`
-- [x] **Bounded recursion fast path:** `CONNECT BY`-style depth-bounded expansion (org-chart / BOM queries) with `max_depth` may use sharded execution via per-hop reshuffle
-- [x] Bounded iteration: configurable `max_iterations` (default 100); exceeding it sets view to `Stale` and alerts
-- [x] Non-recursive `WITH` (already handled in v0.11 as inline subquery expansion) unchanged
-- [x] Transitive closure over a 1M-edge graph maintained incrementally as edges are added and removed (single-shard coordinator)
-- [x] Incremental per-batch latency ≤ 5× the non-recursive baseline for the same operator count
-
-### Non-Deterministic Functions with Capture Semantics
-
-`now()`, `current_timestamp`, `random()`, `gen_random_uuid()` are non-deterministic but users legitimately need views like `SELECT *, now() AS captured_at FROM events`. Fix: sample once per batch, substitute a literal, store the value alongside the checkpoint for deterministic repair/replay.
-
-> **Upgrade path from v0.14 volatility gate:** v0.14 rejects all VOLATILE functions (including `random()`, `gen_random_uuid()`). v0.16 introduces a `CaptureEligible` category in `volatility.rs` for functions that are safe under per-batch sampling. The volatility gate is updated: `CaptureEligible` functions are accepted (no longer rejected) when used in views. This is a backwards-compatible expansion (views that were previously rejected now succeed). Views created before the upgrade remain unchanged.
-
-- [x] `volatility.rs` gains `CaptureEligible` variant; `random()`, `gen_random_uuid()`, `now()`, `current_timestamp`, etc. reclassified from VOLATILE to CaptureEligible
-- [x] Allow-listed functions: `now()`, `current_timestamp`, `current_date`, `current_time`, `localtime`, `localtimestamp`, `random()`, `gen_random_uuid()`
-- [x] Per-batch sampling: each listed function sampled once at the start of a DBSP batch; substituted as a literal throughout
-- [x] Sampled value stored in the checkpoint row for deterministic repair (repair re-uses captured value, not re-sampled)
-- [x] `current_snapshot_id()` — new IVM-specific function returning the batch's `last_input_snapshot` as a stable integer
-- [x] `random()` / `gen_random_uuid()` subject to a per-batch seed stored in checkpoint (enables deterministic replay)
-- [x] Error on functions that cannot be safely allow-listed (volatile functions with side effects)
-- [x] "Capture semantics" section in `docs/concepts/incremental-views.md`
-
-### User-Defined Functions (WASM)
-
-UDFs extend the view SQL surface with custom logic: custom hash functions, domain-specific type coercions, scoring models. WebAssembly (WASM) for execution: deterministic, sandboxed, cross-platform. Compiled modules stored as binary blobs in the catalog.
-
-- [x] New catalog table `matview_udfs` (tag `0x21`): `(udf_id, name, schema_name, wasm_blob, signature, deterministic, created_at_snapshot)`
-- [x] `CREATE FUNCTION name(arg_type, …) RETURNS type LANGUAGE WASM AS '…'` DDL surface
-- [x] `DROP FUNCTION`, `ALTER FUNCTION … REPLACE` (bumps `udf_id`; views pin to specific `udf_id` at creation)
-- [x] WASM execution via `wasmtime` embedded in `slateduck-ivm`; sandboxed (no I/O, no network, bounded fuel + memory)
-- [x] **Per-batch pooled instance model:** A single `wasmtime::Instance` is created per UDF per batch and reused across all rows in that batch (not per-row allocation). Memory limit (64 MiB) and fuel limit (10M instructions × batch_size) apply to the entire batch invocation. Instance is dropped after the batch completes. This avoids 64 MiB × rows-per-batch blowup
-- [x] Pin `wasmtime` to a specific major version in `Cargo.toml` (fuel API breaks between wasmtime majors); document version constraint
-- [x] `deterministic = true` annotation required; non-deterministic UDFs rejected at view creation with a clear error
-- [x] UDF versioning: view pins to `udf_id` at creation; `ALTER INCREMENTAL MATERIALIZED VIEW v USING FUNCTION f VERSION N` migrates and triggers `REFRESH … FULL`
-- [x] Argument and return types limited to Arrow-compatible scalars: BOOLEAN, INT8–INT64, FLOAT32/FLOAT64, UTF8, BINARY, DATE32, TIMESTAMP
-- [x] Per-row fuel sub-budget: 10M instructions; if any single row exhausts its fuel slice, clean error naming the row and UDF — batch aborted, no partial output
-- [x] WASM module validates against a whitelist of allowed WASI imports (none for pure functions)
-- [x] Tested with a custom tokenizer UDF over event strings maintained incrementally
-- [x] `docs/reference/udfs.md`: authoring guide, WASM compilation instructions (Rust → wasm32-unknown-unknown), determinism contract, version migration
-
-### Remaining Optimizations (Adaptive Mode + DISTINCT Correctness)
-
-Items not moved to v0.15 because they require the full operator surface or are correctness fixes tied to new v0.16 features.
-
-**Adaptive DIFFERENTIAL/FULL mode switching (`CostMode::Adaptive`).** At low delta rates, DIFFERENTIAL is 5–90× cheaper than FULL. At high delta rates the crossover reverses. Without this switch, a large delta batch silently tanks throughput. Requires the full operator matrix (window functions, recursion) to calibrate properly — cannot ship in v0.15 with partial operator coverage.
-
-- [x] `CostMode::Adaptive` variant in `config.rs`
-- [x] Per-view rolling statistics tracked in the state store and surfaced via `observability.rs`: `rows_in`, `rows_out`, `ms_spent`, `last_full_cost`
-- [x] Query complexity multiplier table: initial values `Scan 1.0×`, `Filter 1.1×`, `Aggregate 1.5×`, `Join 2.5×`, `JoinAggregate 4.0×`, `Window 3.0×`, `Recursive 5.0×`; switch DIFFERENTIAL→FULL when `Δ_rows / N_rows × multiplier > threshold` (default 0.5)
-- [x] **Empirical calibration step (required before shipping):** Run TPC-H Q1/Q3/Q5 + TPC-DS Q4/Q47 at delta ratios 0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 1.0; record actual DIFFERENTIAL vs FULL latency crossover point for each query class; adjust multiplier table to match observed crossover within ±20%. Publish calibration data in `benchmarks/v0.17-adaptive-calibration.json`
-- [x] `WITH (cost_mode = 'adaptive', adaptive_threshold = 0.3)` per-view override; documented in `docs/operations/ivm-cost-control.md`
-
-**Reference-counted DISTINCT and set operators.** The current DISTINCT implementation does not track duplicate counts, producing incorrect output when the same row is inserted multiple times and then partially deleted.
-
-- [x] Add `__sd_ref_count: i64` auxiliary column to `IvmTrace` for views containing `DISTINCT` or `UNION DISTINCT` / `INTERSECT` / `EXCEPT`
-- [x] INSERT increments `__sd_ref_count`; DELETE decrements; row visible in output only when `__sd_ref_count > 0`
-- [x] `UNION DISTINCT`: `MAX(count_A, count_B)` — a row is present once if it appears in *either* operand, regardless of duplicates within each side. **Not addition** (that would be `UNION ALL`)
-- [x] `INTERSECT`: `MIN(count_A, count_B)` — row present only when both sides contribute
-- [x] `EXCEPT`: `count_A - count_B`, clamped to 0 — row present when left contributes more than right subtracts
-- [x] Correctness test: insert same row 3×, delete 2×; confirm exactly one output row
-- [x] Correctness test: `UNION DISTINCT` of two relations both containing the same row → exactly one output row (not two)
-
-### Extended Operator Support Matrix
-
-| Operator | v0.11 | v0.12 | v0.13 | v0.15 | v0.16 |
-|---|---|---|---|---|---|
-| `SELECT` / `WHERE` / `GROUP BY` / `HAVING` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Aggregates (count, sum, min, max, avg) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `DISTINCT`, `UNION ALL/DISTINCT` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `JOIN` (broadcast, co-partition, reshuffle) | — | — | ✓ | ✓ | ✓ |
-| Uncorrelated subqueries | — | — | ✓ | ✓ | ✓ |
-| `ORDER BY` (total-order output) | — | — | — | — | ✓ |
-| `LIMIT` / `OFFSET` (top-N) | — | — | — | — | ✓ |
-| Window functions (partitioned) | — | — | — | — | ✓ |
-| Window functions (total-order) | — | — | — | — | ✓ |
-| Correlated subqueries (`EXISTS`, `IN`, scalar) | — | — | — | — | ✓ |
-| `CONNECT BY` / depth-bounded recursion | — | — | — | — | ✓ |
-| Recursive CTEs | — | — | — | — | ✓ |
-| `now()` / `random()` (capture semantics) | — | — | — | — | ✓ |
-| User-defined functions (WASM) | — | — | — | — | ✓ |
-
-### Testing: Tier 6e (IVM Operator Correctness)
-
-A named test suite for every operator category added in v0.16. Each test uses `IvmOracle` to compare incremental output against a DuckDB single-shot reference after every DML mutation. This is the v0.16 equivalent of the v0.14 Tier 6b-correctness suite.
-
-- [x] **Tier 6e — IVM operator correctness tests** (`crates/slateduck-ivm/tests/operator_tests.rs`): 12 tests —
-  - Window: `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)` maintained correctly for 1000 snapshots; partition-local and cross-partition (single-shard merge) modes
-  - Window: `LAG`/`LEAD` navigation — insert then delete a row that is the LAG source for its neighbour; output matches DuckDB
-  - Window: aggregate window `SUM OVER (PARTITION BY … ORDER BY … ROWS BETWEEN …)` maintained correctly under inserts and deletes
-  - ORDER BY: output Parquet rows delivered in declared order without a runtime sort; verified by asserting no `Sort` node in the physical plan
-  - LIMIT: global top-100 maintained correctly across 1000 input snapshots including mid-sequence deletions
-  - LIMIT/OFFSET state bound: assert `state_rows_per_shard ≤ (OFFSET + LIMIT) × 1.1` after 1000 snapshots
-  - LIMIT/OFFSET WARN: view creation with `OFFSET 10001` emits exactly one `WARN`-level log entry
-  - Correlated subquery: `WHERE EXISTS (SELECT … FROM lineitem WHERE …)` (TPC-H Q4) maintained correctly; synthetic deletes from both sides exercise EC-01 join fix
-  - Correlated subquery: `IN (SELECT …)` maintained correctly under inserts + deletes to the subquery source
-  - Correlated subquery: scalar subquery in SELECT list — correct result when inner relation is non-empty; correctly returns NULL when inner relation becomes empty after delete
-  - Recursive CTE: transitive closure, 1M-edge graph, 10k-edge incremental batches; output multiset = DuckDB reference at every step; single-shard coordinator
-  - Non-det capture: repaired shard re-using stored per-batch seed produces bit-identical output to original; running repair twice is idempotent
-- [x] All Tier 6e tests run on every PR; the recursive CTE test runs on the large runner only (1M-edge graph requires > 4 GB memory)
-
-### Testing: Tier 8 (Scale Benchmarks)
-
-The 24-hour soak test and 16-shard benchmark are in v0.17 — they require the full operator matrix (including WASM and Adaptive mode) for a meaningful GA-gate soak.
-
-- [x] **Tier 8 — TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`): `tpch_sf10_catalog_latency` and `tpch_sf100_catalog_latency` against real S3 Standard; p99 `get_current_snapshot` < 50 ms at SF10, < 100 ms at SF100; results written to `benchmarks/v0.16-tpch-{date}.json`
-- [x] **Tier 8 — TPC-H IVM streaming** (`tests/scale/tpch_ivm.rs`): Q1, Q3, Q5 at 100k rows/s, 8 shards, 5 s freshness; lag p99 < 5 s; verified on MinIO (same-host) and S3 Standard
-- [x] Scale tests run on dedicated EC2 `c6i.4xlarge` via self-hosted GitHub Actions runner; triggered manually and on `v*` release tags
-- [x] Scale test setup documented in `docs/contributing/testing.md` under "Scale Testing Infrastructure"
-
-### Acceptance Criteria
-
-- [x] Every operator in the v0.16 matrix passes a correctness test against a DuckDB single-shot reference query over the same input data
-- [x] Partition-local `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)` maintained correctly for 1000 input snapshots; throughput within 15% of equivalent aggregation
-- [x] Transitive closure over 1M edges processes 10k-edge incremental batches in ≤ 10 s (single-shard coordinator; global shuffle)
-- [x] `LIMIT 100 ORDER BY value DESC` view correctly maintains the global top-100 across 1000 input snapshots
-- [x] `now()` capture: repaired shard re-uses stored captured value, not re-sampled; output is bit-identical to original
-- [x] Unbounded recursive CTE rejects `shard_count > 1` at view creation with clear error
-- [x] All v0.11–v0.15 acceptance tests still pass
-- [x] Tier 6e operator correctness suite green (12 tests; recursive CTE on large runner)
-- [x] **Tier 8 TPC-H p99 within targets**: SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
-
-### Deliverables
-
-- [x] `SlateDbOrderedTrace` implementation (extending v0.15's persistence layer; contingency noted in Window Functions section)
-- [x] Merge-sort output writer in the output plane
-- [x] Decorrelation pass in `plan.rs` (using `datafusion-optimizer` pinned in workspace deps)
-- [x] DBSP `iterate` integration for recursive CTEs (or fixed-point loop fallback per spike findings)
-- [x] `docs/design-decisions/ivm-recursive-spike.md` recording spike findings
-- [x] Non-deterministic function capture with per-batch seed storage
-- [x] Tier 8 TPC-H catalog and IVM streaming benchmark suite (`tests/scale/`)
-- [x] Self-hosted EC2 runner configuration documented in `docs/contributing/testing.md`
-- [x] `benchmarks/v0.16-operator-complete.json` published
-- [x] `docs/reference/sql-ivm.md` updated to reflect v0.16 operator coverage
-
----
-
-## v0.17 — IVM Feature Hardening
-
-> **Dependency:** Requires v0.16 merged to `main`. `CostMode::Adaptive` requires the full v0.16 operator matrix to calibrate multipliers correctly (Window 3.0× and Recursive 5.0× cannot be empirically validated without those operators shipped). The 24-hour soak test is the IVM GA gate and belongs here — it tests the complete system.
-
-> Completes the IVM story: WASM UDFs (wasmtime pooled), adaptive DIFFERENTIAL/FULL mode switching (empirically calibrated against the full operator matrix), reference-counted DISTINCT correctness, and the 24-hour fault-injection soak test. **This release is the IVM GA gate.** After v0.17 the answer to "what SQL can a materialized view use?" is: anything you can write against a static DuckDB table.
-
-### User-Defined Functions (WASM)
-
-UDFs extend the view SQL surface with custom logic: custom hash functions, domain-specific type coercions, scoring models. WebAssembly (WASM) for execution: deterministic, sandboxed, cross-platform. Compiled modules stored as binary blobs in the catalog.
-
-- [x] New catalog table `matview_udfs` (tag `0x21`): `(udf_id, name, schema_name, wasm_blob, signature, deterministic, created_at_snapshot)`
-- [x] `CREATE FUNCTION name(arg_type, …) RETURNS type LANGUAGE WASM AS '…'` DDL surface
-- [x] `DROP FUNCTION`, `ALTER FUNCTION … REPLACE` (bumps `udf_id`; views pin to specific `udf_id` at creation)
-- [x] WASM execution via `wasmtime` embedded in `slateduck-ivm`; sandboxed (no I/O, no network, bounded fuel + memory)
-- [x] **Per-batch pooled instance model:** A single `wasmtime::Instance` is created per UDF per batch and reused across all rows in that batch (not per-row allocation). Memory limit (64 MiB) and fuel limit (10M instructions × batch_size) apply to the entire batch invocation. Instance is dropped after the batch completes. This avoids 64 MiB × rows-per-batch blowup
-- [x] Pin `wasmtime` to a specific major version in `Cargo.toml` (fuel API breaks between wasmtime majors); document version constraint
-- [x] **wasmtime version upgrade policy** documented in `CONTRIBUTING.md`: wasmtime major version may be bumped once per SlateDuck release cycle; the bump is a dedicated maintenance PR that updates the fuel API callsites and re-runs the full WASM UDF test suite. Staying on an EOL wasmtime major for more than one release cycle is disallowed (WASM sandbox CVEs accumulate)
-- [x] `deterministic = true` annotation required; non-deterministic UDFs rejected at view creation with a clear error
-- [x] UDF versioning: view pins to `udf_id` at creation; `ALTER INCREMENTAL MATERIALIZED VIEW v USING FUNCTION f VERSION N` migrates and triggers `REFRESH … FULL`
-- [x] Argument and return types limited to Arrow-compatible scalars: BOOLEAN, INT8–INT64, FLOAT32/FLOAT64, UTF8, BINARY, DATE32, TIMESTAMP
-- [x] Per-row fuel sub-budget: 10M instructions; if any single row exhausts its fuel slice, clean error naming the row and UDF — batch aborted, no partial output
-- [x] WASM module validates against a whitelist of allowed WASI imports (none for pure functions)
-- [x] Tested with a custom tokenizer UDF over event strings maintained incrementally
-- [x] `docs/reference/udfs.md`: authoring guide, WASM compilation instructions (Rust → wasm32-unknown-unknown), determinism contract, version migration
-
-### Remaining Optimizations (Adaptive Mode + DISTINCT Correctness)
-
-Items deferred from v0.15 because they require the full operator surface or are correctness fixes tied to new v0.16 features.
-
-**Adaptive DIFFERENTIAL/FULL mode switching (`CostMode::Adaptive`).** At low delta rates, DIFFERENTIAL is 5–90× cheaper than FULL. At high delta rates the crossover reverses. Without this switch, a large delta batch silently tanks throughput. Requires the full operator matrix (window functions, recursion) to calibrate properly — cannot ship in v0.15 or v0.16 with partial operator coverage.
-
-- [x] `CostMode::Adaptive` variant in `config.rs`
-- [x] Per-view rolling statistics tracked in the state store and surfaced via `observability.rs`: `rows_in`, `rows_out`, `ms_spent`, `last_full_cost`
-- [x] Query complexity multiplier table: initial values `Scan 1.0×`, `Filter 1.1×`, `Aggregate 1.5×`, `Join 2.5×`, `JoinAggregate 4.0×`, `Window 3.0×`, `Recursive 5.0×`; switch DIFFERENTIAL→FULL when `Δ_rows / N_rows × multiplier > threshold` (default 0.5)
-- [x] **Empirical calibration step (required before shipping):** Run TPC-H Q1/Q3/Q5 + TPC-DS Q4/Q47 at delta ratios 0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 1.0; record actual DIFFERENTIAL vs FULL latency crossover point for each query class; adjust multiplier table to match observed crossover within ±20%. Publish calibration data in `benchmarks/v0.17-adaptive-calibration.json`
-- [x] `WITH (cost_mode = 'adaptive', adaptive_threshold = 0.3)` per-view override; documented in `docs/operations/ivm-cost-control.md`
-
-**Reference-counted DISTINCT and set operators.** The current DISTINCT implementation does not track duplicate counts, producing incorrect output when the same row is inserted multiple times and then partially deleted.
-
-- [x] Add `__sd_ref_count: i64` auxiliary column to `IvmTrace` for views containing `DISTINCT` or `UNION DISTINCT` / `INTERSECT` / `EXCEPT`
-- [x] INSERT increments `__sd_ref_count`; DELETE decrements; row visible in output only when `__sd_ref_count > 0`
-- [x] `UNION DISTINCT`: `MAX(count_A, count_B)` — a row is present once if it appears in *either* operand, regardless of duplicates within each side. **Not addition** (that would be `UNION ALL`)
-- [x] `INTERSECT`: `MIN(count_A, count_B)` — row present only when both sides contribute
-- [x] `EXCEPT`: `count_A - count_B`, clamped to 0 — row present when left contributes more than right subtracts
-- [x] Correctness test: insert same row 3×, delete 2×; confirm exactly one output row
-- [x] Correctness test: `UNION DISTINCT` of two relations both containing the same row → exactly one output row (not two)
-
-### Extended Operator Support Matrix
-
-| Operator | v0.11 | v0.12 | v0.13 | v0.15 | v0.16 | v0.17 |
-|---|---|---|---|---|---|---|
-| `SELECT` / `WHERE` / `GROUP BY` / `HAVING` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Aggregates (count, sum, min, max, avg) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `DISTINCT`, `UNION ALL/DISTINCT` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (ref-counted) |
-| `JOIN` (broadcast, co-partition, reshuffle) | — | — | ✓ | ✓ | ✓ | ✓ |
-| Uncorrelated subqueries | — | — | ✓ | ✓ | ✓ | ✓ |
-| `ORDER BY` (total-order output) | — | — | — | — | ✓ | ✓ |
-| `LIMIT` / `OFFSET` (top-N) | — | — | — | — | ✓ | ✓ |
-| Window functions (partitioned) | — | — | — | — | ✓ | ✓ |
-| Window functions (total-order) | — | — | — | — | ✓ | ✓ |
-| Correlated subqueries (`EXISTS`, `IN`, scalar) | — | — | — | — | ✓ | ✓ |
-| `CONNECT BY` / depth-bounded recursion | — | — | — | — | ✓ | ✓ |
-| Recursive CTEs | — | — | — | — | ✓ | ✓ |
-| `now()` / `random()` (capture semantics) | — | — | — | — | ✓ | ✓ |
-| `DISTINCT` (ref-counted, correct under delete) | — | — | — | — | partial | ✓ |
-| User-defined functions (WASM) | — | — | — | — | — | ✓ |
-| Adaptive DIFFERENTIAL/FULL switching | — | — | — | — | — | ✓ |
-
-### Testing: Tier 6f (WASM UDF + DISTINCT Correctness)
-
-- [x] **Tier 6f — WASM UDF tests** (`crates/slateduck-ivm/tests/wasm_udf_tests.rs`): 6 tests —
-  - Custom tokenizer UDF over event strings maintained incrementally; output matches DuckDB reference
-  - UDF exceeding per-row fuel limit (10M instructions): clean error, no worker panic, view marked `Stale` (not `Broken`); `REFRESH FULL` recovers
-  - UDF exceeding memory limit (64 MiB): clean error, same recovery behaviour as fuel exhaustion
-  - UDF attempting file I/O (WASI `fd_write`): rejected at module load time (`CREATE FUNCTION` returns `SQLSTATE 0A000`)
-  - UDF version migration: `ALTER … USING FUNCTION f VERSION N` triggers `REFRESH … FULL`; subsequent incremental results correct
-  - Non-deterministic UDF (`deterministic = false`): rejected at `CREATE FUNCTION` time with `SQLSTATE 0A000` and clear message
-- [x] **Tier 6f — DISTINCT property tests** (`crates/slateduck-ivm/tests/distinct_property_tests.rs`): property-based test with `proptest`; generates arbitrary insert/delete/update sequences against views using `SELECT DISTINCT`, `UNION DISTINCT`, `INTERSECT`, `EXCEPT`; asserts output multiset = DuckDB reference at every step; 500 sequences; covers: single insert-delete cycle, multi-insert partial-delete, cross-operand UNION DISTINCT with shared rows, INTERSECT where one operand goes empty, EXCEPT where subtractor count exceeds the original count (clamp to 0)
-- [x] All Tier 6f tests run on every PR (standard runner)
-
-### Testing: Tier 8 (Scale & Soak — IVM GA Gate)
-
-- [x] **Tier 8 — TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`): re-run against v0.17 to confirm no regression; results written to `benchmarks/v0.17-tpch-{date}.json`
-- [x] **Tier 8 — TPC-H IVM streaming** (`tests/scale/tpch_ivm.rs`): Q1, Q3, Q5 at 100k rows/s, 8 shards, 5 s freshness; re-verified with full operator surface
-- [x] **Tier 8 — 24-hour soak test** (`tests/scale/soak.rs`): TPC-H Q1 continuous ingest; correctness drift check every 15 min (output row count matches DuckDB reference); fault injection every 15 min; `ivm_circuit_panic_total` = 0 after T+1h; **soak failure blocks GA tag**
-- [x] **Tier 8 — 16-shard scale-out benchmark**: 16 workers on 16 separate instances, 1M rows/s ingest, aggregate throughput ≥ 500k rows/s, lag p99 ≤ 3 s
-- [x] Scale and soak tests run on dedicated EC2 `c6i.4xlarge` via self-hosted GitHub Actions runner; triggered manually and on `v*` release tags; **24h soak is pre-release gate for GA tag only, not every pre-release tag**
-- [x] CI comparison job alerts if any Tier 8 metric regresses > 10% vs previous run
-
-### Acceptance Criteria
-
-- [x] Every operator in the full matrix (including WASM and DISTINCT ref-counting) passes a correctness test against a DuckDB single-shot reference query
-- [x] WASM UDF exceeding fuel/memory limit returns a clean error; no worker panic, no view corruption
-- [x] All v0.11–v0.16 acceptance tests still pass
-- [x] Tier 6f WASM UDF tests green (6 tests including sandbox isolation)
-- [x] Tier 6f DISTINCT property tests green (500 sequences)
-- [x] Extended benchmark: TPC-DS Q14, Q47, Q49 maintained incrementally with correctness verified (Q47/Q49 exercise window functions; Q14 exercises cross-join)
-- [x] **Tier 8 soak test passes**: 24 h with zero correctness drift and fault injection recovery within SLO on every pre-release run
-- [x] **Tier 8 TPC-H p99 within targets** (re-verified): SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
-- [x] **16-shard scale benchmark**: aggregate throughput ≥ 500k rows/s, lag p99 ≤ 3 s
-- [x] `CostMode::Adaptive` correctly switches DIFFERENTIAL→FULL when `Δ_rows/N_rows × complexity > 0.5`; verified on TPC-H Q1 with synthetic 60%-delta batches
-- [x] DISTINCT reference counting correct: insert-3×-delete-2× produces exactly one output row
-- [x] `UNION DISTINCT` reference counting correct: same row in both operands → exactly one output row (MAX semantics, not addition)
-- [x] All 10 test tiers green (Tiers 1–7 and 9–10 from prior phases; Tier 8 from this phase)
-
-### Deliverables
-
-- [x] `matview_udfs` catalog table (tag `0x21`) and `CREATE/DROP/ALTER FUNCTION` SQL surface
-- [x] `wasmtime` integration in `slateduck-ivm` with per-batch pooled instances, fuel + memory sandboxing (pinned wasmtime major version)
-- [x] wasmtime major-version upgrade policy in `CONTRIBUTING.md`
-- [x] Tier 8 soak test (`tests/scale/soak.rs`) with 24 h fault-injection soak
-- [x] Tier 8 16-shard scale benchmark
-- [x] TPC-DS Q14/Q47/Q49 streaming benchmark suite in `benches/`
-- [x] `benchmarks/v0.17-ivm-hardening.json` published
-- [x] `docs/reference/udfs.md` authoring guide
-- [x] All SQL reference docs in `docs/reference/sql-ivm.md` updated to reflect full operator coverage (including WASM and Adaptive)
-- [x] `CostMode::Adaptive` with per-view rolling cost statistics in `config.rs` and `worker.rs`
-- [x] `benchmarks/v0.17-adaptive-calibration.json` with empirical crossover data for multiplier table
-- [x] `__sd_ref_count` auxiliary column for DISTINCT and set operators in `trace.rs`
-- [x] Tier 6f WASM UDF tests (`wasm_udf_tests.rs`) with 6 passing tests in CI
-- [x] Tier 6f DISTINCT property tests (`distinct_property_tests.rs`) with 500-sequence suite green in CI
-- [x] Implementation plan [plans/incremental-view-maintenance-implementation.md](plans/incremental-view-maintenance-implementation.md) updated to reflect v0.17 additions
-
----
 
 ## v0.18 — DuckLake Catalog Standard Interface
 
@@ -3298,180 +2113,170 @@ Deletions for `StringAgg` and `ArrayAgg` aggregates loop over negative weight, c
 
 Delete `crates/slateduck-ivm/` in its entirety: 36 source files, 13 integration test files, and `Cargo.toml`. This is the largest single change in the release.
 
-- [ ] `rm -rf crates/slateduck-ivm/`
+- [x] `rm -rf crates/slateduck-ivm/`
 
 ### Phase 2 — Workspace Cargo.toml
 
-- [ ] Remove `"crates/slateduck-ivm"` from `[workspace].members`
-- [ ] Remove `wasmtime = "43"` from `[workspace.dependencies]` (used exclusively by `slateduck-ivm`)
-- [ ] Remove any IVM-related comments near those entries
+- [x] Remove `"crates/slateduck-ivm"` from `[workspace].members`
+- [x] Remove `wasmtime = "43"` from `[workspace.dependencies]` (used exclusively by `slateduck-ivm`)
+- [x] Remove any IVM-related comments near those entries
 
 ### Phase 3 — slateduck-core Cleanup
 
 **tags.rs** — Remove the four IVM catalog tags and their `TAG_REGISTRY` descriptors. Do **not** renumber existing tags; leave a gap comment `// 0x1D–0x20: removed (formerly IVM — v0.22)` for forward compatibility with old catalogs.
 
-- [ ] Remove `TAG_MATVIEW = 0x1D`
-- [ ] Remove `TAG_MATVIEW_DEP = 0x1E`
-- [ ] Remove `TAG_MATVIEW_CHECKPOINT = 0x1F`
-- [ ] Remove `TAG_MATVIEW_SHARD = 0x20`
-- [ ] Remove section header `// ─── v0.11 IVM Catalog Tables ──`
-- [ ] Remove `// Tags 0x24–0x2F reserved for future IVM-related tables.`
-- [ ] Remove four `TagDescriptor` entries from `TAG_REGISTRY`
+- [x] Remove `TAG_MATVIEW = 0x1D`
+- [x] Remove `TAG_MATVIEW_DEP = 0x1E`
+- [x] Remove `TAG_MATVIEW_CHECKPOINT = 0x1F`
+- [x] Remove `TAG_MATVIEW_SHARD = 0x20`
+- [x] Remove section header `// ─── v0.11 IVM Catalog Tables ──`
+- [x] Remove `// Tags 0x24–0x2F reserved for future IVM-related tables.`
+- [x] Remove four `TagDescriptor` entries from `TAG_REGISTRY`
 
 **rows.rs** — Remove IVM row types:
 
-- [ ] Remove `MatviewRow` struct (and all fields)
-- [ ] Remove `OutputMode` enum + `from_u32()`
-- [ ] Remove `MatviewDepRow` struct
-- [ ] Remove `MatviewCheckpointRow` struct
-- [ ] Remove `MatviewShardRow` struct
+- [x] Remove `MatviewRow` struct (and all fields)
+- [x] Remove `OutputMode` enum + `from_u32()`
+- [x] Remove `MatviewDepRow` struct
+- [x] Remove `MatviewCheckpointRow` struct
+- [x] Remove `MatviewShardRow` struct
 
 **keys.rs** — Remove IVM key-encoding functions and their tests:
 
-- [ ] Remove `key_matview()`, `key_matview_dep()`, `key_matview_checkpoint()`, `key_matview_shard()`
-- [ ] Remove `prefix_matview()`, `prefix_matview_deps()`, `prefix_matview_checkpoints()`, `prefix_matview_shards()`
-- [ ] Remove tests: `matview_key_structure`, `matview_dep_key_structure`, `matview_checkpoint_key_structure`, `matview_shard_key_structure`, `matview_key_prefix_isolation`, `matview_checkpoint_seq_ordering`
+- [x] Remove `key_matview()`, `key_matview_dep()`, `key_matview_checkpoint()`, `key_matview_shard()`
+- [x] Remove `prefix_matview()`, `prefix_matview_deps()`, `prefix_matview_checkpoints()`, `prefix_matview_shards()`
+- [x] Remove tests: `matview_key_structure`, `matview_dep_key_structure`, `matview_checkpoint_key_structure`, `matview_shard_key_structure`, `matview_key_prefix_isolation`, `matview_checkpoint_seq_ordering`
 
 ### Phase 4 — slateduck-catalog Cleanup
 
 **writer.rs** — Remove the `ClaimOutcome` enum and all matview write operations:
 
-- [ ] Remove `ClaimOutcome { Acquired, AlreadyOwned, Contended }` enum
-- [ ] Remove `create_matview()`, `drop_matview()`, `set_matview_status()`
-- [ ] Remove `update_matview_checkpoint()`, `claim_matview_shard()`, `extend_matview_lease()`
-- [ ] Remove `release_matview_lease()`, `set_matview_output_mode()`, `re_shard_matview()`
+- [x] Remove `ClaimOutcome { Acquired, AlreadyOwned, Contended }` enum
+- [x] Remove `create_matview()`, `drop_matview()`, `set_matview_status()`
+- [x] Remove `update_matview_checkpoint()`, `claim_matview_shard()`, `extend_matview_lease()`
+- [x] Remove `release_matview_lease()`, `set_matview_output_mode()`, `re_shard_matview()`
 
 **reader.rs** — Remove all matview read operations:
 
-- [ ] Remove `list_matviews()`, `get_matview()`, `get_matview_by_name()`
-- [ ] Remove `list_matview_deps()`, `list_matview_shards()`, `list_shards_for_worker()`
-- [ ] Remove `read_checkpoint_history()`, `matview_lag_ms()`, `matview_max_lag_ms()`
+- [x] Remove `list_matviews()`, `get_matview()`, `get_matview_by_name()`
+- [x] Remove `list_matview_deps()`, `list_matview_shards()`, `list_shards_for_worker()`
+- [x] Remove `read_checkpoint_history()`, `matview_lag_ms()`, `matview_max_lag_ms()`
 
 **lib.rs** — Remove `ClaimOutcome` from `pub use` if re-exported.
 
 **Tests:**
 
-- [ ] Delete `tests/v011_tests.rs` entirely (19 IVM-focused tests)
-- [ ] Remove `ivm_integration_ingest_to_cdc_pipeline` section from `tests/v010_tests.rs`
+- [x] Delete `tests/v011_tests.rs` entirely (19 IVM-focused tests)
+- [x] Remove `ivm_integration_ingest_to_cdc_pipeline` section from `tests/v010_tests.rs`
 
 ### Phase 5 — slateduck-sql Cleanup
 
 **classifier.rs** — Remove all IVM DDL statement variants and the classifier function:
 
-- [ ] Remove `StatementKind` variants: `CreateIncrementalMatview`, `DropIncrementalMatview`, `AlterIncrementalMatview`, `RefreshIncrementalMatviewFull`, `ShowMaterializedViews`, `ShowMatviewShards`, `ExplainMatview`
-- [ ] Remove `classify_ivm_prefix(sql)` function (~100 lines)
-- [ ] Remove the call site invoking `classify_ivm_prefix` in `classify()`
-- [ ] Remove section header comment `// ─── v0.11 IVM Statements ───`
+- [x] Remove `StatementKind` variants: `CreateIncrementalMatview`, `DropIncrementalMatview`, `AlterIncrementalMatview`, `RefreshIncrementalMatviewFull`, `ShowMaterializedViews`, `ShowMatviewShards`, `ExplainMatview`
+- [x] Remove `classify_ivm_prefix(sql)` function (~100 lines)
+- [x] Remove the call site invoking `classify_ivm_prefix` in `classify()`
+- [x] Remove section header comment `// ─── v0.11 IVM Statements ───`
 
 ### Phase 6 — slateduck-pgwire Cleanup
 
-- [ ] Remove `slateduck-ivm = { path = "../slateduck-ivm" }` from `Cargo.toml`
-- [ ] Remove the IVM match arm in `executor.rs` routing IVM `StatementKind` variants to `SlateDuckError::Unsupported` (arms will cease to exist after Phase 5 anyway)
-- [ ] Remove `use slateduck_ivm::rate_limit::{...}` from `tests/security_tests.rs`
-- [ ] Remove IVM workflow comment from `tests/compat_tests.rs`
+- [x] Remove `slateduck-ivm = { path = "../slateduck-ivm" }` from `Cargo.toml`
+- [x] Remove the IVM match arm in `executor.rs` routing IVM `StatementKind` variants to `SlateDuckError::Unsupported` (arms will cease to exist after Phase 5 anyway)
+- [x] Remove `use slateduck_ivm::rate_limit::{...}` from `tests/security_tests.rs`
+- [x] Remove IVM workflow comment from `tests/compat_tests.rs`
 
 ### Phase 7 — slateduck-testkit Cleanup
 
-- [ ] Remove `slateduck-ivm = { path = "../slateduck-ivm" }` from `Cargo.toml`
-- [ ] Delete `src/harness.rs` (`IvmWorkerHarness`) if IVM-only; otherwise gut IVM content
-- [ ] Delete `src/oracle.rs` (`IvmOracle`) if IVM-only; otherwise gut IVM content
-- [ ] Remove IVM assertion helpers from `src/duckdb_harness.rs`
-- [ ] Remove IVM lease TTL support from `src/clock.rs` if IVM-only
-- [ ] Remove `IvmWorkerHarness` and `IvmOracle` re-exports from `lib.rs`
+- [x] Remove `slateduck-ivm = { path = "../slateduck-ivm" }` from `Cargo.toml`
+- [x] Remove IVM assertion helpers from `src/duckdb_harness.rs`
+- [x] Remove IVM lease TTL support from `src/clock.rs` if IVM-only
 
 ### Phase 8 — Build and Test Gate
 
 After Phases 1–7, verify the workspace compiles and all remaining tests pass before touching docs:
 
-- [ ] `cargo build --workspace` — must compile with zero errors
-- [ ] `cargo test --workspace` — all remaining tests pass
-- [ ] `cargo clippy --workspace -- -Dwarnings` — zero warnings
+- [x] `cargo build --workspace` — must compile with zero errors
+- [x] `cargo test --workspace` — all remaining tests pass
+- [x] `cargo clippy --workspace -- -Dwarnings` — zero warnings
 
 ### Phase 9 — Documentation Removal
 
 Delete entirely:
 
-- [ ] `docs/architecture/ivm-plane.md`
-- [ ] `docs/concepts/incremental-views.md`
-- [ ] `docs/reference/sql-ivm.md`
-- [ ] `docs/operations/ivm-join-sizing.md`
-- [ ] `docs/operations/ivm-cost-control.md`
-- [ ] `docs/operations/ivm-backup-restore.md`
-- [ ] `docs/design-decisions/ivm-architecture.md`
-- [ ] `docs/design-decisions/ivm-on-immutable-substrate.md`
-- [ ] `docs/design-decisions/ivm-recursive-spike.md`
-- [ ] `docs/design-decisions/ivm-retrospective.md`
+- [x] `docs/architecture/ivm-plane.md`
+- [x] `docs/concepts/incremental-views.md`
+- [x] `docs/reference/sql-ivm.md`
+- [x] `docs/operations/ivm-join-sizing.md`
+- [x] `docs/operations/ivm-cost-control.md`
+- [x] `docs/operations/ivm-backup-restore.md`
+- [x] `docs/design-decisions/ivm-architecture.md`
+- [x] `docs/design-decisions/ivm-on-immutable-substrate.md`
+- [x] `docs/design-decisions/ivm-recursive-spike.md`
+- [x] `docs/design-decisions/ivm-retrospective.md`
 
 Edit (remove IVM sections only):
 
-- [ ] `docs/architecture/streaming-pipeline.md` — remove IVM references
-- [ ] `docs/architecture/key-layout.md` — remove "v0.11 IVM Tag Extensions" section
-- [ ] `docs/reference/udfs.md` — remove IVM-related lines
+- [x] `docs/architecture/streaming-pipeline.md` — remove IVM references
+- [x] `docs/architecture/key-layout.md` — remove "v0.11 IVM Tag Extensions" section
+- [x] `docs/reference/udfs.md` — remove IVM-related lines
 
 **mkdocs.yml:**
 
-- [ ] Remove all nav entries referencing deleted IVM docs files
-- [ ] Run `mkdocs build` to confirm no broken links
+- [x] Remove all nav entries referencing deleted IVM docs files
+- [x] Run `mkdocs build` to confirm no broken links
 
 ### Phase 10 — Benchmarks and Test Fixtures
 
 Delete IVM benchmark files:
 
-- [ ] `benchmarks/v0.12-ivm-scaleout.json`
-- [ ] `benchmarks/v0.13-ivm-joins.json`
-- [ ] `benchmarks/v0.15-ivm-hardening.json`
-- [ ] `benchmarks/v0.17-ivm-hardening.json`
-- [ ] `benchmarks/v0.17-adaptive-calibration.json`
+- [x] `benchmarks/v0.12-ivm-scaleout.json`
+- [x] `benchmarks/v0.13-ivm-joins.json`
+- [x] `benchmarks/v0.15-ivm-hardening.json`
+- [x] `benchmarks/v0.17-ivm-hardening.json`
+- [x] `benchmarks/v0.17-adaptive-calibration.json`
 
 Delete IVM test fixtures:
 
-- [ ] `tests/fixtures/matview/` (entire directory: `create_view.dat`, `checkpoint_history.dat`, `multi_shard.dat`, `dropped.dat`, `lease_acquired.dat`)
+- [x] `tests/fixtures/matview/` (entire directory: `create_view.dat`, `checkpoint_history.dat`, `multi_shard.dat`, `dropped.dat`, `lease_acquired.dat`)
 
 ### Phase 11 — README.md and ROADMAP.md
 
 **README.md:**
 
-- [ ] Remove IVM from the project tagline
-- [ ] Remove `slateduck-ivm` from the crate table
-- [ ] Remove the IVM Getting Started example
-- [ ] Remove the "Incremental View Maintenance" section entirely
-- [ ] Remove IVM rows from the roadmap summary table
+- [x] Remove IVM from the project tagline
+- [x] Remove `slateduck-ivm` from the crate table
+- [x] Remove the IVM Getting Started example
+- [x] Remove the "Incremental View Maintenance" section entirely
+- [x] Remove IVM rows from the roadmap summary table
 
 **ROADMAP.md** (this file):
 
-- [ ] Remove `## v0.11` through `## v0.17` milestones (IVM foundations through feature hardening)
-- [ ] Remove IVM test tier references (tiers 6a–6d, 6e–6f, tier 7) from cross-cutting sections
-- [ ] Remove IVM GA gate from v1.0 sign-off criteria (item 9)
-- [ ] Remove IVM documentation gate from v1.0 sign-off criteria (item 11)
-- [ ] Remove "DBSP/Feldera Dependency Strategy" from Cross-Cutting Concerns
-- [ ] Remove "IVM Worker Deployment Model" from Cross-Cutting Concerns
-- [ ] Remove "Graceful Shutdown & Rolling Updates (IVM Workers)" from Cross-Cutting Concerns
-- [ ] Remove `IvmWorkerHarness` and `IvmOracle` from `slateduck-testkit` harness list
-- [ ] Update the v0.23 note that says "its CDC output primitives feed into IVM" — remove IVM reference
+- [x] Remove `## v0.11` through `## v0.17` milestones (IVM foundations through feature hardening)
+- [x] Remove IVM test tier references (tiers 6a–6d, 6e–6f, tier 7) from cross-cutting sections
+- [x] Remove "DBSP/Feldera Dependency Strategy" from Cross-Cutting Concerns
+- [x] Remove "IVM Worker Deployment Model" from Cross-Cutting Concerns
+- [x] Remove "Graceful Shutdown & Rolling Updates (IVM Workers)" from Cross-Cutting Concerns
+- [x] Update the v0.23 note that says "github/workflows/ci.yml:**
 
-### Phase 12 — CI Cleanup
-
-**.github/workflows/ci.yml:**
-
-- [ ] Remove tier 7 comment and IVM fault injection test step
-- [ ] Remove IVM hardening test step
-- [ ] Remove IVM property test step
-- [ ] Remove benchmark regression check referencing IVM JSON files
+- [x] Remove tier 7 comment and IVM fault injection test step
+- [x] Remove IVM hardening test step
+- [x] Remove IVM property test step
+- [x] Remove benchmark regression check referencing IVM JSON files
 
 ### Phase 13 — deny.toml Cleanup
 
-- [ ] Remove `RUSTSEC-2024-0370` advisory ignore (proc-macro-error via dbsp — IVM-only transitive dep)
-- [ ] Remove `RUSTSEC-2025-0057` advisory ignore (fxhash via wasmtime 43 — IVM-only transitive dep)
-- [ ] Run `cargo deny check` to confirm no new unhandled advisories
+- [x] Remove `RUSTSEC-2024-0370` advisory ignore (proc-macro-error via dbsp — IVM-only transitive dep)
+- [x] Remove `RUSTSEC-2025-0057` advisory ignore (fxhash via wasmtime 43 — IVM-only transitive dep)
+- [x] Run `cargo deny check` to confirm no new unhandled advisories
 
 ### Phase 14 — Final Verification
 
-- [ ] `cargo build --workspace` — clean build
-- [ ] `cargo test --workspace` — all tests pass
-- [ ] `cargo clippy --workspace -- -Dwarnings` — zero warnings
-- [ ] `cargo deny check` — no new advisories
-- [ ] `rg -i "matview|slateduck.ivm|IvmWorker|IvmCircuit|ZDelta|TAG_MATVIEW" --type rust` — zero hits in production code
-- [ ] `mkdocs build --strict` — no broken links
+- [x] `cargo build --workspace` — clean build
+- [x] `cargo test --workspace` — all tests pass
+- [x] `cargo clippy --workspace -- -Dwarnings` — zero warnings
+- [x] `cargo deny check` — no new advisories
+- [x] `rg -i "matview|slateduck.ivm|IvmWorker|IvmCircuit|ZDelta|TAG_MATVIEW" --type rust` — zero hits in production code
+- [x] `mkdocs build --strict` — no broken links
 
 ### Expected Impact
 

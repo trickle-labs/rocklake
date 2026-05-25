@@ -7,7 +7,6 @@ members = [
     "crates/slateduck-pgwire",
     "crates/slateduck-ffi",
     "crates/slateduck-datafusion",
-    "crates/slateduck-ivm",
     "crates/slateduck-testkit",
 ]
 resolver = "2"
@@ -43,10 +42,6 @@ sqlparser = { version = "0.55", features = ["visitor"] }
 
 # PG wire protocol
 pgwire = "0.28"
-
-# IVM engine (hand-rolled Z-difference shim; see docs/design-decisions/ivm-architecture.md)
-# WASM UDF execution — pinned to wasmtime 43.x (fuel API stable within major)
-wasmtime = "43"
 
 # Testing
 proptest = "1"

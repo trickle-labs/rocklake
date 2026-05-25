@@ -37,4 +37,3 @@ rcgen = "0.13"
 tokio-rustls = "0.26"
 serde_json = { workspace = true }
 object_store = { workspace = true }
-slateduck-ivm = { path = "../slateduck-ivm" }

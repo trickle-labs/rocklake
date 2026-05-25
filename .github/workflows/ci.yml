@@ -128,7 +128,7 @@ jobs:
             echo "::warning::Coverage ${COVERAGE}% is below 80% threshold (enforced at v1.0)"
           fi
 
-  # Tier 7: Fault injection tests (IVM + catalog).
+  # Tier 7: Fault injection tests (catalog).
   fault-injection:
     name: Fault Injection Tests
     runs-on: ubuntu-latest
@@ -137,17 +137,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: IVM fault injection tests
-        run: cargo test -p slateduck-ivm --test fault_injection_tests
-
       - name: Catalog fault injection tests
         run: cargo test -p slateduck-catalog --test fault_injection_tests
-
-      - name: IVM hardening tests
-        run: cargo test -p slateduck-ivm --test hardening_tests --test durability_tests --test schema_evolution_tests
-
-      - name: IVM property tests (500 sequences)
-        run: cargo test -p slateduck-ivm --test trace_property_tests
 
   # Tier 10: Security tests (PG-Wire protocol layer).
   security-tests:
@@ -172,5 +163,5 @@ jobs:
           python-version: "3.12"
 
       - name: Check benchmark thresholds
-        run: python scripts/check_benchmark_regression.py benchmarks/v0.15-ivm-hardening.json
+        run: python scripts/check_benchmark_regression.py benchmarks/phase-2-baseline.json
 
