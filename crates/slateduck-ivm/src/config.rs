@@ -131,4 +131,3 @@ pub struct StatusArgs {
     #[arg(long, env = "SLATEDUCK_STORE")]
     pub store: String,
 }
-

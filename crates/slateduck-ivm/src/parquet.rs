@@ -49,12 +49,7 @@ impl CompactionPolicy {
 }
 
 /// Compute the data-file path for a shard's output at sequence `seq`.
-pub fn shard_output_path(
-    data_prefix: &str,
-    matview_id: u64,
-    shard_id: u32,
-    seq: u64,
-) -> String {
+pub fn shard_output_path(data_prefix: &str, matview_id: u64, shard_id: u32, seq: u64) -> String {
     let prefix = data_prefix.trim_end_matches('/');
     format!("{prefix}/matviews/{matview_id}/shards/{shard_id}/output-{seq:016x}.parquet")
 }
@@ -116,11 +111,12 @@ mod tests {
 
     #[test]
     fn serialise_ndjson_is_one_line_per_row() {
-        let rows = vec![
-            [("a".to_string(), Value::from(1)), ("b".to_string(), Value::from("x"))]
-                .into_iter()
-                .collect::<HashMap<_, _>>(),
-        ];
+        let rows = vec![[
+            ("a".to_string(), Value::from(1)),
+            ("b".to_string(), Value::from("x")),
+        ]
+        .into_iter()
+        .collect::<HashMap<_, _>>()];
         let bytes = serialise_output_ndjson(&rows);
         assert_eq!(bytes.iter().filter(|&&b| b == b'\n').count(), 1);
     }

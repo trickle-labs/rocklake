@@ -10,10 +10,10 @@
 //! All harness operations are async and designed to work with
 //! `DeterministicClock`.
 
-use slateduck_catalog::{CatalogStore, CatalogError, OpenOptions};
+use object_store::path::Path as ObjectPath;
+use slateduck_catalog::{CatalogError, CatalogStore, OpenOptions};
 use slateduck_ivm::{IvmWorker, WorkerConfig};
 use std::sync::Arc;
-use object_store::path::Path as ObjectPath;
 
 /// Shared object-store handle used to re-open stores in multi-worker tests.
 pub type SharedObjectStore = Arc<dyn object_store::ObjectStore>;
@@ -43,8 +43,7 @@ impl IvmWorkerHarness {
 
     /// Open a fresh in-memory catalog and create a harness.
     pub async fn with_temp_store(worker_id: &str) -> Result<Self, CatalogError> {
-        let object_store: SharedObjectStore =
-            Arc::new(object_store::memory::InMemory::new());
+        let object_store: SharedObjectStore = Arc::new(object_store::memory::InMemory::new());
         let opts = OpenOptions {
             object_store,
             path: ObjectPath::from("test-catalog"),
@@ -145,8 +144,7 @@ impl TwoWorkerHarness {
     /// Create two workers sharing the same in-memory catalog object store.
     pub async fn new() -> Result<Self, CatalogError> {
         // A single Arc<InMemory> is shared by both stores.
-        let object_store: SharedObjectStore =
-            Arc::new(object_store::memory::InMemory::new());
+        let object_store: SharedObjectStore = Arc::new(object_store::memory::InMemory::new());
         let path = ObjectPath::from("test-catalog");
         let opts = OpenOptions {
             object_store: Arc::clone(&object_store),
@@ -171,4 +169,3 @@ impl TwoWorkerHarness {
         Ok(TwoWorkerHarness { worker_a, worker_b })
     }
 }
-

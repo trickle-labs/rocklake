@@ -66,7 +66,9 @@ async fn reopen_catalog_reads_state() {
     let object_store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
     // First open: create a schema.
     {
-        let mut cat = CatalogStore::open(make_opts(Arc::clone(&object_store))).await.unwrap();
+        let mut cat = CatalogStore::open(make_opts(Arc::clone(&object_store)))
+            .await
+            .unwrap();
         let mut writer = cat.begin_write();
         writer.create_schema("public").await.unwrap();
         writer
@@ -76,7 +78,9 @@ async fn reopen_catalog_reads_state() {
         cat.commit_writer(&writer);
     }
     // Second open: should see the schema.
-    let cat = CatalogStore::open(make_opts(Arc::clone(&object_store))).await.unwrap();
+    let cat = CatalogStore::open(make_opts(Arc::clone(&object_store)))
+        .await
+        .unwrap();
     let reader = cat.read_latest();
     let schemas = reader.list_schemas().await.unwrap();
     assert!(
@@ -143,7 +147,10 @@ async fn sequential_snapshot_ids() {
             .unwrap()
             .as_u64();
         cat.commit_writer(&writer);
-        assert!(snap > last_id, "snapshot id {snap} must be > previous {last_id}");
+        assert!(
+            snap > last_id,
+            "snapshot id {snap} must be > previous {last_id}"
+        );
         last_id = snap;
     }
 }
@@ -170,7 +177,10 @@ async fn reader_snapshot_isolation() {
     // Write schema B.
     let mut writer2 = cat.begin_write();
     writer2.create_schema("schema_b").await.unwrap();
-    writer2.create_snapshot(Some("test"), Some("snap_b")).await.unwrap();
+    writer2
+        .create_snapshot(Some("test"), Some("snap_b"))
+        .await
+        .unwrap();
     cat.commit_writer(&writer2);
 
     // Reader at snap_a must NOT see schema_b.
@@ -224,7 +234,10 @@ async fn ten_k_file_registration() {
                 .await
                 .unwrap();
         }
-        writer.create_snapshot(Some("test"), Some("batch")).await.unwrap();
+        writer
+            .create_snapshot(Some("test"), Some("batch"))
+            .await
+            .unwrap();
         cat.commit_writer(&writer);
         registered += batch_size.min(total - registered);
     }
@@ -265,26 +278,17 @@ async fn zone_map_pruning() {
     // Register two files: one with amount 1..100, one with amount 200..300.
     let mut writer = cat.begin_write();
     writer
-        .register_data_file(
-            table_id,
-            "s3://bucket/file1.parquet",
-            "parquet",
-            1000,
-            4096,
-        )
+        .register_data_file(table_id, "s3://bucket/file1.parquet", "parquet", 1000, 4096)
         .await
         .unwrap();
     writer
-        .register_data_file(
-            table_id,
-            "s3://bucket/file2.parquet",
-            "parquet",
-            1000,
-            4096,
-        )
+        .register_data_file(table_id, "s3://bucket/file2.parquet", "parquet", 1000, 4096)
         .await
         .unwrap();
-    writer.create_snapshot(Some("test"), Some("files")).await.unwrap();
+    writer
+        .create_snapshot(Some("test"), Some("files"))
+        .await
+        .unwrap();
     cat.commit_writer(&writer);
 
     // Read back all files — both registered files should be visible.
@@ -298,7 +302,11 @@ async fn zone_map_pruning() {
 #[tokio::test]
 async fn writer_failover() {
     let store = Arc::new(InMemory::new());
-    let mut cat = CatalogStore::open(make_opts(Arc::clone(&store) as Arc<dyn object_store::ObjectStore>)).await.unwrap();
+    let mut cat = CatalogStore::open(make_opts(
+        Arc::clone(&store) as Arc<dyn object_store::ObjectStore>
+    ))
+    .await
+    .unwrap();
 
     // Make a write with the original writer.
     let mut writer = cat.begin_write();
@@ -310,9 +318,11 @@ async fn writer_failover() {
     cat.commit_writer(&writer);
 
     // Simulating failover: open a new store from the same object store.
-    let new_cat = CatalogStore::open(make_opts(Arc::clone(&store) as Arc<dyn object_store::ObjectStore>))
-        .await
-        .unwrap();
+    let new_cat = CatalogStore::open(make_opts(
+        Arc::clone(&store) as Arc<dyn object_store::ObjectStore>
+    ))
+    .await
+    .unwrap();
     // New store should see the committed schema.
     let reader = new_cat.read_latest();
     let schemas = reader.list_schemas().await.unwrap();
@@ -342,7 +352,10 @@ async fn stale_epoch_sqlstate() {
     // We test the error surfacing mechanism by directly checking the enum.
     let err = CatalogError::WriterEpochMismatch;
     let msg = format!("{err}");
-    assert!(msg.contains("epoch") || msg.contains("writer"), "error message should mention epoch: {msg}");
+    assert!(
+        msg.contains("epoch") || msg.contains("writer"),
+        "error message should mention epoch: {msg}"
+    );
 }
 
 // ─── Test 11: New writer sees committed state ───────────────────────────────
@@ -414,13 +427,13 @@ async fn flush_visibility_p99_latency() {
 
     latencies_ms.sort_unstable();
     let p99 = latencies_ms[98]; // 99th percentile
-    // With InMemory store, p99 should be well under 500 ms on any hardware.
+                                // With InMemory store, p99 should be well under 500 ms on any hardware.
     assert!(
         p99 < 500,
         "flush visibility p99 latency ({p99} ms) exceeds 500 ms threshold"
     );
-    println!("flush_visibility_p99_latency: p99={p99}ms, p50={}ms, max={}ms",
-        latencies_ms[49],
-        latencies_ms[99],
+    println!(
+        "flush_visibility_p99_latency: p99={p99}ms, p50={}ms, max={}ms",
+        latencies_ms[49], latencies_ms[99],
     );
 }

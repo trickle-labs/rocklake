@@ -39,9 +39,7 @@ async fn open_catalog() -> CatalogStore {
 
 // Helper: create a schema + base table + matview with given shard_count.
 // Returns (store, schema_id, base_table_id, output_table_id, matview_id).
-async fn setup_matview(
-    shard_count: u32,
-) -> (CatalogStore, u64, u64, u64, u64) {
+async fn setup_matview(shard_count: u32) -> (CatalogStore, u64, u64, u64, u64) {
     let mut store = open_catalog().await;
     let mut writer = store.begin_write();
     let schema_id = writer.create_schema("test").await.unwrap();
@@ -74,12 +72,7 @@ async fn setup_matview(
 }
 
 // Insert `n` rows across `regions` into the base table.
-async fn insert_rows(
-    store: &mut CatalogStore,
-    base_table_id: u64,
-    n: usize,
-    regions: &[&str],
-) {
+async fn insert_rows(store: &mut CatalogStore, base_table_id: u64, n: usize, regions: &[&str]) {
     let mut writer = store.begin_write();
     for i in 0..n {
         let region = regions[i % regions.len()];
@@ -132,9 +125,7 @@ async fn eight_shard_group_by_correctness() {
     // Decode and sum the counts across all shards.
     let total: i64 = output_rows
         .iter()
-        .filter_map(|r| {
-            serde_json::from_slice::<serde_json::Value>(&r.payload).ok()
-        })
+        .filter_map(|r| serde_json::from_slice::<serde_json::Value>(&r.payload).ok())
         .filter_map(|v| v.get("cnt").and_then(|c| c.as_i64()))
         .sum();
     // All 800 input rows should be accounted for.
@@ -178,7 +169,10 @@ async fn re_sharding_content_preservation() {
     let reader = worker.store.read_latest();
     let matviews = reader.list_matviews().await.unwrap();
     let mv = matviews.iter().find(|m| m.matview_id == matview_id);
-    assert!(mv.is_some(), "matview should still be visible after re-sharding");
+    assert!(
+        mv.is_some(),
+        "matview should still be visible after re-sharding"
+    );
     let _ = output_table_id;
 }
 
@@ -215,7 +209,11 @@ async fn lease_heartbeat_generation_bump() {
         .extend_matview_lease(matview_id, 0, worker_id, gen2, now + 60_000)
         .await
         .unwrap();
-    assert_eq!(gen3, gen2 + 1, "second heartbeat must increment generation again");
+    assert_eq!(
+        gen3,
+        gen2 + 1,
+        "second heartbeat must increment generation again"
+    );
 }
 
 // ─── Test 4: Lease expiry handoff ─────────────────────────────────────────
@@ -262,7 +260,13 @@ async fn one_million_row_backfill_rate() {
         setup_matview(1).await;
 
     let t0 = std::time::Instant::now();
-    insert_rows(&mut store, base_table_id, row_count, &["us-east-1", "us-west-2"]).await;
+    insert_rows(
+        &mut store,
+        base_table_id,
+        row_count,
+        &["us-east-1", "us-west-2"],
+    )
+    .await;
     let insert_ms = t0.elapsed().as_millis();
 
     let config = WorkerConfig {

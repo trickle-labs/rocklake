@@ -163,6 +163,10 @@ mod tests {
         for key in &keys {
             seen.insert(shard_index_for(key, &ranges));
         }
-        assert_eq!(seen.len(), 8, "expected all 8 shards reachable, got {seen:?}");
+        assert_eq!(
+            seen.len(),
+            8,
+            "expected all 8 shards reachable, got {seen:?}"
+        );
     }
 }

@@ -32,7 +32,7 @@ pub use config::{CostMode, WorkerConfig};
 pub use heartbeat::{HeartbeatHandle, LeaseRegistry};
 pub use parquet::CompactionPolicy;
 pub use plan::{Aggregate, AggregateKind, IvmPlan};
-pub use shard_key::{ShardKeyRange, compute_key_ranges, hash_key_value, shard_index_for};
+pub use shard_key::{compute_key_ranges, hash_key_value, shard_index_for, ShardKeyRange};
 pub use shutdown::ShutdownSignal;
 pub use source::MatviewInputSource;
 pub use state_store::ShardStateStore;

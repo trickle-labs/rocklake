@@ -273,7 +273,8 @@ impl IvmWorker {
         // In Consistent mode (default), the caller (tick loop) merges
         // all shards before committing — here we just stage the rows.
         let _ = output_mode; // consumed by the tick coordinator in consistent mode
-        crate::output::write_output_rows(&mut out_writer, output_table_id, shard_id, &output_rows).await?;
+        crate::output::write_output_rows(&mut out_writer, output_table_id, shard_id, &output_rows)
+            .await?;
 
         let new_seq = trace.seq + 1;
         out_writer

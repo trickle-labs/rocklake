@@ -38,8 +38,7 @@ pub struct HeartbeatHandle {
 impl HeartbeatHandle {
     /// Signal the heartbeat to stop and wait for it.
     pub async fn shutdown(self) {
-        self.stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = self.task.await;
     }
 }
@@ -92,12 +91,7 @@ pub fn spawn(
                         if let Some(g) = reg.generations.get_mut(&(matview_id, shard_id)) {
                             *g = new_gen;
                         }
-                        tracing::debug!(
-                            matview_id,
-                            shard_id,
-                            new_gen,
-                            "heartbeat extended lease"
-                        );
+                        tracing::debug!(matview_id, shard_id, new_gen, "heartbeat extended lease");
                     }
                     Err(e) => {
                         tracing::warn!(
