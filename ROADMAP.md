@@ -68,6 +68,9 @@ binding on every roadmap release below.
 | **v0.16 — IVM Operator Completeness** | Window functions, ORDER BY, LIMIT/top-N, correlated subqueries (DataFusion dep), recursive CTEs (single-shard coordinator + spike gate), non-det capture | Done |
 | **v0.17 — IVM Feature Hardening** | WASM UDFs (wasmtime pooled), adaptive cost-mode (empirically calibrated against full matrix), ref-counted DISTINCT (MAX semantics), Tier 8 24h soak (IVM GA gate) | Done |
 | **v0.18 — DuckLake Catalog Standard Interface** | `table_changes()` CDC function, stable `rowid`, snapshot lease, `NOTIFY` event-driven, extension schema (first-class catalog tag `0x23`), opaque mixed frontiers; validated first with pg-trickle | Done |
+| **v0.19 — CDC Correctness & Catalog Transaction Hardening** | Real row-level `table_changes()` with Parquet scan, versioned `DataFileRow` / `SnapshotDiff` windows, CAS writer epoch, transactional extension row-ID allocation, atomic GC lease + retain-from, staged write discipline, overflow-safe counters | Planning |
+| **v0.20 — FFI Safety, Live Notifications & Operational Wire-Up** | FFI `&'static mut` removal + SAFETY docs + Miri/ASAN CI, LISTEN/NOTIFY end-to-end, configurable extension schema registration, extension JSON fix, collision-safe key encoding, TLS panic fix, auth/TLS defaults | Planning |
+| **v0.21 — Performance, Scalability & Code Quality** | `list_data_files()` secondary index, IVM output batching, O(1) aggregate deletions, binary IVM key encoding, EWMA worker cost estimate, SQL classifier hardening, module decomposition, MSRV + license CI, metrics path alignment, dead-code + dependency cleanup | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, IVM feature-complete GA sign-off, real-world validation gate | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
@@ -3036,6 +3039,272 @@ All of the following must be green before v0.18 is tagged:
 - [x] Compatibility test suite: `tests/compat/pgtrickle_*.rs`
 - [x] `docs/operations/pgtrickle-compatibility.md`
 - [x] DuckLake Spec Upgrade Policy updated to include pg-trickle `CHANGELOG.md` in review process
+
+---
+
+## v0.19 — CDC Correctness & Catalog Transaction Hardening
+
+> Fix every correctness and transactional-safety gap identified in the v0.18 post-implementation review. All five critical findings and five high-severity transaction/GC findings must be resolved before v0.19 ships. This release has no new user-visible features; it deepens the semantic correctness of features already present.
+
+### Real Row-Level CDC via `table_changes()`
+
+The v0.18 implementation of `table_changes()` emits one synthetic row per added data file with a hardcoded rowid of `0`, no user column values, no delete records, and no update pre/post-image pairs. The standalone `compute_table_changes()` helper caps output at 100 rows regardless of actual row count. This is replaced with a real implementation:
+
+- Integrate a Parquet reader into the `table_changes()` execution path so that each Parquet file in `diff.added_data_files` / `diff.retired_data_files` is scanned and actual rows are emitted
+- Return full column payloads for every change record; `columns_json` must contain actual user column values keyed by name
+- Emit `insert`, `delete`, and (where pre/post images are available) `update_preimage` / `update_postimage` change types
+- Emit real `__sd_rowid` values from the underlying Parquet metadata
+- Add a property test that applies the emitted change stream to the start-snapshot state and exactly reconstructs the end-snapshot state
+
+### Versioned `DataFileRow` and `SnapshotDiff` Windows
+
+`DataFileRow` currently only has `snapshot_id` (the snapshot at which the file was registered); it has no `begin_snapshot` / `end_snapshot` equivalent. `SnapshotDiff` ignores the `from_snapshot` parameter for data files and emits only files where `snapshot_id == to`. This is corrected:
+
+- Version `DataFileRow` with `begin_snapshot` (the snapshot it was added) and optional `end_snapshot` (the snapshot it was logically deleted or replaced); migrate existing data via a catalog format version bump
+- Update `snapshot_diff()` to scan the full `(from_snapshot, to_snapshot]` interval and include files whose begin/end range intersects that window
+- Add `retired_data_files` to `SnapshotDiff`; `execute_table_changes()` uses both added and retired to produce a correct change set
+- Add multi-snapshot window tests: `table_changes(42, 45)` must include changes at 43, 44, and 45
+
+### CAS-Protected Writer Epoch
+
+`CatalogStore::open()` unconditionally overwrites `SYSTEM_WRITER_EPOCH` and `check_epoch()` treats a missing epoch as success. Two concurrent openers can each believe they hold the write token:
+
+- Replace the unconditional epoch write with a transactional writer-lease acquisition protocol: read current epoch, validate that no other writer holds a non-expired lease, CAS a new epoch, and fail closed when the epoch key is missing or not parseable
+- `check_epoch()` must return `WriterEpochMismatch` when the stored epoch key is absent rather than succeeding silently
+- Add concurrent-open tests using two independent `CatalogStore` instances on the same `Db` handle; verify that exactly one writer wins the epoch contest and the other is fenced
+
+### Transactional Extension Schema Row-ID Allocation
+
+`insert_extension_row()` is a non-atomic read/write/write sequence: it reads the marker counter, writes the data row, and then writes the updated marker. Concurrent inserts produce duplicate row IDs:
+
+- Allocate extension table counters under `TAG_COUNTERS` using the existing serializable-transaction pattern already proven by `next_rowid_range()`
+- Commit data row and counter atomically inside a `SerializableSnapshot` transaction with retry on conflict
+- Add a concurrent insert test that spawns multiple concurrent insertions and verifies all assigned row IDs are unique
+
+### Atomic GC Lease-Check and Retain-From Advancement
+
+`gc_apply()` reads pinned snapshots and active leases, then writes `SYSTEM_RETAIN_FROM` in a separate non-transactional `db.put()`. A new lease acquired between the scan and the write is not protected:
+
+- Wrap the current retain-from read, pin scan, lease scan, and retain-from write in a single `SerializableSnapshot` transaction
+- Add an integration test that acquires a lease concurrently with a GC advance and verifies the lease is always respected
+
+### Staged Catalog Write Discipline
+
+`update_table_stats()`, `upsert_file_column_stats()`, `upsert_file_variant_stats()`, and several other `CatalogWriter` methods call `self.db.put()` directly, bypassing `create_snapshot()` atomicity. A failed commit can leave partially applied metadata visible:
+
+- Convert all writer methods that must be durable to staging via `self.staged.push()` or add explicit non-MVCC documentation with separate consistency invariants and tests
+- Add a test that kills the process between a direct `db.put()` metadata write and a subsequent `create_snapshot()` and verifies the catalog is still consistent after restart
+
+### Overflow Safety in Counter Arithmetic
+
+`next_rowid_range()` in both `CatalogWriter` and the standalone free function calculate `let end = current + count` without overflow guards. Lease TTL milliseconds multiplication can also overflow:
+
+- Replace all counter arithmetic with `checked_add` and `checked_mul`; return `CatalogError::InvalidInput` on overflow or zero-count
+- Add property tests near `u64::MAX` for rowid allocation and near `u64::MAX / 1000` for lease TTL
+- Reject `count == 0` as an invalid rowid range request
+
+### SQLSTATE Routing Bug in `SlateDuckError::SqlState`
+
+`sqlstate()` returns the hardcoded string `"55000"` for the `SqlState { code, message }` variant regardless of the stored `code`. The first non-55000 use of this variant reports the wrong SQLSTATE to clients:
+
+- Make `sqlstate()` return the stored code for the `SqlState` variant using `Cow<'_, str>` or add typed variants for each SQLSTATE code that has current callers
+- Add tests covering each SQLSTATE mapping path in `error.rs`
+
+### GC and Lease Resilience Improvements
+
+- `list_active_leases()` silently ignores corrupt rows; return a catalog error for system rows with decode failures and add a warning log for extension rows
+- `update_retain_from_cache()` uses `Ordering::Relaxed`; upgrade to `Ordering::Release` on store and `Ordering::Acquire` on load, or document the ordering invariant explicitly
+- Lease TTL arithmetic uses `unwrap_or_default()` on `SystemTime::now().duration_since(UNIX_EPOCH)`, masking clock-jump errors; add checked arithmetic and reject TTL values that would overflow `u64`
+
+### Test and Documentation Deliverables
+
+- [ ] Property test: `table_changes()` change stream reconstructs end-snapshot state from start-snapshot
+- [ ] Property test: `next_rowid_range()` overflow coverage near `u64::MAX`
+- [ ] Integration test: concurrent writer-epoch acquisition, exactly one winner
+- [ ] Integration test: extension schema concurrent inserts, all row IDs unique
+- [ ] Integration test: GC advance vs. concurrent lease acquisition, lease always wins
+- [ ] Integration test: process crash between direct `db.put()` and `create_snapshot()`, catalog consistent after restart
+- [ ] `docs/architecture/cdc-design.md`: describe the full `table_changes()` execution pipeline including Parquet scan, rowid extraction, and change correlation
+- [ ] `docs/architecture/writer-fencing.md`: document the CAS epoch acquisition protocol and failure modes
+
+---
+
+## v0.20 — FFI Safety, Live Notifications & Operational Wire-Up
+
+> Resolve the FFI unsoundness, wire LISTEN/NOTIFY end-to-end, make extension schema registration configurable, fix extension JSON serialization, fix collision-prone hashed keys, and add TLS/auth safeguards. This release completes the operational surface started in v0.18 and makes the SlateDuck FFI extension safe for distribution.
+
+### FFI Handle Safety Overhaul
+
+`validate_catalog()` returns `Option<&'static mut SlateduckCatalog>` even though the referenced allocation lives only until `slateduck_close()`. `slateduck_close()` reads, zeroes, and drops through raw pointers with no synchronization for concurrent close/use:
+
+- Remove the `&'static mut` return and redesign validation to provide short-lived, scoped access only (closure-based or with explicit lifetime bounds)
+- Introduce an internal `SAFETY:` documentation block above every unsafe block in `lib.rs` stating the pointer validity condition, lifetime assumption, and aliasing constraint
+- Implement double-close and use-after-close guards that are correct under concurrent calling without relying on magic-number checks in isolation
+- Audit all `Vec::from_raw_parts()` calls in the `_free` family for correct capacity vs. length usage
+
+### Sanitizer and Miri CI Coverage
+
+- Add a scheduled nightly CI job that runs `slateduck-ffi` tests under ASAN and UBSAN (`RUSTFLAGS="-Z sanitizer=address"` / `"-Z sanitizer=undefined"`)
+- Add a Miri job for the same crate to catch UB in pure-Rust unsafe code paths
+- Gate the jobs as non-blocking at first, with a plan to promote to blocking at v1.0
+
+### Live LISTEN/NOTIFY End-to-End
+
+`NotifyManager` and `ConnectionSubscriptions` are implemented but completely disconnected from `SessionState` and the executor. `LISTEN` and `UNLISTEN` commands return acknowledgement tags without registering any subscription:
+
+- Add a shared `Arc<NotifyManager>` to server state and thread it into every connection handler
+- Add `ConnectionSubscriptions` to `SessionState`
+- In the executor's `Listen` arm, call `session.subscriptions.listen(&channel, &notify_manager).await` and return `LISTEN` only after successful registration
+- In the executor's `Unlisten` arm, call `session.subscriptions.unlisten(&channel)` before returning
+- After every successful `create_snapshot()`, call `notify_manager.notify()` for each channel that has active subscribers; flush pending notifications to the pg-wire client in the next idle cycle
+- Add integration tests: LISTEN before a snapshot commit receives a notification; UNLISTEN stops delivery; multiple subscribers on the same channel all receive the notification
+
+### Configurable Extension Schema Registration
+
+`resolve_extension_id()` hardcodes `"pgtrickle"` as the only recognized extension schema. Operators cannot restrict or extend the list without code changes:
+
+- Add a `--extension-schemas <schema,...>` CLI flag and `SLATEDUCK_EXTENSION_SCHEMAS` environment variable; default is `pgtrickle` to maintain backward compatibility
+- Thread the allowed-extension list into server state and pass it to `is_registered_extension()` before routing any extension DDL or DML
+- Return `SlateDuckError::PermissionDenied` (SQLSTATE 42501) for unregistered extension schemas
+- Remove the unconditional hardcoded case in `resolve_extension_id()` in favour of the configurable list
+- Document the flag in `--help` and in `docs/operations/extension-schemas.md`
+
+### Extension Schema JSON Serialization Fix
+
+`ParamValues::to_json_string()` builds JSON by string-interpolation with `format!("\"p{}\":\"{}\"", i, val)` without any escaping. Values containing `"`, `\`, newlines, or other control characters produce malformed JSON. Column names are also discarded in favour of positional keys (`p0`, `p1`):
+
+- Replace `to_json_string()` with a `serde_json::Map`-based implementation that properly escapes all values
+- Preserve column names extracted from the parsed `INSERT INTO` statement rather than using positional keys
+- Return a parse error for values that cannot be round-tripped through `serde_json`
+- Add property tests covering embedded quotes, backslashes, Unicode escapes, and control characters
+
+### Collision-Safe Catalog Key Encoding
+
+Snapshot lease keys and extension table keys derive a 64-bit hash from `consumer_id` and `table_name` respectively using `DefaultHasher`. Distinct strings can produce identical hashes, and `DefaultHasher` is not stable across Rust versions:
+
+- Replace hash-based key encoding with length-prefixed UTF-8 byte strings: `[tag] [u16 length BE] [utf-8 bytes]`
+- Validate the original string from the decoded row value before acting on it, rejecting any mismatch as a corruption error
+- Add a catalog format migration for existing lease and extension-schema keys
+- Add collision-stress property tests that verify distinct identifiers always produce distinct keys
+
+### TLS and Authentication Hardening
+
+- `build_tls_acceptor()` calls `.unwrap()` on `cert_path` and `key_path`; replace with `ok_or_else()` returning `std::io::Error`
+- When password authentication is enabled without `--tls-required`, emit a `warn!` log at startup and add a `--insecure-no-tls-warning-suppress` flag for environments where this is intentional
+- Add an integration test that passes a TLS config with only cert or only key path and verifies a clean error is returned rather than a panic
+
+### `read_latest()` Semantic Documentation
+
+`read_latest()` derives the latest snapshot from the in-memory counter (`peek_snapshot_id() - 1`) rather than from a fresh SlateDB read. Add a `read_fresh_latest()` function that reads the counter from SlateDB for use by long-lived read-only processes, and document the distinction in the public API doc comment.
+
+### Test and Documentation Deliverables
+
+- [ ] FFI integration tests: double-close safety, use-after-close, null handle, concurrent close/use
+- [ ] CI: scheduled nightly ASAN + UBSAN + Miri jobs for `slateduck-ffi`
+- [ ] Integration test: LISTEN → snapshot commit → notification received by subscriber
+- [ ] Integration test: UNLISTEN stops delivery; multiple subscribers on one channel
+- [ ] Integration test: unregistered extension schema returns SQLSTATE 42501
+- [ ] Property test: extension JSON round-trip with special characters
+- [ ] Property test: length-prefixed key encoding with arbitrary `consumer_id` and `table_name`
+- [ ] `docs/operations/extension-schemas.md`: registration model, CLI flag, allowed list
+- [ ] `docs/architecture/ffi-safety.md`: pointer ownership, handle lifecycle, SAFETY invariants
+
+---
+
+## v0.21 — Performance, Scalability & Code Quality
+
+> Address the performance and scalability ceilings visible at v0.18, refactor the largest module bottlenecks, enforce MSRV and license hygiene in CI, fix metrics documentation drift, and close all remaining dead-code and code-quality debts. This release targets the scale claims made in the v1.0 acceptance criteria.
+
+### `list_data_files()` Secondary Index and Read Amplification
+
+The current implementation does a full prefix scan over all data files for a table, then filters `snapshot_id <= read_snapshot` in memory. There is no secondary index by snapshot and no end-snapshot filter, so historical and time-travel reads scan the full file set:
+
+- Add a secondary index `TAG_DATA_FILES_BY_SNAPSHOT | table_id(u64 BE) | snapshot_id(u64 BE) | file_id(u64 BE)` updated atomically with every `register_data_file()` call
+- Update `list_data_files()` to use a range scan on the new index keyed by `(table_id, read_snapshot)` rather than a full prefix scan plus in-memory filter
+- Add a benchmark comparing scan latency before/after at 10⁴ and 10⁵ files per table at a historical snapshot
+
+### IVM Output Row Batching
+
+`write_output_rows()` serializes each output row with `serde_json::to_vec()` and calls `register_inlined_insert()` once per row. Large materialized view outputs produce enormous staged-write buffers and per-row overhead:
+
+- Batch output rows in chunks of up to 1,000 before staging; serialize each chunk as a single binary record rather than one JSON record per row
+- Introduce a binary row format for inlined IVM output (fixed-width header + column payload) to reduce per-row serialization overhead
+- Add a memory-limit test: output 100,000 rows from an IVM tick and verify peak RSS does not exceed a configurable threshold
+
+### Aggregate Deletion Complexity Fix (StringAgg / ArrayAgg)
+
+Deletions for `StringAgg` and `ArrayAgg` aggregates loop over negative weight, call `Vec::position()`, and then `Vec::remove(pos)`, giving O(N²) behavior for large groups with selective deletes:
+
+- Replace `Vec<Value>` rescan input storage with a counted multiset (`HashMap<CanonicalValue, i64>`) where deletes decrement counts and compaction sweeps zero-count entries
+- Add a TPC-H Q18 variant benchmark that measures STRING_AGG aggregate deletion performance at 100k and 1M row group sizes
+
+### Binary IVM Key Encoding
+
+Group-by keys (`circuit.rs` `group_key()`) and shard-routing keys (`worker.rs`) use `serde_json::to_string()` / `Value::to_string()` every time a row is processed. On throughput-critical paths this is a major allocation source:
+
+- Define a stable binary canonical form for `serde_json::Value` (fixed type tag, length-prefixed fields, network byte order for numerics)
+- Use this encoding for group keys, shard keys, and state-store key prefixes throughout the IVM pipeline
+- Add benchmark comparisons before/after at 1M rows/sec
+
+### Adaptive Worker Cost Estimate Fix
+
+`estimated_total_rows` in the IVM worker accumulates all processed rows since startup, drifting indefinitely from the actual current table cardinality and eventually producing wrong cost-mode decisions:
+
+- Replace the running sum with an exponential weighted moving average (EWMA) of per-source row count; decay coefficient configurable, default α = 0.1
+- Add an integration test that processes 10 batches at varying sizes and verifies the estimate tracks the true cardinality within 2× after 5 batches
+
+### SQL Classifier Hardening
+
+`classify_listen_prefix()`, `find_as_keyword()`, and `split_qualified_name()` are handwritten string parsers that mis-handle quoted identifiers, `AS` without surrounding spaces, and embedded comments. `LISTEN` accepts any string including empty or invalid identifiers:
+
+- Replace `find_as_keyword()` with an AST-backed approach where sqlparser can be used, falling back to a tokenizer that correctly handles SQL quoting and comments
+- Validate `LISTEN` channel names against PostgreSQL identifier rules (alphanumeric + underscore, no leading digit, 1–63 characters); return SQLSTATE 42602 for invalid channel names
+- Validate quoted identifiers in `split_qualified_name()`
+- Add classifier tests for: quoted schema names, names with dots inside quotes, `AS` without trailing space, LISTEN with invalid channel, LISTEN with empty channel
+
+### Module Decomposition
+
+`executor.rs` (~1,629 lines), `writer.rs` (~1,402 lines), and `classifier.rs` (~990 lines) each mix multiple unrelated concerns. New features continue to enlarge the same files:
+
+- Split `executor.rs` by feature family: `executor/catalog.rs`, `executor/ivm.rs`, `executor/extension.rs`, `executor/session.rs`, `executor/meta.rs`; keep `execute_classified()` as a thin dispatcher
+- Split `catalog/writer.rs` into `writer/staged.rs` (MVCC staged mutations), `writer/stats.rs` (statistics methods), `writer/counters.rs` (ID allocation), and `writer/snapshot.rs` (snapshot commit)
+- Split `sql/classifier.rs` into `classifier/ast.rs`, `classifier/prefix.rs`, `classifier/table_selects.rs`
+- Enforce a lint that no new source file in these crates may exceed 600 lines
+
+### CI Hardening: MSRV, License Enforcement, Full Coverage
+
+- Add a CI job that installs `dtolnay/rust-toolchain@1.93` and runs `cargo check --workspace --all-targets`; fail the PR if it does not compile on the declared MSRV
+- Add `licenses` to the `cargo deny check` CI command; define an allowed license list (Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, Unicode-3.0, ISC, CC0-1.0); add explicit exceptions with rationale for any dep outside the allow list
+- Extend the coverage CI job to include all nine production crates: `slateduck-pgwire`, `slateduck-ivm`, `slateduck-ffi`, `slateduck-sql`, `slateduck-datafusion`, `slateduck-sqlite-vfs` in addition to the existing `slateduck-catalog` and `slateduck-core`
+- Remove the two stale `advisory-not-detected` warnings from `deny.toml` (`RUSTSEC-2024-0370` and `RUSTSEC-2025-0057`)
+
+### Metrics CLI and Documentation Alignment
+
+`docs/operations/monitoring.md` and `docs/reference/metrics.md` document `--metrics-path` and `SLATEDUCK_METRICS_PATH`, but the CLI parser only supports `--metrics-port` and `--metrics-bind`; the HTTP server also responds to any path rather than only `/metrics`:
+
+- Implement `--metrics-path` CLI flag and `SLATEDUCK_METRICS_PATH` env var, defaulting to `/metrics`
+- Update the metrics HTTP server to only serve metrics on the configured path and return 404 for other paths
+- Update the CLI `--help` output to list the metrics flags consistently
+- Update monitoring and reference docs to reflect the actual flag names
+
+### Dead-Code and Dependency Hygiene
+
+- Resolve all `#[allow(dead_code)]` items in production code: implement the stub (link to the tracking roadmap item), delete the unreachable code, or replace with `todo!()` decorated with an issue reference
+- Audit `Cargo.toml` workspace dependencies: move `object_store = { features = ["aws", "gcp", "azure"] }` and `tokio = { features = ["full"] }` to per-crate opt-in features so that crates that do not need cloud backends or the full tokio runtime do not include them
+- Audit `#[allow(clippy::too_many_arguments)]` usages in `writer.rs` and `worker.rs`: introduce `FileColumnStatsInput`, `FileVariantStatsInput`, and `WorkerConfig` parameter structs to bring arg counts below the clippy threshold
+
+### Test and Documentation Deliverables
+
+- [ ] Benchmark: `list_data_files()` with secondary index at 10⁴ / 10⁵ files
+- [ ] Benchmark: IVM output batching at 100k rows, peak RSS limit test
+- [ ] Benchmark: STRING_AGG deletion at 100k / 1M group size
+- [ ] Benchmark: binary group key encoding at 1M rows/sec
+- [ ] CI: MSRV 1.93 check job
+- [ ] CI: `cargo deny check licenses`
+- [ ] CI: full workspace coverage reporting
+- [ ] Integration test: `--metrics-path` routing returns 200 on configured path and 404 elsewhere
+- [ ] Classifier tests: quoted identifiers, AS edge cases, invalid LISTEN channels
+- [ ] `docs/contributing/code-style.md`: module size limit, parameter struct conventions, dead-code policy
 
 ---
 
