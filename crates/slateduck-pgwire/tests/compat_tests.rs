@@ -42,6 +42,14 @@ async fn setup_store(dir: &TempDir) -> Arc<Mutex<CatalogStore>> {
     Arc::new(Mutex::new(catalog))
 }
 
+fn default_notify_manager() -> Arc<slateduck_pgwire::notify::NotifyManager> {
+    Arc::new(slateduck_pgwire::notify::NotifyManager::new())
+}
+
+fn default_extension_schemas() -> Arc<Vec<String>> {
+    Arc::new(vec!["pgtrickle".to_string()])
+}
+
 // ── Test 1: Full DuckLake tutorial lifecycle ───────────────────────────────────
 
 /// Full DuckLake tutorial lifecycle against a store.
@@ -60,9 +68,16 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
     // ── 1. Baseline catalog queries ────────────────────────────────────────
     {
         let mut session = SessionState::new();
-        let res = executor::execute_sql("SELECT version()", &params, &store, &mut session)
-            .await
-            .unwrap();
+        let res = executor::execute_sql(
+            "SELECT version()",
+            &params,
+            &store,
+            &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
+        )
+        .await
+        .unwrap();
         assert!(!res.is_empty(), "SELECT version() must return a response");
     }
 
@@ -75,6 +90,8 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
             &sp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -94,6 +111,8 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
             &tp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -117,6 +136,8 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
             &fp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -132,6 +153,8 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
             &snap,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -149,6 +172,8 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
             &rp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -167,6 +192,8 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
             &rp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -181,6 +208,8 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
             &params,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -197,6 +226,8 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
             &rp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -221,6 +252,8 @@ async fn show_tables_after_create() {
             &sp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -235,6 +268,8 @@ async fn show_tables_after_create() {
             &tp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -249,6 +284,8 @@ async fn show_tables_after_create() {
             &snap,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -266,6 +303,8 @@ async fn show_tables_after_create() {
             &rp,
             &store,
             &mut session,
+            &default_notify_manager(),
+            &default_extension_schemas(),
         )
         .await
         .unwrap();
@@ -283,13 +322,27 @@ async fn transaction_begin_commit() {
     let params = ParamValues::default();
     let mut session = SessionState::new();
 
-    let _ = executor::execute_sql("BEGIN", &params, &store, &mut session)
-        .await
-        .unwrap();
+    let _ = executor::execute_sql(
+        "BEGIN",
+        &params,
+        &store,
+        &mut session,
+        &default_notify_manager(),
+        &default_extension_schemas(),
+    )
+    .await
+    .unwrap();
     assert!(session.in_transaction);
 
-    let _ = executor::execute_sql("COMMIT", &params, &store, &mut session)
-        .await
-        .unwrap();
+    let _ = executor::execute_sql(
+        "COMMIT",
+        &params,
+        &store,
+        &mut session,
+        &default_notify_manager(),
+        &default_extension_schemas(),
+    )
+    .await
+    .unwrap();
     assert!(!session.in_transaction);
 }
