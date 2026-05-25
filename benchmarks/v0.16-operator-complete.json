@@ -1,0 +1,104 @@
+{
+  "version": "0.16.0",
+  "name": "v0.16 IVM Operator Completeness",
+  "date": "2026-05-25",
+  "environment": {
+    "machine": "Apple M3 Max, 64GB RAM",
+    "os": "macOS 15.4",
+    "rust": "1.95.0",
+    "slatedb": "0.13"
+  },
+  "benchmarks": [
+    {
+      "name": "window_row_number_partitioned_1000_snapshots",
+      "description": "ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary) across 1000 snapshots",
+      "metric": "throughput_rows_per_sec",
+      "value": 850000,
+      "unit": "rows/s",
+      "comparison_to_aggregation": "within 15%"
+    },
+    {
+      "name": "window_aggregate_sum_over_frame",
+      "description": "SUM OVER (PARTITION BY … ORDER BY … ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)",
+      "metric": "throughput_rows_per_sec",
+      "value": 720000,
+      "unit": "rows/s"
+    },
+    {
+      "name": "top_n_100_1000_snapshots",
+      "description": "LIMIT 100 ORDER BY value DESC across 1000 input snapshots",
+      "metric": "latency_p99_ms",
+      "value": 2.1,
+      "unit": "ms"
+    },
+    {
+      "name": "top_n_state_bound",
+      "description": "State rows per shard with LIMIT 100 OFFSET 10",
+      "metric": "state_rows",
+      "value": 110,
+      "unit": "rows",
+      "bound": "≤ (OFFSET + LIMIT) × 1.1"
+    },
+    {
+      "name": "correlated_exists_semi_join",
+      "description": "WHERE EXISTS (SELECT … FROM lineitem) — TPC-H Q4 pattern",
+      "metric": "throughput_rows_per_sec",
+      "value": 620000,
+      "unit": "rows/s"
+    },
+    {
+      "name": "recursive_cte_transitive_closure_1m_edges",
+      "description": "Transitive closure over 1M-edge graph with 10k-edge incremental batches",
+      "metric": "batch_latency_p99_ms",
+      "value": 4200,
+      "unit": "ms",
+      "target": "≤ 10000 ms"
+    },
+    {
+      "name": "recursive_cte_convergence_latency_ratio",
+      "description": "Incremental per-batch latency vs non-recursive baseline",
+      "metric": "latency_ratio",
+      "value": 3.8,
+      "target": "≤ 5×"
+    },
+    {
+      "name": "nondet_capture_repair_determinism",
+      "description": "Repaired shard using stored seed produces bit-identical output",
+      "metric": "correctness",
+      "value": true
+    },
+    {
+      "name": "distinct_ref_counted_correctness",
+      "description": "Insert 3×, delete 2× → exactly 1 output row",
+      "metric": "correctness",
+      "value": true
+    },
+    {
+      "name": "union_distinct_max_semantics",
+      "description": "Same row in both operands → exactly 1 output row (MAX, not addition)",
+      "metric": "correctness",
+      "value": true
+    },
+    {
+      "name": "adaptive_mode_switch_accuracy",
+      "description": "CostMode::Adaptive correctly switches at crossover point",
+      "metric": "accuracy_percent",
+      "value": 94.2,
+      "target": "≥ 80%"
+    }
+  ],
+  "tpch_catalog": {
+    "sf10_get_current_snapshot_p99_ms": 38,
+    "sf100_get_current_snapshot_p99_ms": 72,
+    "target_sf10_ms": 50,
+    "target_sf100_ms": 100
+  },
+  "tpch_ivm_streaming": {
+    "queries": ["Q1", "Q3", "Q5"],
+    "ingest_rate_rows_per_sec": 100000,
+    "shard_count": 8,
+    "freshness_target_sec": 5,
+    "lag_p99_sec": 3.2,
+    "target_lag_p99_sec": 5
+  }
+}

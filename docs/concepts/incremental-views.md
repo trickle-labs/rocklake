@@ -67,9 +67,33 @@ EXPLAIN MATVIEW main.region_counts;
 4. **Checkpoint**: After each successful tick, a `MatviewCheckpointRow` is written with the current `seq`, `last_input_snapshot`, and `durable_at_unix_ms`.
 5. **Read**: Readers query the output table at any snapshot. Time-travel before the first matview output returns an empty result (not an error).
 
+## Capture Semantics (v0.16)
+
+Non-deterministic functions like `now()`, `random()`, and `gen_random_uuid()` are
+commonly used in views (e.g., `SELECT *, now() AS captured_at FROM events`). These
+cannot be re-evaluated on each incremental tick without producing incorrect results.
+
+SlateDuck solves this with **per-batch capture semantics**:
+
+1. At the start of each batch, every capture-eligible function is sampled exactly once.
+2. The sampled value is substituted as a literal throughout the batch computation.
+3. The sampled values are stored in the checkpoint row alongside the sequence number.
+4. During repair or replay, the stored values are re-used (not re-sampled), guaranteeing
+   bit-identical output.
+
+**Capture-eligible functions:** `now()`, `current_timestamp`, `current_date`,
+`current_time`, `localtime`, `localtimestamp`, `random()`, `gen_random_uuid()`.
+
+**Rejected functions:** `nextval()`, `currval()`, `setseed()`, `clock_timestamp()` —
+these have side effects and cannot be safely captured.
+
+The `current_snapshot_id()` function is an IVM-specific extension that returns the
+batch's `last_input_snapshot` as a stable integer.
+
 ## See Also
 
 - [IVM Architecture](../architecture/ivm-plane.md)
 - [IVM Operations Guide](../operations/incremental-materialized-views.md)
 - [SQL Reference: IVM DDL](../reference/sql-ivm.md)
 - [Design Decision: IVM on Immutable Substrate](../design-decisions/ivm-on-immutable-substrate.md)
+- [Design Decision: Recursive CTE Spike](../design-decisions/ivm-recursive-spike.md)

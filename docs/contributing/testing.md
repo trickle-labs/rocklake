@@ -425,3 +425,38 @@ Located in `crates/slateduck-ivm/tests/`:
   schema isolation, privilege escalation, TLS enforcement, timing attacks,
   session hijacking, parameter injection, error message leaks, idle timeout,
   auth failure lockout.
+
+### Tier 6e — IVM Operator Correctness (v0.16)
+
+- **`crates/slateduck-ivm/tests/operator_tests.rs`** — 12 tests covering all
+  v0.16 operator categories:
+  - Window functions: `ROW_NUMBER` over 1000 snapshots (partitioned and total-order),
+    `LAG`/`LEAD` navigation with row deletion, aggregate window `SUM OVER` with frames
+  - ORDER BY: output in declared order without runtime sort
+  - LIMIT/OFFSET: top-100 across 1000 snapshots, state bound assertion, large-offset WARN
+  - Correlated subqueries: `EXISTS` (semi-join), `IN` (semi-join), scalar (NULL on empty)
+  - Recursive CTEs: transitive closure with incremental batches
+  - Non-det capture: repair idempotency with stored seed
+  - DISTINCT: ref-counted insert/delete correctness
+  - UNION DISTINCT: MAX semantics (same row in both → exactly one output)
+
+### Scale Testing Infrastructure (Tier 8)
+
+Scale tests run on dedicated EC2 `c6i.4xlarge` instances via self-hosted GitHub
+Actions runners. They are triggered:
+- Manually via `workflow_dispatch`
+- Automatically on `v*` release tags
+
+**Setup requirements:**
+- Instance: `c6i.4xlarge` (16 vCPUs, 32 GB RAM)
+- Storage: 100 GB gp3 EBS
+- Network: Same-region as S3 bucket (us-east-1 recommended)
+- Runner label: `self-hosted-scale`
+
+**TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`):
+- Targets: `get_current_snapshot` p99 < 50 ms (SF10), < 100 ms (SF100)
+- Requires MinIO or real S3 endpoint
+
+**TPC-H IVM streaming** (`tests/scale/tpch_ivm.rs`):
+- Queries: Q1, Q3, Q5 at 100k rows/s, 8 shards
+- Target: lag p99 < 5 s with 5 s freshness target
