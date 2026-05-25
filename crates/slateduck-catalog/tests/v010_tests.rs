@@ -9,7 +9,6 @@
 //! - S3 CDC file writer (in-memory)
 //! - CdcTailer poll loop
 //! - Webhook payload generation
-//! - CDC for materialized-view tables (treated identically to base tables)
 //! - Performance: ingest throughput ≥ 10k records/sec, p95 commit latency ≤ 50ms
 
 use object_store::path::Path as ObjectPath;
