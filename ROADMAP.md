@@ -1820,9 +1820,9 @@ crates/slateduck-ivm/
     └── integration_tests.rs
 ```
 
-- [x] `dbsp` (Feldera) crate added as workspace dependency, version-pinned with a vendored compatibility shim in `circuit.rs`
+- [x] `dbsp` (Feldera) crate added as workspace dependency at v0.299.0. **Note:** `circuit.rs` is a hand-rolled Z-difference shim that implements DBSP's conceptual model without using DBSP's API; the `dbsp` crate is declared but has zero `use` imports anywhere in the workspace. See Pre-v0.14 Architecture Gates — Gate 1.
 - [x] `MatviewInputSource` reads append-only base tables filtered to a key range, emitting `(row, snapshot_id, +1)` deltas
-- [x] `SlateDbTrace` (Phase A: DBSP-bundled persistence; native impl deferred to v0.15)
+- [x] `IvmTrace` checkpoint metadata (`last_input_snapshot`, `last_output_snapshot`, `seq`) persisted to SlateDB. Originally described as "SlateDbTrace Phase A / DBSP-bundled persistence" — the actual deliverable is `IvmTrace`, a checkpoint struct wrapping `IvmCircuit`. Native SlateDB persistence integrated with DBSP traits is the v0.15 work (path depends on Gate 1 outcome).
 - [x] Worker event loop: poll catalog → acquire lease → drive circuit → durable batch → append checkpoint
 - [x] Output writer emits one Parquet file per cycle, commits via existing `CatalogWriter` snapshot path
 - [x] `slateduck-ivm serve --catalog-path … --state-prefix … --worker-id … --shard-limit 1` CLI matches `slateduck-pgwire` ergonomics
@@ -2079,9 +2079,69 @@ When neither broadcast nor co-partitioning applies, one side is re-partitioned a
 
 ---
 
+## Pre-v0.14 Architecture Gates
+
+> **These decisions must be resolved before v0.14 implementation begins.** They are not speculative concerns — they reflect the current state of the codebase as audited at planning time.
+
+### Reality Check: Current IVM Implementation State
+
+The IVM system shipped in v0.11–v0.13 uses a **hand-rolled Z-difference shim** in `circuit.rs`, not the DBSP library. Although `dbsp = "0.299.0"` is declared in `Cargo.toml`, there are zero `use dbsp` imports in the workspace. The `circuit.rs` comment reads:
+
+> "The workspace-level `dbsp` dependency is preserved for future use when full retraction support is added."
+
+Similarly, `plan.rs` hand-parses SQL with `sqlparser` and produces an ad-hoc `IvmPlan` struct — it does not use DataFusion's `LogicalPlan`. The `slateduck-datafusion` crate provides a read-side `CatalogProvider` only; it is not used by the IVM planner. The roadmap's references to "DBSP operators", "DBSP `Trace`/`Batch`/`Cursor` traits", and "DataFusion decorrelation" describe work that has not yet started.
+
+### Gate 1 — DBSP Architecture Decision
+
+One of three paths must be chosen and documented in `docs/design-decisions/ivm-architecture.md` before v0.14 begins:
+
+**Option A — Extend the hand-rolled shim.** Continue building on `IvmCircuit`. Add EC-01 fix, window functions, ORDER BY, recursive CTEs as shim extensions. Remove the unused `dbsp` crate. Fastest short-term; window functions and recursive CTEs require per-partition ordered state built from scratch; compounds technical debt toward v0.16–v0.17.
+
+**Option B — Migrate to DBSP's native circuit API.** Build `compile_view()` to lower SQL → `dbsp::Circuit::build()` dataflow graph; replace `IvmCircuit` with native DBSP operators. The v0.15 `SlateDbTrace` spike then validates trait implementability. Correct long-term foundation; higher upfront cost; risk that DBSP's circuit builder conflicts with SlateDuck's query-driven planning model.
+
+**Option C — Switch to `differential-dataflow`.** Use `TimelyDataflow/differential-dataflow` instead of Feldera DBSP. More mature and lower-level. Requires re-evaluating all DBSP-specific roadmap references.
+
+> **Action:** Run the DBSP feasibility spike **now**, before v0.14 is scoped. The spike currently scheduled in v0.15 should happen this week (timebox: 1 day): can `dbsp::Circuit` be driven externally? Are `Trace`/`Batch`/`Cursor` traits implementable without forking? Document in `docs/design-decisions/ivm-architecture.md`; select Option A, B, or C.
+
+- [ ] **Pre-v0.14 spike (1 day):** Test DBSP circuit API external usability; document findings in `docs/design-decisions/ivm-architecture.md`; choose Option A, B, or C; update all v0.15 task descriptions to reflect the chosen path
+
+### Gate 2 — `IvmOracle` Is the First v0.14 Deliverable
+
+`IvmOracle` does not exist yet. The EC-01 fix cannot be verified without it, and all v0.15–v0.17 correctness tests depend on it. It must be the **first pull request of v0.14**, before any bug fix work:
+
+- Input: view SQL + DML sequence
+- Run: IVM worker via `IvmWorkerHarness`
+- Compare: output multiset against `DuckDbHarness` reference
+- Surface: `IvmOracle::assert_equivalent(view_sql, deltas)` in `slateduck-testkit`
+
+Estimated effort: 3–5 days.
+
+- [ ] **Pre-v0.14:** `IvmOracle::assert_equivalent` implemented and green on the basic GROUP BY + JOIN test cases from v0.11–v0.13
+
+### Gate 3 — Testkit Harness Gaps
+
+`slateduck-testkit` has `DuckDbHarness`, `IvmWorkerHarness`, and `DeterministicClock`. Missing before Tier 4–7 tests can be written:
+
+- `MinioHarness` — required by every Tier 4+ test (object-store backed catalog)
+- `CatalogHarness` — required by Tier 2+ (catalog write/read round-trips without a full worker)
+- `PgWireHarness` — required by Tier 5+ (client compatibility tests)
+
+Build these alongside the first test suites that need them in v0.14; do not defer to v0.15.
+
+### Gate 4 — Reconcile the Implementation Plan
+
+`plans/incremental-view-maintenance-implementation.md` explicitly marks correlated subqueries and window functions as **"post-v1.0"**. The roadmap has both in v0.16. Update the implementation plan to match the agreed scope before v0.14 sprints begin.
+
+### Gate 5 — SQL Planner Migration Decision
+
+`plan.rs` uses `sqlparser` and produces an `IvmPlan` struct. The roadmap's v0.16 correlated subqueries require DataFusion's `PullUpCorrelatedPredicates` / `DecorrelatePredicateSubquery` rewrites, which need a DataFusion `LogicalPlan` as input — not the current ad-hoc struct. Decide before v0.14 whether to start the planner migration in v0.14/v0.15 incrementally, or do it all in v0.16. A mid-sprint migration in v0.16 is a high-risk rework.
+
+---
+
 ## v0.14 — IVM Join Correctness
 
 > **Dependency:** v0.15+ depend on the `IvmOracle` shipped here. Merge to `main` before v0.15 work begins.
+> **Architecture gate:** The five Pre-v0.14 gates above must be resolved before sprint planning for this release: DBSP migration path chosen, `IvmOracle` built first, testkit harnesses scoped.
 
 > Correctness release: fixes the EC-01 phantom-row bug in join deltas, formalises aggregate tier classification with auxiliary columns (BOOL_AND/OR reclassified as semi-algebraic), adds function-volatility validation at view-creation time via hardcoded lookup table, and ships the property-based "differential ≡ full" test oracle that all future IVM correctness tests depend on. See [plans/pg-trickle.md](plans/pg-trickle.md) §4, §6, §9, §11.
 
@@ -2197,11 +2257,14 @@ Foundation for views that read from other materialized views (`CREATE INCREMENTA
 
 ### Native `SlateDbTrace` Implementation
 
-Replace DBSP's bundled persistence with a native trace implementation directly over SlateDB. This is the deferred work from v0.11; it unlocks the cost optimizations below.
+Implement native SlateDB persistence for the IVM trace layer. The v0.11 deliverable was `IvmTrace` (checkpoint metadata only); this release integrates SlateDB durability with the computation layer. **Implementation path depends on the Gate 1 architecture decision made pre-v0.14:**
 
-> **Risk: DBSP trait stability.** DBSP uses GATs internally; some `Trace`, `Batch`, and `Cursor` traits may not be object-safe in stable Rust or may not expose a stable public implementation API. If the traits are not publicly implementable without forking DBSP, the fallback is a `SlateDbBatch` adapter wrapping DBSP's in-memory batch with SlateDB-backed spill-to-disk on memory pressure. Spike this integration first (1-day timebox) before committing to full trait implementation.
+- **Option B (DBSP native):** implement `SlateDbTrace` conforming to DBSP's `Trace`/`Batch`/`Cursor` traits, validated by the pre-v0.14 spike.
+- **Option A (extend shim):** extend `IvmTrace` with SlateDB-backed state serialization and compaction policies; no DBSP trait work.
 
-- [ ] **Spike (1 day):** Verify DBSP `Trace`, `Batch`, `Cursor` traits are implementable externally without forking; document findings
+> **Risk: DBSP trait stability (Option B only).** DBSP uses GATs internally; some traits may not be object-safe in stable Rust. The pre-v0.14 spike resolves this. If traits are not externally implementable, the fallback is a `SlateDbBatch` adapter wrapping DBSP's in-memory batch with SlateDB-backed spill-to-disk on memory pressure.
+
+- [ ] Implement based on the DBSP spike outcome recorded in `docs/design-decisions/ivm-architecture.md` (spike runs pre-v0.14; do not re-run here)
 - [ ] `SlateDbTrace` implements DBSP's persistent `Trace`, `Batch`, and `Cursor` traits (or fallback adapter if spike shows infeasibility)
 - [ ] Frontier advancement mapped to SlateDB compaction
 - [ ] Direct mapping of DBSP batch boundaries to SlateDB SST flushes
@@ -2479,6 +2542,8 @@ A top-level `ORDER BY` implies a total order on the output; Parquet is physicall
 `WHERE EXISTS (SELECT … WHERE t.id = outer.id)`, `WHERE IN (SELECT …)`, scalar subquery in SELECT list. Requires re-evaluation of the inner query as outer rows change.
 
 **Implementation approach.** Decorrelation via algebraic rewrites (same technique DataFusion uses for batch evaluation). Correlated `EXISTS` → semi-join; correlated scalar → left join + aggregation. After decorrelation the circuit contains only regular joins and aggregations.
+
+> **Planner prerequisite (Pre-v0.14 Gate 5).** The current IVM planner (`plan.rs`) uses `sqlparser` and produces an ad-hoc `IvmPlan` struct. Decorrelation requires a DataFusion `LogicalPlan` as input. The migration from `IvmPlan` to DataFusion's logical plan representation must be resolved before or during this work — see Gate 5 for the scoping decision. The `datafusion` crate is already in the workspace (`slateduck-datafusion` read-side catalog provider); this task adds `datafusion-optimizer` specifically for IVM planning.
 
 > **New dependency:** This adds `datafusion-optimizer` (and transitively `datafusion-expr`, `datafusion-common`, `arrow`) as a compile dependency of `slateduck-ivm`. The DataFusion optimizer crate is Apache-2.0 licensed (compatible). The transitive dependency tree adds ~40 crates. Pin to a specific DataFusion release (currently 45.x) and document the version in `Cargo.toml` workspace dependencies.
 
