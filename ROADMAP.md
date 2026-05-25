@@ -2191,6 +2191,9 @@ Foundation for views that read from other materialized views (`CREATE INCREMENTA
 - [ ] Diamond `Slowest` consistency policy: a convergence view (diamond apex D) refreshes only when **all** upstream views have advertised `frontier ≥ F` via their state stores; purely frontier-driven, no SAVEPOINT or advisory lock needed
 - [ ] `EXPLAIN MATERIALIZED VIEW v` extended to show dependency graph, detected diamonds, and current frontier per source
 - [ ] Unit test: diamond topology (A→B, A→C, B→D, C→D); assert D never refreshes with mismatched B/C frontiers
+- [ ] Unit test: linear chain (A→B→C); assert C output matches DuckDB full recompute at each step after updates to A propagate through B
+- [ ] Unit test: concurrent base-table updates (A and B both updated in the same refresh window; C depends on both); assert C never reads A's new frontier with B's old frontier or vice versa
+- [ ] Unit test: view drop cascade; dropping B (when C depends on B) returns a clear error naming the dependent views; C remains intact
 
 ### Native `SlateDbTrace` Implementation
 
@@ -2203,7 +2206,7 @@ Replace DBSP's bundled persistence with a native trace implementation directly o
 - [ ] Frontier advancement mapped to SlateDB compaction
 - [ ] Direct mapping of DBSP batch boundaries to SlateDB SST flushes
 - [ ] Benchmark: native trace ≥ 1.5× faster than v0.11 baseline at equal correctness
-- [ ] Property-tested against DBSP's reference in-memory trace
+- [ ] Property-tested against DBSP's reference in-memory trace: 500 random DML sequences against TPC-H Q1; `SlateDbTrace` output multiset must be identical to the in-memory reference trace at every snapshot; tests in `crates/slateduck-ivm/tests/trace_property_tests.rs`
 
 ### Cost Optimization
 
@@ -2229,6 +2232,7 @@ Per-view `WITH (...)` options always override mode defaults. Documented in `docs
 - [ ] `slateduck-ivm serve --cost-mode=...` accepted and honoured
 - [ ] Mode defaults documented per knob; per-view overrides take precedence
 - [ ] Cost-mode interaction matrix tested in cost-model regression suite
+- [ ] **S3 API call count gate**: after TPC-H Q1 SF1 at balanced mode for 1000 input batches, assert `ivm_s3_puts_total + ivm_s3_gets_total` per million input rows ≤ documented cost model upper bound from `benchmarks/v0.14-ivm-hardening.json`; a regression > 20% vs baseline fails CI
 
 ### State Store Backup & Restore
 
@@ -2242,6 +2246,7 @@ The v0.4 checkpoint API backs up the catalog. Per-shard IVM state stores under `
 - [ ] If a state store is missing entirely at lease-claim time, the worker emits `WARN`-level `state_store_missing` and waits for an operator decision (auto-rebuild gated behind `--auto-rebuild-on-loss` flag, default off) — never silently recomputes terabytes of state
 - [ ] Documented backup cadence guidance: daily for large matviews; on-demand before any infra migration
 - [ ] `docs/operations/ivm-backup-restore.md` published
+- [ ] **Backup/restore correctness test**: run 1000 CDC events; take backup; inject 200 more events; restore from backup; restart worker; assert the worker processes exactly the 200 post-backup events (not the pre-backup 1000) and final output matches DuckDB reference — the persisted frontier prevents re-processing
 
 ### Cost Guardrails (User-Facing)
 
@@ -2308,6 +2313,7 @@ Performance optimizations needed to meet the "steady-state S3 PUT cost ≤ 2×" 
 - [ ] Renaming a column referenced by a view: view marked stale (re-creation required)
 - [ ] **Dropping a column referenced by a view: view marked `broken` (distinct from `stale`)**; `REFRESH ... FULL` cannot fix it because the SQL is un-parseable. Operator must `DROP` and re-create the view with corrected SQL. `SHOW MATERIALIZED VIEWS` shows `status = 'broken'` with the missing column named in the status message
 - [ ] All stale/broken states surfaced in `SHOW MATERIALIZED VIEWS` with a clear `status` column and human-readable reason
+- [ ] **Schema evolution tests** (`crates/slateduck-ivm/tests/schema_evolution_tests.rs`): 5 tests — add column not referenced by view (no-op; view stays fresh); add column referenced by view (stale; `REFRESH FULL` recovers); type-change on referenced column (stale); rename referenced column (stale; re-creation required); drop referenced column (broken; `REFRESH FULL` returns clear error naming the missing column)
 
 ### Exactly-Once Output Snapshots
 
@@ -2337,7 +2343,9 @@ Performance optimizations needed to meet the "steady-state S3 PUT cost ≤ 2×" 
 
 ### Testing: Tier 6d (Hardening), Tier 7 (Fault Injection), Tier 9 (Security) & Tier 10 (Benchmark Regression)
 
-- [ ] **Tier 6d — IVM hardening tests** (`crates/slateduck-ivm/tests/hardening_tests.rs`): 4 tests — repair shard rebuilds from base, `REFRESH ... FULL` rebuilds all shards, `doctor` identifies stuck/expired shards, exactly-once output under output-plane restart
+- [ ] **Tier 6d — IVM hardening tests** (`crates/slateduck-ivm/tests/hardening_tests.rs`): 5 tests — repair shard rebuilds from base, `REFRESH ... FULL` rebuilds all shards, `doctor` identifies stuck/expired shards, exactly-once output under output-plane restart, backup/restore (restored frontier prevents event re-processing)
+- [ ] **Tier 6d — Schema evolution tests** (`crates/slateduck-ivm/tests/schema_evolution_tests.rs`): 5 tests — add-column no-op, add-referenced-column stale, type-change stale, rename stale, drop-referenced broken + clear error on `REFRESH FULL`
+- [ ] **Tier 6d — Frontier durability tests** (`crates/slateduck-ivm/tests/durability_tests.rs`): 3 tests — SIGKILL worker at T=0 (before any CDC), T=100 events, T=500 events; restart worker; assert loaded frontier skips already-processed events and final output is identical to uninterrupted run (no duplicate rows, no missing rows). Note: this is distinct from fault-injection tests — those test crashes mid-batch; these test that the frontier itself is durable across clean restarts
 - [ ] **Tier 7 — IVM fault injection** (`crates/slateduck-ivm/tests/fault_injection_tests.rs`): 4 `fail_point!` tests — kill after DBSP before flush, kill after flush before checkpoint, kill output plane after Parquet write before catalog commit, S3 `GetObject` 503 with retry; gated behind `--features fault-injection`
 - [ ] **Tier 7 — Catalog fault injection** (`crates/slateduck-catalog/tests/fault_injection_tests.rs`): 4 tests — `create_snapshot` panic before commit, IO error after `put` before `flush`, `extend_lease` CAS conflict, `CounterCache` panic with reload verification
 - [ ] **Tier 7 — Network fault injection** via `toxiproxy` Testcontainers proxy in front of MinIO: S3 PUT 503, GET truncated, heartbeat partition, 10 s latency degradation — all confirming no data loss and graceful degradation
@@ -2372,7 +2380,11 @@ The toxiproxy Testcontainers network fault injection tests require Docker. This 
 - [ ] Continuous-soak test: TPC-H Q1 maintained for 24 h with zero correctness drift; **no fault injection in v0.14 soak** (fault-injection soak is Tier 8 in v0.15); correctness checked via `IvmOracle` every 15 min; runs on scale-test infrastructure
 - [ ] All v0.11–v0.13 acceptance tests still pass
 - [ ] IVM worker K8s deployment pattern tested with 4-worker pool and rolling updates
-- [ ] **Tier 6d hardening tests green** (4 tests including repair and exactly-once output)
+- [ ] **Tier 6d hardening tests green** (5 tests including repair, exactly-once output, and backup/restore)
+- [ ] **Tier 6d schema evolution tests green** (5 tests; all stale/broken state transitions verified in CI)
+- [ ] **Tier 6d frontier durability tests green**: crash + restart at T=0, T=100, T=500 all produce output identical to uninterrupted run
+- [ ] **DAG multi-hop, concurrent update, and drop-cascade tests green** (4 DAG unit tests total)
+- [ ] **S3 API call count ≤ cost model upper bound** (call count regression gate green)
 - [ ] **Tier 7 fault injection suite green** on every pre-release tag: catalog faults (4), IVM worker faults (4), network faults via toxiproxy (4)
 - [ ] **Tier 9 security suite green**: credential isolation, TLS, auth, SQL injection guards, rate limiting — 14 tests total
 - [ ] **Tier 10 benchmark regression < 10%** on weekly CI run vs `benchmarks/phase-2-baseline.json`
@@ -2391,7 +2403,10 @@ The toxiproxy Testcontainers network fault injection tests require Docker. This 
 - [ ] Cost-optimization knobs documented and defaulted sensibly
 - [ ] Observability surface complete (metrics, traces, `doctor` CLI)
 - [ ] `REFRESH ... FULL` and per-shard repair shipped
-- [ ] Tier 6d hardening tests (`hardening_tests.rs`) with 4 passing tests
+- [ ] Tier 6d hardening tests (`hardening_tests.rs`) with 5 passing tests
+- [ ] Tier 6d schema evolution tests (`schema_evolution_tests.rs`) with 5 passing tests
+- [ ] Tier 6d frontier durability tests (`durability_tests.rs`) with 3 passing tests
+- [ ] Tier 6d SlateDbTrace property tests (`trace_property_tests.rs`) with 500-sequence suite green
 - [ ] Tier 7 fault injection suites (`fault_injection_tests.rs` in catalog + ivm) with 12 passing tests
 - [ ] Tier 9 security test suite (`security_tests.rs`) with 14 passing tests
 - [ ] Tier 10 benchmark regression job in `.github/workflows/ci.yml` (weekly cron)
@@ -2568,6 +2583,25 @@ Items not moved to v0.14 because they require the full operator surface or are c
 | `now()` / `random()` (capture semantics) | — | — | — | — | ✓ |
 | User-defined functions (WASM) | — | — | — | — | ✓ |
 
+### Testing: Tier 6e (IVM Operator Correctness)
+
+A named test suite for every operator category added in v0.15a. Each test uses `IvmOracle` to compare incremental output against a DuckDB single-shot reference after every DML mutation. This is the v0.15a equivalent of the v0.13.1 Tier 6b-correctness suite.
+
+- [ ] **Tier 6e — IVM operator correctness tests** (`crates/slateduck-ivm/tests/operator_tests.rs`): 12 tests —
+  - Window: `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)` maintained correctly for 1000 snapshots; partition-local and cross-partition (single-shard merge) modes
+  - Window: `LAG`/`LEAD` navigation — insert then delete a row that is the LAG source for its neighbour; output matches DuckDB
+  - Window: aggregate window `SUM OVER (PARTITION BY … ORDER BY … ROWS BETWEEN …)` maintained correctly under inserts and deletes
+  - ORDER BY: output Parquet rows delivered in declared order without a runtime sort; verified by asserting no `Sort` node in the physical plan
+  - LIMIT: global top-100 maintained correctly across 1000 input snapshots including mid-sequence deletions
+  - LIMIT/OFFSET state bound: assert `state_rows_per_shard ≤ (OFFSET + LIMIT) × 1.1` after 1000 snapshots
+  - LIMIT/OFFSET WARN: view creation with `OFFSET 10001` emits exactly one `WARN`-level log entry
+  - Correlated subquery: `WHERE EXISTS (SELECT … FROM lineitem WHERE …)` (TPC-H Q4) maintained correctly; synthetic deletes from both sides exercise EC-01 join fix
+  - Correlated subquery: `IN (SELECT …)` maintained correctly under inserts + deletes to the subquery source
+  - Correlated subquery: scalar subquery in SELECT list — correct result when inner relation is non-empty; correctly returns NULL when inner relation becomes empty after delete
+  - Recursive CTE: transitive closure, 1M-edge graph, 10k-edge incremental batches; output multiset = DuckDB reference at every step; single-shard coordinator
+  - Non-det capture: repaired shard re-using stored per-batch seed produces bit-identical output to original; running repair twice is idempotent
+- [ ] All Tier 6e tests run on every PR; the recursive CTE test runs on the large runner only (1M-edge graph requires > 4 GB memory)
+
 ### Testing: Tier 8 (Scale Benchmarks)
 
 The 24-hour soak test and 16-shard benchmark are in v0.15b — they require the full operator matrix (including WASM and Adaptive mode) for a meaningful GA-gate soak.
@@ -2586,6 +2620,7 @@ The 24-hour soak test and 16-shard benchmark are in v0.15b — they require the 
 - [ ] `now()` capture: repaired shard re-uses stored captured value, not re-sampled; output is bit-identical to original
 - [ ] Unbounded recursive CTE rejects `shard_count > 1` at view creation with clear error
 - [ ] All v0.11–v0.14 acceptance tests still pass
+- [ ] Tier 6e operator correctness suite green (12 tests; recursive CTE on large runner)
 - [ ] **Tier 8 TPC-H p99 within targets**: SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
 
 ### Deliverables
@@ -2671,6 +2706,18 @@ Items deferred from v0.14 because they require the full operator surface or are 
 | User-defined functions (WASM) | — | — | — | — | — | ✓ |
 | Adaptive DIFFERENTIAL/FULL switching | — | — | — | — | — | ✓ |
 
+### Testing: Tier 6f (WASM UDF + DISTINCT Correctness)
+
+- [ ] **Tier 6f — WASM UDF tests** (`crates/slateduck-ivm/tests/wasm_udf_tests.rs`): 6 tests —
+  - Custom tokenizer UDF over event strings maintained incrementally; output matches DuckDB reference
+  - UDF exceeding per-row fuel limit (10M instructions): clean error, no worker panic, view marked `Stale` (not `Broken`); `REFRESH FULL` recovers
+  - UDF exceeding memory limit (64 MiB): clean error, same recovery behaviour as fuel exhaustion
+  - UDF attempting file I/O (WASI `fd_write`): rejected at module load time (`CREATE FUNCTION` returns `SQLSTATE 0A000`)
+  - UDF version migration: `ALTER … USING FUNCTION f VERSION N` triggers `REFRESH … FULL`; subsequent incremental results correct
+  - Non-deterministic UDF (`deterministic = false`): rejected at `CREATE FUNCTION` time with `SQLSTATE 0A000` and clear message
+- [ ] **Tier 6f — DISTINCT property tests** (`crates/slateduck-ivm/tests/distinct_property_tests.rs`): property-based test with `proptest`; generates arbitrary insert/delete/update sequences against views using `SELECT DISTINCT`, `UNION DISTINCT`, `INTERSECT`, `EXCEPT`; asserts output multiset = DuckDB reference at every step; 500 sequences; covers: single insert-delete cycle, multi-insert partial-delete, cross-operand UNION DISTINCT with shared rows, INTERSECT where one operand goes empty, EXCEPT where subtractor count exceeds the original count (clamp to 0)
+- [ ] All Tier 6f tests run on every PR (standard runner)
+
 ### Testing: Tier 8 (Scale & Soak — IVM GA Gate)
 
 - [ ] **Tier 8 — TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`): re-run against v0.15b to confirm no regression; results written to `benchmarks/v0.15b-tpch-{date}.json`
@@ -2685,6 +2732,8 @@ Items deferred from v0.14 because they require the full operator surface or are 
 - [ ] Every operator in the full matrix (including WASM and DISTINCT ref-counting) passes a correctness test against a DuckDB single-shot reference query
 - [ ] WASM UDF exceeding fuel/memory limit returns a clean error; no worker panic, no view corruption
 - [ ] All v0.11–v0.15a acceptance tests still pass
+- [ ] Tier 6f WASM UDF tests green (6 tests including sandbox isolation)
+- [ ] Tier 6f DISTINCT property tests green (500 sequences)
 - [ ] Extended benchmark: TPC-DS Q14, Q47, Q49 maintained incrementally with correctness verified (Q47/Q49 exercise window functions; Q14 exercises cross-join)
 - [ ] **Tier 8 soak test passes**: 24 h with zero correctness drift and fault injection recovery within SLO on every pre-release run
 - [ ] **Tier 8 TPC-H p99 within targets** (re-verified): SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
@@ -2708,6 +2757,8 @@ Items deferred from v0.14 because they require the full operator surface or are 
 - [ ] `CostMode::Adaptive` with per-view rolling cost statistics in `config.rs` and `worker.rs`
 - [ ] `benchmarks/v0.15b-adaptive-calibration.json` with empirical crossover data for multiplier table
 - [ ] `__sd_ref_count` auxiliary column for DISTINCT and set operators in `trace.rs`
+- [ ] Tier 6f WASM UDF tests (`wasm_udf_tests.rs`) with 6 passing tests in CI
+- [ ] Tier 6f DISTINCT property tests (`distinct_property_tests.rs`) with 500-sequence suite green in CI
 - [ ] Implementation plan [plans/incremental-view-maintenance-implementation.md](plans/incremental-view-maintenance-implementation.md) updated to reflect v0.15b additions
 
 ---
@@ -2746,6 +2797,7 @@ Without this, pg-trickle falls back to O(N) polling (`EXCEPT ALL` full diff) ins
 - [ ] `table_changes()` callable from DuckDB `ATTACH 'ducklake:postgresql://slateduck-sidecar/…'`
 - [ ] pg-trickle `cdc_mode` reports `DUCKLAKE_CHANGE_FEED` when source is SlateDuck-backed DuckLake
 - [ ] Property test: apply change records from `table_changes(start, end)` to `start` state → produces `end` state (multiset equality)
+- [ ] GC error path: `table_changes()` with a `start_snapshot` that has been GC’d returns `SQLSTATE 55000`; the error is distinguishable from all other errors by SQLSTATE alone (pg-trickle uses this to trigger a graceful full-refresh fallback)
 
 ### Gap 2 — Stable `rowid` on DuckLake Tables
 
@@ -2765,6 +2817,7 @@ Every SlateDuck-managed DuckLake table must expose a stable `rowid` column that 
 - [ ] `rowid` appears in `table_changes()` output
 - [ ] `rowid` is stable across compaction, GC, and file splits (test with `slateduck compact` between two change windows)
 - [ ] EC-01 test case: delete row from both source and joined table in same refresh window; pg-trickle stream table matches full recompute
+- [ ] Concurrent write test: two writers call `next_rowid_range` concurrently for the same table 1000 times each; assert all allocated ranges are pairwise disjoint (no rowid collision)
 
 ### Gap 3 — Snapshot Lease / Hold Mechanism
 
@@ -2780,6 +2833,7 @@ GC must not advance past a snapshot ID that an external consumer (pg-trickle) ha
 **Acceptance criteria:**
 - [ ] GC blocked at leased snapshot; advances once lease released
 - [ ] TTL expiry allows GC to advance after consumer disappears
+- [ ] Concurrent consumers: two consumers hold leases on the same snapshot; GC is blocked until both release; advances correctly afterward; tested with one clean release and one TTL expiry
 - [ ] `slateduck.hold_snapshot()` / `slateduck.release_snapshot()` callable via PG-wire from pg-trickle
 
 ### Gap 4 — `NOTIFY` on Snapshot Advance
