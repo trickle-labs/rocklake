@@ -38,6 +38,9 @@ pub enum CostMode {
     Balanced,
     /// Latency: minimize latency (narrow flush windows, lazy compaction).
     Latency,
+    /// Adaptive: automatically switch between DIFFERENTIAL and FULL based on
+    /// delta ratio × query complexity multiplier.
+    Adaptive,
 }
 
 impl std::str::FromStr for CostMode {
@@ -49,6 +52,7 @@ impl std::str::FromStr for CostMode {
             "conservative" => Self::Conservative,
             "balanced" => Self::Balanced,
             "latency" => Self::Latency,
+            "adaptive" => Self::Adaptive,
             _ => Self::Standard,
         })
     }

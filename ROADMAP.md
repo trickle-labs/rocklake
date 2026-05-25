@@ -65,7 +65,7 @@ binding on every roadmap release below.
 | **v0.13 — IVM Joins** | Broadcast, co-partitioned, and re-shuffle join strategies; TPC-H Q3/Q4/Q5 | Done |
 | **v0.14 — IVM Join Correctness** | EC-01 phantom-row fix, aggregate tier classification (BOOL_AND/OR semi-algebraic), volatility validation (hardcoded table), property-based \"differential ≡ full\" oracle. **Blocks v0.15+** | Done |
 | **v0.15 — IVM Operational Hardening** | Multi-view DAG (first), native `SlateDbTrace`, cost optimization, cost guardrails (opt-in freshness degradation), observability, fault injection, rate limiting, 24 h soak | Done |
-| **v0.16 — IVM Operator Completeness** | Window functions, ORDER BY, LIMIT/top-N, correlated subqueries (DataFusion dep), recursive CTEs (single-shard coordinator + spike gate), non-det capture | Planning |
+| **v0.16 — IVM Operator Completeness** | Window functions, ORDER BY, LIMIT/top-N, correlated subqueries (DataFusion dep), recursive CTEs (single-shard coordinator + spike gate), non-det capture | Done |
 | **v0.17 — IVM Feature Hardening** | WASM UDFs (wasmtime pooled), adaptive cost-mode (empirically calibrated against full matrix), ref-counted DISTINCT (MAX semantics), Tier 8 24h soak (IVM GA gate) | Planning |
 | **v0.18 — DuckLake Catalog Standard Interface** | `table_changes()` CDC function, stable `rowid`, snapshot lease, `NOTIFY` event-driven, extension schema (first-class catalog tag `0x23`), opaque mixed frontiers; validated first with pg-trickle | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, IVM feature-complete GA sign-off, real-world validation gate | Planning |
@@ -2543,38 +2543,38 @@ The features now spanning v0.16 and v0.17 were originally bundled in a single mi
 
 **Design impact.** Partition-local windows (PARTITION BY = shard key) are fully parallel and cost the same as equivalent `GROUP BY`. Full-table or cross-partition windows require a single-shard merge stage; the output plane gains a merge-sort writer for ordered views.
 
-- [ ] `PARTITION BY` windows where partition key = shard key: fully parallel, same throughput as aggregation
-- [ ] `PARTITION BY` windows where partition key ≠ shard key: route to single-shard merge stage
-- [ ] Full-table windows (no PARTITION BY): `shard_count = 1` enforced at create time with a clear error message if user attempts sharded
-- [ ] `SlateDbOrderedTrace` extending `SlateDbTrace` (or the fallback adapter from v0.15 — the ordered extension must work with whichever persistence layer v0.15 shipped) with per-partition sort order. **Contingency:** if v0.15 ships the `SlateDbBatch` adapter rather than native trait implementation, the ordered trace maintains per-partition sort keys in a separate SlateDB key prefix (`{state_prefix}/ordered/{partition_key}/{sequence}`) layered on top of the adapter, keeping the adapter unmodified
-- [ ] Output plane `merge_sorted_parquet_writer` for total-ordered output tables
-- [ ] Supported window frames: `ROWS BETWEEN`, `RANGE BETWEEN`, `GROUPS BETWEEN`
-- [ ] Navigation functions: `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`
-- [ ] Ranking functions: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`
-- [ ] `WITH (window_mode = 'partitioned' | 'total_order')` option; auto-selected from SQL plan if unambiguous
-- [ ] TPC-DS Q47 (window over monthly revenue) and Q49 (window over return ratios) maintained incrementally
-- [ ] Partition-local window throughput within 15% of equivalent aggregation
+- [x] `PARTITION BY` windows where partition key = shard key: fully parallel, same throughput as aggregation
+- [x] `PARTITION BY` windows where partition key ≠ shard key: route to single-shard merge stage
+- [x] Full-table windows (no PARTITION BY): `shard_count = 1` enforced at create time with a clear error message if user attempts sharded
+- [x] `SlateDbOrderedTrace` extending `SlateDbTrace` (or the fallback adapter from v0.15 — the ordered extension must work with whichever persistence layer v0.15 shipped) with per-partition sort order. **Contingency:** if v0.15 ships the `SlateDbBatch` adapter rather than native trait implementation, the ordered trace maintains per-partition sort keys in a separate SlateDB key prefix (`{state_prefix}/ordered/{partition_key}/{sequence}`) layered on top of the adapter, keeping the adapter unmodified
+- [x] Output plane `merge_sorted_parquet_writer` for total-ordered output tables
+- [x] Supported window frames: `ROWS BETWEEN`, `RANGE BETWEEN`, `GROUPS BETWEEN`
+- [x] Navigation functions: `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`
+- [x] Ranking functions: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`
+- [x] `WITH (window_mode = 'partitioned' | 'total_order')` option; auto-selected from SQL plan if unambiguous
+- [x] TPC-DS Q47 (window over monthly revenue) and Q49 (window over return ratios) maintained incrementally
+- [x] Partition-local window throughput within 15% of equivalent aggregation
 
 ### `ORDER BY` in Materialized Views
 
 A top-level `ORDER BY` implies a total order on the output; Parquet is physically sorted and pre-ordered reads require no runtime sort.
 
-- [ ] `ORDER BY` accepted in view SQL; stored as `output_sort_key` in `MatviewRow`
-- [ ] Output Parquet written with `sorting_columns` metadata
-- [ ] Multiple `ORDER BY` columns with `ASC`/`DESC`/`NULLS FIRST`/`NULLS LAST`
-- [ ] `shard_count = 1` auto-enforced for total-order views
-- [ ] DuckDB scan of an `ORDER BY` matview delivers rows in declared order without a runtime sort (verified by query plan inspection)
+- [x] `ORDER BY` accepted in view SQL; stored as `output_sort_key` in `MatviewRow`
+- [x] Output Parquet written with `sorting_columns` metadata
+- [x] Multiple `ORDER BY` columns with `ASC`/`DESC`/`NULLS FIRST`/`NULLS LAST`
+- [x] `shard_count = 1` auto-enforced for total-order views
+- [x] DuckDB scan of an `ORDER BY` matview delivers rows in declared order without a runtime sort (verified by query plan inspection)
 
 ### `LIMIT` / `OFFSET` (Top-N Materialized Views)
 
 `LIMIT N` materializes only the top N rows by a specified order — "latest N events", "top N customers", "most recent N records". Common pattern; cheap with DBSP's `top_k` operator.
 
-- [ ] `LIMIT N [OFFSET M]` requires `ORDER BY`; error if absent
-- [ ] Incremental top-N via DBSP `top_k`: bounded sorted heap of N candidates maintained across updates
-- [ ] Output Parquet contains exactly N rows; previous output superseded atomically on each publish
-- [ ] Sharded top-N: each shard maintains local top-N; merge shard selects global top-N from `shard_count × N` candidates
-- [ ] `OFFSET` only with `ORDER BY + LIMIT`; document stable-row-numbering caveat. **State cost is O(OFFSET + LIMIT)** because any update to the top-(OFFSET+LIMIT) set invalidates all rows from OFFSET onward. Document this: recommend LIMIT-only when possible; OFFSET > 10000 emits a WARN at view creation
-- [ ] Tested with TPC-H "top 10 orders by value" maintained across 1000 input snapshots
+- [x] `LIMIT N [OFFSET M]` requires `ORDER BY`; error if absent
+- [x] Incremental top-N via DBSP `top_k`: bounded sorted heap of N candidates maintained across updates
+- [x] Output Parquet contains exactly N rows; previous output superseded atomically on each publish
+- [x] Sharded top-N: each shard maintains local top-N; merge shard selects global top-N from `shard_count × N` candidates
+- [x] `OFFSET` only with `ORDER BY + LIMIT`; document stable-row-numbering caveat. **State cost is O(OFFSET + LIMIT)** because any update to the top-(OFFSET+LIMIT) set invalidates all rows from OFFSET onward. Document this: recommend LIMIT-only when possible; OFFSET > 10000 emits a WARN at view creation
+- [x] Tested with TPC-H "top 10 orders by value" maintained across 1000 input snapshots
 
 ### Correlated Subqueries
 
@@ -2586,12 +2586,12 @@ A top-level `ORDER BY` implies a total order on the output; Parquet is physicall
 
 > **New dependency:** This adds `datafusion-optimizer` (and transitively `datafusion-expr`, `datafusion-common`, `arrow`) as a compile dependency of `slateduck-ivm`. The DataFusion optimizer crate is Apache-2.0 licensed (compatible). The transitive dependency tree adds ~40 crates. Pin to a specific DataFusion release (currently 45.x) and document the version in `Cargo.toml` workspace dependencies.
 
-- [ ] Add `datafusion-optimizer` to workspace `Cargo.toml` `[workspace.dependencies]` with pinned version
-- [ ] Decorrelation pass in `plan.rs` via DataFusion's `PullUpCorrelatedPredicates` / `DecorrelatePredicateSubquery` rewrites
-- [ ] `EXISTS`, `NOT EXISTS`, `IN (SELECT …)`, `NOT IN (SELECT …)` → semi/anti-join
-- [ ] Scalar correlated subquery in SELECT list → left join + aggregation
-- [ ] Clear "cannot decorrelate" error for subqueries that escape the rewrite (deep mutual correlation)
-- [ ] TPC-H Q4 (`WHERE EXISTS (SELECT … FROM lineitem WHERE …)`) maintained incrementally
+- [x] Add `datafusion-optimizer` to workspace `Cargo.toml` `[workspace.dependencies]` with pinned version
+- [x] Decorrelation pass in `plan.rs` via DataFusion's `PullUpCorrelatedPredicates` / `DecorrelatePredicateSubquery` rewrites
+- [x] `EXISTS`, `NOT EXISTS`, `IN (SELECT …)`, `NOT IN (SELECT …)` → semi/anti-join
+- [x] Scalar correlated subquery in SELECT list → left join + aggregation
+- [x] Clear "cannot decorrelate" error for subqueries that escape the rewrite (deep mutual correlation)
+- [x] TPC-H Q4 (`WHERE EXISTS (SELECT … FROM lineitem WHERE …)`) maintained incrementally
 
 ### Recursive CTEs
 
@@ -2603,15 +2603,15 @@ A top-level `ORDER BY` implies a total order on the output; Parquet is physicall
 
 > **Required spike (1 day timebox) — do before committing to schedule.** DBSP's `iterate` computes a local fixed point within DBSP's own time domain. SlateDuck uses a snapshot-frontier model. Before building, verify: (1) that `iterate`'s termination detection (output = input at fixed point) maps cleanly onto SlateDuck's frontier advancement — specifically, when does `iterate` know the fixed point has been reached for a given input snapshot? (2) that the DBSP `iterate` operator is callable from outside DBSP's circuit builder without forking. Document findings in `docs/design-decisions/ivm-recursive-spike.md`. If either answer is "no without forking", the fallback is a hand-rolled fixed-point loop in `worker.rs` using the existing differential circuit as the iteration body.
 
-- [ ] **Spike (1 day):** Verify DBSP `iterate` operator is callable externally and that its fixed-point detection maps to SlateDuck's snapshot frontier; document findings in `docs/design-decisions/ivm-recursive-spike.md`
-- [ ] Recursive CTEs identified in the SQL plan (cycles in CTE dependency graph)
-- [ ] Lowered to DBSP `iterate` operators (or hand-rolled fixed-point loop if spike shows `iterate` not usable externally)
-- [ ] **Global convergence:** unbounded recursive CTEs enforce `shard_count = 1` (coordinator receives global shuffle); clear error if user specifies `shard_count > 1`
-- [ ] **Bounded recursion fast path:** `CONNECT BY`-style depth-bounded expansion (org-chart / BOM queries) with `max_depth` may use sharded execution via per-hop reshuffle
-- [ ] Bounded iteration: configurable `max_iterations` (default 100); exceeding it sets view to `Stale` and alerts
-- [ ] Non-recursive `WITH` (already handled in v0.11 as inline subquery expansion) unchanged
-- [ ] Transitive closure over a 1M-edge graph maintained incrementally as edges are added and removed (single-shard coordinator)
-- [ ] Incremental per-batch latency ≤ 5× the non-recursive baseline for the same operator count
+- [x] **Spike (1 day):** Verify DBSP `iterate` operator is callable externally and that its fixed-point detection maps to SlateDuck's snapshot frontier; document findings in `docs/design-decisions/ivm-recursive-spike.md`
+- [x] Recursive CTEs identified in the SQL plan (cycles in CTE dependency graph)
+- [x] Lowered to DBSP `iterate` operators (or hand-rolled fixed-point loop if spike shows `iterate` not usable externally)
+- [x] **Global convergence:** unbounded recursive CTEs enforce `shard_count = 1` (coordinator receives global shuffle); clear error if user specifies `shard_count > 1`
+- [x] **Bounded recursion fast path:** `CONNECT BY`-style depth-bounded expansion (org-chart / BOM queries) with `max_depth` may use sharded execution via per-hop reshuffle
+- [x] Bounded iteration: configurable `max_iterations` (default 100); exceeding it sets view to `Stale` and alerts
+- [x] Non-recursive `WITH` (already handled in v0.11 as inline subquery expansion) unchanged
+- [x] Transitive closure over a 1M-edge graph maintained incrementally as edges are added and removed (single-shard coordinator)
+- [x] Incremental per-batch latency ≤ 5× the non-recursive baseline for the same operator count
 
 ### Non-Deterministic Functions with Capture Semantics
 
@@ -2619,32 +2619,32 @@ A top-level `ORDER BY` implies a total order on the output; Parquet is physicall
 
 > **Upgrade path from v0.14 volatility gate:** v0.14 rejects all VOLATILE functions (including `random()`, `gen_random_uuid()`). v0.16 introduces a `CaptureEligible` category in `volatility.rs` for functions that are safe under per-batch sampling. The volatility gate is updated: `CaptureEligible` functions are accepted (no longer rejected) when used in views. This is a backwards-compatible expansion (views that were previously rejected now succeed). Views created before the upgrade remain unchanged.
 
-- [ ] `volatility.rs` gains `CaptureEligible` variant; `random()`, `gen_random_uuid()`, `now()`, `current_timestamp`, etc. reclassified from VOLATILE to CaptureEligible
-- [ ] Allow-listed functions: `now()`, `current_timestamp`, `current_date`, `current_time`, `localtime`, `localtimestamp`, `random()`, `gen_random_uuid()`
-- [ ] Per-batch sampling: each listed function sampled once at the start of a DBSP batch; substituted as a literal throughout
-- [ ] Sampled value stored in the checkpoint row for deterministic repair (repair re-uses captured value, not re-sampled)
-- [ ] `current_snapshot_id()` — new IVM-specific function returning the batch's `last_input_snapshot` as a stable integer
-- [ ] `random()` / `gen_random_uuid()` subject to a per-batch seed stored in checkpoint (enables deterministic replay)
-- [ ] Error on functions that cannot be safely allow-listed (volatile functions with side effects)
-- [ ] "Capture semantics" section in `docs/concepts/incremental-views.md`
+- [x] `volatility.rs` gains `CaptureEligible` variant; `random()`, `gen_random_uuid()`, `now()`, `current_timestamp`, etc. reclassified from VOLATILE to CaptureEligible
+- [x] Allow-listed functions: `now()`, `current_timestamp`, `current_date`, `current_time`, `localtime`, `localtimestamp`, `random()`, `gen_random_uuid()`
+- [x] Per-batch sampling: each listed function sampled once at the start of a DBSP batch; substituted as a literal throughout
+- [x] Sampled value stored in the checkpoint row for deterministic repair (repair re-uses captured value, not re-sampled)
+- [x] `current_snapshot_id()` — new IVM-specific function returning the batch's `last_input_snapshot` as a stable integer
+- [x] `random()` / `gen_random_uuid()` subject to a per-batch seed stored in checkpoint (enables deterministic replay)
+- [x] Error on functions that cannot be safely allow-listed (volatile functions with side effects)
+- [x] "Capture semantics" section in `docs/concepts/incremental-views.md`
 
 ### User-Defined Functions (WASM)
 
 UDFs extend the view SQL surface with custom logic: custom hash functions, domain-specific type coercions, scoring models. WebAssembly (WASM) for execution: deterministic, sandboxed, cross-platform. Compiled modules stored as binary blobs in the catalog.
 
-- [ ] New catalog table `matview_udfs` (tag `0x21`): `(udf_id, name, schema_name, wasm_blob, signature, deterministic, created_at_snapshot)`
-- [ ] `CREATE FUNCTION name(arg_type, …) RETURNS type LANGUAGE WASM AS '…'` DDL surface
-- [ ] `DROP FUNCTION`, `ALTER FUNCTION … REPLACE` (bumps `udf_id`; views pin to specific `udf_id` at creation)
-- [ ] WASM execution via `wasmtime` embedded in `slateduck-ivm`; sandboxed (no I/O, no network, bounded fuel + memory)
-- [ ] **Per-batch pooled instance model:** A single `wasmtime::Instance` is created per UDF per batch and reused across all rows in that batch (not per-row allocation). Memory limit (64 MiB) and fuel limit (10M instructions × batch_size) apply to the entire batch invocation. Instance is dropped after the batch completes. This avoids 64 MiB × rows-per-batch blowup
-- [ ] Pin `wasmtime` to a specific major version in `Cargo.toml` (fuel API breaks between wasmtime majors); document version constraint
-- [ ] `deterministic = true` annotation required; non-deterministic UDFs rejected at view creation with a clear error
-- [ ] UDF versioning: view pins to `udf_id` at creation; `ALTER INCREMENTAL MATERIALIZED VIEW v USING FUNCTION f VERSION N` migrates and triggers `REFRESH … FULL`
-- [ ] Argument and return types limited to Arrow-compatible scalars: BOOLEAN, INT8–INT64, FLOAT32/FLOAT64, UTF8, BINARY, DATE32, TIMESTAMP
-- [ ] Per-row fuel sub-budget: 10M instructions; if any single row exhausts its fuel slice, clean error naming the row and UDF — batch aborted, no partial output
-- [ ] WASM module validates against a whitelist of allowed WASI imports (none for pure functions)
-- [ ] Tested with a custom tokenizer UDF over event strings maintained incrementally
-- [ ] `docs/reference/udfs.md`: authoring guide, WASM compilation instructions (Rust → wasm32-unknown-unknown), determinism contract, version migration
+- [x] New catalog table `matview_udfs` (tag `0x21`): `(udf_id, name, schema_name, wasm_blob, signature, deterministic, created_at_snapshot)`
+- [x] `CREATE FUNCTION name(arg_type, …) RETURNS type LANGUAGE WASM AS '…'` DDL surface
+- [x] `DROP FUNCTION`, `ALTER FUNCTION … REPLACE` (bumps `udf_id`; views pin to specific `udf_id` at creation)
+- [x] WASM execution via `wasmtime` embedded in `slateduck-ivm`; sandboxed (no I/O, no network, bounded fuel + memory)
+- [x] **Per-batch pooled instance model:** A single `wasmtime::Instance` is created per UDF per batch and reused across all rows in that batch (not per-row allocation). Memory limit (64 MiB) and fuel limit (10M instructions × batch_size) apply to the entire batch invocation. Instance is dropped after the batch completes. This avoids 64 MiB × rows-per-batch blowup
+- [x] Pin `wasmtime` to a specific major version in `Cargo.toml` (fuel API breaks between wasmtime majors); document version constraint
+- [x] `deterministic = true` annotation required; non-deterministic UDFs rejected at view creation with a clear error
+- [x] UDF versioning: view pins to `udf_id` at creation; `ALTER INCREMENTAL MATERIALIZED VIEW v USING FUNCTION f VERSION N` migrates and triggers `REFRESH … FULL`
+- [x] Argument and return types limited to Arrow-compatible scalars: BOOLEAN, INT8–INT64, FLOAT32/FLOAT64, UTF8, BINARY, DATE32, TIMESTAMP
+- [x] Per-row fuel sub-budget: 10M instructions; if any single row exhausts its fuel slice, clean error naming the row and UDF — batch aborted, no partial output
+- [x] WASM module validates against a whitelist of allowed WASI imports (none for pure functions)
+- [x] Tested with a custom tokenizer UDF over event strings maintained incrementally
+- [x] `docs/reference/udfs.md`: authoring guide, WASM compilation instructions (Rust → wasm32-unknown-unknown), determinism contract, version migration
 
 ### Remaining Optimizations (Adaptive Mode + DISTINCT Correctness)
 
@@ -2652,21 +2652,21 @@ Items not moved to v0.15 because they require the full operator surface or are c
 
 **Adaptive DIFFERENTIAL/FULL mode switching (`CostMode::Adaptive`).** At low delta rates, DIFFERENTIAL is 5–90× cheaper than FULL. At high delta rates the crossover reverses. Without this switch, a large delta batch silently tanks throughput. Requires the full operator matrix (window functions, recursion) to calibrate properly — cannot ship in v0.15 with partial operator coverage.
 
-- [ ] `CostMode::Adaptive` variant in `config.rs`
-- [ ] Per-view rolling statistics tracked in the state store and surfaced via `observability.rs`: `rows_in`, `rows_out`, `ms_spent`, `last_full_cost`
-- [ ] Query complexity multiplier table: initial values `Scan 1.0×`, `Filter 1.1×`, `Aggregate 1.5×`, `Join 2.5×`, `JoinAggregate 4.0×`, `Window 3.0×`, `Recursive 5.0×`; switch DIFFERENTIAL→FULL when `Δ_rows / N_rows × multiplier > threshold` (default 0.5)
-- [ ] **Empirical calibration step (required before shipping):** Run TPC-H Q1/Q3/Q5 + TPC-DS Q4/Q47 at delta ratios 0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 1.0; record actual DIFFERENTIAL vs FULL latency crossover point for each query class; adjust multiplier table to match observed crossover within ±20%. Publish calibration data in `benchmarks/v0.17-adaptive-calibration.json`
-- [ ] `WITH (cost_mode = 'adaptive', adaptive_threshold = 0.3)` per-view override; documented in `docs/operations/ivm-cost-control.md`
+- [x] `CostMode::Adaptive` variant in `config.rs`
+- [x] Per-view rolling statistics tracked in the state store and surfaced via `observability.rs`: `rows_in`, `rows_out`, `ms_spent`, `last_full_cost`
+- [x] Query complexity multiplier table: initial values `Scan 1.0×`, `Filter 1.1×`, `Aggregate 1.5×`, `Join 2.5×`, `JoinAggregate 4.0×`, `Window 3.0×`, `Recursive 5.0×`; switch DIFFERENTIAL→FULL when `Δ_rows / N_rows × multiplier > threshold` (default 0.5)
+- [x] **Empirical calibration step (required before shipping):** Run TPC-H Q1/Q3/Q5 + TPC-DS Q4/Q47 at delta ratios 0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 1.0; record actual DIFFERENTIAL vs FULL latency crossover point for each query class; adjust multiplier table to match observed crossover within ±20%. Publish calibration data in `benchmarks/v0.17-adaptive-calibration.json`
+- [x] `WITH (cost_mode = 'adaptive', adaptive_threshold = 0.3)` per-view override; documented in `docs/operations/ivm-cost-control.md`
 
 **Reference-counted DISTINCT and set operators.** The current DISTINCT implementation does not track duplicate counts, producing incorrect output when the same row is inserted multiple times and then partially deleted.
 
-- [ ] Add `__sd_ref_count: i64` auxiliary column to `IvmTrace` for views containing `DISTINCT` or `UNION DISTINCT` / `INTERSECT` / `EXCEPT`
-- [ ] INSERT increments `__sd_ref_count`; DELETE decrements; row visible in output only when `__sd_ref_count > 0`
-- [ ] `UNION DISTINCT`: `MAX(count_A, count_B)` — a row is present once if it appears in *either* operand, regardless of duplicates within each side. **Not addition** (that would be `UNION ALL`)
-- [ ] `INTERSECT`: `MIN(count_A, count_B)` — row present only when both sides contribute
-- [ ] `EXCEPT`: `count_A - count_B`, clamped to 0 — row present when left contributes more than right subtracts
-- [ ] Correctness test: insert same row 3×, delete 2×; confirm exactly one output row
-- [ ] Correctness test: `UNION DISTINCT` of two relations both containing the same row → exactly one output row (not two)
+- [x] Add `__sd_ref_count: i64` auxiliary column to `IvmTrace` for views containing `DISTINCT` or `UNION DISTINCT` / `INTERSECT` / `EXCEPT`
+- [x] INSERT increments `__sd_ref_count`; DELETE decrements; row visible in output only when `__sd_ref_count > 0`
+- [x] `UNION DISTINCT`: `MAX(count_A, count_B)` — a row is present once if it appears in *either* operand, regardless of duplicates within each side. **Not addition** (that would be `UNION ALL`)
+- [x] `INTERSECT`: `MIN(count_A, count_B)` — row present only when both sides contribute
+- [x] `EXCEPT`: `count_A - count_B`, clamped to 0 — row present when left contributes more than right subtracts
+- [x] Correctness test: insert same row 3×, delete 2×; confirm exactly one output row
+- [x] Correctness test: `UNION DISTINCT` of two relations both containing the same row → exactly one output row (not two)
 
 ### Extended Operator Support Matrix
 
@@ -2691,7 +2691,7 @@ Items not moved to v0.15 because they require the full operator surface or are c
 
 A named test suite for every operator category added in v0.16. Each test uses `IvmOracle` to compare incremental output against a DuckDB single-shot reference after every DML mutation. This is the v0.16 equivalent of the v0.14 Tier 6b-correctness suite.
 
-- [ ] **Tier 6e — IVM operator correctness tests** (`crates/slateduck-ivm/tests/operator_tests.rs`): 12 tests —
+- [x] **Tier 6e — IVM operator correctness tests** (`crates/slateduck-ivm/tests/operator_tests.rs`): 12 tests —
   - Window: `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)` maintained correctly for 1000 snapshots; partition-local and cross-partition (single-shard merge) modes
   - Window: `LAG`/`LEAD` navigation — insert then delete a row that is the LAG source for its neighbour; output matches DuckDB
   - Window: aggregate window `SUM OVER (PARTITION BY … ORDER BY … ROWS BETWEEN …)` maintained correctly under inserts and deletes
@@ -2704,41 +2704,41 @@ A named test suite for every operator category added in v0.16. Each test uses `I
   - Correlated subquery: scalar subquery in SELECT list — correct result when inner relation is non-empty; correctly returns NULL when inner relation becomes empty after delete
   - Recursive CTE: transitive closure, 1M-edge graph, 10k-edge incremental batches; output multiset = DuckDB reference at every step; single-shard coordinator
   - Non-det capture: repaired shard re-using stored per-batch seed produces bit-identical output to original; running repair twice is idempotent
-- [ ] All Tier 6e tests run on every PR; the recursive CTE test runs on the large runner only (1M-edge graph requires > 4 GB memory)
+- [x] All Tier 6e tests run on every PR; the recursive CTE test runs on the large runner only (1M-edge graph requires > 4 GB memory)
 
 ### Testing: Tier 8 (Scale Benchmarks)
 
 The 24-hour soak test and 16-shard benchmark are in v0.17 — they require the full operator matrix (including WASM and Adaptive mode) for a meaningful GA-gate soak.
 
-- [ ] **Tier 8 — TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`): `tpch_sf10_catalog_latency` and `tpch_sf100_catalog_latency` against real S3 Standard; p99 `get_current_snapshot` < 50 ms at SF10, < 100 ms at SF100; results written to `benchmarks/v0.16-tpch-{date}.json`
-- [ ] **Tier 8 — TPC-H IVM streaming** (`tests/scale/tpch_ivm.rs`): Q1, Q3, Q5 at 100k rows/s, 8 shards, 5 s freshness; lag p99 < 5 s; verified on MinIO (same-host) and S3 Standard
-- [ ] Scale tests run on dedicated EC2 `c6i.4xlarge` via self-hosted GitHub Actions runner; triggered manually and on `v*` release tags
-- [ ] Scale test setup documented in `docs/contributing/testing.md` under "Scale Testing Infrastructure"
+- [x] **Tier 8 — TPC-H catalog benchmarks** (`tests/scale/tpch_catalog.rs`): `tpch_sf10_catalog_latency` and `tpch_sf100_catalog_latency` against real S3 Standard; p99 `get_current_snapshot` < 50 ms at SF10, < 100 ms at SF100; results written to `benchmarks/v0.16-tpch-{date}.json`
+- [x] **Tier 8 — TPC-H IVM streaming** (`tests/scale/tpch_ivm.rs`): Q1, Q3, Q5 at 100k rows/s, 8 shards, 5 s freshness; lag p99 < 5 s; verified on MinIO (same-host) and S3 Standard
+- [x] Scale tests run on dedicated EC2 `c6i.4xlarge` via self-hosted GitHub Actions runner; triggered manually and on `v*` release tags
+- [x] Scale test setup documented in `docs/contributing/testing.md` under "Scale Testing Infrastructure"
 
 ### Acceptance Criteria
 
-- [ ] Every operator in the v0.16 matrix passes a correctness test against a DuckDB single-shot reference query over the same input data
-- [ ] Partition-local `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)` maintained correctly for 1000 input snapshots; throughput within 15% of equivalent aggregation
-- [ ] Transitive closure over 1M edges processes 10k-edge incremental batches in ≤ 10 s (single-shard coordinator; global shuffle)
-- [ ] `LIMIT 100 ORDER BY value DESC` view correctly maintains the global top-100 across 1000 input snapshots
-- [ ] `now()` capture: repaired shard re-uses stored captured value, not re-sampled; output is bit-identical to original
-- [ ] Unbounded recursive CTE rejects `shard_count > 1` at view creation with clear error
-- [ ] All v0.11–v0.15 acceptance tests still pass
-- [ ] Tier 6e operator correctness suite green (12 tests; recursive CTE on large runner)
-- [ ] **Tier 8 TPC-H p99 within targets**: SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
+- [x] Every operator in the v0.16 matrix passes a correctness test against a DuckDB single-shot reference query over the same input data
+- [x] Partition-local `ROW_NUMBER() OVER (PARTITION BY … ORDER BY …)` maintained correctly for 1000 input snapshots; throughput within 15% of equivalent aggregation
+- [x] Transitive closure over 1M edges processes 10k-edge incremental batches in ≤ 10 s (single-shard coordinator; global shuffle)
+- [x] `LIMIT 100 ORDER BY value DESC` view correctly maintains the global top-100 across 1000 input snapshots
+- [x] `now()` capture: repaired shard re-uses stored captured value, not re-sampled; output is bit-identical to original
+- [x] Unbounded recursive CTE rejects `shard_count > 1` at view creation with clear error
+- [x] All v0.11–v0.15 acceptance tests still pass
+- [x] Tier 6e operator correctness suite green (12 tests; recursive CTE on large runner)
+- [x] **Tier 8 TPC-H p99 within targets**: SF10 < 50 ms catalog, SF100 < 100 ms catalog; IVM lag p99 < 5 s at 8 shards
 
 ### Deliverables
 
-- [ ] `SlateDbOrderedTrace` implementation (extending v0.15's persistence layer; contingency noted in Window Functions section)
-- [ ] Merge-sort output writer in the output plane
-- [ ] Decorrelation pass in `plan.rs` (using `datafusion-optimizer` pinned in workspace deps)
-- [ ] DBSP `iterate` integration for recursive CTEs (or fixed-point loop fallback per spike findings)
-- [ ] `docs/design-decisions/ivm-recursive-spike.md` recording spike findings
-- [ ] Non-deterministic function capture with per-batch seed storage
-- [ ] Tier 8 TPC-H catalog and IVM streaming benchmark suite (`tests/scale/`)
-- [ ] Self-hosted EC2 runner configuration documented in `docs/contributing/testing.md`
-- [ ] `benchmarks/v0.16-operator-complete.json` published
-- [ ] `docs/reference/sql-ivm.md` updated to reflect v0.16 operator coverage
+- [x] `SlateDbOrderedTrace` implementation (extending v0.15's persistence layer; contingency noted in Window Functions section)
+- [x] Merge-sort output writer in the output plane
+- [x] Decorrelation pass in `plan.rs` (using `datafusion-optimizer` pinned in workspace deps)
+- [x] DBSP `iterate` integration for recursive CTEs (or fixed-point loop fallback per spike findings)
+- [x] `docs/design-decisions/ivm-recursive-spike.md` recording spike findings
+- [x] Non-deterministic function capture with per-batch seed storage
+- [x] Tier 8 TPC-H catalog and IVM streaming benchmark suite (`tests/scale/`)
+- [x] Self-hosted EC2 runner configuration documented in `docs/contributing/testing.md`
+- [x] `benchmarks/v0.16-operator-complete.json` published
+- [x] `docs/reference/sql-ivm.md` updated to reflect v0.16 operator coverage
 
 ---
 

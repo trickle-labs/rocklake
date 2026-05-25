@@ -140,8 +140,105 @@ Example output:
 
 ---
 
+## v0.16 Operator Coverage
+
+### Window Functions
+
+```sql
+CREATE INCREMENTAL MATERIALIZED VIEW revenue_ranked AS
+SELECT dept, employee, salary,
+       ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn,
+       RANK() OVER (PARTITION BY dept ORDER BY salary DESC) AS rnk,
+       SUM(salary) OVER (PARTITION BY dept ORDER BY hire_date
+                         ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_sum
+FROM employees
+GROUP BY dept, employee, salary, hire_date
+WITH (window_mode = 'partitioned');
+```
+
+Supported window functions: `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`, and aggregate windows (`SUM`, `AVG`, `COUNT`, `MIN`, `MAX` with `OVER` clause).
+
+Supported frames: `ROWS BETWEEN`, `RANGE BETWEEN`, `GROUPS BETWEEN`.
+
+### ORDER BY in Materialized Views
+
+```sql
+CREATE INCREMENTAL MATERIALIZED VIEW recent_orders AS
+SELECT order_id, customer_id, total, order_date
+FROM orders
+ORDER BY order_date DESC NULLS LAST
+WITH (shard_count = 1);
+```
+
+A top-level `ORDER BY` produces physically sorted Parquet output. `shard_count = 1` is auto-enforced for total-order views.
+
+### LIMIT / OFFSET (Top-N)
+
+```sql
+CREATE INCREMENTAL MATERIALIZED VIEW top_customers AS
+SELECT customer_id, SUM(total) AS lifetime_value
+FROM orders
+GROUP BY customer_id
+ORDER BY lifetime_value DESC
+LIMIT 100;
+```
+
+`LIMIT N` materializes only the top N rows. State cost is O(N). `OFFSET` is supported but state cost becomes O(OFFSET + LIMIT); `OFFSET > 10000` emits a WARN.
+
+### Correlated Subqueries
+
+```sql
+CREATE INCREMENTAL MATERIALIZED VIEW orders_with_items AS
+SELECT o.*
+FROM orders o
+WHERE EXISTS (
+    SELECT 1 FROM lineitem l WHERE l.l_orderkey = o.o_orderkey
+);
+```
+
+Supported patterns: `EXISTS`, `NOT EXISTS`, `IN (SELECT …)`, `NOT IN (SELECT …)`, scalar subquery in SELECT list. Decorrelated to semi-join / anti-join / left join + aggregation.
+
+### Recursive CTEs
+
+```sql
+CREATE INCREMENTAL MATERIALIZED VIEW org_hierarchy AS
+WITH RECURSIVE reports AS (
+    SELECT emp_id, manager_id, 1 AS depth
+    FROM employees WHERE manager_id IS NULL
+    UNION ALL
+    SELECT e.emp_id, e.manager_id, r.depth + 1
+    FROM employees e JOIN reports r ON e.manager_id = r.emp_id
+)
+SELECT * FROM reports
+WITH (shard_count = 1, max_iterations = 50);
+```
+
+Unbounded recursive CTEs require `shard_count = 1`. `max_iterations` defaults to 100.
+
+### Non-Deterministic Functions (Capture Semantics)
+
+```sql
+CREATE INCREMENTAL MATERIALIZED VIEW events_with_ts AS
+SELECT *, now() AS captured_at, gen_random_uuid() AS event_id
+FROM events;
+```
+
+`now()`, `current_timestamp`, `random()`, `gen_random_uuid()` are sampled once per batch. Sampled values are stored in the checkpoint for deterministic repair/replay.
+
+### WITH Options (v0.16)
+
+| Option | Default | Description |
+|---|---|---|
+| `window_mode` | auto | `'partitioned'` or `'total_order'` |
+| `cost_mode` | `'standard'` | `'adaptive'` enables automatic DIFFERENTIAL↔FULL switching |
+| `adaptive_threshold` | `0.5` | Threshold for adaptive mode switching |
+| `max_iterations` | `100` | Max recursion depth for recursive CTEs |
+
+---
+
 ## See Also
 
 - [Concepts: Incremental Views](../concepts/incremental-views.md)
 - [Operations Guide](../operations/incremental-materialized-views.md)
 - [IVM Architecture](../architecture/ivm-plane.md)
+- [Recursive CTE Spike](../design-decisions/ivm-recursive-spike.md)
