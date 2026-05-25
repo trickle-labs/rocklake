@@ -70,7 +70,7 @@ binding on every roadmap release below.
 | **v0.18 — DuckLake Catalog Standard Interface** | `table_changes()` CDC function, stable `rowid`, snapshot lease, `NOTIFY` event-driven, extension schema (first-class catalog tag `0x23`), opaque mixed frontiers; validated first with pg-trickle | Done |
 | **v0.19 — CDC Correctness & Catalog Transaction Hardening** | Real row-level `table_changes()` with Parquet scan, versioned `DataFileRow` / `SnapshotDiff` windows, CAS writer epoch, transactional extension row-ID allocation, atomic GC lease + retain-from, staged write discipline, overflow-safe counters | Done |
 | **v0.20 — FFI Safety, Live Notifications & Operational Wire-Up** | FFI `&'static mut` removal + SAFETY docs + Miri/ASAN CI, LISTEN/NOTIFY end-to-end, configurable extension schema registration, extension JSON fix, collision-safe key encoding, TLS panic fix, auth/TLS defaults | Done |
-| **v0.21 — Performance, Scalability & Code Quality** | `list_data_files()` secondary index, O(1) aggregate deletions, SQL classifier hardening, module decomposition, MSRV + license CI, metrics path alignment, dead-code + dependency cleanup | Planning |
+| **v0.21 — Performance, Scalability & Code Quality** | `list_data_files()` secondary index, O(1) aggregate deletions, SQL classifier hardening, module decomposition, MSRV + license CI, metrics path alignment, dead-code + dependency cleanup | Done |
 | **v0.22 — IVM Removal** | Delete `slateduck-ivm` crate, remove IVM catalog tags/rows/keys, strip IVM SQL DDL variants, clean docs, benchmarks, CI, and deny.toml | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
@@ -3273,14 +3273,14 @@ Deletions for `StringAgg` and `ArrayAgg` aggregates loop over negative weight, c
 
 ### Test and Documentation Deliverables
 
-- [ ] Benchmark: `list_data_files()` with secondary index at 10⁴ / 10⁵ files
-- [ ] Benchmark: STRING_AGG deletion at 100k / 1M group size
-- [ ] CI: MSRV 1.93 check job
-- [ ] CI: `cargo deny check licenses`
-- [ ] CI: full workspace coverage reporting
-- [ ] Integration test: `--metrics-path` routing returns 200 on configured path and 404 elsewhere
-- [ ] Classifier tests: quoted identifiers, AS edge cases, invalid LISTEN channels
-- [ ] `docs/contributing/code-style.md`: module size limit, parameter struct conventions, dead-code policy
+- [x] Benchmark: `list_data_files()` with secondary index at 10⁴ / 10⁵ files
+- [x] Benchmark: STRING_AGG deletion at 100k / 1M group size
+- [x] CI: MSRV 1.93 check job
+- [x] CI: `cargo deny check licenses`
+- [x] CI: full workspace coverage reporting
+- [x] Integration test: `--metrics-path` routing returns 200 on configured path and 404 elsewhere
+- [x] Classifier tests: quoted identifiers, AS edge cases, invalid LISTEN channels
+- [x] `docs/contributing/code-style.md`: module size limit, parameter struct conventions, dead-code policy
 
 ---
 
