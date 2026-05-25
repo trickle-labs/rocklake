@@ -19,8 +19,9 @@
 //! oracle.assert_equivalent("after delete");
 //! ```
 //!
-//! ## Join support
+//! ## Join support (v0.14 EC-01)
 //! For multi-table views, insert rows into each input table by name.
+//! The oracle uses EC-01 asymmetric delta branches for correct join handling.
 //! The reference engine performs a full cross-product + filter + GROUP BY to
 //! compute the expected result.
 
@@ -171,24 +172,78 @@ impl IvmOracle {
                 fields: row,
                 weight,
             }]);
-        } else if let Some(ref mut join_circuit) = self.join_circuit {
+        } else {
             // Multi-table: route to the correct join input.
-            let first_table = self.plan.input_tables.first().map(|s| s.as_str());
-            if Some(table) == first_table {
+            let first_table = self.plan.input_tables.first().cloned().unwrap_or_default();
+            if table == first_table {
                 // Left side: push through the join and into aggregation.
-                let joined_count = join_circuit.push_left_batch(&[(row, weight)]);
-                // The join circuit pushes directly into its inner IvmCircuit.
-                // We need to sync our top-level circuit with the join circuit's inner state.
-                let _ = joined_count;
+                if let Some(ref mut join_circuit) = self.join_circuit {
+                    join_circuit.push_left_batch(&[(row, weight)]);
+                }
             } else {
-                // Right side: find the join index for this table and update join state.
-                for (idx, join) in self.plan.joins.iter().enumerate() {
-                    if join.right_table == table {
-                        join_circuit.push_right_delta(idx, row.clone(), &join.right_col, weight);
+                // Right side: EC-01 correct handling.
+                // When a right-side row is inserted or deleted, we must also
+                // produce the join output for all existing left-side rows that
+                // match this right-side row.
+
+                // Compute left rows BEFORE borrowing join_circuit.
+                let left_rows = self.current_left_rows(&first_table);
+
+                if let Some(ref mut join_circuit) = self.join_circuit {
+                    for (idx, join) in self.plan.joins.iter().enumerate() {
+                        if join.right_table == table {
+                            let right_key_val = row.get(&join.right_col).cloned();
+
+                            // For each matching left row, emit a joined delta.
+                            if let Some(ref rkey) = right_key_val {
+                                let mut joined_deltas: Vec<ZDelta> = Vec::new();
+                                for left_row in &left_rows {
+                                    let lkey = left_row.get(&join.left_col);
+                                    if lkey == Some(rkey) {
+                                        // Merge left + right.
+                                        let mut merged = left_row.clone();
+                                        for (k, v) in &row {
+                                            if !merged.contains_key(k) || k == &join.right_col {
+                                                merged.insert(k.clone(), v.clone());
+                                            }
+                                        }
+                                        joined_deltas.push(ZDelta {
+                                            fields: merged,
+                                            weight,
+                                        });
+                                    }
+                                }
+                                if !joined_deltas.is_empty() {
+                                    join_circuit.inner.push_batch(&joined_deltas);
+                                }
+                            }
+
+                            // Update the join state (for future left-side lookups).
+                            join_circuit.push_right_delta(idx, row.clone(), &join.right_col, weight);
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Get current left-side rows (from DML history, not counting the current op).
+    fn current_left_rows(&self, table: &str) -> Vec<HashMap<String, Value>> {
+        let mut rows: Vec<HashMap<String, Value>> = Vec::new();
+        for op in &self.ops {
+            match op {
+                DmlOp::Insert { table: t, row } if t == table => {
+                    rows.push(row.clone());
+                }
+                DmlOp::Delete { table: t, row } if t == table => {
+                    if let Some(pos) = rows.iter().position(|r| r == row) {
+                        rows.remove(pos);
+                    }
+                }
+                _ => {}
+            }
+        }
+        rows
     }
 }
 
@@ -235,6 +290,7 @@ fn reference_compute(
         return working_rows;
     }
 
+    #[allow(clippy::type_complexity)]
     let mut groups: HashMap<String, (HashMap<String, Value>, Vec<&HashMap<String, Value>>)> =
         HashMap::new();
 
@@ -286,6 +342,42 @@ fn compute_aggregate(
                 .sum();
             Value::Number(serde_json::Number::from(total))
         }
+        AggregateKind::Avg => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<f64> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .filter_map(|v| match v {
+                    Value::Number(n) => n.as_f64(),
+                    _ => None,
+                })
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                let sum: f64 = values.iter().sum();
+                json_f64(sum / values.len() as f64)
+            }
+        }
+        AggregateKind::Stddev => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<f64> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .filter_map(|v| match v {
+                    Value::Number(n) => n.as_f64(),
+                    _ => None,
+                })
+                .collect();
+            if values.len() < 2 {
+                Value::Null
+            } else {
+                let n = values.len() as f64;
+                let mean = values.iter().sum::<f64>() / n;
+                let variance = values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
+                json_f64(variance.sqrt())
+            }
+        }
         AggregateKind::Min => {
             let col = agg.input_col.as_deref().unwrap_or("");
             let min_val = rows
@@ -316,6 +408,120 @@ fn compute_aggregate(
                 Value::Null
             } else {
                 json_f64(max_val)
+            }
+        }
+        AggregateKind::BoolAnd => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<bool> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .filter_map(|v| match v {
+                    Value::Bool(b) => Some(*b),
+                    Value::Number(n) => Some(n.as_i64().unwrap_or(0) != 0),
+                    _ => None,
+                })
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                Value::Bool(values.iter().all(|&b| b))
+            }
+        }
+        AggregateKind::BoolOr => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<bool> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .filter_map(|v| match v {
+                    Value::Bool(b) => Some(*b),
+                    Value::Number(n) => Some(n.as_i64().unwrap_or(0) != 0),
+                    _ => None,
+                })
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                Value::Bool(values.iter().any(|&b| b))
+            }
+        }
+        AggregateKind::BitAnd => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<i64> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .filter_map(|v| match v {
+                    Value::Number(n) => n.as_i64(),
+                    _ => None,
+                })
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                let result = values.iter().fold(!0i64, |acc, &v| acc & v);
+                Value::Number(serde_json::Number::from(result))
+            }
+        }
+        AggregateKind::BitOr => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<i64> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .filter_map(|v| match v {
+                    Value::Number(n) => n.as_i64(),
+                    _ => None,
+                })
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                let result = values.iter().fold(0i64, |acc, &v| acc | v);
+                Value::Number(serde_json::Number::from(result))
+            }
+        }
+        AggregateKind::BitXor => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<i64> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .filter_map(|v| match v {
+                    Value::Number(n) => n.as_i64(),
+                    _ => None,
+                })
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                let result = values.iter().fold(0i64, |acc, &v| acc ^ v);
+                Value::Number(serde_json::Number::from(result))
+            }
+        }
+        AggregateKind::StringAgg => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<&str> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                Value::String(values.join(","))
+            }
+        }
+        AggregateKind::ArrayAgg => {
+            let col = agg.input_col.as_deref().unwrap_or("");
+            let values: Vec<Value> = rows
+                .iter()
+                .filter_map(|r| r.get(col))
+                .cloned()
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                Value::Array(values)
             }
         }
     }

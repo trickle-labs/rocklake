@@ -3,11 +3,15 @@
 //!
 //! Supported SQL subset:
 //!   - GROUP BY on one or more named columns
-//!   - COUNT(*), SUM(col), MIN(col), MAX(col) aggregates
+//!   - COUNT(*), SUM(col), AVG(col), MIN(col), MAX(col), STDDEV(col),
+//!     BOOL_AND(col), BOOL_OR(col), BIT_AND(col), BIT_OR(col), BIT_XOR(col),
+//!     STRING_AGG(col), ARRAY_AGG(col) aggregates
 //!   - Single or multi-input JOINs with an equality predicate
 //!   - EXPLAIN MATERIALIZED VIEW: returns the selected join strategy per operator
+//!   - Volatility validation at compile time (v0.14)
 
 use crate::join::{JoinClause, JoinStrategy, DEFAULT_BROADCAST_THRESHOLD};
+use crate::volatility::{self, Volatility};
 use crate::worker::IvmError;
 
 /// A single aggregate function in the plan.
@@ -21,13 +25,60 @@ pub struct Aggregate {
     pub input_col: Option<String>,
 }
 
+/// Aggregate tier classification (v0.14).
+///
+/// Determines how the IVM engine maintains incremental state for this aggregate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregateTier {
+    /// Fully invertible: no source rescan needed.
+    /// COUNT, SUM, AVG, STDDEV, VAR, CORR, REGR_*
+    Algebraic,
+    /// Partially invertible: rescan group on delete of current extremum/deciding input.
+    /// MIN, MAX, BOOL_AND, BOOL_OR, BIT_AND, BIT_OR, BIT_XOR
+    SemiAlgebraic,
+    /// Not invertible: re-aggregate entire group on each delta.
+    /// STRING_AGG, ARRAY_AGG, JSON_AGG, MODE, PERCENTILE_*
+    GroupRescan,
+}
+
 /// Supported aggregate functions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AggregateKind {
     Count,
     Sum,
+    Avg,
     Min,
     Max,
+    Stddev,
+    BoolAnd,
+    BoolOr,
+    BitAnd,
+    BitOr,
+    BitXor,
+    StringAgg,
+    ArrayAgg,
+}
+
+impl AggregateKind {
+    /// Return the tier classification for this aggregate.
+    pub fn tier(&self) -> AggregateTier {
+        match self {
+            AggregateKind::Count
+            | AggregateKind::Sum
+            | AggregateKind::Avg
+            | AggregateKind::Stddev => AggregateTier::Algebraic,
+
+            AggregateKind::Min
+            | AggregateKind::Max
+            | AggregateKind::BoolAnd
+            | AggregateKind::BoolOr
+            | AggregateKind::BitAnd
+            | AggregateKind::BitOr
+            | AggregateKind::BitXor => AggregateTier::SemiAlgebraic,
+
+            AggregateKind::StringAgg | AggregateKind::ArrayAgg => AggregateTier::GroupRescan,
+        }
+    }
 }
 
 /// Parsed IVM plan extracted from view SQL.
@@ -104,8 +155,17 @@ impl IvmPlan {
                 let kind = match fn_name.as_str() {
                     "COUNT" => AggregateKind::Count,
                     "SUM" => AggregateKind::Sum,
+                    "AVG" => AggregateKind::Avg,
                     "MIN" => AggregateKind::Min,
                     "MAX" => AggregateKind::Max,
+                    "STDDEV" | "STDDEV_POP" | "STDDEV_SAMP" => AggregateKind::Stddev,
+                    "BOOL_AND" => AggregateKind::BoolAnd,
+                    "BOOL_OR" => AggregateKind::BoolOr,
+                    "BIT_AND" => AggregateKind::BitAnd,
+                    "BIT_OR" => AggregateKind::BitOr,
+                    "BIT_XOR" => AggregateKind::BitXor,
+                    "STRING_AGG" => AggregateKind::StringAgg,
+                    "ARRAY_AGG" => AggregateKind::ArrayAgg,
                     _ => continue,
                 };
 
@@ -216,6 +276,145 @@ impl IvmPlan {
             input_tables,
             broadcast_threshold: DEFAULT_BROADCAST_THRESHOLD,
         })
+    }
+
+    /// Compile the IVM plan with volatility validation.
+    ///
+    /// Walks the view SQL expression tree and checks each function call
+    /// against the static volatility lookup table.
+    ///
+    /// - VOLATILE functions: return `SQLSTATE 0A000` at view creation
+    /// - STABLE functions: emit warning, accept
+    /// - IMMUTABLE: always accepted
+    /// - Unknown: treated as VOLATILE unless `allow_unknown_functions` is set
+    pub fn compile(view_sql: &str, allow_unknown_functions: bool) -> Result<Self, IvmError> {
+        // First parse.
+        let plan = Self::parse(view_sql)?;
+
+        // Walk the AST to find function calls and validate volatility.
+        use sqlparser::ast::{SetExpr, Statement};
+        use sqlparser::dialect::GenericDialect;
+        use sqlparser::parser::Parser;
+
+        let dialect = GenericDialect {};
+        let ast = Parser::parse_sql(&dialect, view_sql)
+            .map_err(|e| IvmError::PlanParse(e.to_string()))?;
+
+        for stmt in &ast {
+            if let Statement::Query(q) = stmt {
+                if let SetExpr::Select(select) = q.body.as_ref() {
+                    // Check projection expressions.
+                    for item in &select.projection {
+                        let expr = match item {
+                            sqlparser::ast::SelectItem::ExprWithAlias { expr, .. } => Some(expr),
+                            sqlparser::ast::SelectItem::UnnamedExpr(e) => Some(e),
+                            _ => None,
+                        };
+                        if let Some(e) = expr {
+                            check_expr_volatility(e, allow_unknown_functions)?;
+                        }
+                    }
+                    // Check WHERE clause.
+                    if let Some(ref where_clause) = select.selection {
+                        check_expr_volatility(where_clause, allow_unknown_functions)?;
+                    }
+                    // Check HAVING clause.
+                    if let Some(ref having) = select.having {
+                        check_expr_volatility(having, allow_unknown_functions)?;
+                    }
+                }
+            }
+        }
+
+        Ok(plan)
+    }
+}
+
+/// Recursively check expression tree for volatile function calls.
+fn check_expr_volatility(expr: &sqlparser::ast::Expr, allow_unknown: bool) -> Result<(), IvmError> {
+    use sqlparser::ast::Expr;
+
+    match expr {
+        Expr::Function(f) => {
+            let fn_name = f.name.to_string().to_lowercase();
+            // Skip known aggregate functions (handled separately).
+            let aggregates = [
+                "count", "sum", "avg", "min", "max", "stddev", "stddev_pop",
+                "stddev_samp", "bool_and", "bool_or", "bit_and", "bit_or",
+                "bit_xor", "string_agg", "array_agg",
+            ];
+            if !aggregates.contains(&fn_name.as_str()) {
+                let vol = volatility::volatility_of(&fn_name);
+                match vol {
+                    Volatility::Volatile => {
+                        return Err(IvmError::VolatileFunction(fn_name));
+                    }
+                    Volatility::Stable => {
+                        tracing::warn!(
+                            "STABLE function `{fn_name}` used in materialized view; \
+                             consider capture-semantics path (v0.16)"
+                        );
+                    }
+                    Volatility::Unknown if !allow_unknown => {
+                        return Err(IvmError::UnknownVolatility(fn_name));
+                    }
+                    Volatility::Immutable | Volatility::Unknown => {}
+                }
+            }
+            // Check function arguments recursively.
+            if let sqlparser::ast::FunctionArguments::List(args) = &f.args {
+                for arg in &args.args {
+                    if let sqlparser::ast::FunctionArg::Unnamed(
+                        sqlparser::ast::FunctionArgExpr::Expr(e),
+                    ) = arg
+                    {
+                        check_expr_volatility(e, allow_unknown)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            check_expr_volatility(left, allow_unknown)?;
+            check_expr_volatility(right, allow_unknown)?;
+            Ok(())
+        }
+        Expr::UnaryOp { expr: inner, .. } => check_expr_volatility(inner, allow_unknown),
+        Expr::Nested(inner) => check_expr_volatility(inner, allow_unknown),
+        Expr::IsNull(inner) | Expr::IsNotNull(inner) => {
+            check_expr_volatility(inner, allow_unknown)
+        }
+        Expr::Between {
+            expr: e,
+            low,
+            high,
+            ..
+        } => {
+            check_expr_volatility(e, allow_unknown)?;
+            check_expr_volatility(low, allow_unknown)?;
+            check_expr_volatility(high, allow_unknown)?;
+            Ok(())
+        }
+        Expr::Case {
+            operand,
+            conditions,
+            else_result,
+            ..
+        } => {
+            if let Some(op) = operand {
+                check_expr_volatility(op, allow_unknown)?;
+            }
+            for case_when in conditions {
+                check_expr_volatility(&case_when.condition, allow_unknown)?;
+                check_expr_volatility(&case_when.result, allow_unknown)?;
+            }
+            if let Some(el) = else_result {
+                check_expr_volatility(el, allow_unknown)?;
+            }
+            Ok(())
+        }
+        Expr::Cast { expr: inner, .. } => check_expr_volatility(inner, allow_unknown),
+        _ => Ok(()),
     }
 }
 

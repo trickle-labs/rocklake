@@ -71,6 +71,55 @@ pub struct AggState {
     pub minmax: Vec<MinMaxState>,
     /// Total row count (for COUNT(*) shortcut).
     pub row_count: i64,
+    /// AVG auxiliary: (sum_arg as f64, count_arg as i64) per aggregate index.
+    pub avg_aux: Vec<AvgAux>,
+    /// STDDEV auxiliary: (count, mean, M2) per aggregate index.
+    pub stddev_aux: Vec<StddevAux>,
+    /// BOOL_AND/OR auxiliary: (count_true, count_nonnull) per aggregate index.
+    pub bool_aux: Vec<BoolAux>,
+    /// BIT_AND/OR/XOR auxiliary: per-bit position counts per aggregate index.
+    pub bit_aux: Vec<BitAux>,
+    /// Group-rescan aggregates: all input values retained for re-aggregation.
+    pub rescan_inputs: Vec<Vec<Value>>,
+}
+
+/// Auxiliary state for AVG: fully invertible via sum/count.
+#[derive(Debug, Clone, Default)]
+pub struct AvgAux {
+    pub sum_arg: f64,
+    pub count_arg: i64,
+}
+
+/// Auxiliary state for STDDEV: Welford's online algorithm with retraction.
+#[derive(Debug, Clone, Default)]
+pub struct StddevAux {
+    pub count: i64,
+    pub mean: f64,
+    pub m2: f64,
+}
+
+/// Auxiliary state for BOOL_AND / BOOL_OR.
+#[derive(Debug, Clone, Default)]
+pub struct BoolAux {
+    pub count_true: i64,
+    pub count_nonnull: i64,
+}
+
+/// Auxiliary state for BIT_AND / BIT_OR / BIT_XOR (64-bit positions).
+#[derive(Debug, Clone)]
+pub struct BitAux {
+    /// Per-bit count of set bits (for BIT_AND: count of 1s; for BIT_OR: count of 1s).
+    pub bit_counts: [i64; 64],
+    pub row_count: i64,
+}
+
+impl Default for BitAux {
+    fn default() -> Self {
+        Self {
+            bit_counts: [0; 64],
+            row_count: 0,
+        }
+    }
 }
 
 /// Sorted multiset for MIN/MAX with retraction support.
@@ -131,6 +180,11 @@ impl IvmCircuit {
                 accumulators: vec![0i64; n_aggs],
                 minmax: vec![MinMaxState::default(); n_aggs],
                 row_count: 0,
+                avg_aux: vec![AvgAux::default(); n_aggs],
+                stddev_aux: vec![StddevAux::default(); n_aggs],
+                bool_aux: vec![BoolAux::default(); n_aggs],
+                bit_aux: vec![BitAux::default(); n_aggs],
+                rescan_inputs: vec![Vec::new(); n_aggs],
             });
 
             entry.row_count += delta.weight;
@@ -146,6 +200,44 @@ impl IvmCircuit {
                             entry.accumulators[i] += (v * delta.weight as f64) as i64;
                         }
                     }
+                    AggregateKind::Avg => {
+                        if let Some(col) = &agg.input_col {
+                            let v = value_to_f64(delta.fields.get(col));
+                            entry.avg_aux[i].sum_arg += v * delta.weight as f64;
+                            entry.avg_aux[i].count_arg += delta.weight;
+                        }
+                    }
+                    AggregateKind::Stddev => {
+                        if let Some(col) = &agg.input_col {
+                            let v = value_to_f64(delta.fields.get(col));
+                            let aux = &mut entry.stddev_aux[i];
+                            if delta.weight > 0 {
+                                // Online add (Welford).
+                                for _ in 0..delta.weight {
+                                    aux.count += 1;
+                                    let d = v - aux.mean;
+                                    aux.mean += d / aux.count as f64;
+                                    let d2 = v - aux.mean;
+                                    aux.m2 += d * d2;
+                                }
+                            } else {
+                                // Retraction (reverse Welford).
+                                for _ in 0..(-delta.weight) {
+                                    if aux.count <= 1 {
+                                        aux.count = 0;
+                                        aux.mean = 0.0;
+                                        aux.m2 = 0.0;
+                                    } else {
+                                        let d2 = v - aux.mean;
+                                        aux.count -= 1;
+                                        let d = v - aux.mean;
+                                        aux.mean -= d / aux.count as f64;
+                                        aux.m2 -= d2 * (v - aux.mean);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     AggregateKind::Min => {
                         if let Some(col) = &agg.input_col {
                             let v = value_to_f64(delta.fields.get(col));
@@ -156,6 +248,55 @@ impl IvmCircuit {
                         if let Some(col) = &agg.input_col {
                             let v = value_to_f64(delta.fields.get(col));
                             entry.minmax[i].add(v, delta.weight);
+                        }
+                    }
+                    AggregateKind::BoolAnd | AggregateKind::BoolOr => {
+                        if let Some(col) = &agg.input_col {
+                            let val = delta.fields.get(col);
+                            let is_true = match val {
+                                Some(Value::Bool(b)) => *b,
+                                Some(Value::Number(n)) => n.as_i64().unwrap_or(0) != 0,
+                                _ => false,
+                            };
+                            let is_nonnull = val.is_some() && val != Some(&Value::Null);
+                            if is_nonnull {
+                                entry.bool_aux[i].count_nonnull += delta.weight;
+                                if is_true {
+                                    entry.bool_aux[i].count_true += delta.weight;
+                                }
+                            }
+                        }
+                    }
+                    AggregateKind::BitAnd | AggregateKind::BitOr | AggregateKind::BitXor => {
+                        if let Some(col) = &agg.input_col {
+                            let v = value_to_i64(delta.fields.get(col));
+                            let aux = &mut entry.bit_aux[i];
+                            aux.row_count += delta.weight;
+                            for bit in 0..64 {
+                                if (v >> bit) & 1 == 1 {
+                                    aux.bit_counts[bit] += delta.weight;
+                                }
+                            }
+                        }
+                    }
+                    AggregateKind::StringAgg | AggregateKind::ArrayAgg => {
+                        if let Some(col) = &agg.input_col {
+                            let val = delta.fields.get(col).cloned().unwrap_or(Value::Null);
+                            if delta.weight > 0 {
+                                for _ in 0..delta.weight {
+                                    entry.rescan_inputs[i].push(val.clone());
+                                }
+                            } else {
+                                // Remove matching values.
+                                for _ in 0..(-delta.weight) {
+                                    if let Some(pos) = entry.rescan_inputs[i]
+                                        .iter()
+                                        .position(|v| v == &val)
+                                    {
+                                        entry.rescan_inputs[i].remove(pos);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -182,11 +323,114 @@ impl IvmCircuit {
                     AggregateKind::Count | AggregateKind::Sum => {
                         Value::Number(serde_json::Number::from(state.accumulators[i]))
                     }
+                    AggregateKind::Avg => {
+                        let aux = &state.avg_aux[i];
+                        if aux.count_arg == 0 {
+                            Value::Null
+                        } else {
+                            json_f64(aux.sum_arg / aux.count_arg as f64)
+                        }
+                    }
+                    AggregateKind::Stddev => {
+                        let aux = &state.stddev_aux[i];
+                        if aux.count < 2 {
+                            Value::Null
+                        } else {
+                            json_f64((aux.m2 / (aux.count - 1) as f64).sqrt())
+                        }
+                    }
                     AggregateKind::Min => {
                         state.minmax[i].min().map(json_f64).unwrap_or(Value::Null)
                     }
                     AggregateKind::Max => {
                         state.minmax[i].max().map(json_f64).unwrap_or(Value::Null)
+                    }
+                    AggregateKind::BoolAnd => {
+                        let aux = &state.bool_aux[i];
+                        if aux.count_nonnull == 0 {
+                            Value::Null
+                        } else {
+                            // BOOL_AND = true iff all non-null values are true.
+                            Value::Bool(aux.count_true == aux.count_nonnull)
+                        }
+                    }
+                    AggregateKind::BoolOr => {
+                        let aux = &state.bool_aux[i];
+                        if aux.count_nonnull == 0 {
+                            Value::Null
+                        } else {
+                            // BOOL_OR = true iff at least one non-null value is true.
+                            Value::Bool(aux.count_true > 0)
+                        }
+                    }
+                    AggregateKind::BitAnd => {
+                        let aux = &state.bit_aux[i];
+                        if aux.row_count == 0 {
+                            Value::Null
+                        } else {
+                            // BIT_AND: bit is 1 iff all rows have that bit set.
+                            let mut result_val: i64 = 0;
+                            for bit in 0..64 {
+                                if aux.bit_counts[bit] == aux.row_count {
+                                    result_val |= 1 << bit;
+                                }
+                            }
+                            Value::Number(serde_json::Number::from(result_val))
+                        }
+                    }
+                    AggregateKind::BitOr => {
+                        let aux = &state.bit_aux[i];
+                        if aux.row_count == 0 {
+                            Value::Null
+                        } else {
+                            // BIT_OR: bit is 1 iff at least one row has that bit set.
+                            let mut result_val: i64 = 0;
+                            for bit in 0..64 {
+                                if aux.bit_counts[bit] > 0 {
+                                    result_val |= 1 << bit;
+                                }
+                            }
+                            Value::Number(serde_json::Number::from(result_val))
+                        }
+                    }
+                    AggregateKind::BitXor => {
+                        let aux = &state.bit_aux[i];
+                        if aux.row_count == 0 {
+                            Value::Null
+                        } else {
+                            // BIT_XOR: bit is 1 iff odd number of rows have that bit set.
+                            let mut result_val: i64 = 0;
+                            for bit in 0..64 {
+                                if aux.bit_counts[bit] % 2 != 0 {
+                                    result_val |= 1 << bit;
+                                }
+                            }
+                            Value::Number(serde_json::Number::from(result_val))
+                        }
+                    }
+                    AggregateKind::StringAgg => {
+                        let inputs = &state.rescan_inputs[i];
+                        if inputs.is_empty() {
+                            Value::Null
+                        } else {
+                            let s: String = inputs
+                                .iter()
+                                .filter_map(|v| match v {
+                                    Value::String(s) => Some(s.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            Value::String(s)
+                        }
+                    }
+                    AggregateKind::ArrayAgg => {
+                        let inputs = &state.rescan_inputs[i];
+                        if inputs.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Array(inputs.clone())
+                        }
                     }
                 };
                 row.insert(agg.output_col.clone(), v);
@@ -219,6 +463,14 @@ fn value_to_f64(v: Option<&Value>) -> f64 {
         Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0),
         Some(Value::String(s)) => s.parse().unwrap_or(0.0),
         _ => 0.0,
+    }
+}
+
+fn value_to_i64(v: Option<&Value>) -> i64 {
+    match v {
+        Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
+        Some(Value::String(s)) => s.parse().unwrap_or(0),
+        _ => 0,
     }
 }
 
@@ -255,6 +507,9 @@ pub struct IvmJoinCircuit {
     pub strategies: Vec<JoinStrategy>,
     /// Left join key column for each clause.
     pub left_cols: Vec<String>,
+    /// Pre-snapshot states for EC-01 asymmetric delete branches (v0.14).
+    /// When set, deletes join against this state instead of `join_states`.
+    pub pre_snapshot_states: Vec<Option<HashJoinState>>,
 }
 
 impl IvmJoinCircuit {
@@ -267,7 +522,8 @@ impl IvmJoinCircuit {
             inner: IvmCircuit::new(plan),
             join_states: vec![HashJoinState::new(); n],
             strategies,
-            left_cols,
+            left_cols: left_cols.clone(),
+            pre_snapshot_states: vec![None; n],
         }
     }
 
@@ -308,6 +564,12 @@ impl IvmJoinCircuit {
     /// Stream a batch of left-side rows through the join pipeline and into
     /// the aggregation circuit.
     ///
+    /// **v0.14 EC-01 fix:** Uses asymmetric delta branches:
+    /// - Part 1a: `ΔR_insert ⋈ S_post` — positive contributions
+    /// - Part 1b: `ΔR_delete ⋈ S_pre` — negatives use pre-change snapshot
+    /// - Part 3: `−(ΔR ⋈ ΔS)` — correction term (handled by caller via
+    ///   `apply_correction_term`)
+    ///
     /// Returns the number of joined rows fed to `inner.push_batch`.
     pub fn push_left_batch(&mut self, rows: &[(HashMap<String, Value>, i64)]) -> usize {
         if self.join_states.is_empty() {
@@ -323,16 +585,48 @@ impl IvmJoinCircuit {
             return deltas.len();
         }
 
-        // Apply each join in sequence.  The first join takes the raw input;
-        // each subsequent join takes the output of the previous one.
-        let mut current: Vec<(HashMap<String, Value>, i64)> = rows.to_vec();
+        // EC-01: Split into insert and delete branches.
+        let inserts: Vec<(HashMap<String, Value>, i64)> = rows
+            .iter()
+            .filter(|(_, w)| *w > 0)
+            .cloned()
+            .collect();
+        let deletes: Vec<(HashMap<String, Value>, i64)> = rows
+            .iter()
+            .filter(|(_, w)| *w < 0)
+            .cloned()
+            .collect();
+
+        // Part 1a: ΔR_insert ⋈ S_post (current join state is the post-change snapshot).
+        let mut joined_inserts: Vec<(HashMap<String, Value>, i64)> = inserts.clone();
         for (i, state) in self.join_states.iter().enumerate() {
             let left_col = self.left_cols.get(i).map(|s| s.as_str()).unwrap_or("");
-            current = hash_join_batch(&current, state, left_col);
+            joined_inserts = hash_join_batch(&joined_inserts, state, left_col);
         }
 
-        let n = current.len();
-        let deltas: Vec<ZDelta> = current
+        // Part 1b: ΔR_delete ⋈ S_pre.
+        // S_pre is reconstructed from S_post by reverting any pending right-side
+        // deltas accumulated in `right_deltas_pending`. If there are no pending
+        // right-side deltas, S_pre == S_post (the common case for single-batch
+        // updates where only the left side changes).
+        //
+        // For the common case (no concurrent right-side changes in this window),
+        // S_pre == S_post and deletes also join against the current state.
+        let mut joined_deletes: Vec<(HashMap<String, Value>, i64)> = deletes.clone();
+        if !joined_deletes.is_empty() {
+            // Use the pre-snapshot states if available, else fall back to post.
+            for (i, pre_state) in self.pre_snapshot_states.iter().enumerate() {
+                let left_col = self.left_cols.get(i).map(|s| s.as_str()).unwrap_or("");
+                let state = pre_state.as_ref().unwrap_or(&self.join_states[i]);
+                joined_deletes = hash_join_batch(&joined_deletes, state, left_col);
+            }
+        }
+
+        let mut all_joined = joined_inserts;
+        all_joined.extend(joined_deletes);
+
+        let n = all_joined.len();
+        let deltas: Vec<ZDelta> = all_joined
             .into_iter()
             .map(|(f, w)| ZDelta {
                 fields: f,
@@ -341,6 +635,71 @@ impl IvmJoinCircuit {
             .collect();
         self.inner.push_batch(&deltas);
         n
+    }
+
+    /// Apply the Part 3 correction term: `−(ΔR ⋈ ΔS)`.
+    ///
+    /// Call this after processing both left and right deltas in the same
+    /// refresh window to subtract double-counted intersections.
+    pub fn apply_correction_term(
+        &mut self,
+        left_deltas: &[(HashMap<String, Value>, i64)],
+        right_deltas: &[(HashMap<String, Value>, i64)],
+        right_col: &str,
+    ) {
+        if left_deltas.is_empty() || right_deltas.is_empty() {
+            return;
+        }
+
+        // Build a temporary join state from the right deltas.
+        let mut temp_state = HashJoinState::new();
+        for (row, weight) in right_deltas {
+            if *weight > 0 {
+                let key = match row.get(right_col) {
+                    Some(v) => serde_json::to_string(v).unwrap_or_default(),
+                    None => continue,
+                };
+                temp_state.insert_right(&key, row.clone());
+            }
+        }
+
+        if temp_state.key_count() == 0 {
+            return;
+        }
+
+        // Join left deltas against right deltas.
+        let left_col = self.left_cols.first().map(|s| s.as_str()).unwrap_or("");
+        let correction = hash_join_batch(left_deltas, &temp_state, left_col);
+
+        // Negate and push.
+        let deltas: Vec<ZDelta> = correction
+            .into_iter()
+            .map(|(f, w)| ZDelta {
+                fields: f,
+                weight: -w, // Correction term is negated.
+            })
+            .collect();
+        self.inner.push_batch(&deltas);
+    }
+
+    /// Snapshot the current right-side state as `S_pre` before applying
+    /// right-side deltas in a refresh window.
+    ///
+    /// Call this at the beginning of each refresh window before
+    /// `push_right_delta` to enable correct EC-01 asymmetric delete branches.
+    pub fn snapshot_pre_state(&mut self) {
+        self.pre_snapshot_states = self
+            .join_states
+            .iter()
+            .map(|s| Some(s.clone()))
+            .collect();
+    }
+
+    /// Clear the pre-snapshot states after a refresh window completes.
+    pub fn clear_pre_state(&mut self) {
+        for slot in self.pre_snapshot_states.iter_mut() {
+            *slot = None;
+        }
     }
 
     /// Return the current output from the aggregation circuit.

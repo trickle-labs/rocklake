@@ -4491,6 +4491,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "object_store 0.12.5",
+ "proptest",
  "serde",
  "serde_json",
  "slatedb",
@@ -4559,6 +4560,7 @@ name = "slateduck-testkit"
 version = "0.1.0"
 dependencies = [
  "object_store 0.12.5",
+ "proptest",
  "reqwest",
  "serde_json",
  "slateduck-catalog",

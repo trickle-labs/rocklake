@@ -27,6 +27,6 @@ path = "src/bin/slateduck_ivm.rs"
 object_store       = { workspace = true }
 serde_json         = { workspace = true }
 slateduck-testkit  = { path = "../slateduck-testkit" }
-
+proptest           = { workspace = true }
 tempfile           = { workspace = true }
 tokio              = { workspace = true }
