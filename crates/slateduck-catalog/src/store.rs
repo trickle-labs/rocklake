@@ -1,7 +1,7 @@
 //! CatalogStore: the main entry point for catalog operations.
 
-use slatedb::{Db, IsolationLevel};
 use object_store::path::Path as ObjectPath;
+use slatedb::{Db, IsolationLevel};
 use slateduck_core::counters::CounterCache;
 use slateduck_core::keys;
 use slateduck_core::mvcc::SnapshotId;

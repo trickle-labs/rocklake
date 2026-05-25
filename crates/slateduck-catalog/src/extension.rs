@@ -103,9 +103,9 @@ pub async fn insert_extension_row(
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
 
         // Update the marker with next_id + 1 inside the transaction.
-        let new_next = next_id.checked_add(1).ok_or_else(|| {
-            CatalogError::InvalidInput("extension row ID overflow".to_string())
-        })?;
+        let new_next = next_id
+            .checked_add(1)
+            .ok_or_else(|| CatalogError::InvalidInput("extension row ID overflow".to_string()))?;
         let marker = ExtensionSchemaRow {
             extension_id: extension_id as u32,
             table_name: table_name.to_string(),

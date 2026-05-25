@@ -232,10 +232,8 @@ pub fn apply_changes(
     start_state: &[ParquetRowData],
     changes: &[ChangeRecord],
 ) -> Vec<ParquetRowData> {
-    let mut state: HashMap<u64, ParquetRowData> = start_state
-        .iter()
-        .map(|r| (r.rowid, r.clone()))
-        .collect();
+    let mut state: HashMap<u64, ParquetRowData> =
+        start_state.iter().map(|r| (r.rowid, r.clone())).collect();
 
     for change in changes {
         let rowid = change.rowid.unwrap_or(0);
@@ -296,9 +294,18 @@ mod tests {
     #[test]
     fn test_no_gc_boundary() {
         let added = vec![
-            ParquetRowData { rowid: 0, columns_json: r#"{"id":1,"name":"alice"}"#.to_string() },
-            ParquetRowData { rowid: 1, columns_json: r#"{"id":2,"name":"bob"}"#.to_string() },
-            ParquetRowData { rowid: 2, columns_json: r#"{"id":3,"name":"carol"}"#.to_string() },
+            ParquetRowData {
+                rowid: 0,
+                columns_json: r#"{"id":1,"name":"alice"}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 1,
+                columns_json: r#"{"id":2,"name":"bob"}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 2,
+                columns_json: r#"{"id":3,"name":"carol"}"#.to_string(),
+            },
         ];
         let result = compute_table_changes(
             "public.orders",
@@ -320,12 +327,19 @@ mod tests {
     #[test]
     fn test_insert_and_delete_changes() {
         let added = vec![
-            ParquetRowData { rowid: 0, columns_json: r#"{"id":1}"#.to_string() },
-            ParquetRowData { rowid: 1, columns_json: r#"{"id":2}"#.to_string() },
+            ParquetRowData {
+                rowid: 0,
+                columns_json: r#"{"id":1}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 1,
+                columns_json: r#"{"id":2}"#.to_string(),
+            },
         ];
-        let removed = vec![
-            ParquetRowData { rowid: 10, columns_json: r#"{"id":99}"#.to_string() },
-        ];
+        let removed = vec![ParquetRowData {
+            rowid: 10,
+            columns_json: r#"{"id":99}"#.to_string(),
+        }];
         let result = compute_table_changes("public.orders", 5, 10, 0, &added, &removed);
         assert!(result.is_ok());
         let changes = result.unwrap();
@@ -350,27 +364,47 @@ mod tests {
     fn test_update_detection() {
         // Row with rowid=5 is in both removed (preimage) and added (postimage)
         let added = vec![
-            ParquetRowData { rowid: 5, columns_json: r#"{"id":5,"name":"updated"}"#.to_string() },
-            ParquetRowData { rowid: 6, columns_json: r#"{"id":6,"name":"new"}"#.to_string() },
+            ParquetRowData {
+                rowid: 5,
+                columns_json: r#"{"id":5,"name":"updated"}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 6,
+                columns_json: r#"{"id":6,"name":"new"}"#.to_string(),
+            },
         ];
         let removed = vec![
-            ParquetRowData { rowid: 5, columns_json: r#"{"id":5,"name":"original"}"#.to_string() },
-            ParquetRowData { rowid: 7, columns_json: r#"{"id":7,"name":"deleted"}"#.to_string() },
+            ParquetRowData {
+                rowid: 5,
+                columns_json: r#"{"id":5,"name":"original"}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 7,
+                columns_json: r#"{"id":7,"name":"deleted"}"#.to_string(),
+            },
         ];
         let result = compute_table_changes("public.orders", 5, 10, 0, &added, &removed);
         assert!(result.is_ok());
         let changes = result.unwrap();
 
-        let preimages: Vec<_> = changes.records.iter()
+        let preimages: Vec<_> = changes
+            .records
+            .iter()
             .filter(|r| r.change_type == ChangeType::UpdatePreimage)
             .collect();
-        let postimages: Vec<_> = changes.records.iter()
+        let postimages: Vec<_> = changes
+            .records
+            .iter()
             .filter(|r| r.change_type == ChangeType::UpdatePostimage)
             .collect();
-        let inserts: Vec<_> = changes.records.iter()
+        let inserts: Vec<_> = changes
+            .records
+            .iter()
             .filter(|r| r.change_type == ChangeType::Insert)
             .collect();
-        let deletes: Vec<_> = changes.records.iter()
+        let deletes: Vec<_> = changes
+            .records
+            .iter()
             .filter(|r| r.change_type == ChangeType::Delete)
             .collect();
 
@@ -386,19 +420,40 @@ mod tests {
     fn test_apply_changes_reconstructs_end_state() {
         // Start state: rows 1, 2, 3
         let start_state = vec![
-            ParquetRowData { rowid: 1, columns_json: r#"{"v":"a"}"#.to_string() },
-            ParquetRowData { rowid: 2, columns_json: r#"{"v":"b"}"#.to_string() },
-            ParquetRowData { rowid: 3, columns_json: r#"{"v":"c"}"#.to_string() },
+            ParquetRowData {
+                rowid: 1,
+                columns_json: r#"{"v":"a"}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 2,
+                columns_json: r#"{"v":"b"}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 3,
+                columns_json: r#"{"v":"c"}"#.to_string(),
+            },
         ];
 
         // Changes: delete row 2, update row 3, insert row 4
         let added = vec![
-            ParquetRowData { rowid: 3, columns_json: r#"{"v":"c_updated"}"#.to_string() },
-            ParquetRowData { rowid: 4, columns_json: r#"{"v":"d"}"#.to_string() },
+            ParquetRowData {
+                rowid: 3,
+                columns_json: r#"{"v":"c_updated"}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 4,
+                columns_json: r#"{"v":"d"}"#.to_string(),
+            },
         ];
         let removed = vec![
-            ParquetRowData { rowid: 2, columns_json: r#"{"v":"b"}"#.to_string() },
-            ParquetRowData { rowid: 3, columns_json: r#"{"v":"c"}"#.to_string() },
+            ParquetRowData {
+                rowid: 2,
+                columns_json: r#"{"v":"b"}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 3,
+                columns_json: r#"{"v":"c"}"#.to_string(),
+            },
         ];
 
         let result = compute_table_changes("t", 1, 2, 0, &added, &removed).unwrap();
@@ -431,8 +486,14 @@ mod tests {
     #[test]
     fn test_real_rowid_values() {
         let added = vec![
-            ParquetRowData { rowid: 42, columns_json: r#"{"x":1}"#.to_string() },
-            ParquetRowData { rowid: 100, columns_json: r#"{"x":2}"#.to_string() },
+            ParquetRowData {
+                rowid: 42,
+                columns_json: r#"{"x":1}"#.to_string(),
+            },
+            ParquetRowData {
+                rowid: 100,
+                columns_json: r#"{"x":2}"#.to_string(),
+            },
         ];
         let result = compute_table_changes("t", 0, 1, 0, &added, &[]).unwrap();
         assert_eq!(result.records[0].rowid, Some(42));

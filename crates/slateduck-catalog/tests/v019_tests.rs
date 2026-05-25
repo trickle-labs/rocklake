@@ -194,7 +194,9 @@ async fn rowid_range_overflow_detection() {
     let db = store.db();
 
     // First, seed the counter near u64::MAX
-    let (_, _) = slateduck_catalog::next_rowid_range(db, 99, u64::MAX - 10).await.unwrap();
+    let (_, _) = slateduck_catalog::next_rowid_range(db, 99, u64::MAX - 10)
+        .await
+        .unwrap();
 
     // Now try to allocate more than fits
     let result = slateduck_catalog::next_rowid_range(db, 99, 20).await;
@@ -233,10 +235,7 @@ async fn staged_write_discipline_non_mvcc_visible_without_snapshot() {
     // Create a table first (needs a snapshot)
     let mut w = store.begin_write();
     let schema_id = w.create_schema("test").await.unwrap();
-    let table_id = w
-        .create_table(schema_id, "orders", None)
-        .await
-        .unwrap();
+    let table_id = w.create_table(schema_id, "orders", None).await.unwrap();
     let _snap = w.create_snapshot(None, None).await.unwrap();
     store.commit_writer(&w);
 
@@ -250,7 +249,10 @@ async fn staged_write_discipline_non_mvcc_visible_without_snapshot() {
     // Verify the stats key exists in the DB even without a snapshot commit
     let stats_key = slateduck_core::keys::key_table_stats(table_id);
     let data = store.db().get(&stats_key).await.unwrap();
-    assert!(data.is_some(), "table stats should be written even without snapshot commit");
+    assert!(
+        data.is_some(),
+        "table stats should be written even without snapshot commit"
+    );
 
     store.close().await.unwrap();
 }
@@ -374,43 +376,89 @@ fn table_changes_stream_reconstructs_end_state() {
     use slateduck_sql::table_changes::*;
 
     // Test with various combinations of inserts, deletes, and updates
-    let test_cases: Vec<(Vec<ParquetRowData>, Vec<ParquetRowData>, Vec<ParquetRowData>)> = vec![
+    let test_cases: Vec<(
+        Vec<ParquetRowData>,
+        Vec<ParquetRowData>,
+        Vec<ParquetRowData>,
+    )> = vec![
         // Case 1: Pure inserts (empty start → 3 rows)
         (
             vec![],
             vec![
-                ParquetRowData { rowid: 1, columns_json: r#"{"a":1}"#.to_string() },
-                ParquetRowData { rowid: 2, columns_json: r#"{"a":2}"#.to_string() },
-                ParquetRowData { rowid: 3, columns_json: r#"{"a":3}"#.to_string() },
+                ParquetRowData {
+                    rowid: 1,
+                    columns_json: r#"{"a":1}"#.to_string(),
+                },
+                ParquetRowData {
+                    rowid: 2,
+                    columns_json: r#"{"a":2}"#.to_string(),
+                },
+                ParquetRowData {
+                    rowid: 3,
+                    columns_json: r#"{"a":3}"#.to_string(),
+                },
             ],
             vec![], // no removals
         ),
         // Case 2: Pure deletes (2 rows → empty)
         (
             vec![
-                ParquetRowData { rowid: 1, columns_json: r#"{"a":1}"#.to_string() },
-                ParquetRowData { rowid: 2, columns_json: r#"{"a":2}"#.to_string() },
+                ParquetRowData {
+                    rowid: 1,
+                    columns_json: r#"{"a":1}"#.to_string(),
+                },
+                ParquetRowData {
+                    rowid: 2,
+                    columns_json: r#"{"a":2}"#.to_string(),
+                },
             ],
             vec![], // no additions
             vec![
-                ParquetRowData { rowid: 1, columns_json: r#"{"a":1}"#.to_string() },
-                ParquetRowData { rowid: 2, columns_json: r#"{"a":2}"#.to_string() },
+                ParquetRowData {
+                    rowid: 1,
+                    columns_json: r#"{"a":1}"#.to_string(),
+                },
+                ParquetRowData {
+                    rowid: 2,
+                    columns_json: r#"{"a":2}"#.to_string(),
+                },
             ],
         ),
         // Case 3: Mix of insert + update + delete
         (
             vec![
-                ParquetRowData { rowid: 1, columns_json: r#"{"v":"old1"}"#.to_string() },
-                ParquetRowData { rowid: 2, columns_json: r#"{"v":"old2"}"#.to_string() },
-                ParquetRowData { rowid: 3, columns_json: r#"{"v":"old3"}"#.to_string() },
+                ParquetRowData {
+                    rowid: 1,
+                    columns_json: r#"{"v":"old1"}"#.to_string(),
+                },
+                ParquetRowData {
+                    rowid: 2,
+                    columns_json: r#"{"v":"old2"}"#.to_string(),
+                },
+                ParquetRowData {
+                    rowid: 3,
+                    columns_json: r#"{"v":"old3"}"#.to_string(),
+                },
             ],
             vec![
-                ParquetRowData { rowid: 2, columns_json: r#"{"v":"new2"}"#.to_string() }, // update row 2
-                ParquetRowData { rowid: 4, columns_json: r#"{"v":"new4"}"#.to_string() }, // insert row 4
+                ParquetRowData {
+                    rowid: 2,
+                    columns_json: r#"{"v":"new2"}"#.to_string(),
+                }, // update row 2
+                ParquetRowData {
+                    rowid: 4,
+                    columns_json: r#"{"v":"new4"}"#.to_string(),
+                }, // insert row 4
             ],
             vec![
-                ParquetRowData { rowid: 2, columns_json: r#"{"v":"old2"}"#.to_string() }, // update row 2 preimage
-                ParquetRowData { rowid: 3, columns_json: r#"{"v":"old3"}"#.to_string() }, // delete row 3
+                ParquetRowData {
+                    rowid: 2,
+                    columns_json: r#"{"v":"old2"}"#.to_string(),
+                }, // update row 2 preimage
+                ParquetRowData {
+                    rowid: 3,
+                    columns_json: r#"{"v":"old3"}"#.to_string(),
+                }, // delete row 3
             ],
         ),
     ];
@@ -420,10 +468,8 @@ fn table_changes_stream_reconstructs_end_state() {
         let end_state = apply_changes(start_state, &result.records);
 
         // Compute expected end state manually
-        let mut expected: std::collections::HashMap<u64, &ParquetRowData> = start_state
-            .iter()
-            .map(|r| (r.rowid, r))
-            .collect();
+        let mut expected: std::collections::HashMap<u64, &ParquetRowData> =
+            start_state.iter().map(|r| (r.rowid, r)).collect();
 
         for r in removed {
             expected.remove(&r.rowid);
