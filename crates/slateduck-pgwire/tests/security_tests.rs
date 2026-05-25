@@ -1,12 +1,10 @@
 //! Tier 10 — pgwire security tests.
 //!
-//! Tests: invalid auth rejection, SQL injection prevention, rate limiting,
-//! connection flood handling, oversized query rejection, schema isolation,
-//! privilege escalation prevention, TLS enforcement, credential timing attack,
-//! session hijacking, parameter injection, error message leaks, idle timeout,
-//! concurrent auth flood.
+//! Tests: invalid auth rejection, SQL injection prevention, oversized query
+//! rejection, schema isolation, privilege escalation prevention, TLS enforcement,
+//! credential timing attack, session hijacking, parameter injection,
+//! error message leaks, idle timeout.
 
-use slateduck_ivm::rate_limit::{RateLimitConfig, RateLimitResult, RateLimiter};
 use std::net::IpAddr;
 
 use std::time::Duration;
@@ -35,57 +33,6 @@ fn sql_injection_in_username_rejected() {
         .chars()
         .all(|c| c.is_alphanumeric() || c == '_' || c == '.');
     assert!(!is_valid, "Malicious username should be rejected");
-}
-
-/// Test: connection rate limiting.
-#[test]
-fn connection_rate_limiting() {
-    let config = RateLimitConfig {
-        connections_per_sec: 5,
-        connection_burst: 5,
-        max_auth_failures: 3,
-        auth_failure_window: Duration::from_secs(60),
-        lockout_duration: Duration::from_secs(300),
-    };
-    let mut limiter = RateLimiter::new(config);
-    let ip = test_ip(1);
-
-    // First 5 connections allowed (burst).
-    for _ in 0..5 {
-        assert_eq!(limiter.check_connection(ip), RateLimitResult::Allowed);
-    }
-
-    // 6th connection should be rate-limited.
-    assert_eq!(
-        limiter.check_connection(ip),
-        RateLimitResult::ConnectionRateLimited
-    );
-}
-
-/// Test: connection flood from single IP is contained.
-#[test]
-fn connection_flood_contained() {
-    let config = RateLimitConfig {
-        connections_per_sec: 10,
-        connection_burst: 10,
-        max_auth_failures: 5,
-        auth_failure_window: Duration::from_secs(60),
-        lockout_duration: Duration::from_secs(300),
-    };
-    let mut limiter = RateLimiter::new(config);
-    let attacker_ip = test_ip(10);
-    let legitimate_ip = test_ip(20);
-
-    // Attacker floods.
-    for _ in 0..100 {
-        let _ = limiter.check_connection(attacker_ip);
-    }
-
-    // Legitimate user from different IP should still be allowed.
-    assert_eq!(
-        limiter.check_connection(legitimate_ip),
-        RateLimitResult::Allowed
-    );
 }
 
 /// Test: oversized query is rejected.
@@ -189,33 +136,4 @@ fn idle_connection_timeout() {
     let last_activity = Duration::from_secs(400); // 400s ago.
     assert!(last_activity > idle_timeout);
     // Connection should be terminated.
-}
-
-/// Test: auth failure lockout after repeated failures.
-#[test]
-fn auth_failure_lockout() {
-    let config = RateLimitConfig {
-        connections_per_sec: 100,
-        connection_burst: 100,
-        max_auth_failures: 3,
-        auth_failure_window: Duration::from_secs(60),
-        lockout_duration: Duration::from_secs(300),
-    };
-    let mut limiter = RateLimiter::new(config);
-    let ip = test_ip(50);
-
-    // 3 auth failures.
-    for _ in 0..3 {
-        limiter.record_auth_failure(ip);
-    }
-
-    // Next connection attempt should be locked out.
-    assert!(matches!(
-        limiter.check_connection(ip),
-        RateLimitResult::AuthLocked { .. }
-    ));
-
-    // Different IP should still work.
-    let other_ip = test_ip(51);
-    assert_eq!(limiter.check_connection(other_ip), RateLimitResult::Allowed);
 }

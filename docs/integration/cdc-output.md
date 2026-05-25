@@ -180,32 +180,13 @@ WHERE table = 'ducklake_data_file'
   AND (row->>'table_id')::BIGINT = 42;
 ```
 
-## IVM-Aware CDC
-
-When a materialized view updates, its output snapshot diff is itself a CDC
-event.  The CDC producer treats materialized views identically to base tables:
-
-```
-Base table write → IVM update → Materialized view snapshot → CDC export
-```
-
-A materialized view `orders_daily_mv` appears in the CDC stream as:
-
-```jsonl
-{"snapshot_id":12,"table":"ducklake_table","kind":"add","row":{"table_id":99,"table_name":"orders_daily_mv",...}}
-{"snapshot_id":12,"table":"ducklake_data_file","kind":"add","row":{"table_id":99,"path":"s3://bucket/wh/mv/...",...}}
-```
-
-Downstream consumers filter by `table_name` or `table_id` to subscribe only to
-materialized view updates.
-
 ## Event Types
 
 | `table` value | `kind` | Description |
 |---------------|--------|-------------|
 | `ducklake_schema` | `add` | New schema created |
 | `ducklake_schema` | `retire` | Schema dropped |
-| `ducklake_table` | `add` | New table created (or materialized view) |
+| `ducklake_table` | `add` | New table created |
 | `ducklake_table` | `retire` | Table dropped |
 | `ducklake_column` | `add` | Column added |
 | `ducklake_column` | `retire` | Column dropped |

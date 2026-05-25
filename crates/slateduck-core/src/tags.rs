@@ -85,23 +85,7 @@ pub const TAG_TAG: u8 = 0x1A;
 pub const TAG_COLUMN_TAG: u8 = 0x1B;
 pub const TAG_SCHEMA_VERSIONS: u8 = 0x1C;
 
-// ─── v0.11 IVM Catalog Tables ──────────────────────────────────────────────
-
-/// Incremental materialized view definitions. MVCC behaviour: Versioned.
-/// Key: `0x1D | matview_id(u64 BE) | begin_snapshot(u64 BE)`
-pub const TAG_MATVIEW: u8 = 0x1D;
-
-/// Matview dependency graph: one row per (matview_id, base_table_id). AppendOnly.
-/// Key: `0x1E | matview_id(u64 BE) | base_table_id(u64 BE)`
-pub const TAG_MATVIEW_DEP: u8 = 0x1E;
-
-/// Per-shard checkpoint watermark log. AppendOnly (monotone seq).
-/// Key: `0x1F | matview_id(u64 BE) | shard_id(u32 BE) | seq(u64 BE)`
-pub const TAG_MATVIEW_CHECKPOINT: u8 = 0x1F;
-
-/// Per-shard lease state. MutableSingleton per (matview_id, shard_id); CAS-updated.
-/// Key: `0x20 | matview_id(u64 BE) | shard_id(u32 BE)`
-pub const TAG_MATVIEW_SHARD: u8 = 0x20;
+// 0x1D–0x20: removed (formerly IVM — v0.22)
 
 /// v0.18: Snapshot lease. MutableSingleton per consumer_id.
 /// Key: `0x22 | len(u16 BE) | consumer_id(utf-8 bytes)`
@@ -119,8 +103,6 @@ pub const TAG_EXTENSION_SCHEMA: u8 = 0x23;
 /// Value: serialized DataFileRow (same as primary key value).
 /// Enables O(log N) range scans in list_data_files() instead of O(N) full scans.
 pub const TAG_DATA_FILE_BY_SNAPSHOT: u8 = 0x21;
-
-// Tags 0x24–0x2F reserved for future IVM-related tables.
 
 // ─── SlateDuck Internal Tags ───────────────────────────────────────────────
 
@@ -397,39 +379,6 @@ pub static ALL_TAGS: &[TagDescriptor] = &[
         unique_guard: UniqueGuard::NotNeeded,
         status: TagStatus::Live,
     },
-    // ─── v0.11 IVM tables ─────────────────────────────────────────────────
-    TagDescriptor {
-        tag: TAG_MATVIEW,
-        name: "slateduck_matview",
-        key_shape: "matview_id | begin_snapshot",
-        mvcc: MvccBehavior::Versioned,
-        unique_guard: UniqueGuard::Required,
-        status: TagStatus::Live,
-    },
-    TagDescriptor {
-        tag: TAG_MATVIEW_DEP,
-        name: "slateduck_matview_dep",
-        key_shape: "matview_id | base_table_id",
-        mvcc: MvccBehavior::AppendOnly,
-        unique_guard: UniqueGuard::NotNeeded,
-        status: TagStatus::Live,
-    },
-    TagDescriptor {
-        tag: TAG_MATVIEW_CHECKPOINT,
-        name: "slateduck_matview_checkpoint",
-        key_shape: "matview_id | shard_id | seq",
-        mvcc: MvccBehavior::AppendOnly,
-        unique_guard: UniqueGuard::NotNeeded,
-        status: TagStatus::Live,
-    },
-    TagDescriptor {
-        tag: TAG_MATVIEW_SHARD,
-        name: "slateduck_matview_shard",
-        key_shape: "matview_id | shard_id",
-        mvcc: MvccBehavior::MutableSingleton,
-        unique_guard: UniqueGuard::NotNeeded,
-        status: TagStatus::Live,
-    },
     // ─── SlateDuck Internal ───
     TagDescriptor {
         tag: TAG_INLINED_ROWS,
@@ -494,8 +443,9 @@ mod tests {
 
     #[test]
     fn all_ducklake_tags_allocated() {
-        // 28 DuckLake tables (0x01..=0x1C) + 3 system tags (0xFD, 0xFE, 0xFF) + 1 secondary index (0xFC)
-        assert_eq!(ALL_TAGS.len(), 36);
+        // 28 DuckLake tables (0x01..=0x1C) + 4 SlateDuck internal tags (0xFC–0xFF)
+        // 0x1D–0x20 were removed in v0.22 (formerly IVM catalog tables)
+        assert_eq!(ALL_TAGS.len(), 32);
     }
 
     #[test]

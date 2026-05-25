@@ -1,6 +1,6 @@
 # SlateDuck
 
-**Your entire lakehouse — data, catalog, and live materialized views — in a single S3 bucket. No database server required.**
+**Your entire lakehouse — data, catalog, and streaming pipeline — in a single S3 bucket. No database server required.**
 
 [![CI](https://github.com/trickle-labs/slateduck/actions/workflows/ci.yml/badge.svg)](https://github.com/trickle-labs/slateduck/actions)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -14,7 +14,6 @@ Modern data teams are drowning in infrastructure. You want a lakehouse — fast 
 
 SlateDuck is a catalog backend for [DuckLake](https://ducklake.select/), the elegant open-source lakehouse format from the DuckDB team. Instead of routing catalog metadata through an external database, SlateDuck stores it directly in [SlateDB](https://slatedb.io/) — a battle-hardened, LSM-based embedded key-value store that runs entirely inside object storage. The result is a lakehouse where **both your Parquet data files and your catalog live in the same S3 bucket**, connected to DuckDB over the standard PostgreSQL wire protocol, requiring absolutely no servers beyond lightweight stateless binaries. Point at a bucket, start the sidecar, and you are querying within seconds.
 
-But that is only the beginning. SlateDuck's north star is **incremental view maintenance (IVM)**: the ability to write a SQL view once and have it stay continuously fresh — not by re-running the full query from scratch on every ingest, but by streaming only the delta through a differential dataflow circuit powered by [DBSP](https://github.com/feldera/dbsp). The circuit's state lives in the same SlateDB substrate as your catalog. The output is standard DuckLake Parquet, indistinguishable from a base table. There is no separate streaming system, no new read path, no operational split between "batch" and "streaming" — just a `CREATE INCREMENTAL MATERIALIZED VIEW` statement and a freshness target.
 
 ---
 
@@ -22,23 +21,20 @@ But that is only the beginning. SlateDuck's north star is **incremental view mai
 
 ### Truly Serverless — All the Way Down
 
-There is no "catalog database" to operate. The entire durable state of your catalog — schemas, tables, columns, snapshots, data-file references, and in the IVM track, view definitions, shard leases, and checkpoint watermarks — is stored as SlateDB key-value pairs that live as ordinary objects in S3 (or GCS, Azure Blob Storage, or even the local filesystem for development). Every SlateDuck binary is stateless. If it crashes, you restart it; no recovery ceremony, no WAL replays, no replica promotion. The ground truth is always in object storage, and it always has been.
+There is no "catalog database" to operate. The entire durable state of your catalog — schemas, tables, columns, snapshots, and data-file references — is stored as SlateDB key-value pairs that live as ordinary objects in S3 (or GCS, Azure Blob Storage, or even the local filesystem for development). Every SlateDuck binary is stateless. If it crashes, you restart it; no recovery ceremony, no WAL replays, no replica promotion. The ground truth is always in object storage, and it always has been.
 
-### Live Materialized Views Without a Streaming System
-
-Most teams that want fresh aggregates deploy Kafka, Flink, Spark Streaming, or a dedicated database like Materialize — a separate operational domain alongside their data lake, with its own cost, its own failure modes, and its own mental model. SlateDuck eliminates that split. With `CREATE INCREMENTAL MATERIALIZED VIEW`, you express what you want in SQL, set a freshness target, and SlateDuck's `slateduck-ivm` workers continuously advance the view through differential dataflow (DBSP), persisting incremental state in the same SlateDB/object-store substrate as everything else. The output is ordinary DuckLake Parquet — first-class data files, readable by DuckDB exactly like a base table. No new read path. No streaming cluster. No ETL pipeline.
 
 ### Immutability as the Load-Bearing Foundation
 
-SlateDuck makes a binding architectural promise: **committed facts are never physically deleted by normal operation.** Every schema change, every table creation, every file addition, every checkpoint advance is recorded as a versioned fact. The default `slateduck gc` command only advances the query-visibility floor — it never deletes bytes. Physical deletion is reserved for the explicit, audited `slateduck excise` command, which exists for compliance erasure and is designed to be rare. This immutability is not a safety blanket bolted on afterward; it is the principle that makes time travel trivial, read scale-out free, and IVM recovery crash-safe — a worker can always resume from its last durable checkpoint with no coordination required.
+SlateDuck makes a binding architectural promise: **committed facts are never physically deleted by normal operation.** Every schema change, every table creation, every file addition, every checkpoint advance is recorded as a versioned fact. The default `slateduck gc` command only advances the query-visibility floor — it never deletes bytes. Physical deletion is reserved for the explicit, audited `slateduck excise` command, which exists for compliance erasure and is designed to be rare. This immutability is not a safety blanket bolted on afterward; it is the principle that makes time travel trivial and read scale-out free.
 
 ### Time Travel That Actually Works
 
 Because every row ever written to the catalog is preserved, time travel is not a special mode — it is the natural way the storage engine works. You can read the complete, consistent state of your catalog at any historical `dl_snapshot_id` with no extra overhead, no snapshot tables, no log-file archaeology. Whether you want to audit what your schema looked like last Tuesday or reproduce the exact table state from which a quarterly report was generated six months ago, you do it with a single snapshot ID and a `SELECT`.
 
-### Horizontal Read Scale-Out — and Compute Scale-Out
+### Horizontal Read Scale-Out
 
-The immutability guarantee has two payoffs. For queries: because catalog keys are stable once written, an **unbounded number of stateless reader replicas** can serve queries at any historical snapshot without coordinating with the writer or with each other. For IVM: because state is durably partitioned by `(matview_id, shard_id)`, an unbounded number of stateless `slateduck-ivm` worker processes can claim shards and process them in parallel, each independently advancing its slice of the view at hundreds of thousands of rows per second across 8 shards. Add workers — get proportional throughput. Remove workers — the surviving fleet rebalances via lease takeover. No consensus, no rebalancing protocol, just SlateDB's CAS primitive and immutable catalog snapshots.
+Because catalog keys are stable once written, an **unbounded number of stateless reader replicas** can serve queries at any historical snapshot without coordinating with the writer or with each other. No consensus, no rebalancing protocol — just SlateDB's CAS primitive and immutable catalog snapshots.
 
 ---
 
@@ -56,45 +52,26 @@ SlateDuck operates as three logically separable planes, all sharing the same Sla
 ┌─────────────────────────────────────────────────────────────┐
 │               CONTROL PLANE: slateduck-pgwire               │
 │   PG wire protocol · bounded SQL · catalog writer/reader    │
-│   CREATE/DROP/ALTER INCREMENTAL MATERIALIZED VIEW           │
 └─────────────────────┬───────────────────────────────────────┘
                       │ catalog snapshots (SlateDB)
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   CATALOG (SlateDB)                         │
-│  28 DuckLake tables + matviews, deps, checkpoints, shards   │
+│           28 DuckLake tables (v1.0 schema)                  │
 └──────┬──────────────────────────────────────────────────────┘
-       │ definitions · watermarks · leases
-       ▼
-┌──────────────────────┐      ┌────────────────────────────────┐
-│   OUTPUT PLANE       │◀─────│   COMPUTE PLANE                │
-│  Parquet writer:     │ arrs │  N × slateduck-ivm workers     │
-│  → new DuckLake      │      │  each owning a key-range shard │
-│    snapshot          │      │  DBSP circuit per matview      │
-└──────────────────────┘      └──────────────┬─────────────────┘
-                                              │
-                               ┌──────────────▼─────────────────┐
-                               │  STATE STORE (SlateDB)         │
-                               │  per (matview, shard) database │
-                               │  arrangements as keyed batches │
-                               └────────────────────────────────┘
-                                              │
-                      ┌───────────────────────▼────────────────┐
-                      │   Object Storage (S3 / GCS / Azure)    │
-                      │                                        │
-                      │  catalogs/warehouse-a/  (SlateDB SSTs) │
-                      │  data/warehouse-a/      (Parquet)      │
-                      │  matview-state/         (IVM state)    │
-                      └────────────────────────────────────────┘
+       │
+                      ┌───────────────────────────────────────┐
+                      │   Object Storage (S3 / GCS / Azure)   │
+                      │                                       │
+                      │  catalogs/warehouse-a/  (SlateDB SSTs)│
+                      │  data/warehouse-a/      (Parquet)     │
+                      └───────────────────────────────────────┘
 ```
 
 DuckDB speaks to SlateDuck using the PostgreSQL wire protocol — the same protocol it already uses for PostgreSQL-backed DuckLake. No changes to DuckDB, no patched extensions, no custom drivers.
 
-The **control plane** (`slateduck-pgwire`) handles DDL and ingest. It implements exactly the finite set of SQL shapes that DuckDB's `ducklake` extension emits, plus the new `CREATE INCREMENTAL MATERIALIZED VIEW` grammar. The vocabulary is small, the conformance test suite is exhaustive, and the security profile is tight.
+The **control plane** (`slateduck-pgwire`) handles DDL and ingest. It implements exactly the finite set of SQL shapes that DuckDB's `ducklake` extension emits. The vocabulary is small, the conformance test suite is exhaustive, and the security profile is tight.
 
-The **compute plane** (`slateduck-ivm`) runs N stateless worker processes. Each discovers unclaimed shards by polling the catalog, acquires leases via SlateDB CAS, then continuously drives a DBSP differential dataflow circuit — reading new Parquet files added since the last checkpoint, pushing rows as `(key, value, +1)` deltas through the circuit, persisting updated arrangements, and appending checkpoint watermarks to the catalog. Workers are purely stateless: kill one and another claims its shards after the lease TTL.
-
-The **output plane** (a thread in each `slateduck-ivm` worker) reads the DBSP arrangement at a target frontier and materializes it as standard DuckLake Parquet files, registered through the existing `CatalogWriter`. The output is indistinguishable from a base table — no special read path, no query rewriting, no staleness warnings unless you ask.
 
 ---
 
@@ -141,12 +118,6 @@ USE my_lake;
 CREATE TABLE events (id BIGINT, name VARCHAR, ts TIMESTAMP);
 INSERT INTO events VALUES (1, 'launch', NOW());
 
--- Create a continuously-maintained materialized view (v0.11+)
-CREATE INCREMENTAL MATERIALIZED VIEW events_by_day
-WITH (freshness = '5s')
-AS SELECT date_trunc('day', ts) AS day, count(*) AS n FROM events GROUP BY 1;
-
--- Query the view exactly like a base table — always fresh
 SELECT * FROM events_by_day;
 ```
 
@@ -159,57 +130,14 @@ SlateDuck is a Cargo workspace of focused crates, each with a clear responsibili
 | Crate | Purpose |
 |---|---|
 | `slateduck-core` | Foundational types: binary key layout, MVCC visibility logic, protobuf encoding, counter allocation |
-| `slateduck-catalog` | All 28 DuckLake v1.0 catalog operations: schemas, tables, columns, snapshots, data files; plus IVM catalog tables |
-| `slateduck-sql` | Bounded SQL parser and AST dispatcher — only the shapes DuckDB and IVM DDL actually emit |
+| `slateduck-catalog` | All 28 DuckLake v1.0 catalog operations: schemas, tables, columns, snapshots, and data files |
+| `slateduck-sql` | Bounded SQL parser and AST dispatcher — only the shapes DuckDB actually emits |
 | `slateduck-pgwire` | PostgreSQL wire protocol sidecar binary (startup, simple query, extended query) |
 | `slateduck-datafusion` | DataFusion integration for query planning |
-| `slateduck-ivm` | Incremental view maintenance workers: DBSP circuit compilation, lease management, state-store I/O, Parquet output _(v0.11+)_ |
 | `slateduck-sqlite-vfs` | SQLite VFS layer (planned: native embedded extension path) |
 | `slateduck-ffi` | C/C++ FFI bindings (planned: native DuckDB extension) |
 
 ---
-
-## Incremental View Maintenance
-
-IVM is SlateDuck's transformational v0.11–v1.0 feature. It turns `SELECT` into a continuously maintained result — delivered as ordinary Parquet, with no streaming infrastructure.
-
-```sql
--- Maintained within 5 seconds of new ingest, no streaming cluster needed
-CREATE INCREMENTAL MATERIALIZED VIEW daily_revenue
-WITH (freshness = '5s', shard_count = 8)
-AS
-  SELECT date_trunc('day', ts) AS day,
-         region,
-         sum(amount) AS revenue
-  FROM   orders
-  GROUP  BY 1, 2;
-
--- Diagnose freshness at any time
-SELECT matview_lag('daily_revenue');   -- lag in milliseconds
-SELECT matview_status('daily_revenue'); -- 'active' | 'stale' | 'rebuilding'
-```
-
-**How it works:**
-1. `slateduck-pgwire` stores the view definition and output table in the catalog
-2. `slateduck-ivm` workers claim shards via lease, each driving an independent DBSP differential dataflow circuit
-3. On every freshness tick the worker reads new Parquet files added since its last checkpoint, pushes rows as `(key, value, ±1)` deltas through the circuit, persists the updated arrangement to its SlateDB state store, and appends a checkpoint watermark
-4. The output plane materializes the current state as a Parquet file and registers it as a standard DuckLake data file
-5. DuckDB queries the view identically to any base table — the output is indistinguishable
-
-**Scale-out:** Each matview is sharded by key range. 8 shards → 8 workers running fully in parallel → ≥350k rows/sec sustained throughput (v0.12). Workers are stateless; lease-based recovery is automatic after crashes. No coordination service, no consensus.
-
-**Operator support by version:**
-
-| SQL Operator | v0.11 | v0.12 | v0.13 | v0.14 | v0.15 |
-|---|---|---|---|---|---|
-| `SELECT` projection, `WHERE` filter | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `GROUP BY` + aggregates, `HAVING`, `DISTINCT` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `UNION ALL` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `UNION DISTINCT` | — | ✓ | ✓ | ✓ | ✓ |
-| `JOIN` (broadcast / co-partition / reshuffle) | — | — | ✓ | ✓ | ✓ |
-| Uncorrelated subqueries | — | — | ✓ | ✓ | ✓ |
-| Window functions, `ORDER BY`, `LIMIT` | — | — | — | — | ✓ |
-| Recursive CTEs, WASM UDFs | — | — | — | — | ✓ |
 
 ---
 
@@ -217,15 +145,13 @@ SELECT matview_status('daily_revenue'); -- 'active' | 'stale' | 'rebuilding'
 
 SlateDuck is an opinionated piece of software. It makes strong bets and does not try to be all things to all people. These bets are worth stating plainly:
 
-**Immutability everywhere.** No data, intermediate or final, is ever overwritten. State advances by appending new immutable batches; obsolete data is reclaimed only by retention-bounded compaction. This makes time travel, read scale-out, and IVM crash-recovery all fall out of the same substrate for free.
+**Immutability everywhere.** No data, intermediate or final, is ever overwritten. State advances by appending new immutable batches; obsolete data is reclaimed only by retention-bounded compaction. This makes time travel and read scale-out fall out of the same substrate for free.
 
-**Stateless workers.** Every SlateDuck binary — the pgwire sidecar, the IVM workers — is designed to be killed and restarted at any time with no ceremony. All durable progress lives in the catalog or the state stores in object storage. Killing a worker loses no progress; it just slows freshness until another process picks up the work.
+**Stateless workers.** Every SlateDuck binary is designed to be killed and restarted at any time with no ceremony. All durable progress lives in the catalog in object storage. Killing a process loses no progress.
 
-**One writer per shard.** SlateDB enforces a single active writer per catalog prefix through writer-epoch fencing, and IVM enforces a single active worker per `(matview_id, shard_id)` through CAS-based leases. This eliminates an entire class of corruption bugs that plague systems designed around optimistic concurrent writes. No multi-writer protocols, no consensus.
 
-**Output is just DuckLake.** Materialized view output is registered as first-class DuckLake data files. Readers cannot distinguish a materialized view from a base table. There is no new read path, no query rewriting, no special mode. If you trust your base tables, you trust your views.
 
-**Bounded SQL surface.** The PG wire sidecar and IVM both implement exactly the grammar they need — the finite set of SQL shapes DuckDB emits, plus explicit IVM DDL. The vocabulary is finite, the conformance tests are exhaustive, and the failure mode for an unexpected shape is a clean error rather than a silent wrong answer.
+**Bounded SQL surface.** The PG wire sidecar implements exactly the finite set of SQL shapes DuckDB emits. The vocabulary is finite, the conformance tests are exhaustive, and the failure mode for an unexpected shape is a clean error rather than a silent wrong answer.
 
 **GC and excision are separate operations.** Garbage collection only advances the query-visibility floor. It does not delete catalog bytes. Physical deletion is a separate, audited, rare operation reserved for compliance and retention enforcement. This separation makes the common case (GC) safe to automate and the exceptional case (excision) easy to audit.
 
@@ -237,11 +163,6 @@ SlateDuck is an opinionated piece of software. It makes strong bets and does not
 |---|---|---|
 | v0.9.x | Write-protocol correctness, security enforcement, operational safety, GA readiness | In progress |
 | v0.10 | Streaming ingest | Released |
-| v0.11 | IVM foundations: single-shard, basic aggregates, end-to-end demo | Planned |
-| v0.12 | IVM sharding: multi-shard scale-out, lease management, re-sharding | Planned |
-| v0.13 | IVM joins: broadcast, co-partition, reshuffle; TPC-H Q3/Q5 | Planned |
-| v0.14 | IVM hardening: native SlateDbTrace, cost model, fault injection | Planned |
-| v0.15 | IVM feature parity: window functions, correlated subqueries, recursive CTEs, WASM UDFs | Planned |
 | v1.0 | GA: all acceptance tests green, full docs, migration tooling | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.
@@ -261,7 +182,7 @@ cargo test -p slateduck-catalog
 cargo bench -p slateduck-catalog
 ```
 
-The test suite includes unit tests, property-based tests (via `proptest`), integration tests against real SlateDB instances, and golden-file conformance tests derived from actual DuckDB wire captures. The IVM track adds fault-injection tests and continuous TPC-H streaming benchmarks that run nightly in CI.
+The test suite includes unit tests, property-based tests (via `proptest`), integration tests against real SlateDB instances, and golden-file conformance tests derived from actual DuckDB wire captures.
 
 ---
 

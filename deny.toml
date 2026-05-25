@@ -26,10 +26,6 @@ ignore = [
     "RUSTSEC-2025-0134",
 ]
 
-# Removed from ignore list at v0.21:
-# - RUSTSEC-2024-0370 (proc-macro-error via dbsp/utoipa) — no longer detected in dep tree.
-# - RUSTSEC-2025-0057 (fxhash via wasmtime 43) — no longer detected in dep tree.
-
 # ─── Licenses ─────────────────────────────────────────────────────────────────
 # v0.21: License enforcement enabled.  Allow list covers all licenses found in
 # the dependency tree as of v0.21.  Crates outside this list require an explicit

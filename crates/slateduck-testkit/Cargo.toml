@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 slateduck-core    = { path = "../slateduck-core" }
 slateduck-catalog = { path = "../slateduck-catalog" }
-slateduck-ivm     = { path = "../slateduck-ivm" }
 slateduck-pgwire  = { path = "../slateduck-pgwire" }
 
 tokio        = { workspace = true }

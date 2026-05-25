@@ -479,18 +479,6 @@ async fn execute_classified<'a>(
             execute_virtual_catalog_scan(table_name, store).await
         }
 
-        // IVM statements — routing to the IVM worker is out of scope for the
-        // pg-wire layer in v0.11; return an unsupported error with a clear message.
-        StatementKind::CreateIncrementalMatview { .. }
-        | StatementKind::DropIncrementalMatview { .. }
-        | StatementKind::AlterIncrementalMatview { .. }
-        | StatementKind::RefreshIncrementalMatviewFull { .. }
-        | StatementKind::ShowMaterializedViews
-        | StatementKind::ShowMatviewShards { .. }
-        | StatementKind::ExplainMatview { .. } => Err(SlateDuckError::Unsupported(
-            "IVM DDL is processed by the slateduck-ivm worker, not the pg-wire layer".into(),
-        )),
-
         // ─── v0.18: DuckLake Standard Interface ────────────────────────────
         StatementKind::TableChanges {
             ref table_ref,
