@@ -70,8 +70,9 @@ binding on every roadmap release below.
 | **v0.18 — DuckLake Catalog Standard Interface** | `table_changes()` CDC function, stable `rowid`, snapshot lease, `NOTIFY` event-driven, extension schema (first-class catalog tag `0x23`), opaque mixed frontiers; validated first with pg-trickle | Done |
 | **v0.19 — CDC Correctness & Catalog Transaction Hardening** | Real row-level `table_changes()` with Parquet scan, versioned `DataFileRow` / `SnapshotDiff` windows, CAS writer epoch, transactional extension row-ID allocation, atomic GC lease + retain-from, staged write discipline, overflow-safe counters | Done |
 | **v0.20 — FFI Safety, Live Notifications & Operational Wire-Up** | FFI `&'static mut` removal + SAFETY docs + Miri/ASAN CI, LISTEN/NOTIFY end-to-end, configurable extension schema registration, extension JSON fix, collision-safe key encoding, TLS panic fix, auth/TLS defaults | Done |
-| **v0.21 — Performance, Scalability & Code Quality** | `list_data_files()` secondary index, IVM output batching, O(1) aggregate deletions, binary IVM key encoding, EWMA worker cost estimate, SQL classifier hardening, module decomposition, MSRV + license CI, metrics path alignment, dead-code + dependency cleanup | Planning |
-| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, IVM feature-complete GA sign-off, real-world validation gate | Planning |
+| **v0.21 — Performance, Scalability & Code Quality** | `list_data_files()` secondary index, O(1) aggregate deletions, SQL classifier hardening, module decomposition, MSRV + license CI, metrics path alignment, dead-code + dependency cleanup | Planning |
+| **v0.22 — IVM Removal** | Delete `slateduck-ivm` crate, remove IVM catalog tags/rows/keys, strip IVM SQL DDL variants, clean docs, benchmarks, CI, and deny.toml | Planning |
+| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
 
@@ -3030,12 +3031,12 @@ All of the following must be green before v0.18 is tagged:
 ### Deliverables
 
 - [x] `table_changes()` SQL function in `crates/slateduck-sql/src/`
-- [x] Stable `rowid` implementation in `crates/slateduck-catalog/src/writer.rs` and `crates/slateduck-ivm/src/parquet.rs`
+- [x] Stable `rowid` implementation in `crates/slateduck-catalog/src/writer.rs`
 - [x] Snapshot lease catalog tag `0x22` + `slateduck.hold_snapshot()` / `release_snapshot()` SQL API
 - [x] `LISTEN`/`NOTIFY`/`UNLISTEN` in `crates/slateduck-pgwire/src/`
 - [x] Extension schema first-class catalog objects (tag `0x23`) with `CREATE TABLE IF NOT EXISTS` / `INSERT` / `SELECT` / `DELETE` support
 - [x] Encryption key column audit + fixture
-- [x] Mixed frontier support in `crates/slateduck-ivm/src/state_store.rs` and `plan.rs` (opaque frontier for non-DuckLake sources)
+- [x] Mixed frontier support in `crates/slateduck-catalog/src/` (opaque frontier for non-DuckLake sources)
 - [x] Compatibility test suite: `tests/compat/pgtrickle_*.rs`
 - [x] `docs/operations/pgtrickle-compatibility.md`
 - [x] DuckLake Spec Upgrade Policy updated to include pg-trickle `CHANGELOG.md` in review process
@@ -3223,35 +3224,12 @@ The current implementation does a full prefix scan over all data files for a tab
 - Update `list_data_files()` to use a range scan on the new index keyed by `(table_id, read_snapshot)` rather than a full prefix scan plus in-memory filter
 - Add a benchmark comparing scan latency before/after at 10⁴ and 10⁵ files per table at a historical snapshot
 
-### IVM Output Row Batching
-
-`write_output_rows()` serializes each output row with `serde_json::to_vec()` and calls `register_inlined_insert()` once per row. Large materialized view outputs produce enormous staged-write buffers and per-row overhead:
-
-- Batch output rows in chunks of up to 1,000 before staging; serialize each chunk as a single binary record rather than one JSON record per row
-- Introduce a binary row format for inlined IVM output (fixed-width header + column payload) to reduce per-row serialization overhead
-- Add a memory-limit test: output 100,000 rows from an IVM tick and verify peak RSS does not exceed a configurable threshold
-
 ### Aggregate Deletion Complexity Fix (StringAgg / ArrayAgg)
 
 Deletions for `StringAgg` and `ArrayAgg` aggregates loop over negative weight, call `Vec::position()`, and then `Vec::remove(pos)`, giving O(N²) behavior for large groups with selective deletes:
 
 - Replace `Vec<Value>` rescan input storage with a counted multiset (`HashMap<CanonicalValue, i64>`) where deletes decrement counts and compaction sweeps zero-count entries
 - Add a TPC-H Q18 variant benchmark that measures STRING_AGG aggregate deletion performance at 100k and 1M row group sizes
-
-### Binary IVM Key Encoding
-
-Group-by keys (`circuit.rs` `group_key()`) and shard-routing keys (`worker.rs`) use `serde_json::to_string()` / `Value::to_string()` every time a row is processed. On throughput-critical paths this is a major allocation source:
-
-- Define a stable binary canonical form for `serde_json::Value` (fixed type tag, length-prefixed fields, network byte order for numerics)
-- Use this encoding for group keys, shard keys, and state-store key prefixes throughout the IVM pipeline
-- Add benchmark comparisons before/after at 1M rows/sec
-
-### Adaptive Worker Cost Estimate Fix
-
-`estimated_total_rows` in the IVM worker accumulates all processed rows since startup, drifting indefinitely from the actual current table cardinality and eventually producing wrong cost-mode decisions:
-
-- Replace the running sum with an exponential weighted moving average (EWMA) of per-source row count; decay coefficient configurable, default α = 0.1
-- Add an integration test that processes 10 batches at varying sizes and verifies the estimate tracks the true cardinality within 2× after 5 batches
 
 ### SQL Classifier Hardening
 
@@ -3266,7 +3244,7 @@ Group-by keys (`circuit.rs` `group_key()`) and shard-routing keys (`worker.rs`) 
 
 `executor.rs` (~1,629 lines), `writer.rs` (~1,402 lines), and `classifier.rs` (~990 lines) each mix multiple unrelated concerns. New features continue to enlarge the same files:
 
-- Split `executor.rs` by feature family: `executor/catalog.rs`, `executor/ivm.rs`, `executor/extension.rs`, `executor/session.rs`, `executor/meta.rs`; keep `execute_classified()` as a thin dispatcher
+- Split `executor.rs` by feature family: `executor/catalog.rs`, `executor/extension.rs`, `executor/session.rs`, `executor/meta.rs`; keep `execute_classified()` as a thin dispatcher
 - Split `catalog/writer.rs` into `writer/staged.rs` (MVCC staged mutations), `writer/stats.rs` (statistics methods), `writer/counters.rs` (ID allocation), and `writer/snapshot.rs` (snapshot commit)
 - Split `sql/classifier.rs` into `classifier/ast.rs`, `classifier/prefix.rs`, `classifier/table_selects.rs`
 - Enforce a lint that no new source file in these crates may exceed 600 lines
@@ -3275,7 +3253,7 @@ Group-by keys (`circuit.rs` `group_key()`) and shard-routing keys (`worker.rs`) 
 
 - Add a CI job that installs `dtolnay/rust-toolchain@1.93` and runs `cargo check --workspace --all-targets`; fail the PR if it does not compile on the declared MSRV
 - Add `licenses` to the `cargo deny check` CI command; define an allowed license list (Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, Unicode-3.0, ISC, CC0-1.0); add explicit exceptions with rationale for any dep outside the allow list
-- Extend the coverage CI job to include all nine production crates: `slateduck-pgwire`, `slateduck-ivm`, `slateduck-ffi`, `slateduck-sql`, `slateduck-datafusion`, `slateduck-sqlite-vfs` in addition to the existing `slateduck-catalog` and `slateduck-core`
+- Extend the coverage CI job to include all production crates: `slateduck-pgwire`, `slateduck-ffi`, `slateduck-sql`, `slateduck-datafusion`, `slateduck-sqlite-vfs` in addition to the existing `slateduck-catalog` and `slateduck-core`
 - Remove the two stale `advisory-not-detected` warnings from `deny.toml` (`RUSTSEC-2024-0370` and `RUSTSEC-2025-0057`)
 
 ### Metrics CLI and Documentation Alignment
@@ -3291,14 +3269,12 @@ Group-by keys (`circuit.rs` `group_key()`) and shard-routing keys (`worker.rs`) 
 
 - Resolve all `#[allow(dead_code)]` items in production code: implement the stub (link to the tracking roadmap item), delete the unreachable code, or replace with `todo!()` decorated with an issue reference
 - Audit `Cargo.toml` workspace dependencies: move `object_store = { features = ["aws", "gcp", "azure"] }` and `tokio = { features = ["full"] }` to per-crate opt-in features so that crates that do not need cloud backends or the full tokio runtime do not include them
-- Audit `#[allow(clippy::too_many_arguments)]` usages in `writer.rs` and `worker.rs`: introduce `FileColumnStatsInput`, `FileVariantStatsInput`, and `WorkerConfig` parameter structs to bring arg counts below the clippy threshold
+- Audit `#[allow(clippy::too_many_arguments)]` usages in `writer.rs`: introduce `FileColumnStatsInput` and `FileVariantStatsInput` parameter structs to bring arg counts below the clippy threshold
 
 ### Test and Documentation Deliverables
 
 - [ ] Benchmark: `list_data_files()` with secondary index at 10⁴ / 10⁵ files
-- [ ] Benchmark: IVM output batching at 100k rows, peak RSS limit test
 - [ ] Benchmark: STRING_AGG deletion at 100k / 1M group size
-- [ ] Benchmark: binary group key encoding at 1M rows/sec
 - [ ] CI: MSRV 1.93 check job
 - [ ] CI: `cargo deny check licenses`
 - [ ] CI: full workspace coverage reporting
@@ -3308,9 +3284,207 @@ Group-by keys (`circuit.rs` `group_key()`) and shard-routing keys (`worker.rs`) 
 
 ---
 
+## v0.22 — IVM Removal
+
+> Remove all Incremental View Maintenance code from SlateDuck. IVM is an architectural mismatch: it bolted a streaming aggregation engine onto a catalog store that was designed never to be in the data path. The `list_inlined_inserts` source reads all rows on every tick (O(total rows), not O(delta)), making it equivalent to or worse than full DuckDB re-execution. The wasmtime dependency alone adds ~30 s to clean builds. This release strips the feature entirely so the codebase reflects what SlateDuck actually is: a serverless DuckLake catalog backed by SlateDB.
+>
+> See [plans/incremental-view-maintenance-implementation-removal.md](plans/incremental-view-maintenance-implementation-removal.md) for the full per-file inventory and rationale.
+
+### Phase 1 — Delete the IVM Crate
+
+Delete `crates/slateduck-ivm/` in its entirety: 36 source files, 13 integration test files, and `Cargo.toml`. This is the largest single change in the release.
+
+- [ ] `rm -rf crates/slateduck-ivm/`
+
+### Phase 2 — Workspace Cargo.toml
+
+- [ ] Remove `"crates/slateduck-ivm"` from `[workspace].members`
+- [ ] Remove `wasmtime = "43"` from `[workspace.dependencies]` (used exclusively by `slateduck-ivm`)
+- [ ] Remove any IVM-related comments near those entries
+
+### Phase 3 — slateduck-core Cleanup
+
+**tags.rs** — Remove the four IVM catalog tags and their `TAG_REGISTRY` descriptors. Do **not** renumber existing tags; leave a gap comment `// 0x1D–0x20: removed (formerly IVM — v0.22)` for forward compatibility with old catalogs.
+
+- [ ] Remove `TAG_MATVIEW = 0x1D`
+- [ ] Remove `TAG_MATVIEW_DEP = 0x1E`
+- [ ] Remove `TAG_MATVIEW_CHECKPOINT = 0x1F`
+- [ ] Remove `TAG_MATVIEW_SHARD = 0x20`
+- [ ] Remove section header `// ─── v0.11 IVM Catalog Tables ──`
+- [ ] Remove `// Tags 0x24–0x2F reserved for future IVM-related tables.`
+- [ ] Remove four `TagDescriptor` entries from `TAG_REGISTRY`
+
+**rows.rs** — Remove IVM row types:
+
+- [ ] Remove `MatviewRow` struct (and all fields)
+- [ ] Remove `OutputMode` enum + `from_u32()`
+- [ ] Remove `MatviewDepRow` struct
+- [ ] Remove `MatviewCheckpointRow` struct
+- [ ] Remove `MatviewShardRow` struct
+
+**keys.rs** — Remove IVM key-encoding functions and their tests:
+
+- [ ] Remove `key_matview()`, `key_matview_dep()`, `key_matview_checkpoint()`, `key_matview_shard()`
+- [ ] Remove `prefix_matview()`, `prefix_matview_deps()`, `prefix_matview_checkpoints()`, `prefix_matview_shards()`
+- [ ] Remove tests: `matview_key_structure`, `matview_dep_key_structure`, `matview_checkpoint_key_structure`, `matview_shard_key_structure`, `matview_key_prefix_isolation`, `matview_checkpoint_seq_ordering`
+
+### Phase 4 — slateduck-catalog Cleanup
+
+**writer.rs** — Remove the `ClaimOutcome` enum and all matview write operations:
+
+- [ ] Remove `ClaimOutcome { Acquired, AlreadyOwned, Contended }` enum
+- [ ] Remove `create_matview()`, `drop_matview()`, `set_matview_status()`
+- [ ] Remove `update_matview_checkpoint()`, `claim_matview_shard()`, `extend_matview_lease()`
+- [ ] Remove `release_matview_lease()`, `set_matview_output_mode()`, `re_shard_matview()`
+
+**reader.rs** — Remove all matview read operations:
+
+- [ ] Remove `list_matviews()`, `get_matview()`, `get_matview_by_name()`
+- [ ] Remove `list_matview_deps()`, `list_matview_shards()`, `list_shards_for_worker()`
+- [ ] Remove `read_checkpoint_history()`, `matview_lag_ms()`, `matview_max_lag_ms()`
+
+**lib.rs** — Remove `ClaimOutcome` from `pub use` if re-exported.
+
+**Tests:**
+
+- [ ] Delete `tests/v011_tests.rs` entirely (19 IVM-focused tests)
+- [ ] Remove `ivm_integration_ingest_to_cdc_pipeline` section from `tests/v010_tests.rs`
+
+### Phase 5 — slateduck-sql Cleanup
+
+**classifier.rs** — Remove all IVM DDL statement variants and the classifier function:
+
+- [ ] Remove `StatementKind` variants: `CreateIncrementalMatview`, `DropIncrementalMatview`, `AlterIncrementalMatview`, `RefreshIncrementalMatviewFull`, `ShowMaterializedViews`, `ShowMatviewShards`, `ExplainMatview`
+- [ ] Remove `classify_ivm_prefix(sql)` function (~100 lines)
+- [ ] Remove the call site invoking `classify_ivm_prefix` in `classify()`
+- [ ] Remove section header comment `// ─── v0.11 IVM Statements ───`
+
+### Phase 6 — slateduck-pgwire Cleanup
+
+- [ ] Remove `slateduck-ivm = { path = "../slateduck-ivm" }` from `Cargo.toml`
+- [ ] Remove the IVM match arm in `executor.rs` routing IVM `StatementKind` variants to `SlateDuckError::Unsupported` (arms will cease to exist after Phase 5 anyway)
+- [ ] Remove `use slateduck_ivm::rate_limit::{...}` from `tests/security_tests.rs`
+- [ ] Remove IVM workflow comment from `tests/compat_tests.rs`
+
+### Phase 7 — slateduck-testkit Cleanup
+
+- [ ] Remove `slateduck-ivm = { path = "../slateduck-ivm" }` from `Cargo.toml`
+- [ ] Delete `src/harness.rs` (`IvmWorkerHarness`) if IVM-only; otherwise gut IVM content
+- [ ] Delete `src/oracle.rs` (`IvmOracle`) if IVM-only; otherwise gut IVM content
+- [ ] Remove IVM assertion helpers from `src/duckdb_harness.rs`
+- [ ] Remove IVM lease TTL support from `src/clock.rs` if IVM-only
+- [ ] Remove `IvmWorkerHarness` and `IvmOracle` re-exports from `lib.rs`
+
+### Phase 8 — Build and Test Gate
+
+After Phases 1–7, verify the workspace compiles and all remaining tests pass before touching docs:
+
+- [ ] `cargo build --workspace` — must compile with zero errors
+- [ ] `cargo test --workspace` — all remaining tests pass
+- [ ] `cargo clippy --workspace -- -Dwarnings` — zero warnings
+
+### Phase 9 — Documentation Removal
+
+Delete entirely:
+
+- [ ] `docs/architecture/ivm-plane.md`
+- [ ] `docs/concepts/incremental-views.md`
+- [ ] `docs/reference/sql-ivm.md`
+- [ ] `docs/operations/ivm-join-sizing.md`
+- [ ] `docs/operations/ivm-cost-control.md`
+- [ ] `docs/operations/ivm-backup-restore.md`
+- [ ] `docs/design-decisions/ivm-architecture.md`
+- [ ] `docs/design-decisions/ivm-on-immutable-substrate.md`
+- [ ] `docs/design-decisions/ivm-recursive-spike.md`
+- [ ] `docs/design-decisions/ivm-retrospective.md`
+
+Edit (remove IVM sections only):
+
+- [ ] `docs/architecture/streaming-pipeline.md` — remove IVM references
+- [ ] `docs/architecture/key-layout.md` — remove "v0.11 IVM Tag Extensions" section
+- [ ] `docs/reference/udfs.md` — remove IVM-related lines
+
+**mkdocs.yml:**
+
+- [ ] Remove all nav entries referencing deleted IVM docs files
+- [ ] Run `mkdocs build` to confirm no broken links
+
+### Phase 10 — Benchmarks and Test Fixtures
+
+Delete IVM benchmark files:
+
+- [ ] `benchmarks/v0.12-ivm-scaleout.json`
+- [ ] `benchmarks/v0.13-ivm-joins.json`
+- [ ] `benchmarks/v0.15-ivm-hardening.json`
+- [ ] `benchmarks/v0.17-ivm-hardening.json`
+- [ ] `benchmarks/v0.17-adaptive-calibration.json`
+
+Delete IVM test fixtures:
+
+- [ ] `tests/fixtures/matview/` (entire directory: `create_view.dat`, `checkpoint_history.dat`, `multi_shard.dat`, `dropped.dat`, `lease_acquired.dat`)
+
+### Phase 11 — README.md and ROADMAP.md
+
+**README.md:**
+
+- [ ] Remove IVM from the project tagline
+- [ ] Remove `slateduck-ivm` from the crate table
+- [ ] Remove the IVM Getting Started example
+- [ ] Remove the "Incremental View Maintenance" section entirely
+- [ ] Remove IVM rows from the roadmap summary table
+
+**ROADMAP.md** (this file):
+
+- [ ] Remove `## v0.11` through `## v0.17` milestones (IVM foundations through feature hardening)
+- [ ] Remove IVM test tier references (tiers 6a–6d, 6e–6f, tier 7) from cross-cutting sections
+- [ ] Remove IVM GA gate from v1.0 sign-off criteria (item 9)
+- [ ] Remove IVM documentation gate from v1.0 sign-off criteria (item 11)
+- [ ] Remove "DBSP/Feldera Dependency Strategy" from Cross-Cutting Concerns
+- [ ] Remove "IVM Worker Deployment Model" from Cross-Cutting Concerns
+- [ ] Remove "Graceful Shutdown & Rolling Updates (IVM Workers)" from Cross-Cutting Concerns
+- [ ] Remove `IvmWorkerHarness` and `IvmOracle` from `slateduck-testkit` harness list
+- [ ] Update the v0.10.0 note that says "its CDC output primitives feed into IVM" — remove IVM reference
+
+### Phase 12 — CI Cleanup
+
+**.github/workflows/ci.yml:**
+
+- [ ] Remove tier 7 comment and IVM fault injection test step
+- [ ] Remove IVM hardening test step
+- [ ] Remove IVM property test step
+- [ ] Remove benchmark regression check referencing IVM JSON files
+
+### Phase 13 — deny.toml Cleanup
+
+- [ ] Remove `RUSTSEC-2024-0370` advisory ignore (proc-macro-error via dbsp — IVM-only transitive dep)
+- [ ] Remove `RUSTSEC-2025-0057` advisory ignore (fxhash via wasmtime 43 — IVM-only transitive dep)
+- [ ] Run `cargo deny check` to confirm no new unhandled advisories
+
+### Phase 14 — Final Verification
+
+- [ ] `cargo build --workspace` — clean build
+- [ ] `cargo test --workspace` — all tests pass
+- [ ] `cargo clippy --workspace -- -Dwarnings` — zero warnings
+- [ ] `cargo deny check` — no new advisories
+- [ ] `rg -i "matview|slateduck.ivm|IvmWorker|IvmCircuit|ZDelta|TAG_MATVIEW" --type rust` — zero hits in production code
+- [ ] `mkdocs build --strict` — no broken links
+
+### Expected Impact
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Source lines removed | — | ~20,000 (src) + ~5,000 (tests) |
+| Crates removed | — | `slateduck-ivm` |
+| Workspace dependencies dropped | — | `wasmtime`, `dbsp` transitives |
+| Clean build time reduction | — | ~30 s (wasmtime compile) |
+| Binary eliminated | — | `slateduck-ivm` binary |
+| Advisories dropped from deny.toml | — | 2 (`RUSTSEC-2024-0370`, `RUSTSEC-2025-0057`) |
+
+---
+
 ## v1.0 — General Availability
 
-> Formal TPC-H @ SF10/SF100 benchmark publication, S3 Express acceptance gate, IVM correctness gate, and GA sign-off.
+> Formal TPC-H @ SF10/SF100 benchmark publication, S3 Express acceptance gate, and GA sign-off.
 
 ### Full Benchmark Suite
 
@@ -3342,20 +3516,17 @@ Measurable acceptance criteria that must all be green before v1.0 is tagged:
 6. All 28 DuckLake v1.0 catalog tables implemented, tag-allocated, fixture-covered, and explicitly status-tracked in `tags.rs`.
 7. Phase 0 validation gates pass on LocalFS, MinIO, S3 Standard, and S3 Express; results documented.
 8. `mkdocs build --strict` green; documentation site live with no stub pages.
-9. **IVM GA gate.** v0.11–v0.17 acceptance tests all green: single-shard demo, 8-shard scale-out, TPC-H Q1/Q3/Q5 maintained incrementally, window functions correct (partition-local and total-order), recursive CTEs stable under fixed-point iteration, correlated subqueries decorrelated, non-deterministic function capture reproducible on repair, WASM UDFs sandboxed under fuel + memory limits, 24 h soak with zero correctness drift, fault-injection suite passing, native `SlateDbTrace` benchmarked, operator playbook complete. IVM is feature-complete at v1.0: any SQL view that can be written against a static DuckDB table can be maintained incrementally by SlateDuck.
-10. **Real-world validation gate.** At least 30 days of dogfood deployment on a realistic workload (see Cross-Cutting Concerns: Real-World Validation Policy). Friction log reviewed and all blocking findings resolved. One external-to-the-team developer has successfully deployed IVM using only published docs.
-11. **IVM documentation gate.** Every IVM-track docs deliverable from v0.11–v0.17 is published and non-stub: `docs/concepts/incremental-views.md`, `docs/architecture/ivm-plane.md`, `docs/operations/incremental-materialized-views.md`, `docs/operations/ivm-cost-control.md`, `docs/operations/ivm-backup-restore.md`, `docs/operations/ivm-upgrades.md`, `docs/reference/sql-ivm.md`, `docs/design-decisions/ivm-on-immutable-substrate.md`, `docs/design-decisions/dbsp-dependency.md`, `docs/design-decisions/ivm-retrospective.md`, and a first-time-user tutorial under `docs/getting-started/first-materialized-view.md` that takes a user from `slateduck serve` to a working incremental view in < 15 minutes. `mkdocs build --strict` green.
-12. **Migration path from existing DuckLake deployments.** A documented and tested migration tool (`slateduck migrate-from-ducklake --source postgres://... --catalog s3://...`) reads an existing PostgreSQL- or SQLite-backed DuckLake catalog, replays its current snapshot into a fresh SlateDuck catalog (data files are not copied — they remain at their original object-store paths and are referenced by the new catalog), and emits a verification report. `docs/operations/migration-from-ducklake.md` covers cutover, rollback, and known-incompatibility surfaces. End-to-end tested against both PostgreSQL- and SQLite-backed source catalogs at SF1 scale.
+9. **Real-world validation gate.** At least 30 days of dogfood deployment on a realistic workload (see Cross-Cutting Concerns: Real-World Validation Policy). Friction log reviewed and all blocking findings resolved. One external-to-the-team developer has successfully deployed SlateDuck using only published docs.
+10. **Migration path from existing DuckLake deployments.** A documented and tested migration tool (`slateduck migrate-from-ducklake --source postgres://... --catalog s3://...`) reads an existing PostgreSQL- or SQLite-backed DuckLake catalog, replays its current snapshot into a fresh SlateDuck catalog (data files are not copied — they remain at their original object-store paths and are referenced by the new catalog), and emits a verification report. `docs/operations/migration-from-ducklake.md` covers cutover, rollback, and known-incompatibility surfaces. End-to-end tested against both PostgreSQL- and SQLite-backed source catalogs at SF1 scale.
 13. **World-class testing foundation.** All 10 test tiers from [plans/e2e-integration-tests.md](plans/e2e-integration-tests.md) are fully implemented and green:
     - **Tiers 1–3** (unit/property, catalog, PG-Wire): green on every PR — standard GitHub Actions runner
     - **Tiers 4–5** (MinIO object store, client compat): green on every merge to `main` — large runner (8-vCPU), Testcontainers MinIO
-    - **Tiers 6a–6d** (IVM single-shard through hardening): green on every merge to `main` for IVM paths
-    - **Tier 7** (fault injection — catalog, IVM worker, toxiproxy): green on every pre-release tag
-    - **Tier 8** (24 h soak, 16-shard scale-out, TPC-H SF10/SF100): green on pre-release — dedicated EC2 `c6i.4xlarge`
-    - **Tier 9** (security — credential isolation, TLS, auth, SQL injection guards): green on pre-release
-    - **Tier 10** (benchmark regression < 10% vs baseline): green on weekly scheduled CI
-    - `slateduck-testkit` ships all 6 harnesses: `MinioHarness`, `CatalogHarness`, `PgWireHarness`, `DuckDbHarness`, `IvmWorkerHarness`, `DeterministicClock`
-    - At least 150 named test functions across all tiers at GA; test inventory published in `docs/contributing/testing.md`
+    - **Tier 6** (fault injection — catalog, toxiproxy): green on every pre-release tag
+    - **Tier 7** (24 h soak, TPC-H SF10/SF100): green on pre-release — dedicated EC2 `c6i.4xlarge`
+    - **Tier 8** (security — credential isolation, TLS, auth, SQL injection guards): green on pre-release
+    - **Tier 9** (benchmark regression < 10% vs baseline): green on weekly scheduled CI
+    - `slateduck-testkit` ships 4 harnesses: `MinioHarness`, `CatalogHarness`, `PgWireHarness`, `DuckDbHarness`, `DeterministicClock`
+    - At least 100 named test functions across all tiers at GA; test inventory published in `docs/contributing/testing.md`
 
 ### Deliverables
 
@@ -3369,7 +3540,7 @@ Measurable acceptance criteria that must all be green before v1.0 is tagged:
 
 ## v0.10.0 — Streaming Ingest
 
-> **Note:** v0.10 is documented after v1.0 because it is an independent, parallel workstream. It can be implemented concurrently with the IVM track (v0.11–v0.17) and does not block or depend on IVM. Its CDC output primitives *feed into* IVM when both are deployed — see "Streaming Ingest + IVM Integration" below.
+> **Note:** v0.10 is documented after v1.0 because it is an independent, parallel workstream. It does not block or depend on other workstreams. Its CDC output primitives provide change-stream capabilities that can feed downstream consumers.
 
 > Kafka/NATS streaming pipelines, exactly-once delivery semantics, and pg-tide-relay integration for zero-infrastructure ingest paths from transactional sources to S3-backed data lakes.
 
@@ -3624,47 +3795,13 @@ When a new DuckLake spec version is published:
 - DuckDB minor bumps: new corpus capture required; explicit sign-off
 - DuckDB major bumps: treated as a new client; full re-capture
 
-### DBSP/Feldera Dependency Strategy
-
-The IVM track (v0.11–v0.17) depends on the `dbsp` crate from [Feldera](https://www.feldera.com/). Feldera is a venture-funded startup; the crate is open-source (MIT) but its maintenance trajectory is not guaranteed. This is the single most important external dependency in the entire roadmap.
-
-**Risk mitigation layers:**
-
-1. **Thin adapter boundary.** All DBSP interaction is confined to `slateduck-ivm/src/circuit.rs`. The rest of the crate (source, trace, worker, output) depends only on the adapter's trait surface. Swapping DBSP for another engine requires rewriting one module, not the entire crate.
-
-2. **Version pinning with `=` constraint.** Never float on `^` or `~`. Every DBSP upgrade is an explicit decision with a full regression pass.
-
-3. **Contingency: vendored fork.** If Feldera stops maintaining `dbsp` or makes breaking changes incompatible with SlateDuck's needs:
-   - Fork the crate at the last known-good version
-   - Maintain a `slateduck-dbsp` fork under `trickle-labs/` with only the operators SlateDuck uses (filter, map, aggregate, join, iterate, top_k, window)
-   - Strip unused operators and external storage backends; reduce surface area
-
-4. **Contingency: raw differential-dataflow.** If a fork becomes untenable:
-   - Replace DBSP with direct `differential-dataflow` + `timely-dataflow` (same underlying engine, more stable, maintained by Frank McSherry)
-   - Loses the SQL-to-circuit compiler but retains the core DD semantics
-   - The `plan.rs` → circuit lowering step becomes more manual but the architecture remains unchanged
-
-5. **Evaluation gate.** At the start of v0.11, spend one week evaluating:
-   - DBSP's current release cadence
-   - Feldera's financial health (recent funding, hiring/layoffs)
-   - Alternative: [arroyo](https://github.com/ArroyoSystems/arroyo) (Rust, streaming SQL)
-   - Decision: proceed with DBSP, proceed with alternative, or vendor from day one
-
-6. **Circuit compilation versioning.** Compiled DBSP circuits are derived from `view_sql` and the DBSP version active at compilation time. A DBSP minor/major upgrade may change operator semantics, serialized state layouts, or trace formats. To survive upgrades safely:
-   - Every `MatviewRow` carries a `circuit_compilation_version` field: `(dbsp_semver, slateduck_ivm_semver, compiled_at_snapshot)`
-   - On worker boot, if a held shard's `circuit_compilation_version` is older than the running worker's, the worker enters `recompile_pending` status, recompiles the circuit, validates by replaying the last N checkpoints from input snapshots (without overwriting output), and only then takes over
-   - If recompilation produces incompatible state layouts (detected by a self-check on the first recovered batch), the matview is marked `stale_dbsp_upgrade` and requires `REFRESH ... FULL`. Operators see this in `SHOW MATERIALIZED VIEWS` and the release notes for every DBSP-touching upgrade enumerate which view shapes are forward-compatible
-   - Upgrade docs: every release that bumps `dbsp` includes a compatibility matrix ("views using only filter/map/aggregate are forward-compatible; views using window functions require REFRESH FULL") in `CHANGELOG.md` and `docs/operations/ivm-upgrades.md`
-
-**Document the decision in `docs/design-decisions/dbsp-dependency.md` before v0.11 alpha. The circuit-versioning contract lives in the same document and is updated on every DBSP bump.**
-
 ### Real-World Validation Policy
 
 Synthetic benchmarks (TPC-H, TPC-DS) catch performance regressions and correctness bugs, but they do not catch usability gaps, cost surprises, or workflow friction. Before v1.0 GA:
 
-1. **Internal dogfood.** Run a real SlateDuck+IVM deployment against pg-tide's own analytics pipeline (if available) or a synthetic-but-realistic workload (e.g. GitHub event stream, NYC taxi stream) for ≥ 30 days.
+1. **Internal dogfood.** Run a real SlateDuck deployment against pg-tide's own analytics pipeline (if available) or a synthetic-but-realistic workload (e.g. GitHub event stream, NYC taxi stream) for ≥ 30 days.
 2. **Document surprises.** Any unexpected behaviour, cost spike, or operational friction discovered during dogfooding becomes a documented finding and must be resolved or explicitly accepted before GA.
-3. **User-experience review.** At least one developer unfamiliar with SlateDuck internals must successfully create, monitor, and debug a materialized view using only the published documentation. Their friction log becomes a documentation and UX backlog item.
+3. **User-experience review.** At least one developer unfamiliar with SlateDuck internals must successfully set up and query a catalog using only the published documentation. Their friction log becomes a documentation and UX backlog item.
 
 ### SlateDB Dependency Strategy
 
@@ -3704,91 +3841,9 @@ SlateDB is the storage foundation. Unlike DBSP (an IVM-track dependency), SlateD
 
 **Monitor:** SlateDB release cadence, open issue count, and maintainer activity quarterly. Document findings in `docs/design-decisions/slatedb-dependency.md`.
 
-### IVM Worker Deployment Model (Kubernetes)
-
-v0.9 defines K8s patterns for catalog writer and reader pods. IVM workers (v0.11+) are a third workload class with distinct requirements:
-
-**Pattern — IVM Worker Pool**
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata: { name: slateduck-ivm-worker }
-spec:
-  replicas: 4    # scale based on total shard count / shards-per-worker
-  template:
-    spec:
-      containers:
-      - name: slateduck-ivm
-        args:
-          - "serve"
-          - "--catalog=s3://bucket/catalogs/warehouse-a"
-          - "--state-prefix=s3://bucket/ivm-state/"
-          - "--shard-limit=8"         # max shards this worker claims
-          - "--lease-ttl=30s"
-        resources:
-          requests: { cpu: "2", memory: "4Gi" }
-          limits:   { cpu: "4", memory: "8Gi" }
-```
-
-**Key differences from writer/reader pods:**
-
-| Dimension | Writer/Reader | IVM Worker |
-|-----------|--------------|------------|
-| Catalog access | Writer: read+write, Reader: read | Read (base tables) + Write (checkpoints + output) |
-| State stores | None (stateless) | Per-shard SlateDB instances under `--state-prefix` |
-| Scaling unit | By session count | By total shard count across all matviews |
-| Statefulness | Stateless (S3 is the state) | Lease-based: holds shard leases, releases on shutdown |
-| Failure mode | Writer fencing handles crash | Lease expiry handles crash; peer workers pick up shards |
-
-**Autoscaling guidance:**
-
-- Scale on `max(ivm_lag_ms)` across all shards: if any shard exceeds 2× freshness target, add a worker
-- Scale on `ivm_shards_unassigned`: if > 0 for longer than 2× lease TTL, add a worker
-- Scale down conservatively: only remove a worker when it holds 0 shards for > 5 min (all its shards were redistributed)
-- Document HPA configuration in `docs/deployment/kubernetes.md`
-
-**IAM credentials for IVM workers:**
-
-| Permission | Scope |
-|-----------|-------|
-| Read base table data files | `s3://bucket/data/**` (read-only) |
-| Read/write catalog | `s3://bucket/catalogs/**` |
-| Read/write state stores | `s3://bucket/ivm-state/**` |
-| Write output data files | `s3://bucket/data/**` (write to output table paths) |
-
-IVM workers need broader access than reader pods because they read Parquet data *and* write output Parquet. Document this IAM template in `docs/deployment/credential-isolation.md`.
-
-### Graceful Shutdown & Rolling Updates (IVM Workers)
-
-IVM workers are long-lived processes that hold shard leases and buffer in-flight DBSP batches. Ungraceful shutdown (kill -9) is always safe (lease expiry + checkpoint recovery), but graceful shutdown minimizes wasted work and recovery time.
-
-**Graceful shutdown protocol (on SIGTERM):**
-
-1. Stop acquiring new shard leases
-2. Finish the current DBSP batch for all held shards (bounded by `--max-drain-time`, default 30 s)
-3. Flush and checkpoint all shard state stores
-4. Release all shard leases (set `lease_expires_at = now` via CAS)
-5. Exit 0
-
-If `--max-drain-time` elapses before step 2 completes, abandon in-progress batches (they will be replayed by the next worker from the checkpoint) and proceed to step 4.
-
-**Rolling update strategy:**
-
-- Kubernetes `maxSurge: 1, maxUnavailable: 0` ensures new workers start before old ones drain
-- `terminationGracePeriodSeconds: 60` (must exceed `--max-drain-time` + checkpoint flush time)
-- New workers wait for lease expiry on shards held by draining pods (lease TTL bounds the handoff window)
-- Zero-downtime guarantee: at no point are shards unprocessed for longer than `lease_ttl + max_drain_time`
-
-**Version upgrade (v0.11 → v0.12 etc.):**
-
-- State store format changes require a `state_format_version` key in each shard's state store
-- If a new worker binary encounters an incompatible state format, it runs `REFRESH ... FULL` for that shard rather than attempting migration (correctness over speed)
-- Document the upgrade path in `docs/operations/ivm-upgrades.md`
-
 ### Scale Testing Infrastructure
 
-The IVM acceptance criteria include tests that cannot run in normal CI: 24 h soaks, 1 TB inputs, 1M-edge graphs, and 16-shard scale-out benchmarks. These require dedicated infrastructure.
+Some acceptance criteria cannot run in normal CI: 24 h soaks, 1 TB inputs, and TPC-H SF100 benchmarks. These require dedicated infrastructure.
 
 **Testing tiers:**
 
@@ -3796,8 +3851,8 @@ The IVM acceptance criteria include tests that cannot run in normal CI: 24 h soa
 |------|-----------|-------|---------|
 | CI (every PR) | Unit tests, property tests, single-shard correctness on LocalFS | GitHub Actions (standard runner) | Push/PR |
 | Integration (every merge to main) | Multi-shard correctness, MinIO end-to-end, fault injection (<1h) | GitHub Actions (large runner, 8 vCPU) | Merge to main |
-| Scale (weekly / pre-release) | 16-shard scale-out, 1 TB input, TPC-DS full suite, cost measurement | Dedicated EC2 (c6i.4xlarge) + S3 Standard | Scheduled / manual |
-| Soak (pre-release) | 24 h continuous ingest, fault injection every 15 min, correctness drift check | Dedicated EC2 + S3 Express | Manual gate before GA |
+| Scale (weekly / pre-release) | 1 TB input, TPC-DS full suite, cost measurement | Dedicated EC2 (c6i.4xlarge) + S3 Standard | Scheduled / manual |
+| Soak (pre-release) | 24 h continuous ingest, fault injection every 15 min | Dedicated EC2 + S3 Express | Manual gate before GA |
 
 **Infrastructure requirements:**
 
