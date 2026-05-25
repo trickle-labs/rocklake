@@ -11,11 +11,6 @@
 //!   actual HTTP is left to the calling application)
 //! - **`slateduck-cdc` sidecar support**: a polling loop that tails the
 //!   catalog and exports each new snapshot diff
-//!
-//! # IVM-aware CDC
-//!
-//! Materialized-view output snapshot diffs are exported identically to base
-//! tables — the CDC producer treats them as ordinary tables.
 
 use serde::{Deserialize, Serialize};
 use slateduck_core::mvcc::SnapshotId;
