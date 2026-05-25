@@ -14,6 +14,7 @@ pub mod export;
 pub mod gc;
 pub mod init;
 pub mod inspect;
+pub mod manifest;
 pub mod metrics;
 pub mod migrate;
 pub mod partition;
@@ -23,6 +24,7 @@ pub mod repair;
 pub mod store;
 pub mod streaming;
 pub mod verify;
+pub mod wal;
 pub mod warmup;
 pub mod writer;
 

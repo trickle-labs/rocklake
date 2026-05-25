@@ -4524,6 +4524,7 @@ dependencies = [
  "slatedb",
  "slateduck-catalog",
  "slateduck-core",
+ "slateduck-ivm",
  "slateduck-sql",
  "tempfile",
  "thiserror 2.0.18",

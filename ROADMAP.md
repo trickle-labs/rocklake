@@ -63,8 +63,8 @@ binding on every roadmap release below.
 | **v0.11 — IVM Foundations** | Catalog schema additions (tags 0x1D–0x20), `slateduck-ivm` crate, single-shard GROUP BY views, end-to-end demo | Done |
 | **v0.12 — IVM Scale-Out** | Shard lease management, per-shard SlateDB state stores, multi-shard scale-out, re-sharding | Done |
 | **v0.13 — IVM Joins** | Broadcast, co-partitioned, and re-shuffle join strategies; TPC-H Q3/Q4/Q5 | Done |
-| **v0.14 — IVM Join Correctness** | EC-01 phantom-row fix, aggregate tier classification (BOOL_AND/OR semi-algebraic), volatility validation (hardcoded table), property-based \"differential ≡ full\" oracle. **Blocks v0.15+** | Planning |
-| **v0.15 — IVM Operational Hardening** | Multi-view DAG (first), native `SlateDbTrace`, cost optimization, cost guardrails (opt-in freshness degradation), observability, fault injection, rate limiting, 24 h soak | Planning |
+| **v0.14 — IVM Join Correctness** | EC-01 phantom-row fix, aggregate tier classification (BOOL_AND/OR semi-algebraic), volatility validation (hardcoded table), property-based \"differential ≡ full\" oracle. **Blocks v0.15+** | Done |
+| **v0.15 — IVM Operational Hardening** | Multi-view DAG (first), native `SlateDbTrace`, cost optimization, cost guardrails (opt-in freshness degradation), observability, fault injection, rate limiting, 24 h soak | Done |
 | **v0.16 — IVM Operator Completeness** | Window functions, ORDER BY, LIMIT/top-N, correlated subqueries (DataFusion dep), recursive CTEs (single-shard coordinator + spike gate), non-det capture | Planning |
 | **v0.17 — IVM Feature Hardening** | WASM UDFs (wasmtime pooled), adaptive cost-mode (empirically calibrated against full matrix), ref-counted DISTINCT (MAX semantics), Tier 8 24h soak (IVM GA gate) | Planning |
 | **v0.18 — DuckLake Catalog Standard Interface** | `table_changes()` CDC function, stable `rowid`, snapshot lease, `NOTIFY` event-driven, extension schema (first-class catalog tag `0x23`), opaque mixed frontiers; validated first with pg-trickle | Planning |
@@ -2283,16 +2283,16 @@ The foundational correctness harness that all future IVM tests depend on: after 
 
 Foundation for views that read from other materialized views (`CREATE INCREMENTAL MATERIALIZED VIEW b AS SELECT … FROM a` where `a` is itself a materialized view). Without topological ordering and diamond detection, convergent views compute deltas against inconsistent intermediate state. See [plans/pg-trickle.md](plans/pg-trickle.md) §5.
 
-- [ ] New `crates/slateduck-ivm/src/dag.rs`: Kahn's topological sort (O(V+E)) over the view dependency graph; guarantees upstream views are fully refreshed before any downstream consumer reads their delta
-- [ ] Diamond detection: during topo-sort, track the set of ancestor root nodes per node; a node reachable from the same root via two or more paths is a diamond apex; O(V+E)
-- [ ] Persist view dependency edges in `slateduck-catalog` (tag in existing matview key range; see `plans/blueprint.md` §9.1)
-- [ ] Frontier vector clocks in `state_store.rs`: `BTreeMap<SourceId, Sequence>` per view per shard, persisted durably; worker reads on (re)start and skips CDC events with `seq ≤ frontier[source]`
-- [ ] Diamond `Slowest` consistency policy: a convergence view (diamond apex D) refreshes only when **all** upstream views have advertised `frontier ≥ F` via their state stores; purely frontier-driven, no SAVEPOINT or advisory lock needed
-- [ ] `EXPLAIN MATERIALIZED VIEW v` extended to show dependency graph, detected diamonds, and current frontier per source
-- [ ] Unit test: diamond topology (A→B, A→C, B→D, C→D); assert D never refreshes with mismatched B/C frontiers
-- [ ] Unit test: linear chain (A→B→C); assert C output matches DuckDB full recompute at each step after updates to A propagate through B
-- [ ] Unit test: concurrent base-table updates (A and B both updated in the same refresh window; C depends on both); assert C never reads A's new frontier with B's old frontier or vice versa
-- [ ] Unit test: view drop cascade; dropping B (when C depends on B) returns a clear error naming the dependent views; C remains intact
+- [x] New `crates/slateduck-ivm/src/dag.rs`: Kahn's topological sort (O(V+E)) over the view dependency graph; guarantees upstream views are fully refreshed before any downstream consumer reads their delta
+- [x] Diamond detection: during topo-sort, track the set of ancestor root nodes per node; a node reachable from the same root via two or more paths is a diamond apex; O(V+E)
+- [x] Persist view dependency edges in `slateduck-catalog` (tag in existing matview key range; see `plans/blueprint.md` §9.1)
+- [x] Frontier vector clocks in `state_store.rs`: `BTreeMap<SourceId, Sequence>` per view per shard, persisted durably; worker reads on (re)start and skips CDC events with `seq ≤ frontier[source]`
+- [x] Diamond `Slowest` consistency policy: a convergence view (diamond apex D) refreshes only when **all** upstream views have advertised `frontier ≥ F` via their state stores; purely frontier-driven, no SAVEPOINT or advisory lock needed
+- [x] `EXPLAIN MATERIALIZED VIEW v` extended to show dependency graph, detected diamonds, and current frontier per source
+- [x] Unit test: diamond topology (A→B, A→C, B→D, C→D); assert D never refreshes with mismatched B/C frontiers
+- [x] Unit test: linear chain (A→B→C); assert C output matches DuckDB full recompute at each step after updates to A propagate through B
+- [x] Unit test: concurrent base-table updates (A and B both updated in the same refresh window; C depends on both); assert C never reads A's new frontier with B's old frontier or vice versa
+- [x] Unit test: view drop cascade; dropping B (when C depends on B) returns a clear error naming the dependent views; C remains intact
 
 ### Native `SlateDbTrace` Implementation
 
@@ -2303,21 +2303,21 @@ Implement native SlateDB persistence for the IVM trace layer. The v0.11 delivera
 
 > **Risk: DBSP trait stability (Option B only).** DBSP uses GATs internally; some traits may not be object-safe in stable Rust. The pre-v0.14 spike resolves this. If traits are not externally implementable, the fallback is a `SlateDbBatch` adapter wrapping DBSP's in-memory batch with SlateDB-backed spill-to-disk on memory pressure.
 
-- [ ] Implement based on the DBSP spike outcome recorded in `docs/design-decisions/ivm-architecture.md` (spike runs pre-v0.14; do not re-run here)
-- [ ] `SlateDbTrace` implements DBSP's persistent `Trace`, `Batch`, and `Cursor` traits (or fallback adapter if spike shows infeasibility)
-- [ ] Frontier advancement mapped to SlateDB compaction
-- [ ] Direct mapping of DBSP batch boundaries to SlateDB SST flushes
-- [ ] Benchmark: native trace ≥ 1.5× faster than v0.11 baseline at equal correctness
-- [ ] Property-tested against DBSP's reference in-memory trace: 500 random DML sequences against TPC-H Q1; `SlateDbTrace` output multiset must be identical to the in-memory reference trace at every snapshot; tests in `crates/slateduck-ivm/tests/trace_property_tests.rs`
+- [x] Implement based on the DBSP spike outcome recorded in `docs/design-decisions/ivm-architecture.md` (spike runs pre-v0.14; do not re-run here)
+- [x] `SlateDbTrace` implements DBSP's persistent `Trace`, `Batch`, and `Cursor` traits (or fallback adapter if spike shows infeasibility)
+- [x] Frontier advancement mapped to SlateDB compaction
+- [x] Direct mapping of DBSP batch boundaries to SlateDB SST flushes
+- [x] Benchmark: native trace ≥ 1.5× faster than v0.11 baseline at equal correctness
+- [x] Property-tested against DBSP's reference in-memory trace: 500 random DML sequences against TPC-H Q1; `SlateDbTrace` output multiset must be identical to the in-memory reference trace at every snapshot; tests in `crates/slateduck-ivm/tests/trace_property_tests.rs`
 
 ### Cost Optimization
 
 The naive implementation flushes a SlateDB batch on every input snapshot, generating thousands of small SSTs per day per shard. Mitigations:
 
-- [ ] Coalesce flushes: only flush when `time-since-last-flush > freshness/2` *and* buffered work exists
-- [ ] `await_durable = false` for non-checkpoint writes; `await_durable = true` only at checkpoint boundaries
-- [ ] Aggressive compaction policy for matview state stores (configurable per matview)
-- [ ] Documented cost model: API calls per million input rows × shard count × freshness × state amplification factor (accumulated state size / delta size), with empirical numbers on S3 Standard, S3 Express, GCS, R2. State amplification matters because compaction reads/writes accumulated state, not just the delta
+- [x] Coalesce flushes: only flush when `time-since-last-flush > freshness/2` *and* buffered work exists
+- [x] `await_durable = false` for non-checkpoint writes; `await_durable = true` only at checkpoint boundaries
+- [x] Aggressive compaction policy for matview state stores (configurable per matview)
+- [x] Documented cost model: API calls per million input rows × shard count × freshness × state amplification factor (accumulated state size / delta size), with empirical numbers on S3 Standard, S3 Express, GCS, R2. State amplification matters because compaction reads/writes accumulated state, not just the delta
 
 **`--cost-mode` propagation to IVM workers.** v0.9's `--cost-mode {conservative|balanced|latency}` flag (originally scoped to `slateduck-pgwire`) is extended to `slateduck-ivm serve`. Mode-to-default mapping:
 
@@ -2331,10 +2331,10 @@ The naive implementation flushes a SlateDB batch on every input snapshot, genera
 
 Per-view `WITH (...)` options always override mode defaults. Documented in `docs/operations/ivm-cost-control.md`.
 
-- [ ] `slateduck-ivm serve --cost-mode=...` accepted and honoured
-- [ ] Mode defaults documented per knob; per-view overrides take precedence
-- [ ] Cost-mode interaction matrix tested in cost-model regression suite
-- [ ] **S3 API call count gate**: after TPC-H Q1 SF1 at balanced mode for 1000 input batches, assert `ivm_s3_puts_total + ivm_s3_gets_total` per million input rows ≤ documented cost model upper bound from `benchmarks/v0.15-ivm-hardening.json`; a regression > 20% vs baseline fails CI
+- [x] `slateduck-ivm serve --cost-mode=...` accepted and honoured
+- [x] Mode defaults documented per knob; per-view overrides take precedence
+- [x] Cost-mode interaction matrix tested in cost-model regression suite
+- [x] **S3 API call count gate**: after TPC-H Q1 SF1 at balanced mode for 1000 input batches, assert `ivm_s3_puts_total + ivm_s3_gets_total` per million input rows ≤ documented cost model upper bound from `benchmarks/v0.15-ivm-hardening.json`; a regression > 20% vs baseline fails CI
 
 ### State Store Backup & Restore
 
@@ -2342,24 +2342,24 @@ The v0.4 checkpoint API backs up the catalog. Per-shard IVM state stores under `
 
 > **Design note:** State stores *are already* in object storage (S3/GCS/R2). A "backup" is not a copy to a separate location — it's a **compaction pin** (preventing SlateDB from advancing past a known-good restore point) plus a manifest recording the pinned SST set. Restore means pointing a new state store at the pinned SSTs.
 
-- [ ] `slateduck-ivm backup --matview v --shard N` issues SlateDB's native `Checkpoint` against the shard's state store and writes a manifest (JSON listing pinned SSTs + frontier) to `{state_prefix}/backups/{matview}/{shard}/{timestamp}.json`
-- [ ] Compaction respects pinned SSTs: pinned files not deleted until the pin is released
-- [ ] `slateduck-ivm restore --matview v --shard N --from {timestamp}` resets the shard's active state to the pinned checkpoint; the next worker to claim the shard's lease resumes from the restored frontier
-- [ ] If a state store is missing entirely at lease-claim time, the worker emits `WARN`-level `state_store_missing` and waits for an operator decision (auto-rebuild gated behind `--auto-rebuild-on-loss` flag, default off) — never silently recomputes terabytes of state
-- [ ] Documented backup cadence guidance: daily for large matviews; on-demand before any infra migration
-- [ ] `docs/operations/ivm-backup-restore.md` published
-- [ ] **Backup/restore correctness test**: run 1000 CDC events; take backup; inject 200 more events; restore from backup; restart worker; assert the worker processes exactly the 200 post-backup events (not the pre-backup 1000) and final output matches DuckDB reference — the persisted frontier prevents re-processing
+- [x] `slateduck-ivm backup --matview v --shard N` issues SlateDB's native `Checkpoint` against the shard's state store and writes a manifest (JSON listing pinned SSTs + frontier) to `{state_prefix}/backups/{matview}/{shard}/{timestamp}.json`
+- [x] Compaction respects pinned SSTs: pinned files not deleted until the pin is released
+- [x] `slateduck-ivm restore --matview v --shard N --from {timestamp}` resets the shard's active state to the pinned checkpoint; the next worker to claim the shard's lease resumes from the restored frontier
+- [x] If a state store is missing entirely at lease-claim time, the worker emits `WARN`-level `state_store_missing` and waits for an operator decision (auto-rebuild gated behind `--auto-rebuild-on-loss` flag, default off) — never silently recomputes terabytes of state
+- [x] Documented backup cadence guidance: daily for large matviews; on-demand before any infra migration
+- [x] `docs/operations/ivm-backup-restore.md` published
+- [x] **Backup/restore correctness test**: run 1000 CDC events; take backup; inject 200 more events; restore from backup; restart worker; assert the worker processes exactly the 200 post-backup events (not the pre-backup 1000) and final output matches DuckDB reference — the persisted frontier prevents re-processing
 
 ### Cost Guardrails (User-Facing)
 
 IVM can generate real S3 API costs at scale. Users need visibility and protection *before* they get an unexpected bill.
 
-- [ ] **Cost estimator at view creation.** `EXPLAIN MATERIALIZED VIEW v` includes estimated monthly S3 API cost based on: input rate (from recent snapshot commit frequency), shard count, freshness target, and empirical cost-per-million-rows from the v0.15 cost model
-- [ ] **Per-view cost budget.** `WITH (monthly_cost_limit = '$50')` option; when projected cost exceeds budget, surface warning in `SHOW MATERIALIZED VIEWS` and emit Prometheus alert
-- [ ] **Opt-in freshness degradation.** `WITH (degrade_freshness_on_budget = true)` (default **false**); when enabled AND cost exceeds budget, freshness widens gracefully (from 5 s toward 60 s) rather than stopping the view. Workers reduce flush frequency proportionally. View remains correct, just staler. **Default behaviour without this flag: view continues at declared freshness and operator is alerted; no silent SLA change**
-- [ ] **Per-worker cost tracking.** `slateduck_ivm_estimated_monthly_cost{matview, shard}` metric; `slateduck-ivm doctor` reports per-view projected monthly cost
-- [ ] **Cost ceiling alert.** If any view's projected monthly cost exceeds the budget by 2× (burst scenario), emit `WARN`-level log and Prometheus alert. No automatic stop (correctness over cost), but operator visibility is immediate
-- [ ] **Documentation.** `docs/operations/ivm-cost-control.md`: how to estimate costs before creating views, how budgets work, how to diagnose cost spikes, rules of thumb (freshness↑ = cost↓, shards↓ = cost↓)
+- [x] **Cost estimator at view creation.** `EXPLAIN MATERIALIZED VIEW v` includes estimated monthly S3 API cost based on: input rate (from recent snapshot commit frequency), shard count, freshness target, and empirical cost-per-million-rows from the v0.15 cost model
+- [x] **Per-view cost budget.** `WITH (monthly_cost_limit = '$50')` option; when projected cost exceeds budget, surface warning in `SHOW MATERIALIZED VIEWS` and emit Prometheus alert
+- [x] **Opt-in freshness degradation.** `WITH (degrade_freshness_on_budget = true)` (default **false**); when enabled AND cost exceeds budget, freshness widens gracefully (from 5 s toward 60 s) rather than stopping the view. Workers reduce flush frequency proportionally. View remains correct, just staler. **Default behaviour without this flag: view continues at declared freshness and operator is alerted; no silent SLA change**
+- [x] **Per-worker cost tracking.** `slateduck_ivm_estimated_monthly_cost{matview, shard}` metric; `slateduck-ivm doctor` reports per-view projected monthly cost
+- [x] **Cost ceiling alert.** If any view's projected monthly cost exceeds the budget by 2× (burst scenario), emit `WARN`-level log and Prometheus alert. No automatic stop (correctness over cost), but operator visibility is immediate
+- [x] **Documentation.** `docs/operations/ivm-cost-control.md`: how to estimate costs before creating views, how budgets work, how to diagnose cost spikes, rules of thumb (freshness↑ = cost↓, shards↓ = cost↓)
 
 ### Incremental Delta Optimizations (Performance)
 
@@ -2367,159 +2367,159 @@ Performance optimizations needed to meet the "steady-state S3 PUT cost ≤ 2×" 
 
 **Change-buffer compaction.** Consecutive INSERT/DELETE pairs on the same `row_id` cancel out; applying this before writing to the trace cuts buffer size 50–90% on high-update workloads.
 
-- [ ] In `source.rs`: coalesce delta batches before landing in `IvmTrace`; cancel `(INSERT row_id=X) + (DELETE row_id=X)` pairs within the same batch
-- [ ] Expose compaction ratio (`pairs_cancelled / total_events`) per refresh cycle in metrics
+- [x] In `source.rs`: coalesce delta batches before landing in `IvmTrace`; cancel `(INSERT row_id=X) + (DELETE row_id=X)` pairs within the same batch
+- [x] Expose compaction ratio (`pairs_cancelled / total_events`) per refresh cycle in metrics
 
 **Predicate pushdown into delta scan.** When a `Filter` sits directly above a `Scan`, push the WHERE predicate into the CDC fetch so unfiltered delta rows are never materialised.
 
-- [ ] In `plan.rs`: detect `Filter(Scan(R))` pattern; pass predicate as parameter to the CDC source read
-- [ ] For UPDATE rows: apply predicate to both `old_` and `new_` column values
-- [ ] Correctness test: view with selective WHERE; confirm delta bytes read ∝ matching rows, not total delta size
+- [x] In `plan.rs`: detect `Filter(Scan(R))` pattern; pass predicate as parameter to the CDC source read
+- [x] For UPDATE rows: apply predicate to both `old_` and `new_` column values
+- [x] Correctness test: view with selective WHERE; confirm delta bytes read ∝ matching rows, not total delta size
 
 **Semi-join key pre-filter.** For `delta_orders ⋈ customers`, project `DISTINCT join_key` from the delta side first and use it as the probe set; turns a full probe-side scan into an indexed lookup.
 
-- [ ] In `join.rs`: when probe side is a full-table scan and build side is a delta, inject a `DISTINCT join_key` pre-filter on the probe side before `hash_join_batch`
-- [ ] Benchmark: join throughput with and without pre-filter on TPC-H Q3 at varying delta sizes
+- [x] In `join.rs`: when probe side is a full-table scan and build side is a delta, inject a `DISTINCT join_key` pre-filter on the probe side before `hash_join_batch`
+- [x] Benchmark: join throughput with and without pre-filter on TPC-H Q3 at varying delta sizes
 
 **Append-only fast path.** For INSERT-only views, skip the negative-multiplicity path entirely (~30% throughput gain).
 
-- [ ] Detect INSERT-only workload automatically (no DELETE or UPDATE events in last N batches; N configurable)
-- [ ] Skip negative-multiplicity accumulation in `IvmTrace`; use plain INSERT accumulation
-- [ ] Automatically revert to full bidirectional mode on first DELETE or UPDATE event
+- [x] Detect INSERT-only workload automatically (no DELETE or UPDATE events in last N batches; N configurable)
+- [x] Skip negative-multiplicity accumulation in `IvmTrace`; use plain INSERT accumulation
+- [x] Automatically revert to full bidirectional mode on first DELETE or UPDATE event
 
 **Auto sort-by on join and group-by keys.** Layout Parquet output files sorted by GROUP BY and equi-join keys so downstream DuckDB scans can use sorted-file skip-scan.
 
-- [ ] `parquet.rs::CompactionPolicy`: add `sort_keys: Vec<ColumnName>` field
-- [ ] At view creation, auto-populate `sort_keys` from the SQL plan's GROUP BY and equi-join key columns
-- [ ] Write output Parquet with `sorting_columns` metadata
+- [x] `parquet.rs::CompactionPolicy`: add `sort_keys: Vec<ColumnName>` field
+- [x] At view creation, auto-populate `sort_keys` from the SQL plan's GROUP BY and equi-join key columns
+- [x] Write output Parquet with `sorting_columns` metadata
 
 ### Backpressure & Per-Shard Publication Modes
 
-- [ ] Backpressure protocol: workers stall ingest when output plane is N snapshots behind (default N = 100)
-- [ ] Per-shard `output_mode = 'per_shard'` publishes individual shard frontiers; query layer merges
-- [ ] Skewed-shard detection: emit warning when one shard's lag exceeds 5× the median
-- [ ] Hot-key mitigation guidance in operator playbook
+- [x] Backpressure protocol: workers stall ingest when output plane is N snapshots behind (default N = 100)
+- [x] Per-shard `output_mode = 'per_shard'` publishes individual shard frontiers; query layer merges
+- [x] Skewed-shard detection: emit warning when one shard's lag exceeds 5× the median
+- [x] Hot-key mitigation guidance in operator playbook
 
 ### Delete-File Support
 
-- [ ] Input source emits `(row, -1)` updates for rows newly covered by delete files
-- [ ] Aggregations over deletable base tables correctly subtract deleted rows
-- [ ] Documented constraint: large delete campaigns may require `REFRESH ... FULL` for non-monoidal aggregates
-- [ ] Tested with DuckLake delete files at various scales
+- [x] Input source emits `(row, -1)` updates for rows newly covered by delete files
+- [x] Aggregations over deletable base tables correctly subtract deleted rows
+- [x] Documented constraint: large delete campaigns may require `REFRESH ... FULL` for non-monoidal aggregates
+- [x] Tested with DuckLake delete files at various scales
 
 ### Schema Evolution
 
-- [ ] Adding a column to a base table the view does not reference: no-op
-- [ ] Adding a column the view does reference: view marked stale, requires `REFRESH ... FULL`
-- [ ] Column type change: view marked stale
-- [ ] Renaming a column referenced by a view: view marked stale (re-creation required)
-- [ ] **Dropping a column referenced by a view: view marked `broken` (distinct from `stale`)**; `REFRESH ... FULL` cannot fix it because the SQL is un-parseable. Operator must `DROP` and re-create the view with corrected SQL. `SHOW MATERIALIZED VIEWS` shows `status = 'broken'` with the missing column named in the status message
-- [ ] All stale/broken states surfaced in `SHOW MATERIALIZED VIEWS` with a clear `status` column and human-readable reason
-- [ ] **Schema evolution tests** (`crates/slateduck-ivm/tests/schema_evolution_tests.rs`): 5 tests — add column not referenced by view (no-op; view stays fresh); add column referenced by view (stale; `REFRESH FULL` recovers); type-change on referenced column (stale); rename referenced column (stale; re-creation required); drop referenced column (broken; `REFRESH FULL` returns clear error naming the missing column)
+- [x] Adding a column to a base table the view does not reference: no-op
+- [x] Adding a column the view does reference: view marked stale, requires `REFRESH ... FULL`
+- [x] Column type change: view marked stale
+- [x] Renaming a column referenced by a view: view marked stale (re-creation required)
+- [x] **Dropping a column referenced by a view: view marked `broken` (distinct from `stale`)**; `REFRESH ... FULL` cannot fix it because the SQL is un-parseable. Operator must `DROP` and re-create the view with corrected SQL. `SHOW MATERIALIZED VIEWS` shows `status = 'broken'` with the missing column named in the status message
+- [x] All stale/broken states surfaced in `SHOW MATERIALIZED VIEWS` with a clear `status` column and human-readable reason
+- [x] **Schema evolution tests** (`crates/slateduck-ivm/tests/schema_evolution_tests.rs`): 5 tests — add column not referenced by view (no-op; view stays fresh); add column referenced by view (stale; `REFRESH FULL` recovers); type-change on referenced column (stale); rename referenced column (stale; re-creation required); drop referenced column (broken; `REFRESH FULL` returns clear error naming the missing column)
 
 ### Exactly-Once Output Snapshots
 
-- [ ] Each output snapshot tagged with `(matview_id, target_frontier)` in its catalog metadata
-- [ ] `CatalogWriter` CAS prevents a duplicate snapshot for the same `(matview_id, target_frontier)`
-- [ ] Worker restart mid-output-commit cannot produce duplicate data files
-- [ ] Tested under fault injection: kill -9 during every Parquet write and catalog commit step
+- [x] Each output snapshot tagged with `(matview_id, target_frontier)` in its catalog metadata
+- [x] `CatalogWriter` CAS prevents a duplicate snapshot for the same `(matview_id, target_frontier)`
+- [x] Worker restart mid-output-commit cannot produce duplicate data files
+- [x] Tested under fault injection: kill -9 during every Parquet write and catalog commit step
 
 ### Observability
 
-- [ ] Per-matview metrics: `ivm_lag_ms`, `ivm_throughput_rps`, `ivm_state_size_bytes`, `ivm_s3_puts_total`, `ivm_s3_gets_total`, per shard
-- [ ] OpenTelemetry traces from input read → DBSP circuit → state write → output commit
-- [ ] `slateduck-ivm doctor` CLI: reports stuck shards, expired leases, lagging frontiers, cost outliers
-- [ ] Prometheus exporter compatible with existing `slateduck-pgwire` observability story
+- [x] Per-matview metrics: `ivm_lag_ms`, `ivm_throughput_rps`, `ivm_state_size_bytes`, `ivm_s3_puts_total`, `ivm_s3_gets_total`, per shard
+- [x] OpenTelemetry traces from input read → DBSP circuit → state write → output commit
+- [x] `slateduck-ivm doctor` CLI: reports stuck shards, expired leases, lagging frontiers, cost outliers
+- [x] Prometheus exporter compatible with existing `slateduck-pgwire` observability story
 
 ### `REFRESH ... FULL` & Repair
 
-- [ ] `REFRESH INCREMENTAL MATERIALIZED VIEW v FULL` drops state stores, rebuilds from scratch in parallel
-- [ ] `slateduck-ivm repair --matview v --shard N` recomputes a single shard from base data
-- [ ] Repair operations leave a durable audit trail in `matview_checkpoints`
+- [x] `REFRESH INCREMENTAL MATERIALIZED VIEW v FULL` drops state stores, rebuilds from scratch in parallel
+- [x] `slateduck-ivm repair --matview v --shard N` recomputes a single shard from base data
+- [x] Repair operations leave a durable audit trail in `matview_checkpoints`
 
 ### Fault Injection Test Suite
 
-- [ ] `fail` crate (`fail_point!` macros) harness covers: worker death mid-batch, mid-commit, mid-output; lease expiry races; S3 partial failures; SlateDB compaction during checkpoint
-- [ ] All scenarios survive a 1-hour soak test without correctness loss
-- [ ] Documented in `docs/contributing/testing.md`
+- [x] `fail` crate (`fail_point!` macros) harness covers: worker death mid-batch, mid-commit, mid-output; lease expiry races; S3 partial failures; SlateDB compaction during checkpoint
+- [x] All scenarios survive a 1-hour soak test without correctness loss
+- [x] Documented in `docs/contributing/testing.md`
 
 ### Testing: Tier 6d (Hardening), Tier 7 (Fault Injection), Tier 9 (Security) & Tier 10 (Benchmark Regression)
 
-- [ ] **Tier 6d — IVM hardening tests** (`crates/slateduck-ivm/tests/hardening_tests.rs`): 5 tests — repair shard rebuilds from base, `REFRESH ... FULL` rebuilds all shards, `doctor` identifies stuck/expired shards, exactly-once output under output-plane restart, backup/restore (restored frontier prevents event re-processing)
-- [ ] **Tier 6d — Schema evolution tests** (`crates/slateduck-ivm/tests/schema_evolution_tests.rs`): 5 tests — add-column no-op, add-referenced-column stale, type-change stale, rename stale, drop-referenced broken + clear error on `REFRESH FULL`
-- [ ] **Tier 6d — Frontier durability tests** (`crates/slateduck-ivm/tests/durability_tests.rs`): 3 tests — SIGKILL worker at T=0 (before any CDC), T=100 events, T=500 events; restart worker; assert loaded frontier skips already-processed events and final output is identical to uninterrupted run (no duplicate rows, no missing rows). Note: this is distinct from fault-injection tests — those test crashes mid-batch; these test that the frontier itself is durable across clean restarts
-- [ ] **Tier 7 — IVM fault injection** (`crates/slateduck-ivm/tests/fault_injection_tests.rs`): 4 `fail_point!` tests — kill after DBSP before flush, kill after flush before checkpoint, kill output plane after Parquet write before catalog commit, S3 `GetObject` 503 with retry; gated behind `--features fault-injection`
-- [ ] **Tier 7 — Catalog fault injection** (`crates/slateduck-catalog/tests/fault_injection_tests.rs`): 4 tests — `create_snapshot` panic before commit, IO error after `put` before `flush`, `extend_lease` CAS conflict, `CounterCache` panic with reload verification
-- [ ] **Tier 7 — Network fault injection** via `toxiproxy` Testcontainers proxy in front of MinIO: S3 PUT 503, GET truncated, heartbeat partition, 10 s latency degradation — all confirming no data loss and graceful degradation
-- [ ] **Tier 9 — Security tests** (`crates/slateduck-pgwire/tests/security_tests.rs`): MinIO ACL credential-isolation (4 tests), TLS expired cert rejection, TLS CA validation, SCRAM-SHA-256 auth, brute-force rate limiting, SQL injection guard (3 tests), non-deterministic function blocked in view SQL
-- [ ] **Tier 10 — Benchmark regression CI** (weekly scheduled job): extended `catalog_bench.rs` with 5 new benchmarks; `scripts/check_benchmark_regression.py` compares against `benchmarks/phase-2-baseline.json`; job fails if any metric regresses > 10%
-- [ ] All Tier 7 tests are pre-release gate (run on tag push, not every PR)
-- [ ] All Tier 9 security tests run on the standard large runner (MinIO covers credential isolation; no real AWS required)
+- [x] **Tier 6d — IVM hardening tests** (`crates/slateduck-ivm/tests/hardening_tests.rs`): 5 tests — repair shard rebuilds from base, `REFRESH ... FULL` rebuilds all shards, `doctor` identifies stuck/expired shards, exactly-once output under output-plane restart, backup/restore (restored frontier prevents event re-processing)
+- [x] **Tier 6d — Schema evolution tests** (`crates/slateduck-ivm/tests/schema_evolution_tests.rs`): 5 tests — add-column no-op, add-referenced-column stale, type-change stale, rename stale, drop-referenced broken + clear error on `REFRESH FULL`
+- [x] **Tier 6d — Frontier durability tests** (`crates/slateduck-ivm/tests/durability_tests.rs`): 3 tests — SIGKILL worker at T=0 (before any CDC), T=100 events, T=500 events; restart worker; assert loaded frontier skips already-processed events and final output is identical to uninterrupted run (no duplicate rows, no missing rows). Note: this is distinct from fault-injection tests — those test crashes mid-batch; these test that the frontier itself is durable across clean restarts
+- [x] **Tier 7 — IVM fault injection** (`crates/slateduck-ivm/tests/fault_injection_tests.rs`): 4 `fail_point!` tests — kill after DBSP before flush, kill after flush before checkpoint, kill output plane after Parquet write before catalog commit, S3 `GetObject` 503 with retry; gated behind `--features fault-injection`
+- [x] **Tier 7 — Catalog fault injection** (`crates/slateduck-catalog/tests/fault_injection_tests.rs`): 4 tests — `create_snapshot` panic before commit, IO error after `put` before `flush`, `extend_lease` CAS conflict, `CounterCache` panic with reload verification
+- [x] **Tier 7 — Network fault injection** via `toxiproxy` Testcontainers proxy in front of MinIO: S3 PUT 503, GET truncated, heartbeat partition, 10 s latency degradation — all confirming no data loss and graceful degradation
+- [x] **Tier 9 — Security tests** (`crates/slateduck-pgwire/tests/security_tests.rs`): MinIO ACL credential-isolation (4 tests), TLS expired cert rejection, TLS CA validation, SCRAM-SHA-256 auth, brute-force rate limiting, SQL injection guard (3 tests), non-deterministic function blocked in view SQL
+- [x] **Tier 10 — Benchmark regression CI** (weekly scheduled job): extended `catalog_bench.rs` with 5 new benchmarks; `scripts/check_benchmark_regression.py` compares against `benchmarks/phase-2-baseline.json`; job fails if any metric regresses > 10%
+- [x] All Tier 7 tests are pre-release gate (run on tag push, not every PR)
+- [x] All Tier 9 security tests run on the standard large runner (MinIO covers credential isolation; no real AWS required)
 
 ### PG-Wire Rate Limiting
 
 The Tier 9 security tests include a brute-force rate limiting check. This section provides the corresponding implementation.
 
-- [ ] Per-IP connection rate limiter in `slateduck-pgwire`: token-bucket with configurable burst (default 10 connections/s, burst 20)
-- [ ] Per-IP failed-auth rate limiter: after 5 consecutive failed authentication attempts from the same IP within 60 s, reject with `SQLSTATE 08004` and `WARN`-level log for 5 minutes
-- [ ] Configurable via `--rate-limit-connections-per-sec` and `--rate-limit-auth-failures` CLI flags
-- [ ] Rate limit state is per-process (in-memory `DashMap<IpAddr, TokenBucket>`); not shared across replicas
+- [x] Per-IP connection rate limiter in `slateduck-pgwire`: token-bucket with configurable burst (default 10 connections/s, burst 20)
+- [x] Per-IP failed-auth rate limiter: after 5 consecutive failed authentication attempts from the same IP within 60 s, reject with `SQLSTATE 08004` and `WARN`-level log for 5 minutes
+- [x] Configurable via `--rate-limit-connections-per-sec` and `--rate-limit-auth-failures` CLI flags
+- [x] Rate limit state is per-process (in-memory `DashMap<IpAddr, TokenBucket>`); not shared across replicas
 
 ### CI Infrastructure for Tier 7 Network Tests
 
 The toxiproxy Testcontainers network fault injection tests require Docker. This section tracks the infrastructure prerequisite.
 
-- [ ] `.github/workflows/ci.yml` Tier 7 job uses `ubuntu-latest` with Docker (native, no DinD needed — GitHub Actions ubuntu runners have Docker pre-installed)
-- [ ] Tier 7 network tests gated behind `--features fault-injection` AND `cfg(target_os = "linux")` — skipped on macOS CI (no Testcontainers Docker socket on macOS Actions runners)
-- [ ] Document in `docs/contributing/testing.md`: Tier 7 network tests require Linux CI runner with Docker; local macOS developers can run them with Docker Desktop
+- [x] `.github/workflows/ci.yml` Tier 7 job uses `ubuntu-latest` with Docker (native, no DinD needed — GitHub Actions ubuntu runners have Docker pre-installed)
+- [x] Tier 7 network tests gated behind `--features fault-injection` AND `cfg(target_os = "linux")` — skipped on macOS CI (no Testcontainers Docker socket on macOS Actions runners)
+- [x] Document in `docs/contributing/testing.md`: Tier 7 network tests require Linux CI runner with Docker; local macOS developers can run them with Docker Desktop
 
 ### Acceptance Criteria
 
-- [ ] Native `SlateDbTrace` 1.5× faster than v0.11 on TPC-H Q1 streaming benchmark
-- [ ] Steady-state S3 PUT cost ≤ 2× SlateDB's bare-substrate cost for the same write volume
-- [ ] All fault-injection scenarios pass deterministically
-- [ ] `slateduck-ivm doctor` correctly identifies every fault class in the test suite
-- [ ] Continuous-soak test: TPC-H Q1 maintained for 24 h with zero correctness drift; **no fault injection in v0.15 soak** (fault-injection soak is Tier 8 in v0.17); correctness checked via `IvmOracle` every 15 min; runs on scale-test infrastructure
-- [ ] All v0.11–v0.13 acceptance tests still pass
-- [ ] IVM worker K8s deployment pattern tested with 4-worker pool and rolling updates
-- [ ] **Tier 6d hardening tests green** (5 tests including repair, exactly-once output, and backup/restore)
-- [ ] **Tier 6d schema evolution tests green** (5 tests; all stale/broken state transitions verified in CI)
-- [ ] **Tier 6d frontier durability tests green**: crash + restart at T=0, T=100, T=500 all produce output identical to uninterrupted run
-- [ ] **DAG multi-hop, concurrent update, and drop-cascade tests green** (4 DAG unit tests total)
-- [ ] **S3 API call count ≤ cost model upper bound** (call count regression gate green)
-- [ ] **Tier 7 fault injection suite green** on every pre-release tag: catalog faults (4), IVM worker faults (4), network faults via toxiproxy (4)
-- [ ] **Tier 9 security suite green**: credential isolation, TLS, auth, SQL injection guards, rate limiting — 14 tests total
-- [ ] **Tier 10 benchmark regression < 10%** on weekly CI run vs `benchmarks/phase-2-baseline.json`
-- [ ] **Multi-View DAG:** diamond topology test passes; D never refreshes with inconsistent upstream frontiers
-- [ ] **Rate limiting:** 6th failed auth from same IP within 60 s rejected with `SQLSTATE 08004`
-- [ ] **Change-buffer compaction** reduces CDC event count by ≥ 50% on a 100%-update synthetic workload
-- [ ] **Predicate-pushdown** confirmed: CDC bytes read proportional to WHERE-matching rows, not total delta size
-- [ ] **Append-only fast path** shows ≥ 25% throughput improvement on a pure-INSERT TPC-H Q1 variant
+- [x] Native `SlateDbTrace` 1.5× faster than v0.11 on TPC-H Q1 streaming benchmark
+- [x] Steady-state S3 PUT cost ≤ 2× SlateDB's bare-substrate cost for the same write volume
+- [x] All fault-injection scenarios pass deterministically
+- [x] `slateduck-ivm doctor` correctly identifies every fault class in the test suite
+- [x] Continuous-soak test: TPC-H Q1 maintained for 24 h with zero correctness drift; **no fault injection in v0.15 soak** (fault-injection soak is Tier 8 in v0.17); correctness checked via `IvmOracle` every 15 min; runs on scale-test infrastructure
+- [x] All v0.11–v0.13 acceptance tests still pass
+- [x] IVM worker K8s deployment pattern tested with 4-worker pool and rolling updates
+- [x] **Tier 6d hardening tests green** (5 tests including repair, exactly-once output, and backup/restore)
+- [x] **Tier 6d schema evolution tests green** (5 tests; all stale/broken state transitions verified in CI)
+- [x] **Tier 6d frontier durability tests green**: crash + restart at T=0, T=100, T=500 all produce output identical to uninterrupted run
+- [x] **DAG multi-hop, concurrent update, and drop-cascade tests green** (4 DAG unit tests total)
+- [x] **S3 API call count ≤ cost model upper bound** (call count regression gate green)
+- [x] **Tier 7 fault injection suite green** on every pre-release tag: catalog faults (4), IVM worker faults (4), network faults via toxiproxy (4)
+- [x] **Tier 9 security suite green**: credential isolation, TLS, auth, SQL injection guards, rate limiting — 14 tests total
+- [x] **Tier 10 benchmark regression < 10%** on weekly CI run vs `benchmarks/phase-2-baseline.json`
+- [x] **Multi-View DAG:** diamond topology test passes; D never refreshes with inconsistent upstream frontiers
+- [x] **Rate limiting:** 6th failed auth from same IP within 60 s rejected with `SQLSTATE 08004`
+- [x] **Change-buffer compaction** reduces CDC event count by ≥ 50% on a 100%-update synthetic workload
+- [x] **Predicate-pushdown** confirmed: CDC bytes read proportional to WHERE-matching rows, not total delta size
+- [x] **Append-only fast path** shows ≥ 25% throughput improvement on a pure-INSERT TPC-H Q1 variant
 
 ### Deliverables
 
-- [ ] Native `SlateDbTrace` shipped (or fallback adapter if DBSP traits not externally implementable)
-- [ ] `dag.rs` Multi-View DAG with Kahn topo-sort, diamond detection, and `Slowest` policy
-- [ ] Frontier vector clocks in `state_store.rs` with durable persistence
-- [ ] PG-wire rate limiter (connection + auth failure) in `slateduck-pgwire`
-- [ ] Cost-optimization knobs documented and defaulted sensibly
-- [ ] Observability surface complete (metrics, traces, `doctor` CLI)
-- [ ] `REFRESH ... FULL` and per-shard repair shipped
-- [ ] Tier 6d hardening tests (`hardening_tests.rs`) with 5 passing tests
-- [ ] Tier 6d schema evolution tests (`schema_evolution_tests.rs`) with 5 passing tests
-- [ ] Tier 6d frontier durability tests (`durability_tests.rs`) with 3 passing tests
-- [ ] Tier 6d SlateDbTrace property tests (`trace_property_tests.rs`) with 500-sequence suite green
-- [ ] Tier 7 fault injection suites (`fault_injection_tests.rs` in catalog + ivm) with 12 passing tests
-- [ ] Tier 9 security test suite (`security_tests.rs`) with 14 passing tests
-- [ ] Tier 10 benchmark regression job in `.github/workflows/ci.yml` (weekly cron)
-- [ ] `scripts/check_benchmark_regression.py` with 10% threshold gate
-- [ ] `benchmarks/v0.15-ivm-hardening.json` published
-- [ ] Change-buffer compaction in `source.rs`
-- [ ] Predicate pushdown and semi-join key pre-filter in `plan.rs` and `join.rs`
-- [ ] Append-only fast path detection in `IvmTrace`
-- [ ] `parquet.rs::CompactionPolicy` `sort_keys` auto-population from SQL plan GROUP BY / join keys
-- [ ] Final IVM operator playbook in `docs/operations/incremental-materialized-views.md`
-- [ ] IVM design retrospective in `docs/design-decisions/ivm-retrospective.md` capturing what survived from the design and what changed
+- [x] Native `SlateDbTrace` shipped (or fallback adapter if DBSP traits not externally implementable)
+- [x] `dag.rs` Multi-View DAG with Kahn topo-sort, diamond detection, and `Slowest` policy
+- [x] Frontier vector clocks in `state_store.rs` with durable persistence
+- [x] PG-wire rate limiter (connection + auth failure) in `slateduck-pgwire`
+- [x] Cost-optimization knobs documented and defaulted sensibly
+- [x] Observability surface complete (metrics, traces, `doctor` CLI)
+- [x] `REFRESH ... FULL` and per-shard repair shipped
+- [x] Tier 6d hardening tests (`hardening_tests.rs`) with 5 passing tests
+- [x] Tier 6d schema evolution tests (`schema_evolution_tests.rs`) with 5 passing tests
+- [x] Tier 6d frontier durability tests (`durability_tests.rs`) with 3 passing tests
+- [x] Tier 6d SlateDbTrace property tests (`trace_property_tests.rs`) with 500-sequence suite green
+- [x] Tier 7 fault injection suites (`fault_injection_tests.rs` in catalog + ivm) with 12 passing tests
+- [x] Tier 9 security test suite (`security_tests.rs`) with 14 passing tests
+- [x] Tier 10 benchmark regression job in `.github/workflows/ci.yml` (weekly cron)
+- [x] `scripts/check_benchmark_regression.py` with 10% threshold gate
+- [x] `benchmarks/v0.15-ivm-hardening.json` published
+- [x] Change-buffer compaction in `source.rs`
+- [x] Predicate pushdown and semi-join key pre-filter in `plan.rs` and `join.rs`
+- [x] Append-only fast path detection in `IvmTrace`
+- [x] `parquet.rs::CompactionPolicy` `sort_keys` auto-population from SQL plan GROUP BY / join keys
+- [x] Final IVM operator playbook in `docs/operations/incremental-materialized-views.md`
+- [x] IVM design retrospective in `docs/design-decisions/ivm-retrospective.md` capturing what survived from the design and what changed
 
 ---
 

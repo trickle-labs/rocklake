@@ -391,3 +391,37 @@ cargo tarpaulin --out html
 - **[Development Setup](development-setup.md)** — Running the test suite
 - **[Architecture Guide](architecture-guide.md)** — Where tests live in the codebase
 - **[Code Style](code-style.md)** — Test naming and formatting conventions
+
+## v0.15 Test Additions
+
+v0.15 (IVM Operational Hardening) added several new test categories:
+
+### Tier 6d — IVM Hardening Tests
+
+Located in `crates/slateduck-ivm/tests/`:
+
+- **`hardening_tests.rs`** — Repair shard rebuild, REFRESH FULL, doctor diagnostics,
+  exactly-once output deduplication, backup/restore frontier tracking.
+- **`schema_evolution_tests.rs`** — Schema change impact on views (add/rename/drop
+  column, type change), REFRESH FULL recovery, broken view error messages.
+- **`durability_tests.rs`** — Frontier persistence across SIGKILL at T=0, T=100,
+  T=500; restart from checkpoint; skip processed events.
+- **`trace_property_tests.rs`** — 500-sequence proptest comparing SlateDbTrace
+  output against in-memory reference trace.
+
+### Tier 7 — Fault Injection Tests
+
+- **`crates/slateduck-ivm/tests/fault_injection_tests.rs`** — Kill after DBSP
+  before flush, kill after flush before checkpoint, Parquet write without catalog
+  commit, S3 GetObject 503 retry.
+- **`crates/slateduck-catalog/tests/fault_injection_tests.rs`** — Kill after SST
+  before manifest, corrupted WAL recovery, kill during compaction, concurrent
+  writer fencing.
+
+### Tier 10 — Security Tests
+
+- **`crates/slateduck-pgwire/tests/security_tests.rs`** — 14 tests covering
+  invalid auth, SQL injection, rate limiting, connection flood, oversized queries,
+  schema isolation, privilege escalation, TLS enforcement, timing attacks,
+  session hijacking, parameter injection, error message leaks, idle timeout,
+  auth failure lockout.

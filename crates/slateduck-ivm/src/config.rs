@@ -32,6 +32,12 @@ pub enum CostMode {
     Standard,
     /// Spot: aggressive retry after preemption; faster backoff.
     Spot,
+    /// Conservative: maximize cost savings (wider flush windows, aggressive compaction).
+    Conservative,
+    /// Balanced: moderate flush windows (freshness/2).
+    Balanced,
+    /// Latency: minimize latency (narrow flush windows, lazy compaction).
+    Latency,
 }
 
 impl std::str::FromStr for CostMode {
@@ -40,6 +46,9 @@ impl std::str::FromStr for CostMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.to_lowercase().as_str() {
             "spot" => Self::Spot,
+            "conservative" => Self::Conservative,
+            "balanced" => Self::Balanced,
+            "latency" => Self::Latency,
             _ => Self::Standard,
         })
     }
@@ -119,9 +128,17 @@ pub struct ServeArgs {
     #[arg(long, default_value = "60000")]
     pub max_drain_time_ms: u64,
 
-    /// Cost mode: standard (default) or spot.
+    /// Cost mode: standard (default), conservative, balanced, latency, or spot.
     #[arg(long, default_value = "standard")]
     pub cost_mode: String,
+
+    /// Per-IP connection rate limit (connections per second).
+    #[arg(long, default_value = "10")]
+    pub rate_limit_connections_per_sec: u32,
+
+    /// Per-IP failed auth rate limit threshold (failures within 60s before lockout).
+    #[arg(long, default_value = "5")]
+    pub rate_limit_auth_failures: u32,
 }
 
 /// Arguments for the `status` subcommand.
