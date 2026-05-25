@@ -9,7 +9,6 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use serde_json::Value;
 use slateduck_ivm::circuit::{IvmCircuit, ZDelta};
 use slateduck_ivm::plan::IvmPlan;
-use std::collections::HashMap;
 
 fn make_delta(fields: &[(&str, Value)], weight: i64) -> ZDelta {
     ZDelta {

@@ -448,7 +448,7 @@ impl IvmCircuit {
                                         Value::String(ref sv) => sv.clone(),
                                         other => other.to_string(),
                                     };
-                                    std::iter::repeat(s).take(*c as usize)
+                                    std::iter::repeat_n(s, *c as usize)
                                 })
                                 .collect::<Vec<_>>()
                                 .join(",");
@@ -465,9 +465,7 @@ impl IvmCircuit {
                             pairs.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
                             let arr: Vec<Value> = pairs
                                 .iter()
-                                .flat_map(|(k, c)| {
-                                    std::iter::repeat(k.to_value()).take(*c as usize)
-                                })
+                                .flat_map(|(k, c)| std::iter::repeat_n(k.to_value(), *c as usize))
                                 .collect();
                             Value::Array(arr)
                         }

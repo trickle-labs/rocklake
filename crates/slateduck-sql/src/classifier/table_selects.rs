@@ -50,9 +50,9 @@ pub(super) fn split_qualified_name(s: &str) -> (Option<String>, String) {
     let (first_ident, rest_after_first) = take_sql_identifier(s);
 
     let rest = rest_after_first.trim_start();
-    if rest.starts_with('.') {
+    if let Some(after_dot) = rest.strip_prefix('.') {
         // schema.name — take the second identifier.
-        let rest2 = rest[1..].trim_start();
+        let rest2 = after_dot.trim_start();
         let (second_ident, _) = take_sql_identifier(rest2);
         (Some(first_ident), second_ident)
     } else {
@@ -63,10 +63,10 @@ pub(super) fn split_qualified_name(s: &str) -> (Option<String>, String) {
 /// Extract the first SQL identifier from `s`, stripping double-quote delimiters
 /// when present.  Returns `(identifier, remainder_of_s_after_identifier)`.
 pub(super) fn take_sql_identifier(s: &str) -> (String, &str) {
-    if s.starts_with('"') {
+    if let Some(after_quote) = s.strip_prefix('"') {
         // Quoted identifier: scan until the closing '"', doubling "" as escape.
         let mut result = String::new();
-        let mut chars = s[1..].char_indices();
+        let mut chars = after_quote.char_indices();
         let mut end_byte = 1;
         loop {
             match chars.next() {
