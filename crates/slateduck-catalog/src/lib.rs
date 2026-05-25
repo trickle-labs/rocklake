@@ -41,4 +41,4 @@ pub use reader::{CatalogReader, SnapshotDiff};
 pub use store::{CatalogStore, OpenOptions};
 pub use streaming::{measure_ingest_throughput, IngestRecord, IngestResult, SlateDuckSink};
 pub use warmup::{publish_writer_endpoint, read_writer_endpoint, warmup_cache, WarmupResult};
-pub use writer::{CatalogWriter, validate_app_metadata_key};
+pub use writer::{validate_app_metadata_key, CatalogWriter};

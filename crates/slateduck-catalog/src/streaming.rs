@@ -153,7 +153,10 @@ impl SlateDuckSink {
         // Use the next_offset as a base for deterministic row_id generation.
         // This ensures re-submitted identical batches produce the same row_ids,
         // supporting idempotent inlined-insert registration.
-        let offset_base: u64 = next_offset.parse::<u64>().unwrap_or(0).saturating_mul(records.len() as u64);
+        let offset_base: u64 = next_offset
+            .parse::<u64>()
+            .unwrap_or(0)
+            .saturating_mul(records.len() as u64);
 
         // Write each record as an inlined insert for the table.
         for (idx, record) in records.iter().enumerate() {
@@ -168,7 +171,13 @@ impl SlateDuckSink {
         writer.set_metadata(MetadataScope::Global, 0, &self.offset_key, next_offset)?;
 
         let snapshot_id = writer
-            .create_snapshot(author, Some(&format!("streaming ingest batch: {} records", records.len())))
+            .create_snapshot(
+                author,
+                Some(&format!(
+                    "streaming ingest batch: {} records",
+                    records.len()
+                )),
+            )
             .await?;
 
         store.commit_writer(&writer);

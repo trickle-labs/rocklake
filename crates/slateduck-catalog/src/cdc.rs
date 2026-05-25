@@ -168,12 +168,15 @@ impl CdcSnapshot {
     pub fn to_jsonl(&self) -> String {
         let mut out = String::new();
         // Header line: snapshot metadata.
-        out.push_str(&serde_json::to_string(&serde_json::json!({
-            "_type": "cdc_snapshot_header",
-            "from_snapshot": self.from_snapshot,
-            "to_snapshot": self.to_snapshot,
-            "event_count": self.events.len(),
-        })).unwrap_or_default());
+        out.push_str(
+            &serde_json::to_string(&serde_json::json!({
+                "_type": "cdc_snapshot_header",
+                "from_snapshot": self.from_snapshot,
+                "to_snapshot": self.to_snapshot,
+                "event_count": self.events.len(),
+            }))
+            .unwrap_or_default(),
+        );
         out.push('\n');
         // One line per event.
         for event in &self.events {
@@ -190,7 +193,11 @@ impl CdcSnapshot {
 ///
 /// Format: `{warehouse_prefix}/cdc/snapshot-{to_snapshot:020}.jsonl`
 pub fn cdc_s3_path(warehouse_prefix: &str, to_snapshot: u64) -> String {
-    format!("{}/cdc/snapshot-{:020}.jsonl", warehouse_prefix.trim_end_matches('/'), to_snapshot)
+    format!(
+        "{}/cdc/snapshot-{:020}.jsonl",
+        warehouse_prefix.trim_end_matches('/'),
+        to_snapshot
+    )
 }
 
 /// Write a `CdcSnapshot` as JSON-lines to an in-memory writer (S3 object body).

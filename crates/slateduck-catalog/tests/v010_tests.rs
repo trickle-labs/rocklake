@@ -18,18 +18,13 @@ use slateduck_catalog::{
     streaming::{measure_ingest_throughput, IngestRecord, SlateDuckSink},
     CatalogError, CatalogStore, OpenOptions,
 };
-use slateduck_core::{
-    keys::MetadataScope,
-    mvcc::SnapshotId,
-};
+use slateduck_core::{keys::MetadataScope, mvcc::SnapshotId};
 use std::sync::Arc;
 use tempfile::TempDir;
 
 fn test_opts(dir: &TempDir) -> OpenOptions {
     let path = dir.path().to_str().unwrap().to_string();
-    let store = Arc::new(
-        object_store::local::LocalFileSystem::new_with_prefix(&path).unwrap(),
-    );
+    let store = Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&path).unwrap());
     OpenOptions {
         object_store: store,
         path: ObjectPath::from("catalog"),
@@ -96,11 +91,7 @@ async fn metadata_app_key_valid_namespace() {
 
     let reader = store.read_latest();
     let row = reader
-        .get_metadata(
-            MetadataScope::Global,
-            0,
-            "pg_tide.orders-to-lake.offset",
-        )
+        .get_metadata(MetadataScope::Global, 0, "pg_tide.orders-to-lake.offset")
         .await
         .unwrap();
     assert_eq!(row.unwrap().value, "4782");
@@ -171,7 +162,14 @@ async fn consumer_offset_advances_monotonically() {
         };
 
         let result = sink
-            .commit_batch(&mut store, &records, table_id, expected.as_deref(), &next_offset, None)
+            .commit_batch(
+                &mut store,
+                &records,
+                table_id,
+                expected.as_deref(),
+                &next_offset,
+                None,
+            )
             .await
             .unwrap();
 
@@ -185,7 +183,10 @@ async fn consumer_offset_advances_monotonically() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(row.value, next_offset, "offset must match after batch {batch}");
+        assert_eq!(
+            row.value, next_offset,
+            "offset must match after batch {batch}"
+        );
     }
 }
 
@@ -246,7 +247,10 @@ async fn exactly_once_crash_recovery() {
     // Batch 1: committed successfully.
     sink.commit_batch(
         &mut store,
-        &[IngestRecord { key: "id".to_string(), value: serde_json::json!(1) }],
+        &[IngestRecord {
+            key: "id".to_string(),
+            value: serde_json::json!(1),
+        }],
         table_id,
         None,
         "1",
@@ -260,9 +264,12 @@ async fn exactly_once_crash_recovery() {
     let r = sink
         .commit_batch(
             &mut store,
-            &[IngestRecord { key: "id".to_string(), value: serde_json::json!(2) }],
+            &[IngestRecord {
+                key: "id".to_string(),
+                value: serde_json::json!(2),
+            }],
             table_id,
-            Some("1"),   // must still be "1" after crash
+            Some("1"), // must still be "1" after crash
             "2",
             None,
         )
@@ -283,7 +290,10 @@ async fn exactly_once_wrong_expected_offset_fences() {
     // Commit batch 1.
     sink.commit_batch(
         &mut store,
-        &[IngestRecord { key: "id".to_string(), value: serde_json::json!(1) }],
+        &[IngestRecord {
+            key: "id".to_string(),
+            value: serde_json::json!(1),
+        }],
         table_id,
         None,
         "1",
@@ -296,9 +306,12 @@ async fn exactly_once_wrong_expected_offset_fences() {
     let err = sink
         .commit_batch(
             &mut store,
-            &[IngestRecord { key: "id".to_string(), value: serde_json::json!(2) }],
+            &[IngestRecord {
+                key: "id".to_string(),
+                value: serde_json::json!(2),
+            }],
             table_id,
-            Some("0"),   // wrong!
+            Some("0"), // wrong!
             "2",
             None,
         )
@@ -463,8 +476,12 @@ async fn snapshot_diff_detects_added_table_and_columns() {
         r.list_schemas().await.unwrap()[0].schema_id
     };
     let table_id = w.create_table(schema_id, "orders", None).await.unwrap();
-    w.add_column(table_id, "order_id", "BIGINT", 0, true, None).await.unwrap();
-    w.add_column(table_id, "amount", "DOUBLE", 1, true, None).await.unwrap();
+    w.add_column(table_id, "order_id", "BIGINT", 0, true, None)
+        .await
+        .unwrap();
+    w.add_column(table_id, "amount", "DOUBLE", 1, true, None)
+        .await
+        .unwrap();
     let snap2 = w.create_snapshot(None, None).await.unwrap();
     store.commit_writer(&w);
 
@@ -522,8 +539,7 @@ fn cdc_snapshot_to_jsonl_is_valid() {
     }
 
     // First line is the header.
-    let header: serde_json::Value =
-        serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+    let header: serde_json::Value = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
     assert_eq!(header["_type"], "cdc_snapshot_header");
     assert_eq!(header["event_count"], 2u64);
 }
@@ -560,7 +576,10 @@ fn cdc_file_writer_writes_bytes() {
 fn cdc_s3_path_format() {
     use slateduck_catalog::cdc::cdc_s3_path;
     let path = cdc_s3_path("s3://my-bucket/warehouse", 42);
-    assert_eq!(path, "s3://my-bucket/warehouse/cdc/snapshot-00000000000000000042.jsonl");
+    assert_eq!(
+        path,
+        "s3://my-bucket/warehouse/cdc/snapshot-00000000000000000042.jsonl"
+    );
 }
 
 // ─── CDC Tailer ───────────────────────────────────────────────────────────────
@@ -593,7 +612,10 @@ async fn cdc_tailer_poll_returns_new_diffs() {
 
     // Poll again — nothing new.
     let result2 = tailer.poll_once(&store).await.unwrap();
-    assert!(result2.is_none(), "second poll with no new commits must return None");
+    assert!(
+        result2.is_none(),
+        "second poll with no new commits must return None"
+    );
 }
 
 // ─── Webhook Payload ──────────────────────────────────────────────────────────
@@ -625,10 +647,7 @@ fn webhook_payload_from_cdc() {
     };
 
     let cdc = slateduck_catalog::cdc::CdcSnapshot::from_diff(&diff);
-    let payload = WebhookPayload::from_cdc(
-        &cdc,
-        "https://s3.example.com/cdc/snapshot-4.jsonl",
-    );
+    let payload = WebhookPayload::from_cdc(&cdc, "https://s3.example.com/cdc/snapshot-4.jsonl");
 
     assert_eq!(payload.snapshot_id, 4);
     assert_eq!(payload.from_snapshot, 3);
@@ -679,7 +698,6 @@ async fn cdc_captures_materialized_view_table() {
 #[tokio::test]
 async fn e2e_write_cdc_event_downstream_diff() {
     use slateduck_catalog::cdc::CdcSnapshot;
-    
 
     let dir = TempDir::new().unwrap();
     let (mut store, table_id) = open_with_table(&dir).await;
@@ -704,7 +722,11 @@ async fn e2e_write_cdc_event_downstream_diff() {
     let reader = store.read_at(snap_after).unwrap();
     let diff = reader.snapshot_diff(snap_before, snap_after).await.unwrap();
 
-    assert_eq!(diff.added_data_files.len(), 1, "one new data file registered");
+    assert_eq!(
+        diff.added_data_files.len(),
+        1,
+        "one new data file registered"
+    );
     let df = &diff.added_data_files[0];
     assert_eq!(df.table_id, table_id);
     assert!(df.path.contains("part-00001.parquet"));
@@ -738,9 +760,7 @@ async fn ingest_throughput_meets_performance_target() {
     let sink = SlateDuckSink::new("perf.test.offset").unwrap();
 
     let (throughput, p95_ms) = measure_ingest_throughput(
-        &mut store,
-        &sink,
-        table_id,
+        &mut store, &sink, table_id,
         10_000, // 10k records total (CI-friendly; full 100k would be too slow)
         100,    // 100 records/batch → 100 commits
     )
@@ -750,7 +770,7 @@ async fn ingest_throughput_meets_performance_target() {
     // In release mode, assert production-grade performance.
     // In debug mode, relax the threshold (debug builds are ~10× slower).
     let (min_throughput, max_p95_ms) = if cfg!(debug_assertions) {
-        (500.0, 2000.0)  // debug: 500 rec/s, 2000ms p95
+        (500.0, 2000.0) // debug: 500 rec/s, 2000ms p95
     } else {
         (10_000.0, 50.0) // release: 10k rec/s, 50ms p95
     };
@@ -789,7 +809,10 @@ async fn ivm_integration_ingest_to_cdc_pipeline() {
         .create_table(schema_id, "orders_daily_mv", None)
         .await
         .unwrap();
-    let snap0 = w.create_snapshot(None, Some("initial schema")).await.unwrap();
+    let snap0 = w
+        .create_snapshot(None, Some("initial schema"))
+        .await
+        .unwrap();
     store.commit_writer(&w);
 
     // Start CDC tailer after initial setup.
@@ -879,4 +902,3 @@ async fn ivm_integration_ingest_to_cdc_pipeline() {
         "webhook payload must reference the view table"
     );
 }
-
