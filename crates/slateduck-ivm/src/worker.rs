@@ -24,6 +24,10 @@ pub enum IvmError {
     Output(String),
     #[error("worker error: {0}")]
     Worker(String),
+    #[error("SQLSTATE 0A000: volatile function `{0}` cannot be used in an incremental materialized view")]
+    VolatileFunction(String),
+    #[error("SQLSTATE 0A000: unknown function `{0}` treated as volatile; use WITH (allow_unknown_functions = true) to override")]
+    UnknownVolatility(String),
 }
 
 /// IVM worker — drives incremental computation for all matviews in the catalog.

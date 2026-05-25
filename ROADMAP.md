@@ -2197,10 +2197,10 @@ The v0.13 bilinear join expansion uses the post-change snapshot for both the ins
 
 `S_pre` and `R_pre` reconstructed as `X_post EXCEPT ALL ΔX_insert UNION ALL ΔX_delete`; cached as L₀ CTEs to avoid repeated EXCEPT ALL per join per refresh.
 
-- [ ] Enumerate `(ΔL_ins, ΔL_del, ΔR_ins, ΔR_del)` cases explicitly in `crates/slateduck-ivm/src/join.rs`
-- [ ] Reconstruct and cache both `S_pre` and `R_pre` (L₀ CTEs) for the delete branches in each join operator
-- [ ] Add Part-3 correction term
-- [ ] Regression test: delete matching rows from both sides of a join in the same refresh window; output must match `DuckDbHarness` full recompute
+- [x] Enumerate `(ΔL_ins, ΔL_del, ΔR_ins, ΔR_del)` cases explicitly in `crates/slateduck-ivm/src/join.rs`
+- [x] Reconstruct and cache both `S_pre` and `R_pre` (L₀ CTEs) for the delete branches in each join operator
+- [x] Add Part-3 correction term
+- [x] Regression test: delete matching rows from both sides of a join in the same refresh window; output must match `DuckDbHarness` full recompute
 
 ### Aggregate Tier Classification
 
@@ -2214,12 +2214,12 @@ Annotate every `AggregateKind` variant with one of three tiers and wire up the c
 
 > **Why BOOL_AND/OR are semi-algebraic:** `BOOL_AND(true, false) = false`; removing `true` can’t recover the result without knowing the remaining `true` count. BIT_XOR is not invertible without per-bit parity counts per row.
 
-- [ ] `AggregateKind` variants in `plan.rs` carry a `tier: AggregateTier` annotation
-- [ ] Algebraic aggregates persist auxiliary columns in `IvmTrace`: `sum_arg` + `count_arg` for AVG; `M2` / `sum` / `count` for STDDEV
-- [ ] AVG delta: `new_result = (old_sum_arg ± Δsum) / (old_count_arg ± Δcount)`; no floating-point drift, fully invertible
-- [ ] Semi-algebraic MIN/MAX: on delete of current extremum, issue a group-rescan from source; otherwise merge with LEAST/GREATEST
-- [ ] Group-rescan path implemented in `trace.rs`: re-reads all rows for affected group keys from the input source
-- [ ] Group-rescan aggregates accepted but documented as higher-latency; clear error if input source is unavailable for rescan
+- [x] `AggregateKind` variants in `plan.rs` carry a `tier: AggregateTier` annotation
+- [x] Algebraic aggregates persist auxiliary columns in `IvmTrace`: `sum_arg` + `count_arg` for AVG; `M2` / `sum` / `count` for STDDEV
+- [x] AVG delta: `new_result = (old_sum_arg ± Δsum) / (old_count_arg ± Δcount)`; no floating-point drift, fully invertible
+- [x] Semi-algebraic MIN/MAX: on delete of current extremum, issue a group-rescan from source; otherwise merge with LEAST/GREATEST
+- [x] Group-rescan path implemented in `trace.rs`: re-reads all rows for affected group keys from the input source
+- [x] Group-rescan aggregates accepted but documented as higher-latency; clear error if input source is unavailable for rescan
 
 ### Volatility Validation (Correctness Gate)
 
@@ -2229,45 +2229,45 @@ DuckDB functions fall into `IMMUTABLE`, `STABLE`, and `VOLATILE` categories. Wit
 
 > **Forward-compatibility note:** v0.16 introduces capture semantics that *allow-lists* specific volatile functions (`random()`, `gen_random_uuid()`, `now()`) with deterministic per-batch sampling. At that point, `volatility.rs` gains a `CaptureEligible` category. Views created in v0.14 that are rejected for using `random()` will become valid after upgrading to v0.16. This is an intentional backwards-compatible expansion (reject→accept), not a breaking change.
 
-- [ ] `crates/slateduck-ivm/src/volatility.rs`: hardcoded `fn volatility_of(name: &str) -> Volatility` lookup; generated from DuckDB `duckdb_functions()` at build time or committed as a static table
-- [ ] Walk the view SQL expression tree at `IvmPlan::compile`; look up each function via the static table
-- [ ] VOLATILE functions: return `SQLSTATE 0A000` at view creation with a message naming the offending function
-- [ ] STABLE functions (`now()`, `current_timestamp`): emit `WARN`-level log; accept but recommend capture-semantics path (v0.16)
-- [ ] IMMUTABLE: always accepted silently
-- [ ] Unknown functions (not in static table): treated as VOLATILE with message suggesting `WITH (allow_unknown_functions = true)` override
+- [x] `crates/slateduck-ivm/src/volatility.rs`: hardcoded `fn volatility_of(name: &str) -> Volatility` lookup; generated from DuckDB `duckdb_functions()` at build time or committed as a static table
+- [x] Walk the view SQL expression tree at `IvmPlan::compile`; look up each function via the static table
+- [x] VOLATILE functions: return `SQLSTATE 0A000` at view creation with a message naming the offending function
+- [x] STABLE functions (`now()`, `current_timestamp`): emit `WARN`-level log; accept but recommend capture-semantics path (v0.16)
+- [x] IMMUTABLE: always accepted silently
+- [x] Unknown functions (not in static table): treated as VOLATILE with message suggesting `WITH (allow_unknown_functions = true)` override
 
 ### Property-Based "Differential ≡ Full" Oracle
 
 The foundational correctness harness that all future IVM tests depend on: after each DML mutation, compare the IVM worker's output multiset to a DuckDB single-shot reference execution of the same view SQL.
 
-- [ ] `slateduck-testkit` gains an `IvmOracle` helper: given view SQL + DML sequence → run IVM worker → compare output to `DuckDbHarness` reference via multiset equality
-- [ ] `proptest` strategies for random `INSERT` / `UPDATE` / `DELETE` sequences with realistic key distributions; includes phantom-delete edge cases (both-sides delete in same refresh window)
-- [ ] TPC-H Q1 end-to-end correctness test: 1 000 random input snapshots, zero correctness drift, exercises aggregate auxiliary columns and EC-01 join fix simultaneously
+- [x] `slateduck-testkit` gains an `IvmOracle` helper: given view SQL + DML sequence → run IVM worker → compare output to `DuckDbHarness` reference via multiset equality
+- [x] `proptest` strategies for random `INSERT` / `UPDATE` / `DELETE` sequences with realistic key distributions; includes phantom-delete edge cases (both-sides delete in same refresh window)
+- [x] TPC-H Q1 end-to-end correctness test: 1 000 random input snapshots, zero correctness drift, exercises aggregate auxiliary columns and EC-01 join fix simultaneously
 
 ### Acceptance Criteria
 
-- [ ] EC-01 regression test passes: concurrent same-window delete from both join sides produces correct output matching DuckDB full recompute
-- [ ] AVG over 1M rows with 100k updates shows zero floating-point drift vs. DuckDB reference
-- [ ] `VOLATILE` function at view creation returns `SQLSTATE 0A000`
-- [ ] Property-based oracle passes 1 000 random DML sequences against TPC-H Q1
+- [x] EC-01 regression test passes: concurrent same-window delete from both join sides produces correct output matching DuckDB full recompute
+- [x] AVG over 1M rows with 100k updates shows zero floating-point drift vs. DuckDB reference
+- [x] `VOLATILE` function at view creation returns `SQLSTATE 0A000`
+- [x] Property-based oracle passes 1 000 random DML sequences against TPC-H Q1
 
 ### Testing: Tier 6b-correctness
 
-- [ ] **Tier 6b-correctness — IVM correctness tests** (`crates/slateduck-ivm/tests/correctness_tests.rs`): EC-01 phantom-row regression, aggregate tier AVG drift, aggregate tier MIN/MAX delete-of-extremum, BOOL_AND/OR delete-of-deciding-input, volatility gate VOLATILE rejection, volatility gate STABLE acceptance, property-based oracle 1000-sequence TPC-H Q1, coalesced-batch S_pre reconstruction
-- [ ] All Tier 6b-correctness tests run on every PR (standard runner)
+- [x] **Tier 6b-correctness — IVM correctness tests** (`crates/slateduck-ivm/tests/correctness_tests.rs`): EC-01 phantom-row regression, aggregate tier AVG drift, aggregate tier MIN/MAX delete-of-extremum, BOOL_AND/OR delete-of-deciding-input, volatility gate VOLATILE rejection, volatility gate STABLE acceptance, property-based oracle 1000-sequence TPC-H Q1, coalesced-batch S_pre reconstruction
+- [x] All Tier 6b-correctness tests run on every PR (standard runner)
 
 ### Deliverables
 
-- [ ] `join.rs` EC-01 Part 1a/1b/2/3 split with L₀ CTE caching (includes per-window provenance assertion)
-- [ ] `plan.rs` `AggregateTier` enum and per-`AggregateKind` tier annotation
-- [ ] `trace.rs` auxiliary column storage for algebraic aggregates (AVG/STDDEV)
-- [ ] `trace.rs` semi-algebraic auxiliary columns: `count_true`/`count_nonnull` for BOOL_AND/OR, per-bit counts for BIT_AND/OR/XOR
-- [ ] `trace.rs` group-rescan path for semi-algebraic (on extremum/deciding-input delete) and group-rescan tier aggregates
-- [ ] `volatility.rs` hardcoded volatility lookup table (generated from DuckDB `duckdb_functions()`)
-- [ ] `plan.rs` `IvmPlan::compile` volatility gate (VOLATILE reject / STABLE warn / unknown → VOLATILE)
-- [ ] `slateduck-testkit` `IvmOracle` helper + `proptest` DML strategies (`proptest` added as dev-dependency in `slateduck-testkit/Cargo.toml`)
-- [ ] Tier 6b-correctness test suite green in CI
-- [ ] TPC-H Q1 property-based correctness test green in CI
+- [x] `join.rs` EC-01 Part 1a/1b/2/3 split with L₀ CTE caching (includes per-window provenance assertion)
+- [x] `plan.rs` `AggregateTier` enum and per-`AggregateKind` tier annotation
+- [x] `trace.rs` auxiliary column storage for algebraic aggregates (AVG/STDDEV)
+- [x] `trace.rs` semi-algebraic auxiliary columns: `count_true`/`count_nonnull` for BOOL_AND/OR, per-bit counts for BIT_AND/OR/XOR
+- [x] `trace.rs` group-rescan path for semi-algebraic (on extremum/deciding-input delete) and group-rescan tier aggregates
+- [x] `volatility.rs` hardcoded volatility lookup table (generated from DuckDB `duckdb_functions()`)
+- [x] `plan.rs` `IvmPlan::compile` volatility gate (VOLATILE reject / STABLE warn / unknown → VOLATILE)
+- [x] `slateduck-testkit` `IvmOracle` helper + `proptest` DML strategies (`proptest` added as dev-dependency in `slateduck-testkit/Cargo.toml`)
+- [x] Tier 6b-correctness test suite green in CI
+- [x] TPC-H Q1 property-based correctness test green in CI
 
 ---
 
