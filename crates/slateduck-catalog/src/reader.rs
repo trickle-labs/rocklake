@@ -619,6 +619,78 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    // ─── v0.27: All-tags / all-column-tags / sort-info ──────────────────────
+
+    /// List all `ducklake_tag` rows visible at this snapshot (all objects).
+    pub async fn list_all_tags(&self) -> CatalogResult<Vec<TagRow>> {
+        let prefix = keys::prefix_for_tag(TAG_TAG);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: TagRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// List all `ducklake_column_tag` rows visible at this snapshot (all tables).
+    pub async fn list_all_column_tags(&self) -> CatalogResult<Vec<ColumnTagRow>> {
+        let prefix = keys::prefix_for_tag(TAG_COLUMN_TAG);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ColumnTagRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// List all `ducklake_sort_info` rows visible at this snapshot (all tables).
+    pub async fn list_all_sort_info(&self) -> CatalogResult<Vec<SortInfoRow>> {
+        let prefix = keys::prefix_for_tag(TAG_SORT_INFO);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SortInfoRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// List all `ducklake_schema_versions` rows visible at this snapshot (all tables).
+    pub async fn list_all_schema_versions(&self) -> CatalogResult<Vec<SchemaVersionsRow>> {
+        let prefix = keys::prefix_for_tag(TAG_SCHEMA_VERSIONS);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SchemaVersionsRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
     // ─── v0.10: Snapshot Diff (CDC Output Primitive) ────────────────────────
 
     /// Compute the diff between two snapshots.

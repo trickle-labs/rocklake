@@ -3,7 +3,8 @@
 //! Commands:
 //!   serve, gc, excise, checkpoint, export, import, pg-migrate,
 //!   rebuild, inspect, verify, repair,
-//!   warmup, migrate, corpus, tune
+//!   warmup, migrate, corpus, tune,
+//!   migrate-from-ducklake, export-catalog
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -46,6 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "migrate" => cmd_migrate(&args).await?,
         "corpus" => cmd_corpus(&args).await?,
         "tune" => cmd_tune(&args).await?,
+        "migrate-from-ducklake" => cmd_migrate_from_ducklake(&args).await?,
+        "export-catalog" => cmd_export_catalog(&args).await?,
         "--help" | "-h" => print_usage(),
         other => {
             eprintln!("Unknown command: {other}");
@@ -77,6 +80,8 @@ Commands:
   migrate [--dry-run|--apply]    Migrate catalog to new format version
   corpus diff|validate           Wire-corpus diff and validation
   tune [--target-cost-usd N]     Output recommended settings
+  migrate-from-ducklake          Migrate from an external DuckLake catalog
+  export-catalog                 Export all 28 catalog tables to NDJSON
 
 Options:
   --catalog <path>             Catalog path (required for most commands)
@@ -1157,4 +1162,72 @@ fn resolve_catalog_with_opts(
 
         Ok((obj_path, store))
     }
+}
+
+// ─── migrate-from-ducklake ─────────────────────────────────────────────────
+
+/// Import an existing DuckLake catalog into SlateDuck.
+///
+/// The source can be:
+///   - An NDJSON dump produced by `export-catalog` from a DuckLake deployment.
+///
+/// Example:
+///   slateduck migrate-from-ducklake --source dump.ndjson --catalog ./my-catalog
+async fn cmd_migrate_from_ducklake(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let source = extract_string_arg(args, "--source")
+        .ok_or("--source <file> is required for migrate-from-ducklake")?;
+    let catalog_url = extract_string_arg(args, "--catalog")
+        .ok_or("--catalog <path> is required for migrate-from-ducklake")?;
+
+    println!("migrate-from-ducklake: source={source}, catalog={catalog_url}");
+
+    // Open the destination SlateDuck catalog.
+    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+    let db = slatedb::Db::open(catalog_path, object_store).await?;
+
+    // Import the source NDJSON dump into the destination catalog.
+    let file = std::fs::File::open(&source).map_err(|e| format!("Cannot open source file: {e}"))?;
+    let reader = std::io::BufReader::new(file);
+
+    let result = slateduck_catalog::export::import_catalog(&db, reader).await?;
+
+    println!("Migration complete:");
+    println!("  Rows imported:   {}", result.rows_imported);
+    println!("  Tables imported: {}", result.tables_imported);
+    println!("  Catalog written to: {catalog_url}");
+
+    db.close().await?;
+    Ok(())
+}
+
+// ─── export-catalog ────────────────────────────────────────────────────────
+
+/// Export all 28 DuckLake v1.0 catalog tables to a JSON-lines file.
+///
+/// This produces an interop dump suitable for migration or debugging.
+///
+/// Example:
+///   slateduck export-catalog --catalog ./my-catalog --out catalog-dump.ndjson
+async fn cmd_export_catalog(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = extract_string_arg(args, "--catalog")
+        .ok_or("--catalog <path> is required for export-catalog")?;
+    let output_path =
+        extract_string_arg(args, "--out").unwrap_or_else(|| "catalog-export.ndjson".to_string());
+    let snapshot_id = extract_numeric_arg(args, "--snapshot-id");
+
+    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+    let db = slatedb::Db::open(catalog_path, object_store).await?;
+
+    let mut file = std::fs::File::create(&output_path)
+        .map_err(|e| format!("Cannot create output file {output_path}: {e}"))?;
+
+    let result = slateduck_catalog::export::export_catalog(&db, snapshot_id, &mut file).await?;
+
+    println!("Export complete (all 28 DuckLake v1.0 catalog tables):");
+    println!("  Rows exported:   {}", result.rows_exported);
+    println!("  Tables exported: {}", result.tables_exported);
+    println!("  Output:          {output_path}");
+
+    db.close().await?;
+    Ok(())
 }

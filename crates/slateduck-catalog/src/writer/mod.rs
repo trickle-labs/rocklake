@@ -316,6 +316,31 @@ impl CatalogWriter {
             }
         }
 
+        // CASCADE: retire live sort info for this table (v0.27).
+        {
+            let prefix = keys::prefix_for_tag(slateduck_core::tags::TAG_SORT_INFO);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire: Vec<(Vec<u8>, SortInfoRow)> = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let si_row: SortInfoRow = values::decode_value(&kv.value)?;
+                if si_row.table_id == table_id && si_row.end_snapshot.is_none() {
+                    to_retire.push((kv.key.to_vec(), si_row));
+                }
+            }
+            for (si_key, mut si_row) in to_retire {
+                si_row.end_snapshot = Some(snapshot_id);
+                self.stage(si_key, values::encode_value(&si_row));
+            }
+        }
+
         self.mark_schema_changed();
         Ok(())
     }
@@ -959,6 +984,25 @@ impl CatalogWriter {
         let mut row: ColumnTagRow = values::decode_value(&existing)?;
         row.end_snapshot = Some(snapshot_id);
 
+        self.stage(key, values::encode_value(&row));
+        Ok(())
+    }
+
+    // ─── v0.27: Sort Info ────────────────────────────────────────────────────
+
+    /// Write a `ducklake_sort_info` row for this table.
+    ///
+    /// Stores an individual MVCC entry under `key_sort_info`, which `list_all_sort_info`
+    /// can scan.  The sort_id must be caller-assigned and unique within the table.
+    pub async fn add_sort_info(&mut self, table_id: u64, sort_id: u64) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let row = SortInfoRow {
+            sort_id,
+            table_id,
+            begin_snapshot: snapshot_id,
+            end_snapshot: None,
+        };
+        let key = keys::key_sort_info(table_id, sort_id, snapshot_id);
         self.stage(key, values::encode_value(&row));
         Ok(())
     }
