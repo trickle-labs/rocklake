@@ -77,6 +77,11 @@ pub(super) fn classify_table_select_with_query(
         "ducklake_inlined_data_tables" => StatementKind::SelectInlinedData,
         "ducklake_view" => StatementKind::SelectViews,
         "ducklake_macro" => StatementKind::SelectMacros,
+        // ─── v0.27: P2 fidelity gaps ───────────────────────────────────
+        "ducklake_tag" => StatementKind::SelectTags,
+        "ducklake_column_tag" => StatementKind::SelectColumnTags,
+        "ducklake_sort_info" => StatementKind::SelectSortInfo,
+        "ducklake_schema_version" => StatementKind::SelectSchemaVersion,
         s if s.starts_with("pg_catalog.pg_type") || s == "pg_type" => StatementKind::SelectPgType,
         s if s.starts_with("ducklake_inlined_") => StatementKind::SelectInlinedRows,
         // Virtual catalog schema: slateduck_catalog.{table}

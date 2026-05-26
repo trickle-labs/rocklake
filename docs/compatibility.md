@@ -2,6 +2,21 @@
 
 This page describes the tested compatibility between SlateDuck and various ecosystem components.
 
+## DuckLake Protocol
+
+| Feature | Status | Version | Notes |
+|---------|--------|---------|-------|
+| DuckLake v1.0 catalog format | ✅ Supported | v0.27+ | All 28 spec tables |
+| `ducklake_tag` SQL facade | ✅ Supported | v0.27+ | `tag_name`/`tag_value` per spec |
+| `ducklake_column_tag` SQL facade | ✅ Supported | v0.27+ | `tag_name`/`tag_value` per spec |
+| `ducklake_sort_info` SQL facade | ✅ Supported | v0.27+ | `sort_order`/`column_id` columns included |
+| `ducklake_schema_version` SQL facade | ✅ Supported | v0.27+ | Single global version row |
+| DROP TABLE CASCADE for tags | ✅ Supported | v0.27+ | All tag/column-tag rows retired |
+| DROP TABLE CASCADE for sort_info | ✅ Supported | v0.27+ | All sort_info rows retired |
+| `migrate-from-ducklake` CLI | ✅ Supported | v0.27+ | NDJSON source |
+| `export-catalog` CLI | ✅ Supported | v0.27+ | All 28 tables to NDJSON |
+| Real DuckDB E2E integration | ⚠️ Planned | v0.28 | Requires DuckDB binary in CI |
+
 ## SQL Clients
 
 | Client | Version Tested | Status | Notes |
@@ -64,8 +79,8 @@ This page describes the tested compatibility between SlateDuck and various ecosy
 | Rust Version | Status | Notes |
 |-------------|--------|-------|
 | Stable latest | ✅ Supported | Recommended |
-| 1.80.0 (MSRV) | ✅ Supported | Minimum supported Rust version |
-| < 1.80 | ❌ Not supported | |
+| 1.93.0 (MSRV) | ✅ Supported | Minimum supported Rust version |
+| < 1.93 | ❌ Not supported | |
 
 ## Platform
 

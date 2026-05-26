@@ -225,6 +225,11 @@ impl CatalogStore {
         &self.db
     }
 
+    /// Return the current catalog schema version (used for ducklake_schema_version facade).
+    pub fn schema_version(&self) -> u64 {
+        self.schema_version
+    }
+
     /// Load schema version from the latest snapshot.
     async fn load_schema_version(db: &Db, counters: &CounterCache) -> u64 {
         let latest_id = if counters.peek_snapshot_id() > 1 {

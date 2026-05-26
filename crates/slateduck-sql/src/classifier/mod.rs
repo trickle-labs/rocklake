@@ -56,6 +56,16 @@ pub enum StatementKind {
     /// `SELECT gen_random_uuid()` — pg-tide-relay generates UUIDs
     SelectGenRandomUuid,
 
+    // ─── v0.27 DuckLake Facade Tables ─────────────────────────────────
+    /// `SELECT * FROM ducklake_tag`
+    SelectTags,
+    /// `SELECT * FROM ducklake_column_tag`
+    SelectColumnTags,
+    /// `SELECT * FROM ducklake_sort_info`
+    SelectSortInfo,
+    /// `SELECT * FROM ducklake_schema_version`
+    SelectSchemaVersion,
+
     // ─── DuckLake Write Operations ─────────────────────────────────────
     InsertSnapshot,
     InsertSnapshotChanges,

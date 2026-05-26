@@ -25,10 +25,11 @@ use crate::notify::NotifyManager;
 use crate::session::{BufferedOp, SessionState};
 
 use catalog::{
-    execute_commit, execute_next_rowid_range, execute_table_changes, make_columns_response,
-    make_data_files_response, make_delete_files_response, make_file_ids_response,
-    make_macros_response, make_metadata_response, make_schemas_response,
-    make_snapshot_row_response, make_table_stats_response, make_tables_response,
+    execute_commit, execute_next_rowid_range, execute_table_changes, make_column_tags_response,
+    make_columns_response, make_data_files_response, make_delete_files_response,
+    make_file_ids_response, make_macros_response, make_metadata_response,
+    make_schema_version_response, make_schemas_response, make_snapshot_row_response,
+    make_sort_info_response, make_table_stats_response, make_tables_response, make_tags_response,
     make_views_response,
 };
 use extension::{
@@ -279,6 +280,49 @@ async fn execute_classified<'a>(
                 .map_err(SlateDuckError::from)?;
             Ok(vec![make_macros_response(rows)])
         }
+
+        // ─── v0.27: ducklake_tag / ducklake_column_tag / ducklake_sort_info ─
+        StatementKind::SelectTags => {
+            let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
+            let reader = {
+                let s = store.lock().await;
+                s.read_at(slateduck_core::mvcc::SnapshotId::new(snap_id))
+                    .map_err(SlateDuckError::from)?
+            };
+            let rows = reader.list_all_tags().await.map_err(SlateDuckError::from)?;
+            Ok(vec![make_tags_response(rows)])
+        }
+        StatementKind::SelectColumnTags => {
+            let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
+            let reader = {
+                let s = store.lock().await;
+                s.read_at(slateduck_core::mvcc::SnapshotId::new(snap_id))
+                    .map_err(SlateDuckError::from)?
+            };
+            let rows = reader
+                .list_all_column_tags()
+                .await
+                .map_err(SlateDuckError::from)?;
+            Ok(vec![make_column_tags_response(rows)])
+        }
+        StatementKind::SelectSortInfo => {
+            let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
+            let reader = {
+                let s = store.lock().await;
+                s.read_at(slateduck_core::mvcc::SnapshotId::new(snap_id))
+                    .map_err(SlateDuckError::from)?
+            };
+            let rows = reader
+                .list_all_sort_info()
+                .await
+                .map_err(SlateDuckError::from)?;
+            Ok(vec![make_sort_info_response(rows)])
+        }
+        StatementKind::SelectSchemaVersion => {
+            let catalog_version = { store.lock().await.schema_version() };
+            Ok(vec![make_schema_version_response(catalog_version)])
+        }
+
         StatementKind::SelectInlinedData | StatementKind::SelectInlinedRows => {
             // Return empty result set for inlined data (read-only introspection)
             Ok(vec![make_empty_response()])

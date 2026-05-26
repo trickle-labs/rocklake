@@ -1624,3 +1624,356 @@ pub(super) fn make_macros_response(
     resp.set_command_tag(&format!("SELECT {count}"));
     Response::Query(resp)
 }
+
+// ─── v0.27: ducklake_tag / ducklake_column_tag / ducklake_sort_info ──────────
+
+/// v0.27: Build a PgWire response for `SELECT * FROM ducklake_tag`.
+///
+/// Spec column names: tag_id, begin_snapshot, end_snapshot, object_id,
+/// tag_name, tag_value.  The internal `TagRow.tag_key` is exposed as `tag_name`.
+/// `tag_id` is synthesized as `object_id`.
+pub(super) fn make_tags_response(rows: Vec<slateduck_core::rows::TagRow>) -> Response<'static> {
+    let schema = Arc::new(vec![
+        FieldInfo::new(
+            "tag_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "begin_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "end_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "object_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "tag_name".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "tag_value".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ]);
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        // tag_id synthesized as object_id (stable surrogate within this snapshot)
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.object_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.begin_snapshot.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        let end = r.end_snapshot.map(|e| e.to_string());
+        encoder
+            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.object_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        // Internal field tag_key is exposed as spec column tag_name.
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.tag_key.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.tag_value.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.27: Build a PgWire response for `SELECT * FROM ducklake_column_tag`.
+///
+/// Spec column names: tag_id, begin_snapshot, end_snapshot, column_id,
+/// tag_name, tag_value.  The internal `ColumnTagRow.tag_key` is exposed as `tag_name`.
+/// `tag_id` is synthesized as `column_id`.
+pub(super) fn make_column_tags_response(
+    rows: Vec<slateduck_core::rows::ColumnTagRow>,
+) -> Response<'static> {
+    let schema = Arc::new(vec![
+        FieldInfo::new(
+            "tag_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "begin_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "end_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "column_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "tag_name".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "tag_value".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ]);
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        // tag_id synthesized as column_id (stable surrogate within this snapshot)
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.column_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.begin_snapshot.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        let end = r.end_snapshot.map(|e| e.to_string());
+        encoder
+            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.column_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        // Internal field tag_key is exposed as spec column tag_name.
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.tag_key.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.tag_value.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.27: Build a PgWire response for `SELECT * FROM ducklake_sort_info`.
+///
+/// Spec column names: sort_id, begin_snapshot, end_snapshot, table_id,
+/// sort_order, column_id.
+/// `SortInfoRow` carries `sort_id`, `table_id`, MVCC windows.
+/// `sort_order` and `column_id` default to 0 until sort-expression storage is
+/// implemented in a future version.
+pub(super) fn make_sort_info_response(
+    rows: Vec<slateduck_core::rows::SortInfoRow>,
+) -> Response<'static> {
+    let schema = Arc::new(vec![
+        FieldInfo::new(
+            "sort_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "begin_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "end_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "table_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "sort_order".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "column_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+    ]);
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.sort_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.begin_snapshot.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        let end = r.end_snapshot.map(|e| e.to_string());
+        encoder
+            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.table_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        // sort_order and column_id: default to 0 until sort-expression rows are stored.
+        encoder
+            .encode_field_with_type_and_format(
+                &Some("0".to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some("0".to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.27: Build a PgWire response for `SELECT * FROM ducklake_schema_version`.
+///
+/// Spec column names: schema_version, schema_version_info.
+/// Returns the single global catalog schema version row.
+pub(super) fn make_schema_version_response(catalog_schema_version: u64) -> Response<'static> {
+    let schema = Arc::new(vec![
+        FieldInfo::new(
+            "schema_version".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "schema_version_info".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ]);
+    let mut encoder = DataRowEncoder::new(schema.clone());
+    encoder
+        .encode_field_with_type_and_format(
+            &Some(catalog_schema_version.to_string()),
+            &Type::TEXT,
+            FieldFormat::Text,
+        )
+        .unwrap();
+    // Human-readable description of the DuckLake catalog schema version.
+    let info = Some(format!("DuckLake catalog schema v{catalog_schema_version}"));
+    encoder
+        .encode_field_with_type_and_format(&info, &Type::TEXT, FieldFormat::Text)
+        .unwrap();
+    let data_rows = vec![encoder.finish()];
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag("SELECT 1");
+    Response::Query(resp)
+}
