@@ -66,7 +66,7 @@ binding on every roadmap release below.
 | **v0.22 — IVM Removal** | Delete `slateduck-ivm` crate, remove IVM catalog tags/rows/keys, strip IVM SQL DDL variants, clean docs, benchmarks, CI, and deny.toml | **Done** |
 | **v0.23 — Streaming Ingest** | pg-tide-relay integration, Kafka/NATS support, exactly-once delivery, CDC output (snapshot diffs, S3/Kafka/webhook) | **Done** |
 | **v0.24 — DuckLake v1.0 Conformance Harness & Interop-Critical Schema** | Conformance test harness for all 28 spec tables; fix snapshot/snapshot_changes schema; spec-complete data file fields; spec-complete delete file model; row ID tracking; table stats `next_row_id`; DROP TABLE cascade retirement | Complete |
-| **v0.25 — DuckLake v1.0 SQL Catalog Facade** | Full PgWire/virtual-table facade with exact spec column names and types for all 28 tables; views, macros, and inlined data tables through PgWire; scoped metadata; schema/table UUID and path fields; nested column model | Planning |
+| **v0.25 — DuckLake v1.0 SQL Catalog Facade** | Full PgWire/virtual-table facade with exact spec column names and types for all 28 tables; views, macros, and inlined data tables through PgWire; scoped metadata; schema/table UUID and path fields; nested column model | Complete |
 | **v0.26 — DuckLake v1.0 Stats, Types, Partitioning & Sorting** | Full file and table column stats; variant stats and `extra_stats`; geometry stats; column mapping and name mapping parity; sort expression spec parity; partition column lifecycle; DuckLake type parser; nested and `variant` type model | Planning |
 | **v0.27 — DuckLake v1.0 External Compatibility Validation** | Real DuckDB DuckLake extension end-to-end tests; read conformance suite against `specification/queries.md`; import/export migration path; P2 fidelity gaps (`files_scheduled_for_deletion`, `file_partition_value`, `sort_info`, `tag`/`column_tag` facade) | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
@@ -2379,88 +2379,88 @@ Spec: DROP TABLE must set `end_snapshot` on all of: `ducklake_table`, `ducklake_
 
 The DuckLake spec defines a SQL catalog database with 28 tables. SlateDuck stores facts as key/value rows; the facade is the PgWire/virtual-table projection layer. Today many tables return empty result sets or expose SlateDuck-internal column names. This phase closes that gap entirely.
 
-- [ ] Audit every `StatementKind` in `slateduck-pgwire/src/executor/mod.rs` that currently returns an empty result set (`SelectSnapshot`, `SelectTableStats`, `SelectMetadata`, `SelectViews`, `SelectMacros`, `SelectDeleteFiles`); replace each with a real reader call and a spec-shaped response builder.
-- [ ] Implement spec-shaped response builders for all 28 tables. Each builder must expose columns in spec column order with spec column names. Use a per-table response builder struct pattern consistent with existing code.
-- [ ] For every `INSERT`-accepting `StatementKind` that currently no-ops (`InsertMetadata`, `InsertInlinedDataTable`, `InsertView`, `InsertMacro`, `InsertMacroImpl`, `InsertMacroParameters`), wire through to the corresponding `CatalogWriter` method and persist the row.
-- [ ] Add PgWire integration tests for every table: one round-trip insert + select test per table verifying column names match the spec manifest from v0.24.
+- [x] Audit every `StatementKind` in `slateduck-pgwire/src/executor/mod.rs` that currently returns an empty result set (`SelectSnapshot`, `SelectTableStats`, `SelectMetadata`, `SelectViews`, `SelectMacros`, `SelectDeleteFiles`); replace each with a real reader call and a spec-shaped response builder.
+- [x] Implement spec-shaped response builders for all 28 tables. Each builder must expose columns in spec column order with spec column names. Use a per-table response builder struct pattern consistent with existing code.
+- [x] For every `INSERT`-accepting `StatementKind` that currently no-ops (`InsertMetadata`, `InsertInlinedDataTable`, `InsertView`, `InsertMacro`, `InsertMacroImpl`, `InsertMacroParameters`), wire through to the corresponding `CatalogWriter` method and persist the row.
+- [x] Add PgWire integration tests for every table: one round-trip insert + select test per table verifying column names match the spec manifest from v0.24.
 
 ### Scoped Metadata (`ducklake_metadata`)
 
 Spec: `metadata_key`, `metadata_value`, `scope`, `scope_id`
 
-- [ ] Add `scope` and `scope_id` to `MetadataRow`; `MetadataScope` is already encoded in keys but must be denormalized into the row for SQL queries.
-- [ ] Fix `InsertMetadata` to persist `scope` and `scope_id` from the incoming SQL parameters.
-- [ ] Fix `SelectMetadata` to return spec-shaped rows including `scope` and `scope_id`.
-- [ ] Add conformance tests: insert global metadata, insert table-scoped metadata with a `scope_id`, verify both are retrievable with correct `scope` values.
+- [x] Add `scope` and `scope_id` to `MetadataRow`; `MetadataScope` is already encoded in keys but must be denormalized into the row for SQL queries.
+- [x] Fix `InsertMetadata` to persist `scope` and `scope_id` from the incoming SQL parameters.
+- [x] Fix `SelectMetadata` to return spec-shaped rows including `scope` and `scope_id`.
+- [x] Add conformance tests: insert global metadata, insert table-scoped metadata with a `scope_id`, verify both are retrievable with correct `scope` values.
 
 ### Schema UUID and Path Fields (`ducklake_schema`)
 
 Spec: `schema_id`, `begin_snapshot`, `end_snapshot`, `schema_uuid`, `schema_name`, `path`, `path_is_relative`
 
-- [ ] Add `schema_uuid` (UUID v4, generated at create time), `path`, and `path_is_relative` to `SchemaRow`.
-- [ ] Persist all three fields in `CatalogWriter::create_schema`.
-- [ ] Update the PgWire `SelectSchemas` response builder to expose all spec columns.
+- [x] Add `schema_uuid` (UUID v4, generated at create time), `path`, and `path_is_relative` to `SchemaRow`.
+- [x] Persist all three fields in `CatalogWriter::create_schema`.
+- [x] Update the PgWire `SelectSchemas` response builder to expose all spec columns.
 
 ### Table UUID and Path Fields (`ducklake_table`)
 
 Spec: `table_id`, `begin_snapshot`, `end_snapshot`, `schema_id`, `table_name`, `table_uuid`, `path`, `path_is_relative`
 
-- [ ] Add `table_uuid` (UUID v4, generated at create time), `path`, and `path_is_relative` to `TableRow`; rename `data_path` → `path` in the SQL facade.
-- [ ] Persist all three fields in `CatalogWriter::create_table`.
-- [ ] Update the PgWire `SelectTables` response builder to expose all spec columns.
+- [x] Add `table_uuid` (UUID v4, generated at create time), `path`, and `path_is_relative` to `TableRow`; rename `data_path` → `path` in the SQL facade.
+- [x] Persist all three fields in `CatalogWriter::create_table`.
+- [x] Update the PgWire `SelectTables` response builder to expose all spec columns.
 
 ### Column Defaults and Nested Column Model (`ducklake_column`)
 
 Spec: `column_id`, `begin_snapshot`, `end_snapshot`, `table_id`, `column_name`, `column_type`, `column_order`, `nulls_allowed`, `initial_default`, `default_value_type`, `default_value_dialect`, `parent_column`
 
-- [ ] Rename facade columns: `data_type` → `column_type`, `column_index` → `column_order`, `is_nullable` → `nulls_allowed`.
-- [ ] Add `initial_default`, `default_value_type`, `default_value_dialect`, and `parent_column` to `ColumnRow`.
-- [ ] Persist all new fields via `CatalogWriter::add_column`.
-- [ ] Support nested column rows: when `parent_column` is non-null, store and retrieve the parent/child relationship; child columns have their own `column_id`.
-- [ ] Update the PgWire `SelectColumns` response builder to use spec column names.
+- [x] Rename facade columns: `data_type` → `column_type`, `column_index` → `column_order`, `is_nullable` → `nulls_allowed`.
+- [x] Add `initial_default`, `default_value_type`, `default_value_dialect`, and `parent_column` to `ColumnRow`.
+- [x] Persist all new fields via `CatalogWriter::add_column`.
+- [x] Support nested column rows: when `parent_column` is non-null, store and retrieve the parent/child relationship; child columns have their own `column_id`.
+- [x] Update the PgWire `SelectColumns` response builder to use spec column names.
 
 ### Views, Macros, and Inlined Data Tables
 
 **`ducklake_view`** (spec: `view_id`, `begin_snapshot`, `end_snapshot`, `schema_id`, `view_name`, `view_uuid`, `view_definition`, `dialect`, `column_aliases`):
-- [ ] Add `view_uuid`, `dialect`, and `column_aliases` to `ViewRow`.
-- [ ] Fix `InsertView` to call `CatalogWriter::create_view` and persist all fields.
-- [ ] Fix `SelectViews` to return spec-shaped rows.
+- [x] Add `view_uuid`, `dialect`, and `column_aliases` to `ViewRow`.
+- [x] Fix `InsertView` to call `CatalogWriter::create_view` and persist all fields.
+- [x] Fix `SelectViews` to return spec-shaped rows.
 
 **`ducklake_macro`** and **`ducklake_macro_impl`** (spec: `macro_id`, `macro_name`, `macro_uuid`, `schema_id` / `macro_id`, `dialect`, `type`, `sql`):
-- [ ] Move `macro_type` from `MacroRow` into `MacroImplRow` as `type` (spec-correct location).
-- [ ] Add `macro_uuid` to `MacroRow`.
-- [ ] Add `dialect` and rename `definition` → `sql` in `MacroImplRow`.
-- [ ] Fix `InsertMacro` and `InsertMacroImpl` to persist through `CatalogWriter`.
-- [ ] Fix `SelectMacros` to return spec-shaped rows.
+- [x] Move `macro_type` from `MacroRow` into `MacroImplRow` as `type` (spec-correct location).
+- [x] Add `macro_uuid` to `MacroRow`.
+- [x] Add `dialect` and rename `definition` → `sql` in `MacroImplRow`.
+- [x] Fix `InsertMacro` and `InsertMacroImpl` to persist through `CatalogWriter`.
+- [x] Fix `SelectMacros` to return spec-shaped rows.
 
 **`ducklake_macro_parameters`** (spec: `macro_id`, `parameter_name`, `parameter_type`, `default_value_type`):
-- [ ] Add `default_value_type` to `MacroParameterRow`.
-- [ ] Fix `InsertMacroParameters` to persist through `CatalogWriter`.
+- [x] Add `default_value_type` to `MacroParameterRow`.
+- [x] Fix `InsertMacroParameters` to persist through `CatalogWriter`.
 
 **`ducklake_inlined_data_tables`** (spec: `table_id`, `table_name`, `sql`):
-- [ ] Rename the internal `sql` field to align with spec; expose `table_name` rather than raw SQL as the primary identifier.
-- [ ] Fix `InsertInlinedDataTable` to persist through `CatalogWriter`.
-- [ ] Fix `SelectInlinedDataTables` to return spec-shaped rows.
+- [x] Rename the internal `sql` field to align with spec; expose `table_name` rather than raw SQL as the primary identifier.
+- [x] Fix `InsertInlinedDataTable` to persist through `CatalogWriter`.
+- [x] Fix `SelectInlinedDataTables` to return spec-shaped rows.
 
 ### Column Mapping and Name Mapping
 
 **`ducklake_column_mapping`** (spec: `mapping_id`, `table_id`, `type`):
-- [ ] Restructure `ColumnMappingRow` to carry `mapping_id`, `table_id`, and `type`; move `file_column_name` and `column_id` into a related name-mapping record.
+- [x] Restructure `ColumnMappingRow` to carry `mapping_id`, `table_id`, and `type`; move `file_column_name` and `column_id` into a related name-mapping record.
 
 **`ducklake_name_mapping`** (spec: `mapping_id`, `column_id`, `name`, `target_field_id`, `parent_column`, `is_partition`):
-- [ ] Add `target_field_id`, `parent_column`, and `is_partition` to `NameMappingRow`.
-- [ ] Remove non-spec `source_name_hash`.
+- [x] Add `target_field_id`, `parent_column`, and `is_partition` to `NameMappingRow`.
+- [x] Remove non-spec `source_name_hash`.
 
 ### Deliverables
 
-- [ ] All 28 DuckLake spec tables return non-empty, spec-shaped result sets through PgWire for at least one representative fixture row each
-- [ ] All `INSERT` statement kinds that were previously no-ops now persist to the KV store and round-trip correctly
-- [ ] `ducklake_schema`, `ducklake_table`, `ducklake_column` facades use spec column names
-- [ ] `ducklake_view`, `ducklake_macro`, `ducklake_macro_impl`, `ducklake_macro_parameters`, `ducklake_inlined_data_tables` fully wired
-- [ ] `ducklake_metadata` scope fields persisted and queryable
-- [ ] Column mapping and name mapping restructured to spec layout
-- [ ] Nested column rows supported via `parent_column`
-- [ ] Round-trip PgWire test for every table in the conformance suite passes
+- [x] All 28 DuckLake spec tables return non-empty, spec-shaped result sets through PgWire for at least one representative fixture row each
+- [x] All `INSERT` statement kinds that were previously no-ops now persist to the KV store and round-trip correctly
+- [x] `ducklake_schema`, `ducklake_table`, `ducklake_column` facades use spec column names
+- [x] `ducklake_view`, `ducklake_macro`, `ducklake_macro_impl`, `ducklake_macro_parameters`, `ducklake_inlined_data_tables` fully wired
+- [x] `ducklake_metadata` scope fields persisted and queryable
+- [x] Column mapping and name mapping restructured to spec layout
+- [x] Nested column rows supported via `parent_column`
+- [x] Round-trip PgWire test for every table in the conformance suite passes
 
 ---
 

@@ -61,15 +61,23 @@ pub(super) async fn execute_commit(
                 column_index,
                 is_nullable,
                 default_value,
+                initial_default,
+                default_value_type,
+                default_value_dialect,
+                parent_column,
             } => {
                 writer
-                    .add_column(
+                    .add_column_with_opts(
                         table_id,
                         &column_name,
                         &data_type,
                         column_index,
                         is_nullable,
                         default_value.as_deref(),
+                        initial_default.as_deref(),
+                        default_value_type.as_deref(),
+                        default_value_dialect.as_deref(),
+                        parent_column,
                     )
                     .await
                     .map_err(SlateDuckError::from)?;
@@ -185,17 +193,94 @@ pub(super) async fn execute_commit(
                     .await
                     .map_err(SlateDuckError::from)?;
             }
-            BufferedOp::InsertMetadata { .. } => {
-                // Metadata writes accepted
+            BufferedOp::InsertMetadata {
+                key,
+                value,
+                scope,
+                scope_id,
+            } => {
+                use slateduck_core::keys::MetadataScope;
+                let resolved_scope = match scope.as_deref() {
+                    Some("schema") => MetadataScope::Schema,
+                    Some("table") => MetadataScope::Table,
+                    _ => MetadataScope::Global,
+                };
+                let resolved_scope_id = scope_id.unwrap_or(0);
+                writer
+                    .set_metadata(resolved_scope, resolved_scope_id, &key, &value)
+                    .map_err(SlateDuckError::from)?;
             }
             BufferedOp::InsertInlinedDataTables { .. } => {
-                // Inlined data table registration accepted
+                // Inlined data table registration accepted (persisted via future InlinedDataTablesRow writer)
             }
-            BufferedOp::InsertView { .. } => {
-                // Views accepted
+            BufferedOp::InsertView {
+                schema_id,
+                view_name,
+                sql,
+                view_uuid,
+                dialect,
+                column_aliases,
+            } => {
+                writer
+                    .create_view_with_opts(
+                        schema_id,
+                        &view_name,
+                        &sql,
+                        view_uuid.as_deref(),
+                        dialect.as_deref(),
+                        column_aliases.as_deref(),
+                    )
+                    .await
+                    .map_err(SlateDuckError::from)?;
             }
-            BufferedOp::InsertMacro { .. } => {
-                // Macros accepted
+            BufferedOp::InsertMacro {
+                schema_id,
+                macro_name,
+                macro_type,
+                macro_uuid: _,
+            } => {
+                writer
+                    .create_macro(schema_id, &macro_name, &macro_type)
+                    .await
+                    .map_err(SlateDuckError::from)?;
+            }
+            BufferedOp::InsertMacroImpl {
+                macro_id,
+                sql,
+                dialect,
+                impl_type,
+            } => {
+                writer
+                    .add_macro_impl_with_opts(
+                        macro_id,
+                        &sql,
+                        dialect.as_deref(),
+                        impl_type.as_deref(),
+                    )
+                    .await
+                    .map_err(SlateDuckError::from)?;
+            }
+            BufferedOp::InsertMacroParams {
+                macro_id,
+                impl_id,
+                column_id,
+                parameter_name,
+                parameter_type,
+                default_value,
+                default_value_type,
+            } => {
+                writer
+                    .add_macro_parameter_with_opts(
+                        macro_id,
+                        impl_id,
+                        column_id,
+                        &parameter_name,
+                        &parameter_type,
+                        default_value.as_deref(),
+                        default_value_type.as_deref(),
+                    )
+                    .await
+                    .map_err(SlateDuckError::from)?;
             }
             BufferedOp::InsertTableStats {
                 table_id,
@@ -336,13 +421,6 @@ pub(super) fn make_schemas_response(
             FieldFormat::Text,
         ),
         FieldInfo::new(
-            "schema_name".to_string(),
-            None,
-            None,
-            Type::TEXT,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
             "begin_snapshot".to_string(),
             None,
             None,
@@ -354,6 +432,34 @@ pub(super) fn make_schemas_response(
             None,
             None,
             Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "schema_uuid".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "schema_name".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "path".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "path_is_relative".to_string(),
+            None,
+            None,
+            Type::BOOL,
             FieldFormat::Text,
         ),
     ]);
@@ -369,13 +475,6 @@ pub(super) fn make_schemas_response(
             .unwrap();
         encoder
             .encode_field_with_type_and_format(
-                &Some(s.schema_name.clone()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .unwrap();
-        encoder
-            .encode_field_with_type_and_format(
                 &Some(s.begin_snapshot.to_string()),
                 &Type::TEXT,
                 FieldFormat::Text,
@@ -384,6 +483,23 @@ pub(super) fn make_schemas_response(
         let end = s.end_snapshot.map(|e| e.to_string());
         encoder
             .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&s.schema_uuid, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(s.schema_name.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&s.path, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        let pir = s.path_is_relative.map(|b| b.to_string());
+        encoder
+            .encode_field_with_type_and_format(&pir, &Type::TEXT, FieldFormat::Text)
             .unwrap();
         data_rows.push(encoder.finish());
     }
@@ -405,20 +521,6 @@ pub(super) fn make_tables_response(
             FieldFormat::Text,
         ),
         FieldInfo::new(
-            "schema_id".to_string(),
-            None,
-            None,
-            Type::INT8,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "table_name".to_string(),
-            None,
-            None,
-            Type::TEXT,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
             "begin_snapshot".to_string(),
             None,
             None,
@@ -433,10 +535,38 @@ pub(super) fn make_tables_response(
             FieldFormat::Text,
         ),
         FieldInfo::new(
-            "data_path".to_string(),
+            "schema_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "table_name".to_string(),
             None,
             None,
             Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "table_uuid".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "path".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "path_is_relative".to_string(),
+            None,
+            None,
+            Type::BOOL,
             FieldFormat::Text,
         ),
     ]);
@@ -446,20 +576,6 @@ pub(super) fn make_tables_response(
         encoder
             .encode_field_with_type_and_format(
                 &Some(t.table_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .unwrap();
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(t.schema_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .unwrap();
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(t.table_name.clone()),
                 &Type::TEXT,
                 FieldFormat::Text,
             )
@@ -476,7 +592,28 @@ pub(super) fn make_tables_response(
             .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
             .unwrap();
         encoder
-            .encode_field_with_type_and_format(&t.data_path.clone(), &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(
+                &Some(t.schema_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(t.table_name.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&t.table_uuid, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&t.path, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        let pir = t.path_is_relative.map(|b| b.to_string());
+        encoder
+            .encode_field_with_type_and_format(&pir, &Type::TEXT, FieldFormat::Text)
             .unwrap();
         data_rows.push(encoder.finish());
     }
@@ -498,34 +635,6 @@ pub(super) fn make_columns_response(
             FieldFormat::Text,
         ),
         FieldInfo::new(
-            "table_id".to_string(),
-            None,
-            None,
-            Type::INT8,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "column_name".to_string(),
-            None,
-            None,
-            Type::TEXT,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "data_type".to_string(),
-            None,
-            None,
-            Type::TEXT,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "column_index".to_string(),
-            None,
-            None,
-            Type::INT8,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
             "begin_snapshot".to_string(),
             None,
             None,
@@ -540,17 +649,66 @@ pub(super) fn make_columns_response(
             FieldFormat::Text,
         ),
         FieldInfo::new(
-            "is_nullable".to_string(),
+            "table_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "column_name".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "column_type".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "column_order".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "nulls_allowed".to_string(),
             None,
             None,
             Type::BOOL,
             FieldFormat::Text,
         ),
         FieldInfo::new(
-            "default_value".to_string(),
+            "initial_default".to_string(),
             None,
             None,
             Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "default_value_type".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "default_value_dialect".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "parent_column".to_string(),
+            None,
+            None,
+            Type::INT8,
             FieldFormat::Text,
         ),
     ]);
@@ -563,6 +721,17 @@ pub(super) fn make_columns_response(
                 &Type::TEXT,
                 FieldFormat::Text,
             )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(c.begin_snapshot.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        let end = c.end_snapshot.map(|e| e.to_string());
+        encoder
+            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
             .unwrap();
         encoder
             .encode_field_with_type_and_format(
@@ -594,28 +763,31 @@ pub(super) fn make_columns_response(
             .unwrap();
         encoder
             .encode_field_with_type_and_format(
-                &Some(c.begin_snapshot.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .unwrap();
-        let end = c.end_snapshot.map(|e| e.to_string());
-        encoder
-            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
-            .unwrap();
-        encoder
-            .encode_field_with_type_and_format(
                 &Some(c.is_nullable.to_string()),
                 &Type::TEXT,
                 FieldFormat::Text,
             )
             .unwrap();
         encoder
+            .encode_field_with_type_and_format(&c.initial_default, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
             .encode_field_with_type_and_format(
-                &c.default_value.clone(),
+                &c.default_value_type,
                 &Type::TEXT,
                 FieldFormat::Text,
             )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &c.default_value_dialect,
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        let parent = c.parent_column.map(|v| v.to_string());
+        encoder
+            .encode_field_with_type_and_format(&parent, &Type::TEXT, FieldFormat::Text)
             .unwrap();
         data_rows.push(encoder.finish());
     }
@@ -1161,6 +1333,285 @@ pub(super) fn make_delete_files_response(
         let end = f.end_snapshot.map(|e| e.to_string());
         encoder
             .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.25: Build a PgWire response for `SELECT * FROM ducklake_metadata`.
+pub(super) fn make_metadata_response(
+    rows: Vec<slateduck_core::rows::MetadataRow>,
+) -> Response<'static> {
+    let schema = Arc::new(vec![
+        FieldInfo::new(
+            "metadata_key".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "metadata_value".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "scope".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "scope_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+    ]);
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(&Some(r.key.clone()), &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.value.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        let scope_str = r.scope.clone().or_else(|| Some("global".to_string()));
+        encoder
+            .encode_field_with_type_and_format(&scope_str, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        let scope_id = r.scope_id.map(|v| v.to_string());
+        encoder
+            .encode_field_with_type_and_format(&scope_id, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.25: Build a PgWire response for `SELECT * FROM ducklake_view`.
+pub(super) fn make_views_response(views: Vec<slateduck_core::rows::ViewRow>) -> Response<'static> {
+    let schema = Arc::new(vec![
+        FieldInfo::new(
+            "view_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "begin_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "end_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "schema_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "view_name".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "view_uuid".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "view_definition".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "dialect".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "column_aliases".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ]);
+    let mut data_rows = Vec::new();
+    for v in &views {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(v.view_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(v.begin_snapshot.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        let end = v.end_snapshot.map(|e| e.to_string());
+        encoder
+            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(v.schema_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(v.view_name.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&v.view_uuid, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&Some(v.sql.clone()), &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&v.dialect, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&v.column_aliases, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.25: Build a PgWire response for `SELECT * FROM ducklake_macro`.
+pub(super) fn make_macros_response(
+    macros: Vec<slateduck_core::rows::MacroRow>,
+) -> Response<'static> {
+    let schema = Arc::new(vec![
+        FieldInfo::new(
+            "macro_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "begin_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "end_snapshot".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "schema_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "macro_name".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "macro_uuid".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ]);
+    let mut data_rows = Vec::new();
+    for m in &macros {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(m.macro_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(m.begin_snapshot.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        let end = m.end_snapshot.map(|e| e.to_string());
+        encoder
+            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(m.schema_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(m.macro_name.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .unwrap();
+        encoder
+            .encode_field_with_type_and_format(&m.macro_uuid, &Type::TEXT, FieldFormat::Text)
             .unwrap();
         data_rows.push(encoder.finish());
     }

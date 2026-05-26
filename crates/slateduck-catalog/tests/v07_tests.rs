@@ -197,6 +197,10 @@ async fn packed_metadata_write_and_read() {
                 end_snapshot: None,
                 default_value: None,
                 is_nullable: false,
+                initial_default: None,
+                default_value_type: None,
+                default_value_dialect: None,
+                parent_column: None,
             },
             ColumnRow {
                 column_id: 2,
@@ -208,6 +212,10 @@ async fn packed_metadata_write_and_read() {
                 end_snapshot: None,
                 default_value: None,
                 is_nullable: true,
+                initial_default: None,
+                default_value_type: None,
+                default_value_dialect: None,
+                parent_column: None,
             },
         ],
         partition_info: vec![PartitionInfoRow {

@@ -27,8 +27,9 @@ use crate::session::{BufferedOp, SessionState};
 use catalog::{
     execute_commit, execute_next_rowid_range, execute_table_changes, make_columns_response,
     make_data_files_response, make_delete_files_response, make_file_ids_response,
-    make_schemas_response, make_snapshot_row_response, make_table_stats_response,
-    make_tables_response,
+    make_macros_response, make_metadata_response, make_schemas_response,
+    make_snapshot_row_response, make_table_stats_response, make_tables_response,
+    make_views_response,
 };
 use extension::{
     execute_create_extension_table, execute_delete_extension_rows, execute_insert_extension_row,
@@ -232,12 +233,47 @@ async fn execute_classified<'a>(
                 Ok(vec![make_empty_response()])
             }
         }
-        StatementKind::SelectMetadata
-        | StatementKind::SelectInlinedData
-        | StatementKind::SelectViews
-        | StatementKind::SelectMacros
-        | StatementKind::SelectInlinedRows => {
-            // Return empty result set for these less commonly used reads
+        StatementKind::SelectMetadata => {
+            let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
+            let reader = {
+                let s = store.lock().await;
+                s.read_at(slateduck_core::mvcc::SnapshotId::new(snap_id))
+                    .map_err(SlateDuckError::from)?
+            };
+            let rows = reader
+                .list_all_metadata()
+                .await
+                .map_err(SlateDuckError::from)?;
+            Ok(vec![make_metadata_response(rows)])
+        }
+        StatementKind::SelectViews => {
+            let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
+            let reader = {
+                let s = store.lock().await;
+                s.read_at(slateduck_core::mvcc::SnapshotId::new(snap_id))
+                    .map_err(SlateDuckError::from)?
+            };
+            let rows = reader
+                .list_all_views()
+                .await
+                .map_err(SlateDuckError::from)?;
+            Ok(vec![make_views_response(rows)])
+        }
+        StatementKind::SelectMacros => {
+            let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
+            let reader = {
+                let s = store.lock().await;
+                s.read_at(slateduck_core::mvcc::SnapshotId::new(snap_id))
+                    .map_err(SlateDuckError::from)?
+            };
+            let rows = reader
+                .list_all_macros()
+                .await
+                .map_err(SlateDuckError::from)?;
+            Ok(vec![make_macros_response(rows)])
+        }
+        StatementKind::SelectInlinedData | StatementKind::SelectInlinedRows => {
+            // Return empty result set for inlined data (read-only introspection)
             Ok(vec![make_empty_response()])
         }
 
@@ -349,6 +385,10 @@ async fn execute_classified<'a>(
                 column_index: params.get_u64(3).unwrap_or(0),
                 is_nullable: params.get_bool(4).unwrap_or(true),
                 default_value: params.get_optional_string(5),
+                initial_default: params.get_optional_string(6),
+                default_value_type: params.get_optional_string(7),
+                default_value_dialect: params.get_optional_string(8),
+                parent_column: params.get_u64(9).ok(),
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -423,6 +463,8 @@ async fn execute_classified<'a>(
             let op = BufferedOp::InsertMetadata {
                 key: params.get_string(0).unwrap_or_default(),
                 value: params.get_string(1).unwrap_or_default(),
+                scope: params.get_optional_string(2),
+                scope_id: params.get_u64(3).ok(),
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -449,6 +491,9 @@ async fn execute_classified<'a>(
                 schema_id: params.get_u64(0).unwrap_or(0),
                 view_name: params.get_string(1).unwrap_or_default(),
                 sql: params.get_string(2).unwrap_or_default(),
+                view_uuid: params.get_optional_string(3),
+                dialect: params.get_optional_string(4),
+                column_aliases: params.get_optional_string(5),
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -462,6 +507,7 @@ async fn execute_classified<'a>(
                 schema_id: params.get_u64(0).unwrap_or(0),
                 macro_name: params.get_string(1).unwrap_or_default(),
                 macro_type: params.get_string(2).unwrap_or_default(),
+                macro_uuid: params.get_optional_string(3),
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -470,8 +516,35 @@ async fn execute_classified<'a>(
             }
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
-        StatementKind::InsertMacroImpl | StatementKind::InsertMacroParameters => {
-            // Accept but no-op for now (macros deferred)
+        StatementKind::InsertMacroImpl => {
+            let op = BufferedOp::InsertMacroImpl {
+                macro_id: params.get_u64(0).unwrap_or(0),
+                sql: params.get_string(1).unwrap_or_default(),
+                dialect: params.get_optional_string(2),
+                impl_type: params.get_optional_string(3),
+            };
+            if session.in_transaction {
+                session.pending_txn.push(op)?;
+            } else {
+                execute_commit(vec![op], store, notify_manager).await?;
+            }
+            Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
+        }
+        StatementKind::InsertMacroParameters => {
+            let op = BufferedOp::InsertMacroParams {
+                macro_id: params.get_u64(0).unwrap_or(0),
+                impl_id: params.get_u64(1).unwrap_or(0),
+                column_id: params.get_u64(2).unwrap_or(0),
+                parameter_name: params.get_string(3).unwrap_or_default(),
+                parameter_type: params.get_string(4).unwrap_or_default(),
+                default_value: params.get_optional_string(5),
+                default_value_type: params.get_optional_string(6),
+            };
+            if session.in_transaction {
+                session.pending_txn.push(op)?;
+            } else {
+                execute_commit(vec![op], store, notify_manager).await?;
+            }
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
 
