@@ -163,7 +163,10 @@ fn bench_create_snapshot(c: &mut Criterion) {
     rt.block_on(catalog.close()).unwrap();
 }
 
-fn setup_catalog_n_files(rt: &Runtime, n: usize) -> (CatalogStore, TempDir, u64, u64, CommitResult) {
+fn setup_catalog_n_files(
+    rt: &Runtime,
+    n: usize,
+) -> (CatalogStore, TempDir, u64, u64, CommitResult) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let store = Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&path).unwrap());
