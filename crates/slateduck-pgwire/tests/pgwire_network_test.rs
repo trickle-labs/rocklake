@@ -243,7 +243,10 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
         .unwrap();
     assert!(!schema_list.is_empty(), "must see the events schema");
     let names: Vec<String> = schema_list.iter().map(|r| r.get("schema_name")).collect();
-    assert!(names.contains(&"events".to_string()), "events schema must be present");
+    assert!(
+        names.contains(&"events".to_string()),
+        "events schema must be present"
+    );
 
     let file_rows = client
         .query(
@@ -293,16 +296,24 @@ async fn select_version_returns_postgresql_compatible_string() {
     let dir = TempDir::new().unwrap();
     let (addr, tx, handle) = start_server(&dir).await;
 
-    let conn_str = format!("host=127.0.0.1 port={} user=duckdb dbname=ducklake", addr.port());
+    let conn_str = format!(
+        "host=127.0.0.1 port={} user=duckdb dbname=ducklake",
+        addr.port()
+    );
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls)
         .await
         .unwrap();
-    tokio::spawn(async move { let _ = connection.await; });
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
     let rows = client.query("SELECT version()", &[]).await.unwrap();
     assert_eq!(rows.len(), 1);
     let v: &str = rows[0].get(0);
-    assert!(v.contains("PostgreSQL"), "version() must contain 'PostgreSQL', got: {v}");
+    assert!(
+        v.contains("PostgreSQL"),
+        "version() must contain 'PostgreSQL', got: {v}"
+    );
 
     let _ = tx.send(());
     let _ = handle.await;
@@ -334,11 +345,16 @@ async fn tls_optional_server_accepts_plaintext() {
     let dir = TempDir::new().unwrap();
     let (addr, tx, handle) = start_tls_server(&dir, false).await;
 
-    let conn_str = format!("host=127.0.0.1 port={} user=duckdb dbname=ducklake", addr.port());
+    let conn_str = format!(
+        "host=127.0.0.1 port={} user=duckdb dbname=ducklake",
+        addr.port()
+    );
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls)
         .await
         .unwrap();
-    tokio::spawn(async move { let _ = connection.await; });
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
     let rows = client.query("SELECT version()", &[]).await.unwrap();
     assert_eq!(rows.len(), 1);

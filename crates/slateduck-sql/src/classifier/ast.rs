@@ -139,9 +139,13 @@ pub(super) fn classify_no_from_select(select: &sqlparser::ast::Select) -> Statem
             if let Expr::Function(func) = expr {
                 if func.name.to_string().to_lowercase() == "version" {
                     // Check second item for RDS pattern
-                    if let Some(SelectItem::UnnamedExpr(Expr::Subquery(_)) | 
-                               SelectItem::ExprWithAlias { expr: Expr::Subquery(_), .. }) =
-                        select.projection.get(1)
+                    if let Some(
+                        SelectItem::UnnamedExpr(Expr::Subquery(_))
+                        | SelectItem::ExprWithAlias {
+                            expr: Expr::Subquery(_),
+                            ..
+                        },
+                    ) = select.projection.get(1)
                     {
                         return StatementKind::SelectVersionWithRdsCheck;
                     }
@@ -149,7 +153,7 @@ pub(super) fn classify_no_from_select(select: &sqlparser::ast::Select) -> Statem
             }
         }
     }
-    
+
     // Single-item SELECT functions
     if let Some(SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. }) =
         select.projection.first()
@@ -165,7 +169,7 @@ pub(super) fn classify_no_from_select(select: &sqlparser::ast::Select) -> Statem
             }
             _ => {}
         }
-        
+
         if let Expr::Function(func) = expr {
             let func_name = func.name.to_string().to_lowercase();
             match func_name.as_str() {

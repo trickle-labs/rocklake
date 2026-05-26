@@ -177,11 +177,7 @@ pub(super) fn make_version_with_rds_check_response<'a>() -> Response<'a> {
         .expect("pgwire field encoding is infallible");
     // RDS check: 0 means not on RDS
     encoder
-        .encode_field_with_type_and_format(
-            &Some("0".to_string()),
-            &Type::INT8,
-            FieldFormat::Text,
-        )
+        .encode_field_with_type_and_format(&Some("0".to_string()), &Type::INT8, FieldFormat::Text)
         .expect("pgwire field encoding is infallible");
     let row = encoder.finish();
     let data_rows = vec![row];

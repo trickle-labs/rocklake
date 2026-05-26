@@ -39,14 +39,8 @@ async fn write_n_snapshots(store: &mut CatalogStore, n: u32) -> Vec<u64> {
     let mut ids = Vec::with_capacity(n as usize);
     let mut writer = store.begin_write();
     for i in 0..n {
-        writer
-            .create_schema(&format!("schema_{i}"))
-            .await
-            .unwrap();
-        let commit = writer
-            .create_snapshot(Some("setup"), None)
-            .await
-            .unwrap();
+        writer.create_schema(&format!("schema_{i}")).await.unwrap();
+        let commit = writer.create_snapshot(Some("setup"), None).await.unwrap();
         ids.push(commit.snapshot_id.as_u64());
         store.commit_writer(commit);
         writer = store.begin_write();

@@ -71,7 +71,7 @@ binding on every roadmap release below.
 | **v0.27 — DuckLake v1.0 External Compatibility Validation** | Real DuckDB DuckLake extension end-to-end tests; read conformance suite against `specification/queries.md`; import/export migration path; P2 fidelity gaps (`files_scheduled_for_deletion`, `file_partition_value`, `sort_info`, `tag`/`column_tag` facade) | Done |
 | **v0.27.1 — CDC Completeness & Real Parquet Row Scanning** | Implement real `extract_rows_from_parquet()` via `object_store`; replace synthetic CDC column payloads with actual file data; verify `record_count` against scanned rows; streaming/batching for large Parquet files; end-to-end CDC round-trip tests | Done |
 | **v0.27.2 — DataFusion Completeness, Code Hardening & Security** | Auto-resolve `data_root` from catalog metadata; eliminate OS-thread-per-sync DataFusion bridge overhead; resolve or remove `slateduck-sqlite-vfs` placeholder; replace DataRowEncoder `unwrap()` calls; harden key/value decode paths; verify `checked_add` in writer; verify `SqlState` code propagation; API ergonomics for `CatalogStore` commit; warn on auth-without-TLS; address wall-clock lease concern | Done |
-| **v0.27.3 — Testing Completeness, CI Production Gates & Documentation** | Make coverage threshold a hard gate; add doc-tests for all public APIs in `slateduck-core` and `slateduck-catalog`; add network-level PG-Wire integration test; add concurrent writer fencing test; verify checkpoint-restore snapshot-ID safety; verify `rebuild_catalog` behaviour; align `docs/operations/monitoring.md` with CLI flags; close all open partial findings from Assessments 1 & 2 | Planning |
+| **v0.27.3 — Testing Completeness, CI Production Gates & Documentation** | Make coverage threshold a hard gate; add doc-tests for all public APIs in `slateduck-core` and `slateduck-catalog`; add network-level PG-Wire integration test; add concurrent writer fencing test; verify checkpoint-restore snapshot-ID safety; verify `rebuild_catalog` behaviour; align `docs/operations/monitoring.md` with CLI flags; close all open partial findings from Assessments 1 & 2 | Done |
 | **v0.28.0 — Full Ecosystem Compatibility Certification** | Release-blocking CI evidence for every `docs/compatibility.md` row: real DuckDB/DuckLake versions, SQL clients, Spark/Trino/Presto disposition, DataFusion, object stores, TLS/auth, Rust/MSRV, and release platforms | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
@@ -2778,88 +2778,88 @@ SlateDuck claims DuckLake v1.0 catalog compatibility when all of the following a
 
 ### Coverage as a Hard Gate (N-09)
 
-- [ ] In `.github/workflows/ci.yml`, replace the `::warning` threshold check with a hard `exit 1` when workspace coverage falls below 80 %:
+- [x] In `.github/workflows/ci.yml`, replace the `::warning` threshold check with a hard `exit 1` when workspace coverage falls below 80 %:
   ```bash
   if [ "${COVERAGE%.*}" -lt 80 ]; then
     echo "::error::Coverage ${COVERAGE}% is below the 80% gate"
     exit 1
   fi
   ```
-- [ ] Set per-crate minimums in the CI script: `slateduck-core` ≥ 85 %, `slateduck-catalog` ≥ 85 %, `slateduck-sql` ≥ 80 %, `slateduck-pgwire` ≥ 75 %.
-- [ ] Remove `continue-on-error: true` from the sanitizer jobs (ASAN, UBSAN, Miri); failures must block the merge queue.
+- [x] Set per-crate minimums in the CI script: `slateduck-core` ≥ 85 %, `slateduck-catalog` ≥ 85 %, `slateduck-sql` ≥ 80 %, `slateduck-pgwire` ≥ 75 %.
+- [x] Remove `continue-on-error: true` from the sanitizer jobs (ASAN, UBSAN, Miri); failures must block the merge queue.
 
 ### Doc-Tests for All Public APIs (N-10)
 
-- [ ] Add at least one `///` example (`# Examples` section with a compilable doctest) to every `pub fn` and `pub struct` in:
+- [x] Add at least one `///` example (`# Examples` section with a compilable doctest) to every `pub fn` and `pub struct` in:
   - `crates/slateduck-core/src/keys.rs` — key construction and round-trip decode
   - `crates/slateduck-core/src/values.rs` — value encode/decode
   - `crates/slateduck-core/src/types.rs` — DuckLake type parsing
   - `crates/slateduck-catalog/src/lib.rs` — `CatalogStore::open()`, `begin_write()`, `create_snapshot()`
   - `crates/slateduck-catalog/src/reader.rs` — `read_at()`, `list_schemas()`, `list_tables()`
-- [ ] Add `#![deny(missing_docs)]` to `slateduck-core` and `slateduck-catalog` crate roots.
-- [ ] Verify all doc-tests pass with `cargo test --doc --workspace`.
+- [x] Add `#![deny(missing_docs)]` to `slateduck-core` and `slateduck-catalog` crate roots.
+- [x] Verify all doc-tests pass with `cargo test --doc --workspace`.
 
 ### Network-Level PG-Wire Integration Test (N-11)
 
-- [ ] Add `tests/pgwire_network_test.rs` (or a new integration test binary in `slateduck-pgwire/tests/`):
+- [x] Add `tests/pgwire_network_test.rs` (or a new integration test binary in `slateduck-pgwire/tests/`):
   - Spawn the `slateduck serve` binary on a random available port using `std::process::Child`.
   - Connect using `tokio-postgres` (no libpq dependency) with a real TCP socket.
   - Execute: `CREATE SCHEMA`, `CREATE TABLE`, `INSERT`, `SELECT`, and `table_changes()`.
   - Assert row counts and column values in the response.
   - Tear down the process after the test regardless of outcome.
-- [ ] Add a separate test that connects with TLS enabled and verifies the handshake completes and auth is enforced.
-- [ ] Wire these tests into CI as a new `integration` job that runs after the main `test` job.
+- [x] Add a separate test that connects with TLS enabled and verifies the handshake completes and auth is enforced.
+- [x] Wire these tests into CI as a new `integration` job that runs after the main `test` job.
 
 ### Concurrent Writer Fencing Test
 
-- [ ] Add `tests/concurrent_writer_fencing.rs` in `slateduck-catalog`:
+- [x] Add `tests/concurrent_writer_fencing.rs` in `slateduck-catalog`:
   - Open two `CatalogStore` handles against the same `SlateDB` instance.
   - Have the first store acquire a writer epoch and commit a snapshot.
   - Have the second store attempt to acquire a writer epoch; assert it receives `CatalogError::WriterFenced` or equivalent.
   - Verify the second store can re-open successfully with a fresh epoch after the first store is dropped.
-- [ ] Extend the test to cover the race: both stores attempt epoch acquisition simultaneously (use `tokio::join!`); verify exactly one succeeds.
+- [x] Extend the test to cover the race: both stores attempt epoch acquisition simultaneously (use `tokio::join!`); verify exactly one succeeds.
 
 ### Checkpoint Restore Snapshot-ID Safety (closes F-07)
 
-- [ ] Add `tests/checkpoint_restore.rs` in `slateduck-catalog`:
+- [x] Add `tests/checkpoint_restore.rs` in `slateduck-catalog`:
   - Write 5 snapshots, checkpoint, delete catalog state, restore from checkpoint.
   - Assert the next allocated snapshot ID is strictly greater than the highest ID in the restored snapshot.
   - Verify no existing snapshot's `dl_snapshot_id` is reissued.
-- [ ] If any reuse is found, fix `restore_checkpoint()` to read `COUNTER_SNAPSHOT` from the restored state before re-initialising the in-memory counter.
+- [x] If any reuse is found, fix `restore_checkpoint()` to read `COUNTER_SNAPSHOT` from the restored state before re-initialising the in-memory counter.
 
 ### Metrics Documentation Alignment (Medium-10)
 
-- [ ] Audit `docs/operations/monitoring.md` against the actual `--metrics-path` / `SLATEDUCK_METRICS_PATH` CLI flags in `src/main.rs` and the pgwire server.
-- [ ] For each documented metric name, verify it is emitted by the implementation (add a `grep` assertion in a new `tests/metrics_smoke.rs` if helpful).
-- [ ] Update or remove metric names in the docs that no longer exist; add entries for any emitted metrics that are undocumented.
-- [ ] Add a CI step: `cargo run --bin slateduck -- --help | grep -q "metrics"` as a smoke check that the flag is present.
+- [x] Audit `docs/operations/monitoring.md` against the actual `--metrics-path` / `SLATEDUCK_METRICS_PATH` CLI flags in `src/main.rs` and the pgwire server.
+- [x] For each documented metric name, verify it is emitted by the implementation (add a `grep` assertion in a new `tests/metrics_smoke.rs` if helpful).
+- [x] Update or remove metric names in the docs that no longer exist; add entries for any emitted metrics that are undocumented.
+- [x] Add a CI step: `cargo run --bin slateduck -- --help | grep -q "metrics"` as a smoke check that the flag is present.
 
 ### Documentation Drift — Remaining Items (Section 8)
 
-- [ ] `docs/architecture/crate-structure.md`: reflect the outcome of the `slateduck-sqlite-vfs` decision from v0.27.2.
-- [ ] `docs/concepts/`: verify all concept pages reference current crate names and module paths (no references to removed crates such as `slateduck-ivm`).
-- [ ] `docs/roadmap/`: generate a per-version summary page for v0.27, v0.27.1, v0.27.2, v0.27.3 with the status of each Assessment finding.
-- [ ] `docs/internals/cdc.md`: document the real Parquet scanning path added in v0.27.1, including the `record_count` mismatch warning behaviour.
-- [ ] `docs/integration/datafusion.md`: fully updated after v0.27.2 DataFusion changes.
+- [x] `docs/architecture/crate-structure.md`: reflect the outcome of the `slateduck-sqlite-vfs` decision from v0.27.2.
+- [x] `docs/concepts/`: verify all concept pages reference current crate names and module paths (no references to removed crates such as `slateduck-ivm`).
+- [x] `docs/roadmap/`: generate a per-version summary page for v0.27, v0.27.1, v0.27.2, v0.27.3 with the status of each Assessment finding.
+- [x] `docs/internals/cdc.md`: document the real Parquet scanning path added in v0.27.1, including the `record_count` mismatch warning behaviour.
+- [x] `docs/integration/datafusion.md`: fully updated after v0.27.2 DataFusion changes.
 
 ### Sanitizer & Miri Hardening
 
-- [ ] Remove `continue-on-error: true` from `sanitizers.yml` for ASAN and UBSAN jobs.
-- [ ] Extend Miri coverage to `slateduck-core` key and value encode/decode functions (currently only `slateduck-ffi` is Miri-tested).
-- [ ] Add a `cargo miri test -p slateduck-core` step to the nightly Miri job.
-- [ ] Investigate and resolve any Miri `Stacked Borrows` or `Tree Borrows` errors surfaced by expanded coverage.
+- [x] Remove `continue-on-error: true` from `sanitizers.yml` for ASAN and UBSAN jobs.
+- [x] Extend Miri coverage to `slateduck-core` key and value encode/decode functions (currently only `slateduck-ffi` is Miri-tested).
+- [x] Add a `cargo miri test -p slateduck-core` step to the nightly Miri job.
+- [x] Investigate and resolve any Miri `Stacked Borrows` or `Tree Borrows` errors surfaced by expanded coverage.
 
 ### Definition of Done
 
-- [ ] Coverage below 80 % causes a hard CI failure on every PR and merge.
-- [ ] Sanitizer and Miri jobs are non-optional; a failure blocks merge.
-- [ ] Every public API in `slateduck-core` and `slateduck-catalog` has at least one passing doc-test.
-- [ ] A real TCP `tokio-postgres` client successfully completes a full DuckLake DDL/DML/query cycle against the running `slateduck serve` binary in CI.
-- [ ] Concurrent writer fencing is verified by an automated test.
-- [ ] Checkpoint restore snapshot-ID safety is verified by an automated test.
-- [ ] `docs/operations/monitoring.md` matches the implemented CLI flags and metric names.
-- [ ] Assessment findings **N-09**, **N-10**, **N-11**, **F-07**, **Medium-10** resolved and closed.
-- [ ] All open partial findings from Assessments 1 and 2 are marked either **Fixed** (with test) or **Accepted** (with rationale) in a new `docs/internals/open-findings-verification.md`.
+- [x] Coverage below 80 % causes a hard CI failure on every PR and merge.
+- [x] Sanitizer and Miri jobs are non-optional; a failure blocks merge.
+- [x] Every public API in `slateduck-core` and `slateduck-catalog` has at least one passing doc-test.
+- [x] A real TCP `tokio-postgres` client successfully completes a full DuckLake DDL/DML/query cycle against the running `slateduck serve` binary in CI.
+- [x] Concurrent writer fencing is verified by an automated test.
+- [x] Checkpoint restore snapshot-ID safety is verified by an automated test.
+- [x] `docs/operations/monitoring.md` matches the implemented CLI flags and metric names.
+- [x] Assessment findings **N-09**, **N-10**, **N-11**, **F-07**, **Medium-10** resolved and closed.
+- [x] All open partial findings from Assessments 1 and 2 are marked either **Fixed** (with test) or **Accepted** (with rationale) in a new `docs/internals/open-findings-verification.md`.
 
 ---
 

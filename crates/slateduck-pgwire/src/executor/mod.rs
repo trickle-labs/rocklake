@@ -75,7 +75,10 @@ async fn execute_classified<'a>(
     notify_manager: &Arc<NotifyManager>,
     extension_schemas: &Arc<Vec<String>>,
 ) -> Result<Vec<Response<'a>>, SlateDuckError> {
-    eprintln!("[DEBUG] execute_classified: kind={:?}, sql={:?}", kind, _sql);
+    eprintln!(
+        "[DEBUG] execute_classified: kind={:?}, sql={:?}",
+        kind, _sql
+    );
     match kind {
         // ─── Session / Introspection ───────────────────────────────────
         StatementKind::SelectVersion => {
