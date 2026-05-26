@@ -33,8 +33,8 @@ fn setup_catalog() -> (TempDir, CatalogStore) {
         let sid = writer.create_schema("main").await.unwrap();
         writer.create_table(sid, "events", None).await.unwrap();
         writer.create_table(sid, "orders", None).await.unwrap();
-        writer.create_snapshot(None, None).await.unwrap();
-        catalog.commit_writer(&writer);
+        let cr = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(cr);
     });
     (dir, catalog)
 }
