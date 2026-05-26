@@ -9,6 +9,7 @@
 //!  - TLS-required server rejects plaintext connections.
 //!  - Process is torn down after each test regardless of outcome.
 
+use futures::TryStreamExt;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 use slateduck_catalog::{CatalogStore, OpenOptions};
@@ -143,6 +144,10 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
     });
 
     // ── 1. Create a schema ──────────────────────────────────────────────────
+    // DuckLake requires InsertSchema and InsertSnapshot in the same atomic
+    // commit. Wrap in BEGIN/COMMIT so that the CatalogWriter calls
+    // create_snapshot() and actually persists the staged schema row.
+    client.execute("BEGIN", &[]).await.unwrap();
     client
         .execute(
             "INSERT INTO ducklake_schema (schema_name) VALUES ($1)",
@@ -150,8 +155,6 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
         )
         .await
         .unwrap();
-
-    // Commit the schema creation.
     client
         .execute(
             "INSERT INTO ducklake_snapshot (author, message) VALUES ($1, $2)",
@@ -159,20 +162,24 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
         )
         .await
         .unwrap();
+    client.execute("COMMIT", &[]).await.unwrap();
 
-    // ── 2. Retrieve the schema_id ───────────────────────────────────────────
+    // ── 2. Retrieve the snapshot id ─────────────────────────────────────────
     let snap_rows = client
         .query("SELECT max(snapshot_id) AS s FROM ducklake_snapshot", &[])
         .await
         .unwrap();
     assert_eq!(snap_rows.len(), 1, "must have at least one snapshot");
-    let snap_id: i64 = snap_rows[0].get("s");
+    let snap_id: i64 = snap_rows[0].get("max");
     assert!(snap_id >= 1, "snapshot_id must be positive");
 
+    // Retrieve schema_id.  The server returns all schemas visible at snap_id;
+    // the test asserts there is exactly one (the "events" schema just created).
     let schema_rows = client
         .query(
-            "SELECT schema_id FROM ducklake_schema WHERE schema_name = $1",
-            &[&"events"],
+            "SELECT schema_id, schema_name FROM ducklake_schema WHERE begin_snapshot <= $1 \
+             AND (end_snapshot IS NULL OR end_snapshot > $1)",
+            &[&snap_id],
         )
         .await
         .unwrap();
@@ -180,6 +187,7 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
     let schema_id: i64 = schema_rows[0].get("schema_id");
 
     // ── 3. Create a table ───────────────────────────────────────────────────
+    client.execute("BEGIN", &[]).await.unwrap();
     client
         .execute(
             "INSERT INTO ducklake_table (schema_id, table_name, data_path) VALUES ($1, $2, $3)",
@@ -187,8 +195,6 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
         )
         .await
         .unwrap();
-
-    // Commit the table creation.
     client
         .execute(
             "INSERT INTO ducklake_snapshot (author, message) VALUES ($1, $2)",
@@ -196,17 +202,20 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
         )
         .await
         .unwrap();
+    client.execute("COMMIT", &[]).await.unwrap();
 
     let snap_rows2 = client
         .query("SELECT max(snapshot_id) AS s FROM ducklake_snapshot", &[])
         .await
         .unwrap();
-    let snap2: i64 = snap_rows2[0].get("s");
+    let snap2: i64 = snap_rows2[0].get("max");
 
+    // Retrieve table_id.  The DuckLake protocol passes schema_id as the first
+    // parameter ($1) so that the server can call list_tables(schema_id).
     let table_rows = client
         .query(
-            "SELECT table_id FROM ducklake_table WHERE table_name = $1 AND schema_id = $2",
-            &[&"logs", &schema_id],
+            "SELECT table_id FROM ducklake_table WHERE schema_id = $1",
+            &[&schema_id],
         )
         .await
         .unwrap();
@@ -214,6 +223,7 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
     let table_id: i64 = table_rows[0].get("table_id");
 
     // ── 4. Register a data file (INSERT) ────────────────────────────────────
+    client.execute("BEGIN", &[]).await.unwrap();
     client
         .execute(
             "INSERT INTO ducklake_data_file (table_id, path, file_format, row_count, file_size_bytes) VALUES ($1, $2, $3, $4, $5)",
@@ -221,16 +231,14 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
         )
         .await
         .unwrap();
-
-    // Commit the data file registration.
-    let snap_rows3 = client
+    client
         .execute(
             "INSERT INTO ducklake_snapshot (author, message) VALUES ($1, $2)",
             &[&"network-test", &"register data file"],
         )
         .await
         .unwrap();
-    assert_eq!(snap_rows3, 1, "snapshot insert must affect 1 row");
+    client.execute("COMMIT", &[]).await.unwrap();
 
     // ── 5. SELECT — query the catalog ───────────────────────────────────────
     let schema_list = client
@@ -286,6 +294,61 @@ async fn full_ddl_dml_query_cycle_over_tcp() {
     }
 
     // Tear down the server cleanly.
+    let _ = tx.send(());
+    let _ = handle.await;
+}
+
+/// Verify binary COPY TO STDOUT streams parseable rows over the network.
+#[tokio::test]
+async fn copy_to_stdout_binary_streams_rows() {
+    let dir = TempDir::new().unwrap();
+    let (addr, tx, handle) = start_server(&dir).await;
+
+    let conn_str = format!(
+        "host=127.0.0.1 port={} user=duckdb dbname=ducklake",
+        addr.port()
+    );
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {e}");
+        }
+    });
+
+    let stream = client
+        .copy_out("COPY (SELECT current_database()) TO STDOUT (FORMAT binary)")
+        .await
+        .unwrap();
+    let chunks = stream.try_collect::<Vec<_>>().await.unwrap();
+
+    assert!(
+        !chunks.is_empty(),
+        "COPY stream must include at least one chunk"
+    );
+
+    // Binary COPY signature in first chunk.
+    const SIG: &[u8] = b"PGCOPY\n\xff\r\n\0";
+    assert!(
+        chunks[0].len() >= 19,
+        "first COPY chunk must contain binary header"
+    );
+    assert_eq!(
+        &chunks[0][..SIG.len()],
+        SIG,
+        "invalid binary COPY signature"
+    );
+
+    // End-of-copy marker should be int16 -1 at the end of the payload.
+    let last = &chunks[chunks.len() - 1];
+    assert!(
+        last.len() >= 2,
+        "COPY payload must contain trailer bytes at the end"
+    );
+    assert_eq!(&last[last.len() - 2..], &[0xff, 0xff]);
+
     let _ = tx.send(());
     let _ = handle.await;
 }

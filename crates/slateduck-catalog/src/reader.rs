@@ -98,7 +98,7 @@ impl CatalogReader {
     /// # Examples
     ///
     /// ```no_run
-    /// # tokio_test::block_on(async {
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// use std::sync::Arc;
     /// use object_store::local::LocalFileSystem;
     /// use object_store::path::Path as ObjectPath;
@@ -107,7 +107,7 @@ impl CatalogReader {
     /// let dir = tempfile::tempdir().unwrap();
     /// let store = Arc::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
     /// let catalog = CatalogStore::open(OpenOptions { object_store: store, path: ObjectPath::from(""), encryption: None }).await.unwrap();
-    /// let reader = catalog.read_at(0).unwrap();
+    /// let reader = catalog.read_at(slateduck_core::mvcc::SnapshotId::new(0)).unwrap();
     /// let schemas = reader.list_schemas().await.unwrap();
     /// assert!(schemas.is_empty());
     /// # });
@@ -134,7 +134,7 @@ impl CatalogReader {
     /// # Examples
     ///
     /// ```no_run
-    /// # tokio_test::block_on(async {
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// use std::sync::Arc;
     /// use object_store::local::LocalFileSystem;
     /// use object_store::path::Path as ObjectPath;
@@ -143,7 +143,7 @@ impl CatalogReader {
     /// let dir = tempfile::tempdir().unwrap();
     /// let store = Arc::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
     /// let catalog = CatalogStore::open(OpenOptions { object_store: store, path: ObjectPath::from(""), encryption: None }).await.unwrap();
-    /// let reader = catalog.read_at(0).unwrap();
+    /// let reader = catalog.read_at(slateduck_core::mvcc::SnapshotId::new(0)).unwrap();
     /// let tables = reader.list_tables(1).await.unwrap();
     /// assert!(tables.is_empty());
     /// # });
@@ -340,6 +340,21 @@ impl CatalogReader {
         }
     }
 
+    /// List all aggregate table stats rows.
+    pub async fn list_all_table_stats(&self) -> CatalogResult<Vec<TableStatsRow>> {
+        let prefix = keys::prefix_for_tag(TAG_TABLE_STATS);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            rows.push(values::decode_value(&kv.value)?);
+        }
+        Ok(rows)
+    }
+
     /// Return data file IDs that survive a statistics-based predicate prune for a column.
     pub async fn prune_files(
         &self,
@@ -436,6 +451,28 @@ impl CatalogReader {
                 rows.push(row);
             }
         }
+        Ok(rows)
+    }
+
+    /// List registered inlined data tables, optionally scoped to a table id.
+    pub async fn list_inlined_data_tables(
+        &self,
+        table_id: Option<u64>,
+    ) -> CatalogResult<Vec<InlinedDataTablesRow>> {
+        let prefix = keys::prefix_for_tag(TAG_INLINED_DATA_TABLES);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: InlinedDataTablesRow = values::decode_value(&kv.value)?;
+            if table_id.map(|id| id == row.table_id).unwrap_or(true) {
+                rows.push(row);
+            }
+        }
+        rows.sort_by_key(|row| (row.table_id, row.schema_version));
         Ok(rows)
     }
 
@@ -743,6 +780,22 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: SchemaVersionsRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
+    /// List all `ducklake_table_column_stats` rows.
+    pub async fn list_all_table_column_stats(&self) -> CatalogResult<Vec<TableColumnStatsRow>> {
+        let prefix = keys::prefix_for_tag(TAG_TABLE_COLUMN_STATS);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: TableColumnStatsRow = values::decode_value(&kv.value)?;
             rows.push(row);
         }
         Ok(rows)
