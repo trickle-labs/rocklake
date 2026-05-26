@@ -44,6 +44,9 @@ proptest! {
             schema_name,
             begin_snapshot,
             end_snapshot,
+            schema_uuid: None,
+            path: None,
+            path_is_relative: None,
         };
         let encoded = encode_value(&row);
         let decoded: SchemaRow = decode_value(&encoded).unwrap();
@@ -67,7 +70,9 @@ proptest! {
             table_name,
             begin_snapshot,
             end_snapshot,
-            data_path,
+            path: data_path,
+            table_uuid: None,
+            path_is_relative: None,
         };
         let encoded = encode_value(&row);
         let decoded: TableRow = decode_value(&encoded).unwrap();
@@ -94,6 +99,10 @@ proptest! {
             end_snapshot: None,
             default_value: None,
             is_nullable,
+            initial_default: None,
+            default_value_type: None,
+            default_value_dialect: None,
+            parent_column: None,
         };
         let encoded = encode_value(&row);
         let decoded: ColumnRow = decode_value(&encoded).unwrap();

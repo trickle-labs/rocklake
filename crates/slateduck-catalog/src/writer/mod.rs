@@ -96,6 +96,9 @@ impl CatalogWriter {
             schema_name: schema_name.to_string(),
             begin_snapshot: snapshot_id,
             end_snapshot: None,
+            schema_uuid: Some(uuid::Uuid::new_v4().to_string()),
+            path: None,
+            path_is_relative: None,
         };
 
         let key = keys::key_schema(schema_id);
@@ -137,7 +140,9 @@ impl CatalogWriter {
             table_name: table_name.to_string(),
             begin_snapshot: snapshot_id,
             end_snapshot: None,
-            data_path: data_path.map(|s| s.to_string()),
+            path: data_path.map(|s| s.to_string()),
+            table_uuid: Some(uuid::Uuid::new_v4().to_string()),
+            path_is_relative: None,
         };
 
         let key = keys::key_table(schema_id, table_id, snapshot_id);
@@ -357,6 +362,35 @@ impl CatalogWriter {
         is_nullable: bool,
         default_value: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.add_column_with_opts(
+            table_id,
+            column_name,
+            data_type,
+            column_index,
+            is_nullable,
+            default_value,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Extended add_column supporting v0.25 nested column model and default type fields.
+    pub async fn add_column_with_opts(
+        &mut self,
+        table_id: u64,
+        column_name: &str,
+        data_type: &str,
+        column_index: u64,
+        is_nullable: bool,
+        default_value: Option<&str>,
+        initial_default: Option<&str>,
+        default_value_type: Option<&str>,
+        default_value_dialect: Option<&str>,
+        parent_column: Option<u64>,
+    ) -> CatalogResult<u64> {
         let column_id = self.counters.alloc_catalog_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
@@ -370,6 +404,10 @@ impl CatalogWriter {
             end_snapshot: None,
             default_value: default_value.map(|s| s.to_string()),
             is_nullable,
+            initial_default: initial_default.map(|s| s.to_string()),
+            default_value_type: default_value_type.map(|s| s.to_string()),
+            default_value_dialect: default_value_dialect.map(|s| s.to_string()),
+            parent_column,
         };
 
         let key = keys::key_column(table_id, column_id, snapshot_id);
@@ -590,6 +628,20 @@ impl CatalogWriter {
         view_name: &str,
         sql: &str,
     ) -> CatalogResult<u64> {
+        self.create_view_with_opts(schema_id, view_name, sql, None, None, None)
+            .await
+    }
+
+    /// Extended create_view supporting v0.25 UUID and dialect fields.
+    pub async fn create_view_with_opts(
+        &mut self,
+        schema_id: u64,
+        view_name: &str,
+        sql: &str,
+        view_uuid: Option<&str>,
+        dialect: Option<&str>,
+        column_aliases: Option<&str>,
+    ) -> CatalogResult<u64> {
         let view_id = self.counters.alloc_catalog_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
@@ -600,6 +652,11 @@ impl CatalogWriter {
             sql: sql.to_string(),
             begin_snapshot: snapshot_id,
             end_snapshot: None,
+            view_uuid: view_uuid
+                .map(|s| s.to_string())
+                .or_else(|| Some(uuid::Uuid::new_v4().to_string())),
+            dialect: dialect.map(|s| s.to_string()),
+            column_aliases: column_aliases.map(|s| s.to_string()),
         };
 
         let key = keys::key_view(schema_id, view_id, snapshot_id);
@@ -649,6 +706,7 @@ impl CatalogWriter {
             macro_type: macro_type.to_string(),
             begin_snapshot: snapshot_id,
             end_snapshot: None,
+            macro_uuid: Some(uuid::Uuid::new_v4().to_string()),
         };
 
         let key = keys::key_macro(schema_id, macro_id, snapshot_id);
@@ -681,12 +739,26 @@ impl CatalogWriter {
     }
 
     pub async fn add_macro_impl(&mut self, macro_id: u64, definition: &str) -> CatalogResult<u64> {
+        self.add_macro_impl_with_opts(macro_id, definition, None, None)
+            .await
+    }
+
+    /// Extended add_macro_impl supporting v0.25 dialect and type fields.
+    pub async fn add_macro_impl_with_opts(
+        &mut self,
+        macro_id: u64,
+        sql: &str,
+        dialect: Option<&str>,
+        impl_type: Option<&str>,
+    ) -> CatalogResult<u64> {
         let impl_id = self.counters.alloc_catalog_id();
 
         let row = MacroImplRow {
             impl_id,
             macro_id,
-            definition: definition.to_string(),
+            sql: sql.to_string(),
+            dialect: dialect.map(|s| s.to_string()),
+            impl_type: impl_type.map(|s| s.to_string()),
         };
 
         let key = keys::key_macro_impl(macro_id, impl_id);
@@ -703,6 +775,29 @@ impl CatalogWriter {
         parameter_type: &str,
         default_value: Option<&str>,
     ) -> CatalogResult<()> {
+        self.add_macro_parameter_with_opts(
+            macro_id,
+            impl_id,
+            column_id,
+            parameter_name,
+            parameter_type,
+            default_value,
+            None,
+        )
+        .await
+    }
+
+    /// Extended add_macro_parameter supporting v0.25 default_value_type.
+    pub async fn add_macro_parameter_with_opts(
+        &mut self,
+        macro_id: u64,
+        impl_id: u64,
+        column_id: u64,
+        parameter_name: &str,
+        parameter_type: &str,
+        default_value: Option<&str>,
+        default_value_type: Option<&str>,
+    ) -> CatalogResult<()> {
         let row = MacroParametersRow {
             macro_id,
             impl_id,
@@ -710,6 +805,7 @@ impl CatalogWriter {
             parameter_name: parameter_name.to_string(),
             parameter_type: parameter_type.to_string(),
             default_value: default_value.map(|s| s.to_string()),
+            default_value_type: default_value_type.map(|s| s.to_string()),
         };
 
         let key = keys::key_macro_parameters(macro_id, impl_id, column_id);
@@ -871,9 +967,16 @@ impl CatalogWriter {
         value: &str,
     ) -> CatalogResult<()> {
         validate_app_metadata_key(key)?;
+        let scope_str = match scope {
+            slateduck_core::keys::MetadataScope::Global => "global",
+            slateduck_core::keys::MetadataScope::Schema => "schema",
+            slateduck_core::keys::MetadataScope::Table => "table",
+        };
         let row = MetadataRow {
             key: key.to_string(),
             value: value.to_string(),
+            scope: Some(scope_str.to_string()),
+            scope_id: Some(scope_id),
         };
         let k = keys::key_metadata(scope, scope_id, key);
         self.stage(k, values::encode_value(&row));

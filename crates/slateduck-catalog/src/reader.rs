@@ -405,6 +405,24 @@ impl CatalogReader {
         Ok(views)
     }
 
+    /// v0.25: List all visible views across all schemas.
+    pub async fn list_all_views(&self) -> CatalogResult<Vec<ViewRow>> {
+        let prefix = keys::prefix_for_tag(slateduck_core::tags::TAG_VIEW);
+        let mut views = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ViewRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                views.push(row);
+            }
+        }
+        Ok(views)
+    }
+
     // ─── Phase 6: Macros ────────────────────────────────────────────────────
 
     pub async fn list_macros(&self, schema_id: u64) -> CatalogResult<Vec<MacroRow>> {
@@ -422,6 +440,40 @@ impl CatalogReader {
             }
         }
         Ok(macros)
+    }
+
+    /// v0.25: List all visible macros across all schemas.
+    pub async fn list_all_macros(&self) -> CatalogResult<Vec<MacroRow>> {
+        let prefix = keys::prefix_for_tag(slateduck_core::tags::TAG_MACRO);
+        let mut macros = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: MacroRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                macros.push(row);
+            }
+        }
+        Ok(macros)
+    }
+
+    /// v0.25: List all metadata entries (all scopes) for the SQL facade.
+    pub async fn list_all_metadata(&self) -> CatalogResult<Vec<MetadataRow>> {
+        let prefix = keys::prefix_all_metadata();
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: MetadataRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
     }
 
     pub async fn list_macro_impls(&self, macro_id: u64) -> CatalogResult<Vec<MacroImplRow>> {

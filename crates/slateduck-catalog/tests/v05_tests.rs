@@ -154,7 +154,7 @@ async fn macro_with_impl_and_params() {
     let reader = store.read_at(SnapshotId::new(1)).unwrap();
     let impls = reader.list_macro_impls(macro_id).await.unwrap();
     assert_eq!(impls.len(), 1);
-    assert_eq!(impls[0].definition, "x + 1");
+    assert_eq!(impls[0].sql, "x + 1");
 
     let params = reader
         .list_macro_parameters(macro_id, impl_id)

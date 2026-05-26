@@ -134,7 +134,8 @@ pub async fn export_catalog<W: Write>(
                     "table_name": row.table_name,
                     "begin_snapshot": row.begin_snapshot,
                     "end_snapshot": row.end_snapshot,
-                    "data_path": row.data_path,
+                    "path": row.path,
+                    "table_uuid": row.table_uuid,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -347,6 +348,9 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     schema_name: req_str!(d, "schema_name", tbl),
                     begin_snapshot: req_u64!(d, "begin_snapshot", tbl),
                     end_snapshot: d["end_snapshot"].as_u64(),
+                    schema_uuid: d["schema_uuid"].as_str().map(|s| s.to_string()),
+                    path: d["path"].as_str().map(|s| s.to_string()),
+                    path_is_relative: d["path_is_relative"].as_bool(),
                 };
                 let key = keys::key_schema(schema_id);
                 db.put(&key, &values::encode_value(&row)).await?;
@@ -362,7 +366,12 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     table_name: req_str!(d, "table_name", tbl),
                     begin_snapshot,
                     end_snapshot: d["end_snapshot"].as_u64(),
-                    data_path: d["data_path"].as_str().map(|s| s.to_string()),
+                    path: d["path"]
+                        .as_str()
+                        .or_else(|| d["data_path"].as_str())
+                        .map(|s| s.to_string()),
+                    table_uuid: d["table_uuid"].as_str().map(|s| s.to_string()),
+                    path_is_relative: d["path_is_relative"].as_bool(),
                 };
                 let key = keys::key_table(schema_id, table_id, begin_snapshot);
                 db.put(&key, &values::encode_value(&row)).await?;
@@ -388,6 +397,12 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                             message: "missing or invalid bool field 'is_nullable'".to_string(),
                         }
                     })?,
+                    initial_default: d["initial_default"].as_str().map(|s| s.to_string()),
+                    default_value_type: d["default_value_type"].as_str().map(|s| s.to_string()),
+                    default_value_dialect: d["default_value_dialect"]
+                        .as_str()
+                        .map(|s| s.to_string()),
+                    parent_column: d["parent_column"].as_u64(),
                 };
                 let key = keys::key_column(table_id, column_id, begin_snapshot);
                 db.put(&key, &values::encode_value(&row)).await?;
@@ -526,6 +541,9 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
         schema_name: "main".to_string(),
         begin_snapshot: 1,
         end_snapshot: None,
+        schema_uuid: None,
+        path: None,
+        path_is_relative: None,
     };
     let key = keys::key_schema(schema_id);
     db.put(&key, &values::encode_value(&schema_row)).await?;
@@ -538,7 +556,9 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
         table_name: "default".to_string(),
         begin_snapshot: 1,
         end_snapshot: None,
-        data_path: None,
+        path: None,
+        table_uuid: None,
+        path_is_relative: None,
     };
     let key = keys::key_table(schema_id, table_id, 1);
     db.put(&key, &values::encode_value(&table_row)).await?;

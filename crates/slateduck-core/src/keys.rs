@@ -530,6 +530,11 @@ pub fn prefix_for_tag(tag: u8) -> Vec<u8> {
     vec![tag]
 }
 
+/// Build a scan prefix for all metadata entries: `0x01`.
+pub fn prefix_all_metadata() -> Vec<u8> {
+    vec![TAG_METADATA]
+}
+
 /// Build a scan prefix for data files of a specific table: `0x0B | table_id`.
 pub fn prefix_data_files_for_table(table_id: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(9);

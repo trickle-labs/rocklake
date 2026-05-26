@@ -9,6 +9,12 @@ pub struct MetadataRow {
     pub key: String,
     #[prost(string, tag = "2")]
     pub value: String,
+    /// v0.25: scope of this metadata entry ("global", "schema", "table").
+    #[prost(string, optional, tag = "3")]
+    pub scope: Option<String>,
+    /// v0.25: scope-specific ID (schema_id or table_id); 0 for global.
+    #[prost(uint64, optional, tag = "4")]
+    pub scope_id: Option<u64>,
 }
 
 /// Snapshot row value.
@@ -70,6 +76,15 @@ pub struct SchemaRow {
     pub begin_snapshot: u64,
     #[prost(uint64, optional, tag = "4")]
     pub end_snapshot: Option<u64>,
+    /// v0.25: UUID v4 generated at create time.
+    #[prost(string, optional, tag = "5")]
+    pub schema_uuid: Option<String>,
+    /// v0.25: path/prefix for this schema's objects.
+    #[prost(string, optional, tag = "6")]
+    pub path: Option<String>,
+    /// v0.25: true if path is relative.
+    #[prost(bool, optional, tag = "7")]
+    pub path_is_relative: Option<bool>,
 }
 
 /// Table row value.
@@ -85,8 +100,15 @@ pub struct TableRow {
     pub begin_snapshot: u64,
     #[prost(uint64, optional, tag = "5")]
     pub end_snapshot: Option<u64>,
+    /// v0.25: path for this table (spec column: path); was data_path pre-v0.25.
     #[prost(string, optional, tag = "6")]
-    pub data_path: Option<String>,
+    pub path: Option<String>,
+    /// v0.25: UUID v4 generated at create time.
+    #[prost(string, optional, tag = "7")]
+    pub table_uuid: Option<String>,
+    /// v0.25: true if path is relative.
+    #[prost(bool, optional, tag = "8")]
+    pub path_is_relative: Option<bool>,
 }
 
 /// Column row value.
@@ -98,8 +120,10 @@ pub struct ColumnRow {
     pub table_id: u64,
     #[prost(string, tag = "3")]
     pub column_name: String,
+    /// Spec column: column_type.
     #[prost(string, tag = "4")]
     pub data_type: String,
+    /// Spec column: column_order.
     #[prost(uint64, tag = "5")]
     pub column_index: u64,
     #[prost(uint64, tag = "6")]
@@ -108,8 +132,21 @@ pub struct ColumnRow {
     pub end_snapshot: Option<u64>,
     #[prost(string, optional, tag = "8")]
     pub default_value: Option<String>,
+    /// Spec column: nulls_allowed.
     #[prost(bool, tag = "9")]
     pub is_nullable: bool,
+    /// v0.25: initial default expression.
+    #[prost(string, optional, tag = "10")]
+    pub initial_default: Option<String>,
+    /// v0.25: type of default value (e.g. "sql", "literal").
+    #[prost(string, optional, tag = "11")]
+    pub default_value_type: Option<String>,
+    /// v0.25: SQL dialect for the default expression.
+    #[prost(string, optional, tag = "12")]
+    pub default_value_dialect: Option<String>,
+    /// v0.25: parent column_id for nested (struct) column fields.
+    #[prost(uint64, optional, tag = "13")]
+    pub parent_column: Option<u64>,
 }
 
 /// View row value.
@@ -127,6 +164,15 @@ pub struct ViewRow {
     pub begin_snapshot: u64,
     #[prost(uint64, optional, tag = "6")]
     pub end_snapshot: Option<u64>,
+    /// v0.25: UUID v4 generated at create time.
+    #[prost(string, optional, tag = "7")]
+    pub view_uuid: Option<String>,
+    /// v0.25: SQL dialect for the view definition.
+    #[prost(string, optional, tag = "8")]
+    pub dialect: Option<String>,
+    /// v0.25: comma-separated column aliases.
+    #[prost(string, optional, tag = "9")]
+    pub column_aliases: Option<String>,
 }
 
 /// Macro row value.
@@ -144,6 +190,9 @@ pub struct MacroRow {
     pub begin_snapshot: u64,
     #[prost(uint64, optional, tag = "6")]
     pub end_snapshot: Option<u64>,
+    /// v0.25: UUID v4 generated at create time.
+    #[prost(string, optional, tag = "7")]
+    pub macro_uuid: Option<String>,
 }
 
 /// Macro implementation row value.
@@ -153,8 +202,15 @@ pub struct MacroImplRow {
     pub impl_id: u64,
     #[prost(uint64, tag = "2")]
     pub macro_id: u64,
+    /// v0.25: renamed from definition; spec column: sql.
     #[prost(string, tag = "3")]
-    pub definition: String,
+    pub sql: String,
+    /// v0.25: SQL dialect for this implementation.
+    #[prost(string, optional, tag = "4")]
+    pub dialect: Option<String>,
+    /// v0.25: macro type (moved from MacroRow for spec correctness; spec: type).
+    #[prost(string, optional, tag = "5")]
+    pub impl_type: Option<String>,
 }
 
 /// Macro parameters row value.
@@ -172,6 +228,9 @@ pub struct MacroParametersRow {
     pub parameter_type: String,
     #[prost(string, optional, tag = "6")]
     pub default_value: Option<String>,
+    /// v0.25: type descriptor for the default value.
+    #[prost(string, optional, tag = "7")]
+    pub default_value_type: Option<String>,
 }
 
 /// Data file row value.
@@ -294,10 +353,15 @@ pub struct ColumnMappingRow {
     pub mapping_id: u64,
     #[prost(uint64, tag = "2")]
     pub table_id: u64,
-    #[prost(string, tag = "3")]
-    pub file_column_name: String,
-    #[prost(uint64, tag = "4")]
-    pub column_id: u64,
+    /// Legacy field; superseded by mapping_type (spec restructure in v0.25).
+    #[prost(string, optional, tag = "3")]
+    pub file_column_name: Option<String>,
+    /// Legacy field; superseded by NameMappingRow.column_id.
+    #[prost(uint64, optional, tag = "4")]
+    pub column_id: Option<u64>,
+    /// v0.25: spec column 'type' — mapping type descriptor.
+    #[prost(string, optional, tag = "5")]
+    pub mapping_type: Option<String>,
 }
 
 /// Name mapping row value.
@@ -307,10 +371,21 @@ pub struct NameMappingRow {
     pub mapping_id: u64,
     #[prost(uint64, tag = "2")]
     pub column_id: u64,
+    /// Spec column: name (was source_name pre-v0.25).
     #[prost(string, tag = "3")]
-    pub source_name: String,
-    #[prost(uint64, tag = "4")]
-    pub source_name_hash: u64,
+    pub name: String,
+    /// Legacy: source_name_hash; deprecated in v0.25. Not written for new rows.
+    #[prost(uint64, optional, tag = "4")]
+    pub source_name_hash: Option<u64>,
+    /// v0.25: target field ID in the file schema.
+    #[prost(uint64, optional, tag = "5")]
+    pub target_field_id: Option<u64>,
+    /// v0.25: parent column_id for nested name mappings.
+    #[prost(uint64, optional, tag = "6")]
+    pub parent_column: Option<u64>,
+    /// v0.25: true if this is a partition column mapping.
+    #[prost(bool, optional, tag = "7")]
+    pub is_partition: Option<bool>,
 }
 
 /// Table stats row value.

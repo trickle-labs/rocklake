@@ -27,6 +27,10 @@ pub enum BufferedOp {
         column_index: u64,
         is_nullable: bool,
         default_value: Option<String>,
+        initial_default: Option<String>,
+        default_value_type: Option<String>,
+        default_value_dialect: Option<String>,
+        parent_column: Option<u64>,
     },
     InsertDataFile {
         table_id: u64,
@@ -73,6 +77,8 @@ pub enum BufferedOp {
     InsertMetadata {
         key: String,
         value: String,
+        scope: Option<String>,
+        scope_id: Option<u64>,
     },
     InsertInlinedDataTables {
         table_id: u64,
@@ -83,11 +89,30 @@ pub enum BufferedOp {
         schema_id: u64,
         view_name: String,
         sql: String,
+        view_uuid: Option<String>,
+        dialect: Option<String>,
+        column_aliases: Option<String>,
     },
     InsertMacro {
         schema_id: u64,
         macro_name: String,
         macro_type: String,
+        macro_uuid: Option<String>,
+    },
+    InsertMacroImpl {
+        macro_id: u64,
+        sql: String,
+        dialect: Option<String>,
+        impl_type: Option<String>,
+    },
+    InsertMacroParams {
+        macro_id: u64,
+        impl_id: u64,
+        column_id: u64,
+        parameter_name: String,
+        parameter_type: String,
+        default_value: Option<String>,
+        default_value_type: Option<String>,
     },
     InsertTableStats {
         table_id: u64,

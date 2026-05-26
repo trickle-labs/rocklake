@@ -63,6 +63,8 @@ impl CatalogRegistry {
         let row = MetadataRow {
             key: format!("dataset:{}", entry.name),
             value,
+            scope: Some("global".to_string()),
+            scope_id: Some(0),
         };
 
         self.store
@@ -87,6 +89,8 @@ impl CatalogRegistry {
         let row = MetadataRow {
             key: format!("dataset:{}", name),
             value: String::new(),
+            scope: Some("global".to_string()),
+            scope_id: Some(0),
         };
 
         self.store
