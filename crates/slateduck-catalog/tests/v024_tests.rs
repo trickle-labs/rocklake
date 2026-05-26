@@ -333,7 +333,7 @@ async fn data_file_registration_tracks_next_row_id() {
         w.register_data_file(table_id, "s3://b/f1.parquet", "parquet", 100, 1000)
             .await
             .unwrap();
-        // update_table_stats takes ABSOLUTE totals (matching DuckLake protocol).
+        // update_table_stats accumulates incremental deltas (matching DuckLake batch protocol).
         w.update_table_stats(table_id, 100, 1, 1000).await.unwrap();
         let _cr = w.create_snapshot(None, None).await.unwrap();
         store.commit_writer(_cr);
@@ -343,8 +343,9 @@ async fn data_file_registration_tracks_next_row_id() {
         w.register_data_file(table_id, "s3://b/f2.parquet", "parquet", 50, 500)
             .await
             .unwrap();
-        // Provide cumulative absolute totals (100 + 50 = 150 records, 2 files, 1500 bytes).
-        w.update_table_stats(table_id, 150, 2, 1500).await.unwrap();
+        // update_table_stats takes incremental deltas per DuckLake batch protocol.
+        // Second batch: 50 new records, 1 new file, 500 new bytes.
+        w.update_table_stats(table_id, 50, 1, 500).await.unwrap();
         let _cr = w.create_snapshot(None, None).await.unwrap();
         store.commit_writer(_cr);
     }
@@ -358,7 +359,7 @@ async fn data_file_registration_tracks_next_row_id() {
     let stats = stats.expect("table stats must exist");
     assert_eq!(
         stats.record_count, 150,
-        "record_count must be 150 (absolute total)"
+        "record_count must be 150 (100 + 50 accumulated deltas)"
     );
     assert!(
         stats.next_row_id.unwrap_or(0) > 0,
