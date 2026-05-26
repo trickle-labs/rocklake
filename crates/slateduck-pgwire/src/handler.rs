@@ -1283,29 +1283,12 @@ fn inlined_storage_type(logical_type: &str) -> Type {
 }
 
 fn project_described_fields(
-    sql: &str,
+    _sql: &str,
     schema: Vec<pgwire::api::results::FieldInfo>,
 ) -> Vec<pgwire::api::results::FieldInfo> {
-    let Some(names) = projection_names(sql) else {
-        return schema;
-    };
-    let mut remaining = schema
-        .into_iter()
-        .map(|field| (field.name().to_ascii_lowercase(), field))
-        .collect::<Vec<_>>();
-    let mut projected = Vec::new();
-    for name in names {
-        let Some(index) = remaining
-            .iter()
-            .position(|(field_name, _)| field_name == &name)
-        else {
-            return remaining.into_iter().map(|(_, field)| field).collect();
-        };
-        projected.push(remaining.remove(index).1);
-    }
-    if projected.is_empty() {
-        remaining.into_iter().map(|(_, field)| field).collect()
-    } else {
-        projected
-    }
+    // The execute path (make_*_response) always returns ALL catalog columns
+    // regardless of the SELECT projection.  Returning the full schema here
+    // ensures the RowDescription from Describe matches the DataRow from
+    // Execute, so clients can resolve columns by name rather than by position.
+    schema
 }
