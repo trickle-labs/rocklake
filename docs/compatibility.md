@@ -74,8 +74,7 @@ This page describes the tested compatibility between SlateDuck and various ecosy
 | Linux (Ubuntu 22.04+) | x86-64 | ✅ Supported | Primary CI target |
 | Linux | aarch64 | ✅ Supported | Release binary provided |
 | macOS 13+ | arm64 (Apple Silicon) | ✅ Supported | Release binary provided |
-| macOS | x86-64 | ⚠️ Best-effort | Not in CI matrix |
-| Windows | — | ❌ Not supported | |
+| Windows | x86-64 | ✅ Supported | Release binary provided |
 
 ## Version Policy
 
