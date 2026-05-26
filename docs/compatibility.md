@@ -2,6 +2,15 @@
 
 This page describes the tested compatibility between SlateDuck and various ecosystem components.
 
+## DuckDB Client Versions
+
+| DuckDB Version | Status | Notes |
+|---------------|--------|-------|
+| 1.5.x | ✅ Supported | Primary supported version (v0.27.4+). All postgres-scanner initialization queries handled. |
+| 1.3.x – 1.4.x | ⚠️ Untested | Expected to work; not validated |
+| 1.2.2 | 🕰️ Legacy | Previously validated; not actively tested |
+| < 1.2 | ❌ Not supported | Protocol incompatibilities |
+
 ## DuckLake Protocol
 
 | Feature | Status | Version | Notes |

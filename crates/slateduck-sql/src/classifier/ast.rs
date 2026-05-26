@@ -12,7 +12,9 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
         Statement::Commit { .. } => StatementKind::Commit,
         Statement::Rollback { .. } => StatementKind::Rollback,
 
-        // SET variable
+        // DISCARD: DuckDB sends this when returning a connection to the pool.
+        Statement::Discard { .. } => StatementKind::DiscardAll,
+
         Statement::SetVariable {
             variables, value, ..
         } => {
@@ -177,6 +179,10 @@ pub(super) fn classify_no_from_select(select: &sqlparser::ast::Select) -> Statem
                 "current_schema" => return StatementKind::SelectCurrentSchema,
                 "current_database" => return StatementKind::SelectCurrentDatabase,
                 "gen_random_uuid" => return StatementKind::SelectGenRandomUuid,
+                // DuckDB postgres scanner: secret storage fast-path check.
+                "to_regclass" => return StatementKind::SelectToRegclass,
+                // DuckDB postgres scanner: database size query.
+                "pg_database_size" => return StatementKind::SelectPgDatabaseSize,
                 "slateduck.next_rowid_range" => {
                     return classify_next_rowid_range_call(func);
                 }
@@ -187,6 +193,18 @@ pub(super) fn classify_no_from_select(select: &sqlparser::ast::Select) -> Statem
                     return classify_release_snapshot_call(func);
                 }
                 _ => {}
+            }
+        }
+
+        // SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE ...)
+        // DuckDB secret storage fallback check.
+        if let Expr::Exists { subquery, .. } = expr {
+            if subquery
+                .to_string()
+                .to_lowercase()
+                .contains("information_schema")
+            {
+                return StatementKind::SelectExistsInfoSchema;
             }
         }
     }

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response};
+use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
 use pgwire::api::Type;
 
 use slateduck_sql::ParamValues;
@@ -76,11 +76,11 @@ pub(super) fn make_single_int_response<'a>(col_name: &str, value: i64) -> Respon
         None,
         None,
         Type::INT8,
-        FieldFormat::Text,
+        FieldFormat::Binary,
     )]);
     let mut encoder = DataRowEncoder::new(schema.clone());
     encoder
-        .encode_field_with_type_and_format(&Some(value.to_string()), &Type::TEXT, FieldFormat::Text)
+        .encode_field_with_type_and_format(&Some(value), &Type::INT8, FieldFormat::Binary)
         .unwrap();
     let row = encoder.finish();
     let data_rows = vec![row];
@@ -95,11 +95,11 @@ pub(super) fn make_null_int_response<'a>(col_name: &str) -> Response<'a> {
         None,
         None,
         Type::INT8,
-        FieldFormat::Text,
+        FieldFormat::Binary,
     )]);
     let mut encoder = DataRowEncoder::new(schema.clone());
     encoder
-        .encode_field_with_type_and_format(&None::<String>, &Type::TEXT, FieldFormat::Text)
+        .encode_field_with_type_and_format(&None::<i64>, &Type::INT8, FieldFormat::Binary)
         .unwrap();
     let row = encoder.finish();
     let data_rows = vec![row];
@@ -184,4 +184,311 @@ pub(super) fn make_version_with_rds_check_response<'a>() -> Response<'a> {
     let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
     resp.set_command_tag("SELECT 1");
     Response::Query(resp)
+}
+
+/// `SELECT to_regclass('...')` — returns a single NULL TEXT row.
+/// NULL tells DuckDB the named relation does not exist.
+pub(super) fn make_null_text_response<'a>(col_name: &str) -> Response<'a> {
+    let schema = Arc::new(vec![FieldInfo::new(
+        col_name.to_string(),
+        None,
+        None,
+        Type::TEXT,
+        FieldFormat::Text,
+    )]);
+    let mut encoder = DataRowEncoder::new(schema.clone());
+    encoder
+        .encode_field_with_type_and_format(&None::<String>, &Type::TEXT, FieldFormat::Text)
+        .expect("pgwire field encoding is infallible");
+    let row = encoder.finish();
+    let data_rows = vec![row];
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag("SELECT 1");
+    Response::Query(resp)
+}
+
+/// `SELECT EXISTS(...)` — returns a single `false` BOOL row.
+pub(super) fn make_false_bool_response<'a>(col_name: &str) -> Response<'a> {
+    let schema = Arc::new(vec![FieldInfo::new(
+        col_name.to_string(),
+        None,
+        None,
+        Type::BOOL,
+        FieldFormat::Text,
+    )]);
+    let mut encoder = DataRowEncoder::new(schema.clone());
+    // PostgreSQL text format for boolean false is "f"
+    encoder
+        .encode_field_with_type_and_format(&Some("f".to_string()), &Type::TEXT, FieldFormat::Text)
+        .expect("pgwire field encoding is infallible");
+    let row = encoder.finish();
+    let data_rows = vec![row];
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag("SELECT 1");
+    Response::Query(resp)
+}
+
+/// Build one result-set row for the `pg_namespace` response.
+/// Columns: `(oid INT8, nspname TEXT)`
+fn make_pg_namespace_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        FieldInfo::new("oid".to_string(), None, None, Type::INT8, FieldFormat::Text),
+        FieldInfo::new(
+            "nspname".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ])
+}
+
+fn make_pg_namespace_rows(
+    schema: Arc<Vec<FieldInfo>>,
+    namespaces: &[(i64, &str)],
+) -> Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>> {
+    namespaces
+        .iter()
+        .map(|(oid, name)| {
+            let mut enc = DataRowEncoder::new(schema.clone());
+            enc.encode_field_with_type_and_format(
+                &Some(oid.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("infallible");
+            enc.encode_field_with_type_and_format(
+                &Some(name.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("infallible");
+            enc.finish()
+        })
+        .collect()
+}
+
+/// Build the `pg_class` UNION result-set schema.
+/// Columns: `(namespace_id INT8, relname TEXT, relpages INT8, attname TEXT,
+///  type_name TEXT, type_modifier INT8, ndim INT8, attnum INT8,
+///  notnull BOOL, constraint_id INT8, constraint_type TEXT, constraint_key TEXT)`
+fn make_pg_class_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        FieldInfo::new(
+            "namespace_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "relname".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "relpages".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "attname".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "type_name".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "type_modifier".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "ndim".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "attnum".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "notnull".to_string(),
+            None,
+            None,
+            Type::BOOL,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "constraint_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "constraint_type".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "constraint_key".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ])
+}
+
+/// Build the `pg_enum` result-set schema.
+/// Columns: `(oid INT8, enumtypid INT8, typname TEXT, enumlabel TEXT)`
+fn make_pg_enum_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        FieldInfo::new("oid".to_string(), None, None, Type::INT8, FieldFormat::Text),
+        FieldInfo::new(
+            "enumtypid".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "typname".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "enumlabel".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ])
+}
+
+/// Build the `pg_type` composites result-set schema.
+/// Columns: `(oid INT8, id INT8, type TEXT, attname TEXT, typname TEXT)`
+fn make_pg_type_composites_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        FieldInfo::new("oid".to_string(), None, None, Type::INT8, FieldFormat::Text),
+        FieldInfo::new("id".to_string(), None, None, Type::INT8, FieldFormat::Text),
+        FieldInfo::new(
+            "type".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "attname".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "typname".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ])
+}
+
+/// Build the `pg_indexes` result-set schema.
+/// Columns: `(oid INT8, tablename TEXT, indexname TEXT)`
+fn make_pg_indexes_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        FieldInfo::new("oid".to_string(), None, None, Type::INT8, FieldFormat::Text),
+        FieldInfo::new(
+            "tablename".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "indexname".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ])
+}
+
+/// Return the five result sets for the DuckDB postgres-scanner catalog scan,
+/// plus a ROLLBACK command-complete.
+///
+/// The batch is:
+///   1. `pg_namespace` — `(1, 'public')` and `(2, 'main')`
+///   2. `pg_class` UNION — empty (no tables to advertise over postgres wire)
+///   3. `pg_enum` — empty
+///   4. `pg_type` composites — empty
+///   5. `pg_indexes` — empty
+///   +  ROLLBACK command-complete tag
+pub(super) fn make_pg_catalog_scan_responses<'a>() -> Vec<Response<'a>> {
+    // Result set 1: pg_namespace
+    let ns_schema = make_pg_namespace_schema();
+    let ns_rows = make_pg_namespace_rows(ns_schema.clone(), &[(1, "public"), (2, "main")]);
+    let mut ns_resp = QueryResponse::new(ns_schema, futures::stream::iter(ns_rows));
+    ns_resp.set_command_tag("SELECT 2");
+
+    // Result set 2: pg_class UNION — empty
+    let cls_schema = make_pg_class_schema();
+    let cls_rows: Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>> = Vec::new();
+    let mut cls_resp = QueryResponse::new(cls_schema, futures::stream::iter(cls_rows));
+    cls_resp.set_command_tag("SELECT 0");
+
+    // Result set 3: pg_enum — empty
+    let enum_schema = make_pg_enum_schema();
+    let enum_rows: Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>> = Vec::new();
+    let mut enum_resp = QueryResponse::new(enum_schema, futures::stream::iter(enum_rows));
+    enum_resp.set_command_tag("SELECT 0");
+
+    // Result set 4: pg_type composites — empty
+    let typ_schema = make_pg_type_composites_schema();
+    let typ_rows: Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>> = Vec::new();
+    let mut typ_resp = QueryResponse::new(typ_schema, futures::stream::iter(typ_rows));
+    typ_resp.set_command_tag("SELECT 0");
+
+    // Result set 5: pg_indexes — empty
+    let idx_schema = make_pg_indexes_schema();
+    let idx_rows: Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>> = Vec::new();
+    let mut idx_resp = QueryResponse::new(idx_schema, futures::stream::iter(idx_rows));
+    idx_resp.set_command_tag("SELECT 0");
+
+    vec![
+        Response::Query(ns_resp),
+        Response::Query(cls_resp),
+        Response::Query(enum_resp),
+        Response::Query(typ_resp),
+        Response::Query(idx_resp),
+        Response::TransactionEnd(Tag::new("ROLLBACK")),
+    ]
 }

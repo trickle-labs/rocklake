@@ -37,7 +37,8 @@ use extension::{
     execute_select_extension_table,
 };
 use helpers::{
-    apply_set, get_show_value, get_snapshot_param, make_empty_response, make_null_int_response,
+    apply_set, get_show_value, get_snapshot_param, make_empty_response, make_false_bool_response,
+    make_null_int_response, make_null_text_response, make_pg_catalog_scan_responses,
     make_pg_type_response, make_single_int_response, make_single_text_response,
     make_version_with_rds_check_response, require_param_u64,
 };
@@ -111,6 +112,33 @@ async fn execute_classified<'a>(
         StatementKind::SetVariable(ref var, ref val) => {
             apply_set(var, val, session);
             Ok(vec![Response::Execution(Tag::new("SET"))])
+        }
+
+        // ─── Session / Connection Management (DuckDB postgres scanner) ─
+        StatementKind::DiscardAll => {
+            // DISCARD ALL: session cleanup when DuckDB returns a connection to
+            // the pool. SlateDuck is stateless per connection so this is a no-op.
+            Ok(vec![Response::Execution(Tag::new("DISCARD"))])
+        }
+        StatementKind::SelectToRegclass => {
+            // to_regclass('name') — return NULL to tell DuckDB the relation
+            // does not exist (SlateDuck has no duckdb_secrets table).
+            Ok(vec![make_null_text_response("to_regclass")])
+        }
+        StatementKind::SelectExistsInfoSchema => {
+            // EXISTS(SELECT 1 FROM information_schema.tables WHERE ...) — return
+            // false; SlateDuck does not expose information_schema.
+            Ok(vec![make_false_bool_response("exists")])
+        }
+        StatementKind::SelectPgDatabaseSize => {
+            // pg_database_size(current_database()) — informational only; return 0.
+            Ok(vec![make_single_int_response("pg_database_size", 0)])
+        }
+        StatementKind::PgCatalogScan => {
+            // Multi-statement pg_namespace / pg_class / pg_enum / pg_type /
+            // pg_indexes catalog scan sent by the DuckDB postgres scanner as a
+            // single PQsendQuery call. Return five result sets + ROLLBACK.
+            Ok(make_pg_catalog_scan_responses())
         }
 
         // ─── Transaction Control ───────────────────────────────────────
@@ -664,7 +692,23 @@ async fn execute_classified<'a>(
             ref table_ref,
             start_snapshot,
             end_snapshot,
-        } => execute_table_changes(table_ref, start_snapshot, end_snapshot, store).await,
+        } => {
+            // When the SQL uses $N placeholders (e.g. table_changes($1, $2, $3))
+            // the classifier stores the literal "$1" / 0 / u64::MAX fallbacks.
+            // Resolve the actual values from the runtime params in that case.
+            let (resolved_ref, resolved_start, resolved_end) = if table_ref.starts_with('$') {
+                let pidx = table_ref[1..].parse::<usize>().unwrap_or(1) - 1;
+                let r = params
+                    .get_string(pidx)
+                    .unwrap_or_else(|_| table_ref.clone());
+                let s = params.get_u64(1).unwrap_or(start_snapshot);
+                let e = params.get_u64(2).unwrap_or(end_snapshot);
+                (r, s, e)
+            } else {
+                (table_ref.clone(), start_snapshot, end_snapshot)
+            };
+            execute_table_changes(&resolved_ref, resolved_start, resolved_end, store).await
+        }
         StatementKind::NextRowidRange {
             ref table_ref,
             count,

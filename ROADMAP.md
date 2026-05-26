@@ -72,7 +72,7 @@ binding on every roadmap release below.
 | **v0.27.1 — CDC Completeness & Real Parquet Row Scanning** | Implement real `extract_rows_from_parquet()` via `object_store`; replace synthetic CDC column payloads with actual file data; verify `record_count` against scanned rows; streaming/batching for large Parquet files; end-to-end CDC round-trip tests | Done |
 | **v0.27.2 — DataFusion Completeness, Code Hardening & Security** | Auto-resolve `data_root` from catalog metadata; eliminate OS-thread-per-sync DataFusion bridge overhead; resolve or remove `slateduck-sqlite-vfs` placeholder; replace DataRowEncoder `unwrap()` calls; harden key/value decode paths; verify `checked_add` in writer; verify `SqlState` code propagation; API ergonomics for `CatalogStore` commit; warn on auth-without-TLS; address wall-clock lease concern | Done |
 | **v0.27.3 — Testing Completeness, CI Production Gates & Documentation** | Make coverage threshold a hard gate; add doc-tests for all public APIs in `slateduck-core` and `slateduck-catalog`; add network-level PG-Wire integration test; add concurrent writer fencing test; verify checkpoint-restore snapshot-ID safety; verify `rebuild_catalog` behaviour; align `docs/operations/monitoring.md` with CLI flags; close all open partial findings from Assessments 1 & 2 | Done |
-| **v0.27.4 — DuckDB 1.5.x PostgreSQL Scanner Compatibility** | Handle all DuckDB 1.5.x postgres scanner initialization queries: `DISCARD ALL`; `SELECT to_regclass('duckdb_secrets')`; `SELECT EXISTS(... information_schema.tables ...)`; multi-statement catalog scan (`pg_namespace`, `pg_class`/`pg_attribute`/`pg_constraint`, `pg_enum`, `pg_type` composites, `pg_indexes`); `SELECT pg_database_size(current_database())`; capture DuckDB 1.5.x wire-corpus fixture; update compatibility matrix to DuckDB 1.5.x only | Planning |
+| **v0.27.4 — DuckDB 1.5.x PostgreSQL Scanner Compatibility** | Handle all DuckDB 1.5.x postgres scanner initialization queries: `DISCARD ALL`; `SELECT to_regclass('duckdb_secrets')`; `SELECT EXISTS(... information_schema.tables ...)`; multi-statement catalog scan (`pg_namespace`, `pg_class`/`pg_attribute`/`pg_constraint`, `pg_enum`, `pg_type` composites, `pg_indexes`); `SELECT pg_database_size(current_database())`; capture DuckDB 1.5.x wire-corpus fixture; update compatibility matrix to DuckDB 1.5.x only | Done |
 | **v0.28.0 — Full Ecosystem Compatibility Certification** | Release-blocking CI evidence for every `docs/compatibility.md` row: real DuckDB/DuckLake versions, SQL clients, Spark/Trino/Presto disposition, DataFusion, object stores, TLS/auth, Rust/MSRV, and release platforms | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
@@ -2881,31 +2881,31 @@ See `plans/ducklake-queries.md` for the full audit with exact SQL, expected colu
 
 ### Step 1 — `DISCARD ALL` (High, connection pool)
 
-- [ ] Add `DiscardAll` variant to `StatementKind` in `crates/slateduck-sql/src/classifier/mod.rs`.
-- [ ] Classify `DISCARD ALL` (and `DISCARD SEQUENCES`, `DISCARD PLANS`, `DISCARD TEMP`) in `crates/slateduck-sql/src/classifier/ast.rs`.
-- [ ] Add a handler in `crates/slateduck-pgwire/src/executor/mod.rs` that returns a `CommandComplete("DISCARD")` tag with zero rows — no error.
-- [ ] Add a test: verify `classify_statement("DISCARD ALL")` returns `DiscardAll` and that the executor returns a `CommandComplete` response.
+- [x] Add `DiscardAll` variant to `StatementKind` in `crates/slateduck-sql/src/classifier/mod.rs`.
+- [x] Classify `DISCARD ALL` (and `DISCARD SEQUENCES`, `DISCARD PLANS`, `DISCARD TEMP`) in `crates/slateduck-sql/src/classifier/ast.rs`.
+- [x] Add a handler in `crates/slateduck-pgwire/src/executor/mod.rs` that returns a `CommandComplete("DISCARD")` tag with zero rows — no error.
+- [x] Add a test: verify `classify_statement("DISCARD ALL")` returns `DiscardAll` and that the executor returns a `CommandComplete` response.
 
 ### Step 2 — `SELECT to_regclass('duckdb_secrets')` (High, secret storage)
 
-- [ ] Add `SelectToRegclass` variant to `StatementKind`.
-- [ ] Classify `SELECT to_regclass(...)` in the AST classifier: detect a function call named `to_regclass` in a no-FROM projection.
-- [ ] Add a handler that returns a single row with `NULL` in a column named `to_regclass` (type `TEXT`). Returning `NULL` tells DuckDB the `duckdb_secrets` table does not exist.
-- [ ] Add a test verifying `NULL` is returned for `to_regclass('duckdb_secrets')`.
+- [x] Add `SelectToRegclass` variant to `StatementKind`.
+- [x] Classify `SELECT to_regclass(...)` in the AST classifier: detect a function call named `to_regclass` in a no-FROM projection.
+- [x] Add a handler that returns a single row with `NULL` in a column named `to_regclass` (type `TEXT`). Returning `NULL` tells DuckDB the `duckdb_secrets` table does not exist.
+- [x] Add a test verifying `NULL` is returned for `to_regclass('duckdb_secrets')`.
 
 ### Step 3 — `SELECT EXISTS(... information_schema.tables ...)` (High, secret storage fallback)
 
-- [ ] Add `SelectExistsInfoSchema` variant to `StatementKind`.
-- [ ] Classify the pattern: `SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE ...)` — detect a no-FROM projection containing a scalar subquery against `information_schema.tables`.
-- [ ] Add a handler that returns a single `false` boolean row (column named `exists`, type `BOOL`).
-- [ ] Add a test verifying the classifier recognises the full `duckdb_secrets` existence query and returns `false`.
+- [x] Add `SelectExistsInfoSchema` variant to `StatementKind`.
+- [x] Classify the pattern: `SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE ...)` — detect a no-FROM projection containing a scalar subquery against `information_schema.tables`.
+- [x] Add a handler that returns a single `false` boolean row (column named `exists`, type `BOOL`).
+- [x] Add a test verifying the classifier recognises the full `duckdb_secrets` existence query and returns `false`.
 
 ### Step 4 — `SELECT pg_database_size(current_database())` (Low, informational)
 
-- [ ] Add `SelectPgDatabaseSize` variant to `StatementKind`.
-- [ ] Classify `SELECT pg_database_size(...)` in the AST classifier.
-- [ ] Add a handler returning `0::INT8` (or an approximation from the catalog store size if available).
-- [ ] Add a test verifying the handler returns a single integer row.
+- [x] Add `SelectPgDatabaseSize` variant to `StatementKind`.
+- [x] Classify `SELECT pg_database_size(...)` in the AST classifier.
+- [x] Add a handler returning `0::INT8` (or an approximation from the catalog store size if available).
+- [x] Add a test verifying the handler returns a single integer row.
 
 ### Step 5 — Multi-Statement Catalog Scan (`pg_namespace` / `pg_class` / `pg_enum` / `pg_type` / `pg_indexes`) (Critical)
 
@@ -2923,37 +2923,37 @@ ROLLBACK;
 
 DuckDB expects five result sets (one per SELECT) in sequence before the final `ROLLBACK`.
 
-- [ ] Add `PgCatalogScan` variant to `StatementKind`.
-- [ ] Detect the batch: a `Begin` statement whose `sql` string contains the `pg_namespace` / `pg_class` / `pg_enum` characteristic queries.
-- [ ] Build a multi-result response in the executor:
+- [x] Add `PgCatalogScan` variant to `StatementKind`.
+- [x] Detect the batch: a `Begin` statement whose `sql` string contains the `pg_namespace` / `pg_class` / `pg_enum` characteristic queries.
+- [x] Build a multi-result response in the executor:
   - **pg_namespace result** (`oid INT8, nspname TEXT`): one row per schema SlateDuck exposes (at minimum `(1, 'public')` and `(2, 'main')`).
   - **pg_class UNION result** (`namespace_id INT8, relname TEXT, relpages INT8, attname TEXT, type_name TEXT, type_modifier INT8, ndim INT8, attnum INT8, notnull BOOL, constraint_id INT8, constraint_type TEXT, constraint_key TEXT`): rows for every ducklake table with its column definitions. Constraints: empty.
   - **pg_enum result** (`oid INT8, enumtypid INT8, typname TEXT, enumlabel TEXT`): zero rows.
   - **pg_type composites result** (`oid INT8, id INT8, type TEXT, attname TEXT, typname TEXT`): zero rows.
   - **pg_indexes result** (`oid INT8, tablename TEXT, indexname TEXT`): zero rows.
-- [ ] Verify the `pgwire` crate supports returning multiple result sets for a single simple-query string; adapt the handler or the protocol layer if needed.
-- [ ] Add tests for each of the five result set shapes.
-- [ ] Add an end-to-end test that replays a DuckDB 1.5.x ATTACH corpus through the PG-Wire layer and asserts all five result sets are present with correct schema.
+- [x] Verify the `pgwire` crate supports returning multiple result sets for a single simple-query string; adapt the handler or the protocol layer if needed.
+- [x] Add tests for each of the five result set shapes.
+- [x] Add an end-to-end test that replays a DuckDB 1.5.x ATTACH corpus through the PG-Wire layer and asserts all five result sets are present with correct schema.
 
 ### Step 6 — Wire Corpus for DuckDB 1.5.x
 
-- [ ] Record a new `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` by running DuckDB 1.5.x against SlateDuck once all the above handlers are in place.
-- [ ] The fixture must capture the full ATTACH sequence: connection, version check, `DISCARD ALL`, `to_regclass`, `information_schema.tables`, multi-statement catalog scan, and at least one DuckLake metadata query.
-- [ ] Add a corpus replay test that validates every message in the fixture against the running SlateDuck server.
-- [ ] Update `docs/compatibility.md` and `tests/fixtures/compatibility-matrix.toml` (from v0.28.0 scope) to record DuckDB 1.5.x as the primary supported version.
-- [ ] Remove or demote DuckDB 1.2.2 from the supported matrix to `legacy` / `untested`.
+- [x] Record a new `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` by running DuckDB 1.5.x against SlateDuck once all the above handlers are in place.
+- [x] The fixture must capture the full ATTACH sequence: connection, version check, `DISCARD ALL`, `to_regclass`, `information_schema.tables`, multi-statement catalog scan, and at least one DuckLake metadata query.
+- [x] Add a corpus replay test that validates every message in the fixture against the running SlateDuck server.
+- [x] Update `docs/compatibility.md` and `tests/fixtures/compatibility-matrix.toml` (from v0.28.0 scope) to record DuckDB 1.5.x as the primary supported version.
+- [x] Remove or demote DuckDB 1.2.2 from the supported matrix to `legacy` / `untested`.
 
 ### Definition of Done
 
-- [ ] `DISCARD ALL` returns `CommandComplete("DISCARD")` with no error.
-- [ ] `SELECT to_regclass('duckdb_secrets')` returns a single `NULL` row.
-- [ ] `SELECT EXISTS(... information_schema.tables ...)` returns a single `false` row.
-- [ ] `SELECT pg_database_size(current_database())` returns a single integer row.
-- [ ] Multi-statement catalog scan returns five result sets with correct schema.
-- [ ] DuckDB 1.5.x `ATTACH 'ducklake:postgres:...'` completes without error in CI.
-- [ ] A new `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` fixture is captured and replayed by CI.
-- [ ] `docs/compatibility.md` states DuckDB 1.5.x as supported with CI evidence.
-- [ ] DuckDB 1.2.2 is downgraded to `legacy` in the compatibility matrix.
+- [x] `DISCARD ALL` returns `CommandComplete("DISCARD")` with no error.
+- [x] `SELECT to_regclass('duckdb_secrets')` returns a single `NULL` row.
+- [x] `SELECT EXISTS(... information_schema.tables ...)` returns a single `false` row.
+- [x] `SELECT pg_database_size(current_database())` returns a single integer row.
+- [x] Multi-statement catalog scan returns five result sets with correct schema.
+- [x] DuckDB 1.5.x `ATTACH 'ducklake:postgres:...'` completes without error in CI.
+- [x] A new `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` fixture is captured and replayed by CI.
+- [x] `docs/compatibility.md` states DuckDB 1.5.x as supported with CI evidence.
+- [x] DuckDB 1.2.2 is downgraded to `legacy` in the compatibility matrix.
 
 ---
 

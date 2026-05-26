@@ -51,7 +51,7 @@ impl CatalogStore {
     /// # Examples
     ///
     /// ```no_run
-    /// # tokio_test::block_on(async {
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// use std::sync::Arc;
     /// use object_store::local::LocalFileSystem;
     /// use object_store::path::Path as ObjectPath;
@@ -163,7 +163,7 @@ impl CatalogStore {
     /// # Examples
     ///
     /// ```no_run
-    /// # tokio_test::block_on(async {
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
     /// use std::sync::Arc;
     /// use object_store::local::LocalFileSystem;
     /// use object_store::path::Path as ObjectPath;
@@ -172,7 +172,7 @@ impl CatalogStore {
     /// let dir = tempfile::tempdir().unwrap();
     /// let store = Arc::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
     /// let catalog = CatalogStore::open(OpenOptions { object_store: store, path: ObjectPath::from(""), encryption: None }).await.unwrap();
-    /// let reader = catalog.read_at(0).unwrap();
+    /// let reader = catalog.read_at(slateduck_core::mvcc::SnapshotId::new(0)).unwrap();
     /// let schemas = reader.list_schemas().await.unwrap();
     /// assert!(schemas.is_empty());
     /// # });

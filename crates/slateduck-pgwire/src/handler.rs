@@ -14,9 +14,7 @@ use pgwire::api::auth::{
 use pgwire::api::copy::NoopCopyHandler;
 use pgwire::api::portal::Portal;
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
-use pgwire::api::results::{
-    DescribePortalResponse, DescribeResponse, DescribeStatementResponse, Response,
-};
+use pgwire::api::results::{DescribePortalResponse, DescribeStatementResponse, Response};
 use pgwire::api::stmt::{QueryParser, StoredStatement};
 use pgwire::api::store::PortalStore;
 use pgwire::api::{
@@ -282,11 +280,51 @@ impl ExtendedQueryHandler for SlateDuckHandler {
     {
         let sql = &portal.statement.statement;
 
-        // Extract parameters from portal
+        // Extract parameters from portal, handling binary-encoded integers.
+        // tokio-postgres (and DuckDB) always send parameters in binary format;
+        // for integer types we must decode the big-endian bytes to decimal
+        // strings so that the string-based ParamValues can parse them.
+        //
+        // The stored `portal.statement.parameter_types` reflects what the client
+        // declared in its Parse message (usually UNKNOWN because tokio-postgres
+        // relies on DescribeStatement to learn types). We use `describe_params_for_sql`
+        // as an authoritative fallback so binary INT8 bytes are always decoded correctly.
+        let inferred_types = describe_params_for_sql(sql);
         let param_values: Vec<Option<String>> = portal
             .parameters
             .iter()
-            .map(|p| p.as_ref().map(|b| String::from_utf8_lossy(b).to_string()))
+            .enumerate()
+            .map(|(i, p)| {
+                p.as_ref().map(|b| {
+                    if portal.parameter_format.is_binary(i) {
+                        // Prefer a non-UNKNOWN stored type; fall back to inferred type.
+                        let pg_type = portal
+                            .statement
+                            .parameter_types
+                            .get(i)
+                            .filter(|t| **t != Type::UNKNOWN)
+                            .cloned()
+                            .or_else(|| inferred_types.get(i).cloned())
+                            .unwrap_or(Type::UNKNOWN);
+                        match pg_type {
+                            Type::INT8 if b.len() == 8 => {
+                                let bytes: [u8; 8] = b[..8].try_into().unwrap_or([0; 8]);
+                                return i64::from_be_bytes(bytes).to_string();
+                            }
+                            Type::INT4 if b.len() == 4 => {
+                                let bytes: [u8; 4] = b[..4].try_into().unwrap_or([0; 4]);
+                                return i32::from_be_bytes(bytes).to_string();
+                            }
+                            Type::INT2 if b.len() == 2 => {
+                                let bytes: [u8; 2] = b[..2].try_into().unwrap_or([0; 2]);
+                                return i16::from_be_bytes(bytes).to_string();
+                            }
+                            _ => {}
+                        }
+                    }
+                    String::from_utf8_lossy(b).to_string()
+                })
+            })
             .collect();
         let params = ParamValues::new(param_values);
 
@@ -323,70 +361,28 @@ impl ExtendedQueryHandler for SlateDuckHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        use pgwire::api::results::FieldFormat;
-        use pgwire::api::results::FieldInfo;
-
-        // Classify the statement to determine response schema
         let sql = &stmt.statement;
-        let kind = slateduck_sql::classify_statement(sql)
-            .unwrap_or(slateduck_sql::StatementKind::Unsupported(String::new()));
+        let fields = describe_fields_for_sql(sql);
 
-        let fields = match kind {
-            slateduck_sql::StatementKind::SelectVersion => vec![FieldInfo::new(
-                "version".to_string(),
-                None,
-                None,
-                Type::TEXT,
-                FieldFormat::Text,
-            )],
-            slateduck_sql::StatementKind::SelectCurrentSchema => vec![FieldInfo::new(
-                "current_schema".to_string(),
-                None,
-                None,
-                Type::TEXT,
-                FieldFormat::Text,
-            )],
-            slateduck_sql::StatementKind::SelectCurrentDatabase => vec![FieldInfo::new(
-                "current_database".to_string(),
-                None,
-                None,
-                Type::TEXT,
-                FieldFormat::Text,
-            )],
-            slateduck_sql::StatementKind::SelectPgType => vec![
-                FieldInfo::new("oid".to_string(), None, None, Type::INT4, FieldFormat::Text),
-                FieldInfo::new(
-                    "typname".to_string(),
-                    None,
-                    None,
-                    Type::TEXT,
-                    FieldFormat::Text,
-                ),
-            ],
-            slateduck_sql::StatementKind::SelectMaxSnapshot => vec![FieldInfo::new(
-                "max".to_string(),
-                None,
-                None,
-                Type::INT8,
-                FieldFormat::Text,
-            )],
-            slateduck_sql::StatementKind::ShowVariable(ref var) => vec![FieldInfo::new(
-                var.clone(),
-                None,
-                None,
-                Type::TEXT,
-                FieldFormat::Text,
-            )],
-            _ => vec![],
+        // Return precise parameter types so the client can correctly serialize
+        // typed values (e.g. i64 → INT8). When the client provided type hints in
+        // its Parse message we respect those; otherwise we infer from the
+        // StatementKind.
+        let param_types = if !stmt.parameter_types.is_empty()
+            && stmt.parameter_types.iter().any(|t| *t != Type::UNKNOWN)
+        {
+            stmt.parameter_types.clone()
+        } else {
+            describe_params_for_sql(sql)
         };
 
-        Ok(DescribeStatementResponse::new(vec![], fields))
+        Ok(DescribeStatementResponse::new(param_types, fields))
     }
 
     async fn do_describe_portal<C>(
         &self,
         _client: &mut C,
-        _portal: &Portal<Self::Statement>,
+        portal: &Portal<Self::Statement>,
     ) -> PgWireResult<DescribePortalResponse>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
@@ -394,7 +390,9 @@ impl ExtendedQueryHandler for SlateDuckHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        Ok(DescribePortalResponse::no_data())
+        let sql = &portal.statement.statement;
+        let fields = describe_fields_for_sql(sql);
+        Ok(DescribePortalResponse::new(fields))
     }
 }
 
@@ -475,5 +473,154 @@ impl PgWireServerHandlers for SlateDuckServerHandlers {
 
     fn error_handler(&self) -> Arc<Self::ErrorHandler> {
         self.error_handler.clone()
+    }
+}
+
+/// Count the number of positional parameters (`$1`, `$2`, …) in a SQL string.
+/// Returns the highest parameter index found, which equals the number of
+/// parameters the client must bind.
+fn count_sql_params(sql: &str) -> usize {
+    let mut max = 0usize;
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > start {
+                if let Ok(n) = sql[start..end].parse::<usize>() {
+                    if n > max {
+                        max = n;
+                    }
+                }
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    max
+}
+
+/// Return the expected parameter types for a SQL statement.
+/// Allows tokio-postgres to correctly serialize typed Rust values (e.g. i64→INT8)
+/// even when the client sends no type hints in the Parse message.
+fn describe_params_for_sql(sql: &str) -> Vec<Type> {
+    use slateduck_sql::StatementKind;
+    let kind =
+        slateduck_sql::classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
+    match kind {
+        // Snapshot-scoped catalog selects: $1 = snapshot_id (INT8)
+        StatementKind::SelectSchemas
+        | StatementKind::SelectTables
+        | StatementKind::SelectDataFiles
+        | StatementKind::SelectMaxSnapshotAfter => vec![Type::INT8],
+        // Inserts whose first column is a numeric FK
+        StatementKind::InsertTable => vec![Type::INT8, Type::TEXT, Type::TEXT],
+        StatementKind::InsertDataFile => {
+            // table_id, path, format, row_count, file_size_bytes
+            vec![Type::INT8, Type::TEXT, Type::TEXT, Type::INT8, Type::INT8]
+        }
+        // Text-only inserts
+        StatementKind::InsertSchema => vec![Type::TEXT],
+        StatementKind::InsertSnapshot => vec![Type::TEXT, Type::TEXT],
+        // table_changes(table_name TEXT, from_snapshot INT8, to_snapshot INT8)
+        StatementKind::TableChanges { .. } => vec![Type::TEXT, Type::INT8, Type::INT8],
+        // Everything else: fall back to UNKNOWN (works for &str / String)
+        _ => {
+            let count = count_sql_params(sql);
+            vec![Type::UNKNOWN; count]
+        }
+    }
+}
+
+/// Return the result-set field descriptions for a SQL statement.
+/// Used by both `do_describe_statement` and `do_describe_portal`.
+fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
+    use pgwire::api::results::{FieldFormat, FieldInfo};
+
+    let kind = slateduck_sql::classify_statement(sql)
+        .unwrap_or(slateduck_sql::StatementKind::Unsupported(String::new()));
+
+    /// Quick helper to build a FieldInfo for text-type metadata columns.
+    macro_rules! text_col {
+        ($name:expr) => {
+            FieldInfo::new($name.to_string(), None, None, Type::TEXT, FieldFormat::Text)
+        };
+    }
+    macro_rules! int8_col {
+        ($name:expr) => {
+            FieldInfo::new(
+                $name.to_string(),
+                None,
+                None,
+                Type::INT8,
+                FieldFormat::Binary,
+            )
+        };
+    }
+
+    match kind {
+        slateduck_sql::StatementKind::SelectVersion => vec![text_col!("version")],
+        slateduck_sql::StatementKind::SelectCurrentSchema => vec![text_col!("current_schema")],
+        slateduck_sql::StatementKind::SelectCurrentDatabase => {
+            vec![text_col!("current_database")]
+        }
+        slateduck_sql::StatementKind::SelectPgType => vec![
+            FieldInfo::new("oid".to_string(), None, None, Type::INT4, FieldFormat::Text),
+            text_col!("typname"),
+        ],
+        slateduck_sql::StatementKind::SelectMaxSnapshot
+        | slateduck_sql::StatementKind::SelectMaxSnapshotAfter => {
+            vec![int8_col!("max")]
+        }
+        slateduck_sql::StatementKind::ShowVariable(ref var) => {
+            vec![text_col!(var.as_str())]
+        }
+        // Catalog table schemas — must match the executor's make_*_response column lists.
+        slateduck_sql::StatementKind::SelectSchemas => vec![
+            int8_col!("schema_id"),
+            int8_col!("begin_snapshot"),
+            int8_col!("end_snapshot"),
+            text_col!("schema_uuid"),
+            text_col!("schema_name"),
+            text_col!("path"),
+            FieldInfo::new(
+                "path_is_relative".to_string(),
+                None,
+                None,
+                Type::BOOL,
+                FieldFormat::Text,
+            ),
+        ],
+        slateduck_sql::StatementKind::SelectTables => vec![
+            int8_col!("table_id"),
+            int8_col!("begin_snapshot"),
+            int8_col!("end_snapshot"),
+            int8_col!("schema_id"),
+            text_col!("table_uuid"),
+            text_col!("table_name"),
+            text_col!("data_path"),
+        ],
+        slateduck_sql::StatementKind::SelectDataFiles => vec![
+            int8_col!("data_file_id"),
+            int8_col!("table_id"),
+            int8_col!("begin_snapshot"),
+            int8_col!("end_snapshot"),
+            int8_col!("file_order"),
+            text_col!("path"),
+            FieldInfo::new(
+                "path_is_relative".to_string(),
+                None,
+                None,
+                Type::BOOL,
+                FieldFormat::Text,
+            ),
+            text_col!("file_format"),
+        ],
+        _ => vec![],
     }
 }

@@ -33,6 +33,30 @@ pub enum StatementKind {
     ShowVariable(String),
     SetVariable(String, String),
 
+    // ─── Session / Connection Management ──────────────────────────────
+    /// `DISCARD ALL` / `DISCARD SEQUENCES` / `DISCARD PLANS` / `DISCARD TEMP`
+    /// — DuckDB sends this when returning a connection to the pool.
+    DiscardAll,
+    /// `SELECT to_regclass('duckdb_secrets')` — DuckDB secret storage fast-path
+    /// check. Returns `NULL` because SlateDuck has no `duckdb_secrets` table.
+    SelectToRegclass,
+    /// `SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE ...)`
+    /// — DuckDB secret storage fallback check. Returns `false`.
+    SelectExistsInfoSchema,
+    /// `SELECT pg_database_size(current_database())` — informational size query.
+    SelectPgDatabaseSize,
+    /// Multi-statement catalog scan sent by the DuckDB postgres scanner as a
+    /// single `PQsendQuery` call:
+    /// `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+    ///  SELECT oid, nspname FROM pg_namespace ...;
+    ///  SELECT ... FROM pg_class JOIN ... UNION ALL ...;
+    ///  SELECT ... FROM pg_enum JOIN ...;
+    ///  SELECT ... FROM pg_type JOIN ...;
+    ///  SELECT ... FROM pg_indexes JOIN ...;
+    ///  ROLLBACK;`
+    /// Returns five result sets in sequence.
+    PgCatalogScan,
+
     // ─── Transaction Control ───────────────────────────────────────────
     Begin,
     Commit,
@@ -166,6 +190,13 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
     // Pre-parse fast path for LISTEN/UNLISTEN.
     if let Some(result) = classify_listen_prefix(sql) {
         return result;
+    }
+
+    // Pre-parse detection for the multi-statement pg_namespace catalog scan.
+    // DuckDB postgres scanner sends this as a single PQsendQuery call; sqlparser
+    // would only see the leading BEGIN. Detect by characteristic tokens.
+    if sql.contains("pg_namespace") && sql.contains("pg_class") {
+        return Ok(StatementKind::PgCatalogScan);
     }
 
     let dialect = PostgreSqlDialect {};

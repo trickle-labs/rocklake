@@ -426,21 +426,21 @@ pub(super) fn make_schemas_response(
             None,
             None,
             Type::INT8,
-            FieldFormat::Text,
+            FieldFormat::Binary,
         ),
         FieldInfo::new(
             "begin_snapshot".to_string(),
             None,
             None,
             Type::INT8,
-            FieldFormat::Text,
+            FieldFormat::Binary,
         ),
         FieldInfo::new(
             "end_snapshot".to_string(),
             None,
             None,
             Type::INT8,
-            FieldFormat::Text,
+            FieldFormat::Binary,
         ),
         FieldInfo::new(
             "schema_uuid".to_string(),
@@ -476,21 +476,21 @@ pub(super) fn make_schemas_response(
         let mut encoder = DataRowEncoder::new(schema.clone());
         encoder
             .encode_field_with_type_and_format(
-                &Some(s.schema_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
+                &Some(s.schema_id as i64),
+                &Type::INT8,
+                FieldFormat::Binary,
             )
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
-                &Some(s.begin_snapshot.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
+                &Some(s.begin_snapshot as i64),
+                &Type::INT8,
+                FieldFormat::Binary,
             )
             .expect("pgwire field encoding is infallible");
-        let end = s.end_snapshot.map(|e| e.to_string());
+        let end = s.end_snapshot.map(|e| e as i64);
         encoder
-            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(&end, &Type::INT8, FieldFormat::Binary)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(&s.schema_uuid, &Type::TEXT, FieldFormat::Text)
@@ -526,28 +526,28 @@ pub(super) fn make_tables_response(
             None,
             None,
             Type::INT8,
-            FieldFormat::Text,
+            FieldFormat::Binary,
         ),
         FieldInfo::new(
             "begin_snapshot".to_string(),
             None,
             None,
             Type::INT8,
-            FieldFormat::Text,
+            FieldFormat::Binary,
         ),
         FieldInfo::new(
             "end_snapshot".to_string(),
             None,
             None,
             Type::INT8,
-            FieldFormat::Text,
+            FieldFormat::Binary,
         ),
         FieldInfo::new(
             "schema_id".to_string(),
             None,
             None,
             Type::INT8,
-            FieldFormat::Text,
+            FieldFormat::Binary,
         ),
         FieldInfo::new(
             "table_name".to_string(),
@@ -583,27 +583,27 @@ pub(super) fn make_tables_response(
         let mut encoder = DataRowEncoder::new(schema.clone());
         encoder
             .encode_field_with_type_and_format(
-                &Some(t.table_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
+                &Some(t.table_id as i64),
+                &Type::INT8,
+                FieldFormat::Binary,
             )
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
-                &Some(t.begin_snapshot.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
+                &Some(t.begin_snapshot as i64),
+                &Type::INT8,
+                FieldFormat::Binary,
             )
             .expect("pgwire field encoding is infallible");
-        let end = t.end_snapshot.map(|e| e.to_string());
+        let end = t.end_snapshot.map(|e| e as i64);
         encoder
-            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(&end, &Type::INT8, FieldFormat::Binary)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
-                &Some(t.schema_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
+                &Some(t.schema_id as i64),
+                &Type::INT8,
+                FieldFormat::Binary,
             )
             .expect("pgwire field encoding is infallible");
         encoder
