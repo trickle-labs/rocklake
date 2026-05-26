@@ -34,7 +34,8 @@ use catalog::{
     make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
     make_macros_response, make_metadata_response, make_metadata_table_empty_response,
     make_schema_version_response, make_schema_versions_response, make_schemas_response,
-    make_snapshot_row_response, make_snapshot_stats_changes_response, make_sort_info_response,
+    make_snapshot_changes_response, make_snapshot_row_response,
+    make_snapshot_stats_changes_response, make_sort_info_response,
     make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
     make_tags_response, make_views_response, parse_inlined_table_ids,
 };
@@ -721,6 +722,19 @@ async fn execute_classified<'a>(
             } else {
                 Ok(vec![make_empty_response()])
             }
+        }
+        StatementKind::SelectSnapshotChanges => {
+            let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
+            let reader = {
+                let s = store.lock().await;
+                s.read_at(slateduck_core::mvcc::SnapshotId::new(snap_id))
+                    .map_err(SlateDuckError::from)?
+            };
+            let rows = reader
+                .list_all_snapshot_changes()
+                .await
+                .map_err(SlateDuckError::from)?;
+            Ok(vec![make_snapshot_changes_response(rows)])
         }
         StatementKind::SelectMetadata => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);

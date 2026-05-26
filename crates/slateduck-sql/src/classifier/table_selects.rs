@@ -68,6 +68,7 @@ pub(super) fn classify_table_select_with_query(
     let lower = table_name.to_lowercase();
     match lower.as_str() {
         "ducklake_snapshot" => classify_snapshot_select(query, select),
+        "ducklake_snapshot_changes" => StatementKind::SelectSnapshotChanges,
         "ducklake_schema" => StatementKind::SelectSchemas,
         "ducklake_table" => StatementKind::SelectTables,
         "ducklake_column" => StatementKind::SelectColumns,

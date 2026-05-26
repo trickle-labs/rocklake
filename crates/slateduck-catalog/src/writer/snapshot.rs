@@ -3,7 +3,7 @@
 use slatedb::{DbTransaction, IsolationLevel};
 use slateduck_core::keys;
 use slateduck_core::mvcc::SnapshotId;
-use slateduck_core::rows::SnapshotRow;
+use slateduck_core::rows::{SnapshotChangesRow, SnapshotRow};
 use slateduck_core::tags::{
     COUNTER_NEXT_CATALOG_ID, COUNTER_NEXT_FILE_ID, COUNTER_NEXT_SNAPSHOT_ID, SYSTEM_WRITER_EPOCH,
 };
@@ -94,6 +94,42 @@ impl CatalogWriter {
         // Drain staged mutations — these become part of the atomic commit.
         let staged = std::mem::take(&mut self.staged);
 
+        // Drain and finalize the pending snapshot-changes row (if any), populating
+        // author / commit_message from the InsertSnapshot op.
+        let pending_changes = {
+            let mut row = self
+                .pending_snapshot_changes
+                .take()
+                .unwrap_or(SnapshotChangesRow {
+                    snapshot_id,
+                    change_type: String::new(),
+                    change_info: None,
+                    schema_id: None,
+                    table_id: None,
+                    author: None,
+                    commit_message: None,
+                    commit_extra_info: None,
+                    changes_made: None,
+                });
+            row.snapshot_id = snapshot_id;
+            if row.author.is_none() {
+                row.author = author.map(|s| s.to_string());
+            }
+            if row.commit_message.is_none() {
+                row.commit_message = message.map(|s| s.to_string());
+            }
+            // Only persist if there is something meaningful to store.
+            if row.author.is_some()
+                || row.commit_message.is_some()
+                || row.changes_made.is_some()
+                || !row.change_type.is_empty()
+            {
+                Some(row)
+            } else {
+                None
+            }
+        };
+
         // One serializable transaction for everything.
         let tx = self.begin_tx().await?;
 
@@ -110,6 +146,13 @@ impl CatalogWriter {
         let snapshot_key = keys::key_snapshot(snapshot_id);
         tx.put(&snapshot_key, values::encode_value(&row))
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        // Write the snapshot-changes row (if any changes were recorded).
+        if let Some(changes_row) = &pending_changes {
+            let changes_key = keys::key_snapshot_changes(snapshot_id);
+            tx.put(&changes_key, values::encode_value(changes_row))
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        }
 
         // Persist all counter values atomically with the snapshot.
         tx.put(
