@@ -2914,10 +2914,29 @@ The workflow named `DuckDB Compatibility Matrix` is not a full compatibility mat
 - [ ] Promote `cargo test -p slateduck-datafusion` into the compatibility workflow for DataFusion 45 and include the Parquet scan test as the supported-row evidence.
 - [ ] Add a version-policy check proving DataFusion `< 45` is outside the supported range, or remove the row from the public matrix.
 
+### Object Storage Backend Testing
+
+Local testing strategy for all supported object stores via containerized emulators:
+
+| Backend | Local Emulator | Harness Pattern | Exercise |
+|---------|---|---|---|
+| **AWS S3** | MinIO (`minio/minio:latest`) | [MinioHarness](crates/slateduck-testkit/src/minio_harness.rs) (existing) | Catalog open/create, snapshot commit, read-after-write, list/prefix scan, writer fencing, recovery from fresh process |
+| **GCS** | Google Cloud Emulator or `fsouza/fake-gcs-server` | GcsEmulatorHarness (new) | Same as MinIO; use `GoogleCloudStorageBuilder` configured for emulator endpoint |
+| **Azure Blob** | Azurite (`mcr.microsoft.com/azure-storage/azurite`) | AzureEmulatorHarness (new) | Same as MinIO; use `MicrosoftAzureBuilder` configured for emulator endpoint |
+
+Each harness follows the MinioHarness pattern: start Docker container → wait for readiness → configure ObjectStore builder → return `Arc<dyn ObjectStore>` → teardown after test.
+
+Harnesses are added to `slateduck-testkit` and exposed as conditional features (`gcs-emulator`, `azure-emulator`, `minio-tests`) to allow local testing without requiring all Docker images.
+
+- [ ] Implement `GcsEmulatorHarness` in `crates/slateduck-testkit/src/gcs_emulator_harness.rs` with `GoogleCloudStorageBuilder` configuration and container lifecycle management.
+- [ ] Implement `AzureEmulatorHarness` in `crates/slateduck-testkit/src/azure_emulator_harness.rs` with `MicrosoftAzureBuilder` configuration and container lifecycle management.
+- [ ] Add shared backend test suite exercisable by all three harnesses: `catalog_backend_compat_test!()` macro covering open/create, commit, read-after-write, list/prefix, writer fencing, and recovery.
+- [ ] Wire all three harnesses into `crates/slateduck-pgwire/tests/integration_tests.rs` as optional gated tests.
+
 ### Storage, TLS, Rust, and Platform Matrix
 
-- [ ] Add real backend compatibility jobs for LocalFS, MinIO, AWS S3, GCS, and Azure Blob. Each supported backend must exercise catalog open/create, snapshot commit, read-after-write, list/prefix scan, writer fencing, and recovery from a fresh process.
-- [ ] Make credentialed AWS/GCS/Azure jobs release-blocking for v0.28.0, even if they run on a protected scheduled/release workflow rather than every PR.
+- [ ] Add real backend compatibility jobs for LocalFS, MinIO, AWS S3, GCS, and Azure Blob in the CI workflow. Each supported backend must exercise the shared backend compatibility suite (open/create, snapshot commit, read-after-write, list/prefix scan, writer fencing, recovery from fresh process).
+- [ ] LocalFS and MinIO tests run on every CI push. GCS and Azure Blob tests run on protected scheduled/release workflows or when explicitly triggered, backed by real cloud credentials.
 - [ ] Add TLS protocol-version tests using real client handshakes: TLS 1.2 accepted, TLS 1.3 accepted, TLS 1.1 and older rejected. Include auth + TLS combined coverage.
 - [ ] Reconcile Rust compatibility by either updating `docs/compatibility.md` to MSRV 1.93 or lowering the workspace MSRV with proof. Stable and MSRV checks must be represented in the manifest.
 - [ ] Add Windows x86-64 CI and release artifacts before claiming Windows support. The release workflow must build, checksum, upload, and document the Windows binary.
