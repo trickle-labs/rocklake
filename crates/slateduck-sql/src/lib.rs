@@ -14,4 +14,8 @@ pub mod table_changes;
 pub use classifier::{classify_statement, StatementKind};
 pub use error::SqlDispatchError;
 pub use params::ParamValues;
-pub use table_changes::{ChangeRecord, ChangeType, TableChangesError, TableChangesResult};
+pub use table_changes::{
+    cdc_record_count_mismatch_total, extract_rows_from_parquet, apply_changes, compute_table_changes,
+    ChangeRecord, ChangeType, ParquetRowData, TableChangesError, TableChangesResult,
+    DEFAULT_CDC_BATCH_SIZE,
+};
