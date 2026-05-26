@@ -161,15 +161,12 @@ pub(super) fn classify_no_from_select(select: &sqlparser::ast::Select) -> Statem
         select.projection.first()
     {
         // Check for literal 1 (SELECT 1)
-        match expr {
-            Expr::Value(val) => {
-                if let sqlparser::ast::Value::Number(n, _) = &val.value {
-                    if n == "1" {
-                        return StatementKind::SelectOne;
-                    }
+        if let Expr::Value(val) = expr {
+            if let sqlparser::ast::Value::Number(n, _) = &val.value {
+                if n == "1" {
+                    return StatementKind::SelectOne;
                 }
             }
-            _ => {}
         }
 
         if let Expr::Function(func) = expr {

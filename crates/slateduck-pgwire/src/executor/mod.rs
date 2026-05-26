@@ -696,17 +696,18 @@ async fn execute_classified<'a>(
             // When the SQL uses $N placeholders (e.g. table_changes($1, $2, $3))
             // the classifier stores the literal "$1" / 0 / u64::MAX fallbacks.
             // Resolve the actual values from the runtime params in that case.
-            let (resolved_ref, resolved_start, resolved_end) = if table_ref.starts_with('$') {
-                let pidx = table_ref[1..].parse::<usize>().unwrap_or(1) - 1;
-                let r = params
-                    .get_string(pidx)
-                    .unwrap_or_else(|_| table_ref.clone());
-                let s = params.get_u64(1).unwrap_or(start_snapshot);
-                let e = params.get_u64(2).unwrap_or(end_snapshot);
-                (r, s, e)
-            } else {
-                (table_ref.clone(), start_snapshot, end_snapshot)
-            };
+            let (resolved_ref, resolved_start, resolved_end) =
+                if let Some(rest) = table_ref.strip_prefix('$') {
+                    let pidx = rest.parse::<usize>().unwrap_or(1) - 1;
+                    let r = params
+                        .get_string(pidx)
+                        .unwrap_or_else(|_| table_ref.clone());
+                    let s = params.get_u64(1).unwrap_or(start_snapshot);
+                    let e = params.get_u64(2).unwrap_or(end_snapshot);
+                    (r, s, e)
+                } else {
+                    (table_ref.clone(), start_snapshot, end_snapshot)
+                };
             execute_table_changes(&resolved_ref, resolved_start, resolved_end, store).await
         }
         StatementKind::NextRowidRange {
