@@ -378,6 +378,7 @@ impl CatalogWriter {
     }
 
     /// Extended add_column supporting v0.25 nested column model and default type fields.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_column_with_opts(
         &mut self,
         table_id: u64,
@@ -788,6 +789,7 @@ impl CatalogWriter {
     }
 
     /// Extended add_macro_parameter supporting v0.25 default_value_type.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_macro_parameter_with_opts(
         &mut self,
         macro_id: u64,
