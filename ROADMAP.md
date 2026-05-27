@@ -79,6 +79,7 @@ binding on every roadmap release below.
 | **v0.27.8 — DuckLake Transaction Atomicity & Snapshot Changes Conformance** | Group all statements in one logical DuckLake commit into an atomic batch; spec-complete `ducklake_snapshot_changes` with `changes_made`, `author`, `commit_message`, `commit_extra_info`; interleaved writer and rollback tests; writer fencing validation; type-aware column stats for dates, timestamps, decimals | Planning |
 | **v0.27.9 — DuckLake Advanced Metadata Validation** | End-to-end DuckDB tests for views, macros, tags, column tags, sort info, and partition info; DROP/ALTER cascade covering all metadata types; ALTER TABLE time-travel tests; imported existing DuckLake catalog support | Planning |
 | **v0.27.10 — DuckLake Compatibility CI** | Pin known-good DuckDB and DuckLake versions in CI; nightly optional jobs covering fresh, restart, and concurrent scenarios; durable compatibility corpus captured from real workloads; acceptance gates for "DuckDB and SlateDuck work perfectly together" | Planning |
+| **v0.27.11 — Wire & SQL Resiliency Hardening** | Implement five core resiliency mitigations: DataFusion virtual catalog engine, AST normalization visitor pipeline, dynamic session settings registry, automated PG-dialect fuzzing with SQLSTATE 0A000 conformance, and hardened sandbox timeouts for process-spawning tests | Planning |
 | **v0.35.0 — Strategy C: Native DuckDB Extension** | Complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; `slateduck-ffi` C ABI already done; C++ catalog registration is the remaining gap | Planning |
 | **v0.40.0 — Full Ecosystem Compatibility Certification** | Release-blocking CI evidence for every `docs/compatibility.md` row: real DuckDB/DuckLake versions, SQL clients, Spark/Trino/Presto disposition, DataFusion, object stores, TLS/auth, Rust/MSRV, and release platforms | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
@@ -3467,6 +3468,55 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Nightly optional CI job is defined and runs green against pinned DuckDB/DuckLake.
 - [ ] `docs/compatibility.md` states DuckLake v1.0 compatibility with CI evidence.
 - [ ] All acceptance criteria from `plans/ducklake-1.0-spec-gaps-2.md` are met.
+
+---
+
+## v0.27.11 — Wire & SQL Resiliency Hardening
+
+> Harden SlateDuck's query classifier, PgWire connection stability, and integration test suite to insulate the sidecar from changes in client query patterns, dialect shifts, and connection initialization queries. Corresponds to the five actionable mitigations outlined in `plans/wire-and-sql-resiliency-report-1.md`.
+
+### Tasks
+
+#### Mitigation 1: Abstract Virtual SQL Query Engine (DataFusion Integration)
+
+- [ ] Register the 28 DuckLake catalog tables as memory-backed logical schemas in an in-memory DataFusion `SessionContext` upon PgWire connection startup.
+- [ ] Direct `SELECT` queries targeting catalog tables directly to the DataFusion engine for logical planning, projection resolution, and execution.
+- [ ] Verify that complex subqueries, Common Table Expressions (CTEs), custom projections, Joins, and aggregations against the catalog tables are resolved automatically.
+
+#### Mitigation 2: AST Normalizer & Pre-Processing Pipeline
+
+- [ ] Implement an AST visitor pipeline (`crates/slateduck-sql/src/classifier/normalize.rs`) that runs prior to statement classification.
+- [ ] Support recursive flattening of subqueries (e.g., nested `TableFactor::Derived` subqueries) and lifting of projection aliases.
+- [ ] Implement identifier normalization to canonically strip catalog and schema prefixes (e.g., mapping `"public".ducklake_table` to `ducklake_table`).
+- [ ] Strip redundant parentheses, double-quotes, whitespace tokens, and unused AST clauses such as `LIMIT` and `ORDER BY` before classification.
+
+#### Mitigation 3: Dynamic Session Settings Registry
+
+- [ ] Create a generic, session-scoped settings `HashMap<String, String>` inside the PgWire `SessionState` struct (`crates/slateduck-pgwire/src/session.rs`).
+- [ ] Update the `classify_statement` logic to parse any `SET <variable> = <value>` dynamically as a generic `StatementKind::SetVariable(key, value)`.
+- [ ] Update the PgWire executor to capture set variables in the `SessionState` map and immediately return a standard PostgreSQL `CommandComplete` tag of `"SET"`.
+
+#### Mitigation 4: Automated Dialect Fuzz Testing & SQLSTATE Hardening
+
+- [ ] Create a dedicated CI integration test target (`tests/dialect_fuzz.rs`) generating semi-randomized PostgreSQL-dialect query strings to send to the PgWire executor.
+- [ ] Harden the `execute_sql` handler to intercept all unsupported/unhandled queries and return a standardized PostgreSQL error:
+  - **SQLSTATE**: `0A000` (Feature Not Supported)
+  - **Severity**: `ERROR`
+  - **Message**: "Statement is not supported by SlateDuck's catalog facade."
+- [ ] Assert that under fuzzing the server remains non-blocking (never drops the connection abruptly, panics, or hangs).
+
+#### Mitigation 5: Hardened Testing with Sandbox Timeouts
+
+- [ ] Update `crates/slateduck-pgwire/tests/v0276_lifecycle_tests.rs` and other integration test targets that spawn external commands to use strict `tokio::time::timeout`.
+- [ ] Replace blocking `Command::output()` calls with non-blocking async `Command::output()` wrapped in a 5-second timeout, gracefully skipping/failing on timeout rather than hanging the test suite.
+
+### Definition of Done
+
+- [ ] In-memory DataFusion `SessionContext` registers all 28 virtual catalog tables and handles complex SQL.
+- [ ] `crates/slateduck-sql/src/classifier/normalize.rs` AST visitor flattening and identifier stripping is fully covered by unit tests.
+- [ ] PgWire `SessionState` stores generic settings dynamically and returns `"SET"` complete tags.
+- [ ] Fuzz test suite `tests/dialect_fuzz.rs` is active and asserts non-blocking behavior and SQLSTATE `0A000` conformance.
+- [ ] Process-spawning test suite in `v0276_lifecycle_tests.rs` uses async commands wrapped in strict `tokio` timeouts.
 
 ---
 
