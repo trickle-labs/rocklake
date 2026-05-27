@@ -22,7 +22,7 @@ This claim is backed by the durable compatibility corpus and automated CI eviden
 | Exact column schema, count, names, and OIDs under describe match the spec | ✅ |
 | Catalog Version 7 (`V1_0`) is returned; v1.1 migration (`V1_1_DEV_1`) is rejected | ✅ |
 
-**CI Evidence**: The `ducklake-corpus` job in [`.github/workflows/compatibility.yml`](../.github/workflows/compatibility.yml)
+**CI Evidence**: The `ducklake-corpus` job in `.github/workflows/compatibility.yml`
 runs on every push/PR and verifies the full DuckLake compatibility corpus. A nightly job
 additionally runs the fresh, restart, and concurrent-writers scenarios.
 
