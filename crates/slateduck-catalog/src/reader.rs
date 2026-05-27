@@ -93,6 +93,26 @@ impl CatalogReader {
         }
     }
 
+    /// List all `ducklake_snapshot_changes` rows across all snapshots.
+    ///
+    /// Returns one `SnapshotChangesRow` per snapshot that has a recorded
+    /// changes entry.  The caller (response builder) is responsible for
+    /// aggregating them into spec output rows.
+    pub async fn list_all_snapshot_changes(&self) -> CatalogResult<Vec<SnapshotChangesRow>> {
+        let prefix = keys::prefix_for_tag(TAG_SNAPSHOT_CHANGES);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SnapshotChangesRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
     /// List all schemas visible at this snapshot.
     ///
     /// # Examples

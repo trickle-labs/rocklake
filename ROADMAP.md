@@ -3005,11 +3005,11 @@ Current schema diverges from spec in two ways: `next_catalog_id` / `next_file_id
 
 **Tasks:**
 
-- [ ] Denormalize `next_catalog_id` and `next_file_id` into `SnapshotRow` at commit time in `CatalogWriter::create_snapshot`.
-- [ ] Move `author` and `message` semantics from `SnapshotRow` to `SnapshotChangesRow` as `author` and `commit_message`.
-- [ ] Build a spec-compatible `changes_made` string per snapshot (format: `created_schema:schema_name`, `created_table:table_id`, `dropped_table:table_id`, etc.).
-- [ ] Update PgWire response projections to expose the new schema.
-- [ ] Add tests: verify denormalized counter values match counter state; verify snapshot changes capture all mutations.
+- [x] Denormalize `next_catalog_id` and `next_file_id` into `SnapshotRow` at commit time in `CatalogWriter::create_snapshot`.
+- [x] Move `author` and `message` semantics from `SnapshotRow` to `SnapshotChangesRow` as `author` and `commit_message`.
+- [x] Build a spec-compatible `changes_made` string per snapshot (format: `created_schema:schema_name`, `created_table:table_id`, `dropped_table:table_id`, etc.).
+- [x] Update PgWire response projections to expose the new schema (`make_snapshot_row_response` returns 5 spec columns; `make_snapshot_changes_response` aggregates per snapshot_id with comma-separated `changes_made`).
+- [x] Add tests: verify denormalized counter values match counter state; verify snapshot changes capture all mutations (`crates/slateduck-catalog/tests/v0275_tests.rs` Phase 1–2).
 
 #### 3. Implement Spec-Complete Delete File Semantics
 
@@ -3043,8 +3043,8 @@ Dropped tables currently leave related metadata visible. All related rows must h
 
 **Tasks:**
 
-- [ ] Implement cascading `end_snapshot` updates in `CatalogWriter::drop_table`.
-- [ ] Verify all affected table types are retired: write a test that drops a table and checks every related spec table for `end_snapshot` set correctly.
+- [x] Implement cascading `end_snapshot` updates in `CatalogWriter::drop_table` (data files, delete files matched by `data_file_id`, and inlined insert rows).
+- [x] Verify all affected table types are retired: `drop_table_cascades_to_delete_files` and `drop_table_cascades_to_inlined_rows` tests in `crates/slateduck-catalog/tests/v0275_tests.rs`.
 - [ ] Update the typed drop path in the SQL dispatcher to call the cascading drop writer.
 
 ### P1 (Important) — Feature Gaps
@@ -3168,6 +3168,8 @@ The following bugs were discovered during the DuckDB/DuckLake source review docu
 - [x] **`ducklake_table_stats` column order and `next_row_id` exposure**: response builder now preserves DuckLake's requested projection order and exposes v1.0 `next_row_id`.
 - [x] **Incremental stats inserts accumulated instead of replaced**: `update_table_stats` now reads and accumulates existing `record_count`, `file_count`, `file_size_bytes`, and advances `next_row_id`.
 - [x] **Table column stats widening across batches**: `upsert_table_column_stats` now merges `contains_null`, `contains_nan`, `min_value`, `max_value`, and `extra_stats` using numeric-aware comparison.
+- [x] **Boolean stats ordering in `stats_value_less_or_equal`**: added explicit `false < true` branch before integer parsing so boolean min/max merge correctly. Covered by `stats_merge_handles_booleans_correctly` in `v0275_tests.rs`.
+- [x] **`ducklake_snapshot_changes` SQL facade**: added `SelectSnapshotChanges` classifier variant, `list_all_snapshot_changes` reader, and `make_snapshot_changes_response` executor that aggregates multiple change events per snapshot into one row with comma-separated `changes_made`.
 - [x] **Inlined deletes decrement global row count**: `BufferedOp::DeleteInlinedRows` calls `adjust_table_record_count` with a negative delta.
 - [x] **Stale inlined append row IDs remapped**: `inlined_insert_key_exists` prevents overwriting live rows; ordinary append rows are remapped to the next free key.
 - [x] **Dynamic inlined row update classification**: `UPDATE ducklake_inlined_data_* SET end_snapshot` is now classified as `UpdateInlinedRowEndSnapshot` and buffered.

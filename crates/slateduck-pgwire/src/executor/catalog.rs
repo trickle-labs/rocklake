@@ -523,19 +523,17 @@ pub(super) async fn execute_commit(
 // ─── Response Builders ─────────────────────────────────────────────────────
 
 /// F-24: Require a u64 parameter; returns SQLSTATE 22023 if absent or invalid.
+/// Build a PgWire response for a single `ducklake_snapshot` row.
+///
+/// Spec columns (DuckLake v1.0): `snapshot_id, snapshot_time, schema_version,
+/// next_catalog_id, next_file_id`.  The `author` and `message` fields are moved
+/// to `ducklake_snapshot_changes` per the v1.0 spec.
 pub(super) fn make_snapshot_row_response(
     snap: slateduck_core::rows::SnapshotRow,
 ) -> Response<'static> {
     let schema = Arc::new(vec![
         FieldInfo::new(
             "snapshot_id".to_string(),
-            None,
-            None,
-            Type::INT8,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "schema_version".to_string(),
             None,
             None,
             Type::INT8,
@@ -549,17 +547,10 @@ pub(super) fn make_snapshot_row_response(
             FieldFormat::Text,
         ),
         FieldInfo::new(
-            "author".to_string(),
+            "schema_version".to_string(),
             None,
             None,
-            Type::TEXT,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "message".to_string(),
-            None,
-            None,
-            Type::TEXT,
+            Type::INT8,
             FieldFormat::Text,
         ),
         FieldInfo::new(
@@ -587,23 +578,17 @@ pub(super) fn make_snapshot_row_response(
         .expect("pgwire field encoding is infallible");
     encoder
         .encode_field_with_type_and_format(
-            &Some(snap.schema_version.to_string()),
-            &Type::TEXT,
-            FieldFormat::Text,
-        )
-        .expect("pgwire field encoding is infallible");
-    encoder
-        .encode_field_with_type_and_format(
             &Some(snap.snapshot_time.clone()),
             &Type::TEXT,
             FieldFormat::Text,
         )
         .expect("pgwire field encoding is infallible");
     encoder
-        .encode_field_with_type_and_format(&snap.author, &Type::TEXT, FieldFormat::Text)
-        .expect("pgwire field encoding is infallible");
-    encoder
-        .encode_field_with_type_and_format(&snap.message, &Type::TEXT, FieldFormat::Text)
+        .encode_field_with_type_and_format(
+            &Some(snap.schema_version.to_string()),
+            &Type::TEXT,
+            FieldFormat::Text,
+        )
         .expect("pgwire field encoding is infallible");
     let next_catalog_id = snap.next_catalog_id.map(|v| v.to_string());
     encoder
@@ -616,6 +601,138 @@ pub(super) fn make_snapshot_row_response(
     let row = encoder.finish();
     let mut resp = QueryResponse::new(schema, futures::stream::iter(vec![row]));
     resp.set_command_tag("SELECT 1");
+    Response::Query(resp)
+}
+
+/// Build a PgWire response for `SELECT * FROM ducklake_snapshot_changes`.
+///
+/// Spec columns (DuckLake v1.0): `snapshot_id, changes_made, author,
+/// commit_message, commit_extra_info`.
+///
+/// Internally each snapshot may have multiple `SnapshotChangesRow` entries
+/// (one per change event).  This builder aggregates them by `snapshot_id`
+/// into a single output row, joining `change_type:change_info` tokens into
+/// the `changes_made` comma-separated string.
+pub(super) fn make_snapshot_changes_response(
+    rows: Vec<slateduck_core::rows::SnapshotChangesRow>,
+) -> Response<'static> {
+    use std::collections::BTreeMap;
+    let schema = Arc::new(vec![
+        FieldInfo::new(
+            "snapshot_id".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "changes_made".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "author".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "commit_message".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new(
+            "commit_extra_info".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+    ]);
+
+    // Aggregate per snapshot_id in snapshot order.
+    struct Aggregated {
+        changes: Vec<String>,
+        author: Option<String>,
+        commit_message: Option<String>,
+        commit_extra_info: Option<String>,
+    }
+    let mut map: BTreeMap<u64, Aggregated> = BTreeMap::new();
+    for r in &rows {
+        let entry = map.entry(r.snapshot_id).or_insert(Aggregated {
+            changes: Vec::new(),
+            author: r.author.clone(),
+            commit_message: r.commit_message.clone(),
+            commit_extra_info: r.commit_extra_info.clone(),
+        });
+        // If the row already carries a pre-built changes_made string, use it;
+        // otherwise derive one from change_type:change_info.
+        if let Some(ref cm) = r.changes_made {
+            if !cm.is_empty() {
+                entry.changes.push(cm.clone());
+                continue;
+            }
+        }
+        let token = match &r.change_info {
+            Some(info) if !info.is_empty() => format!("{}:{}", r.change_type, info),
+            _ => r.change_type.clone(),
+        };
+        if !token.is_empty() {
+            entry.changes.push(token);
+        }
+        // Prefer the most-informative value across multiple rows.
+        if entry.author.is_none() {
+            entry.author = r.author.clone();
+        }
+        if entry.commit_message.is_none() {
+            entry.commit_message = r.commit_message.clone();
+        }
+        if entry.commit_extra_info.is_none() {
+            entry.commit_extra_info = r.commit_extra_info.clone();
+        }
+    }
+
+    let mut data_rows = Vec::new();
+    for (snapshot_id, agg) in &map {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(snapshot_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let changes_made = if agg.changes.is_empty() {
+            None
+        } else {
+            Some(agg.changes.join(","))
+        };
+        encoder
+            .encode_field_with_type_and_format(&changes_made, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&agg.author, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&agg.commit_message, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &agg.commit_extra_info,
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
     Response::Query(resp)
 }
 

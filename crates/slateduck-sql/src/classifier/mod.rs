@@ -200,6 +200,8 @@ pub enum StatementKind {
     SelectSnapshot,
     /// `SELECT ... FROM ducklake_snapshot ORDER BY snapshot_id ASC LIMIT 1`
     SelectFirstSnapshot,
+    /// `SELECT * FROM ducklake_snapshot_changes`
+    SelectSnapshotChanges,
     SelectInlinedData,
     SelectViews,
     SelectMacros,

@@ -56,6 +56,12 @@ pub struct CatalogWriter {
     current_schema_version: u64,
     /// Staged (key, value) pairs committed atomically by `create_snapshot()`.
     staged: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Pending snapshot-changes row for the current transaction.
+    ///
+    /// Multiple `add_snapshot_changes()` calls accumulate into this single row
+    /// to avoid key collisions and produce the spec-required one-row-per-snapshot
+    /// shape for `ducklake_snapshot_changes`.
+    pub(crate) pending_snapshot_changes: Option<SnapshotChangesRow>,
 }
 
 impl CatalogWriter {
@@ -72,6 +78,7 @@ impl CatalogWriter {
             schema_changed: false,
             current_schema_version: schema_version,
             staged: Vec::new(),
+            pending_snapshot_changes: None,
         }
     }
 
@@ -210,7 +217,10 @@ impl CatalogWriter {
             }
         }
 
-        // CASCADE: retire live data files for this table.
+        // CASCADE: retire live data files for this table; also collect their IDs
+        // so delete files can be matched even when table_id is not stored in the row.
+        let mut retired_data_file_ids: std::collections::HashSet<u64> =
+            std::collections::HashSet::new();
         {
             let prefix = keys::prefix_for_tag(slateduck_core::tags::TAG_DATA_FILE);
             let mut iter = self
@@ -226,6 +236,7 @@ impl CatalogWriter {
             {
                 let df_row: DataFileRow = values::decode_value(&kv.value)?;
                 if df_row.table_id == table_id && df_row.end_snapshot.is_none() {
+                    retired_data_file_ids.insert(df_row.data_file_id);
                     to_retire.push((kv.key.to_vec(), df_row));
                 }
             }
@@ -340,6 +351,65 @@ impl CatalogWriter {
             for (si_key, mut si_row) in to_retire {
                 si_row.end_snapshot = Some(snapshot_id);
                 self.stage(si_key, values::encode_value(&si_row));
+            }
+        }
+
+        // CASCADE: retire live delete files for this table (v0.27.5).
+        // Match by explicit table_id field OR by data_file_id membership in this table.
+        {
+            let prefix = keys::prefix_for_tag(slateduck_core::tags::TAG_DELETE_FILE);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire: Vec<(Vec<u8>, DeleteFileRow)> = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let df_row: DeleteFileRow = values::decode_value(&kv.value)?;
+                if df_row.end_snapshot.is_some() {
+                    continue; // already retired
+                }
+                let belongs = match df_row.table_id {
+                    Some(tid) => tid == table_id,
+                    // Fall back: check if the associated data file was in this table.
+                    None => retired_data_file_ids.contains(&df_row.data_file_id),
+                };
+                if belongs {
+                    to_retire.push((kv.key.to_vec(), df_row));
+                }
+            }
+            for (df_key, mut df_row) in to_retire {
+                df_row.end_snapshot = Some(snapshot_id);
+                self.stage(df_key, values::encode_value(&df_row));
+            }
+        }
+
+        // CASCADE: retire live inlined insert rows for this table (v0.27.5).
+        {
+            let prefix = keys::prefix_inlined_inserts_for_table(table_id);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire: Vec<(Vec<u8>, InlinedInsertRow)> = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let ins_row: InlinedInsertRow = values::decode_value(&kv.value)?;
+                if ins_row.end_snapshot.is_none() {
+                    to_retire.push((kv.key.to_vec(), ins_row));
+                }
+            }
+            for (ins_key, mut ins_row) in to_retire {
+                ins_row.end_snapshot = Some(snapshot_id);
+                self.stage(ins_key, values::encode_value(&ins_row));
             }
         }
 
@@ -1181,8 +1251,10 @@ impl CatalogWriter {
 
     /// Stage a `SnapshotChangesRow` for this transaction.
     ///
-    /// The key is `key_snapshot_changes(pending_snapshot_id)`. The row is
-    /// committed atomically with the snapshot in `create_snapshot()`.
+    /// Multiple calls within the same transaction accumulate into a single
+    /// `SnapshotChangesRow` (one row per snapshot) to satisfy the DuckLake
+    /// v1.0 spec and avoid key collisions.  The row is committed atomically
+    /// with the snapshot in `create_snapshot()`.
     pub async fn add_snapshot_changes(
         &mut self,
         change_type: String,
@@ -1191,19 +1263,45 @@ impl CatalogWriter {
         table_id: Option<u64>,
     ) -> CatalogResult<()> {
         let snapshot_id = self.counters.peek_snapshot_id();
-        let row = SnapshotChangesRow {
-            snapshot_id,
-            change_type,
-            change_info,
-            schema_id,
-            table_id,
-            author: None,
-            commit_message: None,
-            commit_extra_info: None,
-            changes_made: None,
+        // Build the spec changes_made token: "change_type:change_info" or just "change_type".
+        let token = match &change_info {
+            Some(info) if !info.is_empty() => format!("{change_type}:{info}"),
+            _ => change_type.clone(),
         };
-        let key = keys::key_snapshot_changes(snapshot_id);
-        self.stage(key, values::encode_value(&row));
+        match &mut self.pending_snapshot_changes {
+            None => {
+                self.pending_snapshot_changes = Some(SnapshotChangesRow {
+                    snapshot_id,
+                    change_type,
+                    change_info,
+                    schema_id,
+                    table_id,
+                    author: None,
+                    commit_message: None,
+                    commit_extra_info: None,
+                    changes_made: if token.is_empty() { None } else { Some(token) },
+                });
+            }
+            Some(existing) => {
+                // Append the new token to the existing changes_made string.
+                if !token.is_empty() {
+                    match &mut existing.changes_made {
+                        None => existing.changes_made = Some(token),
+                        Some(cm) => {
+                            cm.push(',');
+                            cm.push_str(&token);
+                        }
+                    }
+                }
+                // Carry schema_id / table_id from the most-specific change.
+                if existing.schema_id.is_none() {
+                    existing.schema_id = schema_id;
+                }
+                if existing.table_id.is_none() {
+                    existing.table_id = table_id;
+                }
+            }
+        }
         Ok(())
     }
 

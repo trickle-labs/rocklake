@@ -53,15 +53,43 @@ fn stats_max<'a>(left: &'a str, right: &'a str) -> &'a str {
     }
 }
 
+/// Type-aware less-or-equal comparison for DuckLake column stat values.
+///
+/// Encoded stat values are stored as their string representation. We must
+/// compare them semantically so that numeric ordering is respected (e.g.
+/// `-10` < `-2`, `10` < `2` lexicographically but `2` < `10` numerically).
+///
+/// Comparison priority:
+/// 1. `BOOLEAN`-like tokens: `"false"` < `"true"`.
+/// 2. `INTEGER`/`BIGINT`: parsed as `i128` for signed integer comparison.
+/// 3. `FLOAT`/`DOUBLE`: parsed as `f64` for finite float comparison.
+/// 4. `DATE`: ISO-8601 `YYYY-MM-DD` strings sort correctly lexicographically
+///    so the string comparison path handles them correctly.
+/// 5. `TIMESTAMP`/`TIMESTAMPTZ`: ISO-8601 strings sort correctly lexicographically.
+/// 6. Everything else (strings, UUIDs, decimals, etc.): lexicographic.
 fn stats_value_less_or_equal(left: &str, right: &str) -> bool {
-    if let (Ok(left), Ok(right)) = (left.parse::<i128>(), right.parse::<i128>()) {
-        return left <= right;
+    // BOOLEAN
+    match (left, right) {
+        ("false", "false") | ("true", "true") => return true,
+        ("false", "true") => return true,
+        ("true", "false") => return false,
+        _ => {}
     }
-    if let (Ok(left), Ok(right)) = (left.parse::<f64>(), right.parse::<f64>()) {
-        if left.is_finite() && right.is_finite() {
-            return left <= right;
+
+    // INTEGER / BIGINT — covers negative numbers (e.g. "-10" vs "-2").
+    if let (Ok(l), Ok(r)) = (left.parse::<i128>(), right.parse::<i128>()) {
+        return l <= r;
+    }
+
+    // FLOAT / DOUBLE — covers finite float values with fractional parts.
+    if let (Ok(l), Ok(r)) = (left.parse::<f64>(), right.parse::<f64>()) {
+        if l.is_finite() && r.is_finite() {
+            return l <= r;
         }
     }
+
+    // DATE, TIMESTAMP, TIMESTAMPTZ, UUID, and plain strings — ISO-8601 date
+    // and timestamp strings sort correctly lexicographically, as do UUIDs.
     left <= right
 }
 
