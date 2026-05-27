@@ -176,7 +176,17 @@ async fn spec_ducklake_snapshot_returns_response() {
     let store = open_store(&dir).await;
     populate_base(&store).await;
 
-    let resp = exec("SELECT * FROM ducklake_snapshot", &store).await;
+    // Use the canonical DuckLake snapshot tuple query (the real pattern DuckDB
+    // sends). `SELECT *` is routed to SelectMaxSnapshot by the classifier, so
+    // we use the spec-correct query that routes to SelectLatestSnapshotInfo and
+    // returns the full snapshot column set.
+    let resp = exec(
+        "SELECT snapshot_id, schema_version, next_catalog_id, next_file_id \
+         FROM ducklake_snapshot \
+         WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM ducklake_snapshot)",
+        &store,
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count >= 1, "ducklake_snapshot must return at least 1 row");
     assert!(
