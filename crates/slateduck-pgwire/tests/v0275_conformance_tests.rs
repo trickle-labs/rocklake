@@ -840,3 +840,85 @@ async fn spec_schema_columns_include_required_fields() {
     assert!(cols.contains(&"begin_snapshot".to_string()), "{cols:?}");
     assert!(cols.contains(&"end_snapshot".to_string()), "{cols:?}");
 }
+
+// ─── Task 15: Inlined data arbitrary output alias ─────────────────────────────
+
+/// Task 15: Verify that `SELECT row_id AS rid, CAST(id AS INTEGER) AS duck_id
+/// FROM ducklake_inlined_data_*` exposes the user-supplied alias names in the
+/// RowDescription, not the underlying column names.
+#[tokio::test]
+async fn inlined_data_select_with_aliases_returns_aliased_column_names() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+
+    // Set up a schema, table with an id column, and register inlined rows.
+    exec_all(
+        "INSERT INTO ducklake_schema (schema_name) VALUES ($1)",
+        &store,
+        &ParamValues::new(vec![Some("myschema".to_string())]),
+    )
+    .await;
+    exec_all(
+        "INSERT INTO ducklake_table (schema_id, table_name, data_path) VALUES ($1, $2, $3)",
+        &store,
+        &ParamValues::new(vec![
+            Some("1".to_string()),
+            Some("events".to_string()),
+            None,
+        ]),
+    )
+    .await;
+    exec_all(
+        "INSERT INTO ducklake_column \
+         (table_id, column_name, column_type, column_order, nulls_allowed) \
+         VALUES ($1, $2, $3, $4, $5)",
+        &store,
+        &ParamValues::new(vec![
+            Some("2".to_string()),
+            Some("id".to_string()),
+            Some("BIGINT".to_string()),
+            Some("0".to_string()),
+            Some("false".to_string()),
+        ]),
+    )
+    .await;
+    exec_all(
+        "INSERT INTO ducklake_snapshot (author, message) VALUES ($1, $2)",
+        &store,
+        &ParamValues::new(vec![Some("testbot".to_string()), Some("setup".to_string())]),
+    )
+    .await;
+
+    // Insert an inlined row: (row_id, begin_snapshot, end_snapshot, id)
+    exec_all(
+        r#"INSERT INTO "public".ducklake_inlined_data_2_1 VALUES (0, 1, NULL, 42)"#,
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
+
+    // SELECT with aliases — column names in RowDescription must match the alias.
+    let resp = exec(
+        r#"SELECT row_id AS rid, CAST(id AS INTEGER) AS duck_id FROM "public".ducklake_inlined_data_2_1"#,
+        &store,
+    )
+    .await;
+    let (cols, count) = inspect_query(resp).await;
+    assert!(count >= 1, "inlined row must be visible; count={count}");
+    assert!(
+        cols.contains(&"rid".to_string()),
+        "RowDescription must use alias 'rid', got: {cols:?}"
+    );
+    assert!(
+        cols.contains(&"duck_id".to_string()),
+        "RowDescription must use alias 'duck_id', got: {cols:?}"
+    );
+    assert!(
+        !cols.contains(&"row_id".to_string()),
+        "original column name 'row_id' must NOT appear when aliased, got: {cols:?}"
+    );
+    assert!(
+        !cols.contains(&"id".to_string()),
+        "original column name 'id' must NOT appear when aliased, got: {cols:?}"
+    );
+}

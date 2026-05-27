@@ -1186,7 +1186,8 @@ async fn execute_classified<'a>(
                     .ok()
                     .or_else(|| literal_u64(&literals, 1))
                     .unwrap_or(0),
-                file_count: params
+                // DuckLake v1.0 position 2 is next_row_id, not file_count.
+                next_row_id: params
                     .get_u64(2)
                     .ok()
                     .or_else(|| literal_u64(&literals, 2))

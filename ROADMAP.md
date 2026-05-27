@@ -3183,8 +3183,8 @@ The internal `TableStatsRow` retains a `file_count` field that no longer maps to
 
 **Tasks:**
 
-- [ ] Rename internal `file_count` in `TableStatsRow` or wrap it in a clearly internal struct so the public DuckLake `next_row_id` and `file_size_bytes` fields are unambiguous.
-- [ ] Update `InsertTableStats` parsing in `crates/slateduck-pgwire/src/executor/mod.rs` so the third literal is treated as `next_row_id` or explicitly ignored if SlateDuck computes `next_row_id` independently.
+- [x] Rename internal `file_count` in `TableStatsRow` or wrap it in a clearly internal struct so the public DuckLake `next_row_id` and `file_size_bytes` fields are unambiguous.
+- [x] Update `InsertTableStats` parsing in `crates/slateduck-pgwire/src/executor/mod.rs` so the third literal is treated as `next_row_id` or explicitly ignored if SlateDuck computes `next_row_id` independently.
 - [x] Add migration/facade handling for persisted catalogs that stored the old `file_count` semantics.
 - [x] Add a regression test confirming that all four DuckLake v1.0 `ducklake_table_stats` column positions round-trip correctly.
 
@@ -3196,9 +3196,9 @@ DuckLake commit batches contain multiple metadata statements whose combined mean
 
 - [x] Ensure all SQL statements belonging to one logical DuckLake metadata commit are buffered and evaluated as a single atomic batch before any side effects are applied.
 - [x] Verify that stale row ID remapping, stats adjustments, snapshot changes, and catalog counter increments all see the complete incoming batch.
-- [ ] Add tests with interleaved DuckLake writers that produce conflicting commits; verify exactly one writer wins per snapshot.
+- [x] Add tests with interleaved DuckLake writers that produce conflicting commits; verify exactly one writer wins per snapshot.
 - [x] Add writer fencing tests: kill writer mid-batch; start new writer; verify no partial batch is visible and new writer takes over cleanly.
-- [ ] Add rollback tests: disconnect mid-batch; verify catalog state is unchanged from before the batch started.
+- [x] Add rollback tests: disconnect mid-batch; verify catalog state is unchanged from before the batch started.
 
 ### P1 (Important) — Additional Feature Items From spec-gaps-2
 
@@ -3208,11 +3208,11 @@ Executor response builders, handler `describe_fields_for_sql`, and COPY schemas 
 
 **Tasks:**
 
-- [ ] Introduce a shared `DuckLakeTableSchema` type or equivalent constant registry mapping each `ducklake_*` table name to its exact FieldInfo list.
-- [ ] Wire `make_*_response` builders, `describe_fields_for_sql`, and `projected_copy_indices` to the registry so all three paths use the identical field definitions.
+- [x] Introduce a shared `DuckLakeTableSchema` type or equivalent constant registry mapping each `ducklake_*` table name to its exact FieldInfo list.
+- [x] Wire `make_*_response` builders, `describe_fields_for_sql`, and `projected_copy_indices` to the registry so all three paths use the identical field definitions.
 - [x] Add `postgres_query` tests in `duckdb_binary_tests.rs` or equivalent for every relevant metadata table with both plain and cast/alias projection shapes.
 - [x] Add COPY-to-stdout tests that verify projection order and binary field encoding correctness.
-- [ ] Implement arbitrary output alias support for dynamic inlined table projections and add a test for `SELECT row_id AS rid, CAST(id AS INTEGER) AS duck_id FROM ducklake_inlined_data_*`.
+- [x] Implement arbitrary output alias support for dynamic inlined table projections and add a test for `SELECT row_id AS rid, CAST(id AS INTEGER) AS duck_id FROM ducklake_inlined_data_*`.
 
 #### 16. Type-Aware Column Stats Merge
 
@@ -3245,7 +3245,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [x] Capture DuckLake metadata SQL from real attach, create, insert, delete, update, drop, view, macro, and partition workflows; store normalized SQL under `tests/fixtures/` tagged by DuckDB and DuckLake version.
 - [x] Add a corpus classification test that runs every statement through `classify_statement` and fails on `StatementKind::Unsupported`.
 - [x] Add a corpus response-shape test that executes every corpus `SELECT` and validates field names and field count.
-- [ ] Add an optional `make ducklake-compat` or equivalent CI job that runs the corpus against a local DuckDB and DuckLake binary and reports new failures as actionable diffs.
+- [x] Add an optional `make ducklake-compat` or equivalent CI job that runs the corpus against a local DuckDB and DuckLake binary and reports new failures as actionable diffs.
 
 ### Definition of Done
 
@@ -3260,9 +3260,9 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [x] All P2 field naming is aligned with spec: `tag_name`/`tag_value` for tags; spec-correct sort_expression and files_scheduled_for_deletion schemas.
 - [x] Conformance test suite passes all queries from `specification/queries.md` with spec-correct results.
 - [x] No `SelectXXX` handler returns an empty result set unless the spec explicitly permits it (e.g., no metadata rows, no views, no macros).
-- [ ] Stats model semantics are clean: internal `file_count` naming is resolved; `InsertTableStats` maps all four v1.0 literal positions correctly.
+- [x] Stats model semantics are clean: internal `file_count` naming is resolved; `InsertTableStats` maps all four v1.0 literal positions correctly.
 - [x] One logical DuckLake commit is processed atomically; partial batch state is never visible; writer fencing tests pass.
-- [ ] All executor response builders, handler describes, and COPY schemas are derived from a shared schema registry.
+- [x] All executor response builders, handler describes, and COPY schemas are derived from a shared schema registry.
 - [x] `postgres_query` tests exist for every DuckLake metadata table in both plain and cast/alias projection forms.
 - [x] COPY-to-stdout projection and binary encoding tests pass.
 - [x] Type-aware stats merging covers dates, timestamps, decimals, and all other DuckLake stat-relevant types.
