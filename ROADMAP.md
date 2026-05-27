@@ -3473,7 +3473,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 ## v0.27.11 — Wire & SQL Resiliency Hardening
 
-> Harden SlateDuck's query classifier, PgWire connection stability, and integration test suite to insulate the sidecar from changes in client query patterns, dialect shifts, and connection initialization queries. Corresponds to the five actionable mitigations outlined in `plans/wire-and-sql-resiliency-report-1.md`.
+> Harden SlateDuck's query classifier, PgWire connection stability, and integration test suite to insulate the sidecar from changes in client query patterns, dialect shifts, and connection initialization queries. Incorporates the five actionable mitigations outlined in `plans/wire-and-sql-resiliency-report-1.md` and addresses the critical test sandboxing recommendations from the test suite assessment in `/Users/grove/obsidian-vault/grove/slateduck/test_suite_assessment.md`.
 
 ### Tasks
 
@@ -3505,10 +3505,12 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
   - **Message**: "Statement is not supported by SlateDuck's catalog facade."
 - [ ] Assert that under fuzzing the server remains non-blocking (never drops the connection abruptly, panics, or hangs).
 
-#### Mitigation 5: Hardened Testing with Sandbox Timeouts
+#### Mitigation 5: Hardened Testing with Sandbox Timeouts (Test Suite Assessment Integration)
 
-- [ ] Update `crates/slateduck-pgwire/tests/v0276_lifecycle_tests.rs` and other integration test targets that spawn external commands to use strict `tokio::time::timeout`.
-- [ ] Replace blocking `Command::output()` calls with non-blocking async `Command::output()` wrapped in a 5-second timeout, gracefully skipping/failing on timeout rather than hanging the test suite.
+- [ ] Eliminate the indefinite block risk identified in the test suite assessment (`/Users/grove/obsidian-vault/grove/slateduck/test_suite_assessment.md`) in `crates/slateduck-pgwire/tests/v0276_lifecycle_tests.rs`.
+- [ ] Replace blocking `Command::output()` calls in helper functions (like `ducklake_available()`) with non-blocking, asynchronous command execution wrapped in strict `tokio::time::timeout` boundaries (e.g., 5 seconds).
+- [ ] Ensure that if `LOAD ducklake` attempts to fetch the extension over restricted or slow networks, the invocation times out gracefully and the test skips or fails cleanly rather than hanging the entire runner.
+- [ ] Audit and apply similar timeout controls to all other integration test targets spawning external processes.
 
 ### Definition of Done
 
@@ -3516,7 +3518,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] `crates/slateduck-sql/src/classifier/normalize.rs` AST visitor flattening and identifier stripping is fully covered by unit tests.
 - [ ] PgWire `SessionState` stores generic settings dynamically and returns `"SET"` complete tags.
 - [ ] Fuzz test suite `tests/dialect_fuzz.rs` is active and asserts non-blocking behavior and SQLSTATE `0A000` conformance.
-- [ ] Process-spawning test suite in `v0276_lifecycle_tests.rs` uses async commands wrapped in strict `tokio` timeouts.
+- [ ] All external shell commands in `v0276_lifecycle_tests.rs` (especially `ducklake_available`) are run asynchronously under a 5-second `tokio::time::timeout` and do not block the suite on network constraints.
 
 ---
 
