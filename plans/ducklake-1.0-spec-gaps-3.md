@@ -9,7 +9,9 @@ This document provides a comprehensive, rigorous, and complete specification of 
 This gap assessment and roadmap strictly target the following software and catalog versions:
 - **Client/Engine:** **DuckDB v1.5.3** (from the checked-out `v1.5.3` branch in `../duckdb`).
 - **Lakehouse Catalog Spec:** **DuckLake 1.0 Specification** (Catalog Version 7 / `V1_0` as defined in `../ducklake`).
-- **Strict Version Constraint:** SlateDuck **strictly targets only the 1.0 specification** of DuckLake. Any subsequent development branches (such as DuckLake v1.1 / Catalog Version 8 / `V1_1_DEV_1` or higher) are explicitly marked **out of scope**. This boundary limits scope creep and ensures a stable, robust compatibility baseline.
+- **Strict Version Constraint & Code Audit Finding:** SlateDuck **strictly targets only the 1.0 specification** of DuckLake. 
+  - *Deep Code Audit Finding:* Deep auditing of the upstream `ducklake` source code reveals that **DuckLake v1.1 (Catalog Version 8 / `V1_1_DEV_1`) introduces absolutely zero new metadata tables or structural catalog modifications**. The only difference is the version string tag migration (`MigrateV10()`), which executes `UPDATE ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';`.
+  - *Isolation Strategy:* SlateDuck strictly isolates itself by returning `'1.0'` as the global version and ignoring/rejecting any v1.1 migrations. This boundary completely shields SlateDuck from version-handling overhead and enforces a stable compatibility baseline. Any subsequent development branches are explicitly marked **out of scope**.
 
 Our primary objective is to define the exact technical specifications and changes required in SlateDuck to achieve **100% perfect interoperability** with DuckDB v1.5.3 and DuckLake v1.0 across all operational regimes—including inlined data, data-file based storage, transaction-isolation guarantees, metadata replication, and complex analytical operations.
 
