@@ -49,8 +49,7 @@ fn load_corpus() -> serde_json::Value {
     let path = corpus_path();
     let content = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read corpus at {}: {e}", path.display()));
-    serde_json::from_str(&content)
-        .unwrap_or_else(|e| panic!("failed to parse corpus JSON: {e}"))
+    serde_json::from_str(&content).unwrap_or_else(|e| panic!("failed to parse corpus JSON: {e}"))
 }
 
 async fn open_store(dir: &TempDir) -> Arc<Mutex<CatalogStore>> {
@@ -114,7 +113,7 @@ async fn inspect_query(resp: Response<'static>) -> (Vec<String>, usize) {
             }
             (cols, count)
         }
-        other => panic!("expected Query response, got a non-Query variant"),
+        _other => panic!("expected Query response, got a non-Query variant"),
     }
 }
 
@@ -185,11 +184,15 @@ fn ducklake_corpus_no_unsupported_statements() {
                 Ok(kind) => {
                     let kind_str = format!("{kind:?}");
                     if kind_str.contains("Unsupported") {
-                        failures.push(format!("seq={seq} phase={phase}: PgCatalogScan classified as Unsupported"));
+                        failures.push(format!(
+                            "seq={seq} phase={phase}: PgCatalogScan classified as Unsupported"
+                        ));
                     }
                 }
                 Err(e) => {
-                    failures.push(format!("seq={seq} phase={phase}: classify_statement error: {e}"));
+                    failures.push(format!(
+                        "seq={seq} phase={phase}: classify_statement error: {e}"
+                    ));
                 }
             }
             continue;
@@ -273,7 +276,9 @@ fn ducklake_corpus_covers_pinned_target_versions() {
                 }
             }
             Err(e) => {
-                failures.push(format!("seq={seq}: classify_statement error for `{sql}`: {e}"));
+                failures.push(format!(
+                    "seq={seq}: classify_statement error for `{sql}`: {e}"
+                ));
             }
         }
     }
@@ -327,14 +332,10 @@ async fn ducklake_corpus_response_shapes_match() {
         match resp {
             None => {
                 // Execute_sql returned no responses — treat as error for SELECTs.
-                failures.push(format!(
-                    "seq={seq}: `{sql}` returned no response"
-                ));
+                failures.push(format!("seq={seq}: `{sql}` returned no response"));
             }
             Some(Response::Error(e)) => {
-                failures.push(format!(
-                    "seq={seq}: `{sql}` returned error: {}", e.message
-                ));
+                failures.push(format!("seq={seq}: `{sql}` returned error: {}", e.message));
             }
             Some(Response::Query(qr)) => {
                 let actual_cols: Vec<String> = qr
@@ -348,9 +349,7 @@ async fn ducklake_corpus_response_shapes_match() {
                 futures::pin_mut!(stream);
                 while let Some(item) = stream.next().await {
                     if let Err(e) = item {
-                        failures.push(format!(
-                            "seq={seq}: `{sql}` data-row encoding error: {e}"
-                        ));
+                        failures.push(format!("seq={seq}: `{sql}` data-row encoding error: {e}"));
                         break;
                     }
                 }
@@ -368,7 +367,7 @@ async fn ducklake_corpus_response_shapes_match() {
                     }
                 }
             }
-            Some(_other) => {
+            Some(_) => {
                 // Non-query response (e.g., Execution for write statements) is
                 // unexpected for a SELECT — flag it.
                 failures.push(format!(
@@ -402,7 +401,10 @@ async fn ducklake_v1_0_catalog_version_is_seven() {
 
     let (cols, count) = inspect_query(resp).await;
 
-    assert_eq!(count, 1, "ducklake_schema_version must return exactly 1 row");
+    assert_eq!(
+        count, 1,
+        "ducklake_schema_version must return exactly 1 row"
+    );
     assert!(
         cols.contains(&"schema_version".to_string()),
         "ducklake_schema_version must include schema_version column"
@@ -420,7 +422,10 @@ async fn ducklake_v1_0_catalog_version_is_seven() {
 fn ducklake_v1_1_migration_statement_is_classifiable() {
     let sql = "UPDATE ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version'";
     let result = classify_statement(sql);
-    assert!(result.is_ok(), "v1.1 migration statement must not error: {result:?}");
+    assert!(
+        result.is_ok(),
+        "v1.1 migration statement must not error: {result:?}"
+    );
     let kind = result.unwrap();
     let kind_str = format!("{kind:?}");
     assert!(
