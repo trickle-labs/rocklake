@@ -78,11 +78,11 @@ binding on every roadmap release below.
 | **v0.27.7 — DuckLake SQL Schema Registry** | `DuckLakeTableSchema` registry as single source of truth for all 28 metadata table schemas; wire executor response builders, handler describe, and COPY to the registry; projection-order golden tests for every table; arbitrary output alias support for dynamic inlined tables | Done |
 | **v0.27.8 — DuckLake Transaction Atomicity & Snapshot Changes Conformance** | Group all statements in one logical DuckLake commit into an atomic batch; spec-complete `ducklake_snapshot_changes` with `changes_made`, `author`, `commit_message`, `commit_extra_info`; interleaved writer and rollback tests; writer fencing validation; type-aware column stats for dates, timestamps, decimals | Done |
 | **v0.27.9 — DuckLake Advanced Metadata Validation** | End-to-end DuckDB tests for views, macros, tags, column tags, sort info, and partition info; DROP/ALTER cascade covering all metadata types; ALTER TABLE time-travel tests; imported existing DuckLake catalog support | Planning |
-| **v0.27.10 — DuckLake Compatibility CI** | Pin known-good DuckDB and DuckLake versions in CI; nightly optional jobs covering fresh, restart, and concurrent scenarios; durable compatibility corpus captured from real workloads; acceptance gates for "DuckDB and SlateDuck work perfectly together" | Planning |
-| **v0.27.11 — Wire & SQL Resiliency Hardening** | Implement five core resiliency mitigations: DataFusion virtual catalog engine, AST normalization visitor pipeline, dynamic session settings registry, automated PG-dialect fuzzing with SQLSTATE 0A000 conformance, and hardened sandbox timeouts for process-spawning tests | Planning |
-| **v0.27.12 — Containerized Multi-Backend Object Store Emulator Testing** | Implement containerized Google Cloud Storage and Azure Blob Storage emulator harnesses in `slateduck-testkit` (utilizing `fake-gcs-server` and Azurite); verify full catalog CRUD, transaction commit, and writer-epoch fencing across GCS and Azure in CI | Planning |
-| **v0.27.13 — Real Multi-Client & Multi-Driver Interoperability Certification** | Build automated multi-driver integration test suite executing catalog operations via `psql`, `pgcli`, `tokio-postgres` (Rust), `pg` (Node.js), `psycopg` (Python), and `pgx` (Go); verify binary format codes and metadata descriptions work seamlessly | Planning |
-| **v0.27.14 — Security Hardening & Protocol-Level Testing** | Verify timing-attack resistance for password verification under constant-time tests; integrate SCRAM-SHA-256 database authentication; implement automated SSL/TLS handshaking gates ensuring strict rejection of insecure protocols (TLS 1.1 or older) | Planning |
+| **v0.27.10 — DuckLake Compatibility CI** | Pin known-good DuckDB and DuckLake versions in CI; nightly optional jobs; durable compatibility corpus covering PQsendQuery pg_catalog scans; exact column schema/OID describe checks | Planning |
+| **v0.27.11 — Wire & SQL Resiliency Hardening** | Implement DataFusion virtual catalog, AST visitor, settings registry, fuzzer; fully refactor schema registry (matching all 28 tables exactly, renaming key/value, sql, tag columns) | Planning |
+| **v0.27.12 — Containerized Multi-Backend Object Store Emulator Testing** | Implement containerized GCS/Azure emulators; verify catalog CRUD, snapshot commit, and epoch fencing; persist/expose data-file and delete-file spec fields (footer_size, partition_id, encryption_key) | Planning |
+| **v0.27.13 — Real Multi-Client & Multi-Driver Interoperability Certification** | Build multi-driver compat suite; verify binary formats; validate client schema discovery; enforce visibility constraints (begin_snapshot/end_snapshot) and sort data files by file_order | Planning |
+| **v0.27.14 — Security Hardening & Protocol-Level Testing** | Verify constant-time auth; SCRAM-SHA-256; TLS version gating; implement atomic metadata commits, consolidated stats deltas, and repeatable-read writer fencing (SQLSTATE 40001) | Planning |
 | **v0.35.0 — Strategy C: Native DuckDB Extension** | Complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; `slateduck-ffi` C ABI already done; C++ catalog registration is the remaining gap | Planning |
 | **v0.40.0 — Full Ecosystem Compatibility Certification** | Release-blocking CI evidence for every `docs/compatibility.md` row: real DuckDB/DuckLake versions, SQL clients, Spark/Trino/Presto disposition, DataFusion, object stores, TLS/auth, Rust/MSRV, and release platforms | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
@@ -3433,13 +3433,14 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 ## v0.27.10 — DuckLake Compatibility CI
 
-> Prevent regressions as DuckDB and DuckLake evolve by building a durable compatibility corpus and automating it in CI. This is the final milestone before SlateDuck can claim broad DuckLake v1.0 compatibility. Corresponds to Phase 6 of the implementation roadmap in `plans/ducklake-1.0-spec-gaps-2.md`.
+> Prevent regressions as DuckDB and DuckLake evolve by building a durable compatibility corpus and automating it in CI. This is the final milestone before SlateDuck can claim broad DuckLake v1.0 compatibility. Corresponds to Phase 6 of the implementation roadmap in `plans/ducklake-1.0-spec-gaps-3.md`.
 
 ### Tasks
 
 #### Durable Compatibility Corpus
 
 - [ ] Capture the complete set of DuckLake metadata SQL statements from a fresh DuckDB/DuckLake session covering: attach, create schema, create table, INSERT, DELETE, UPDATE, DROP TABLE, DROP SCHEMA, CREATE VIEW, CREATE MACRO, CREATE TABLE with sort/partition/tags.
+- [ ] Capture the multi-statement schema discovery transaction (`StatementKind::PgCatalogScan`) in the compatibility corpus.
 - [ ] Store normalized SQL statements under `tests/fixtures/ducklake-corpus/` tagged by DuckDB version and DuckLake version.
 - [ ] Add a classification test that runs every statement in the corpus through `classify_statement` and fails on any `StatementKind::Unsupported`.
 - [ ] Add a response-shape test that executes every corpus SELECT against a running SlateDuck instance and validates field names and count.
@@ -3453,7 +3454,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 #### Acceptance Gates
 
 - [ ] Create a `docs/compatibility.md` section that states the DuckLake v1.0 compatibility claim and links to CI evidence.
-- [ ] Define the acceptance criteria for "DuckDB and SlateDuck work perfectly together" (from `plans/ducklake-1.0-spec-gaps-2.md`):
+- [ ] Define the acceptance criteria for "DuckDB and SlateDuck work perfectly together" (from `plans/ducklake-1.0-spec-gaps-3.md`):
   - DuckDB can attach fresh; create/drop schemas and tables without custom flags.
   - Inlined and file-backed tables both work.
   - INSERT, DELETE, UPDATE, ALTER, DROP, view, macro, tag, partition, and sort metadata work.
@@ -3463,6 +3464,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
   - Table stats, column stats, data-file metadata, and delete-file metadata survive incremental commits and restarts.
   - Conflict checks and snapshot changes behave correctly under multiple writers.
   - The compatibility suite runs against pinned versions and catches SQL drift.
+  - Exact column schema, count, names, and OIDs under simple and extended describes for all 28 tables match the spec perfectly.
 
 ### Definition of Done
 
@@ -3470,7 +3472,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Classification and response-shape corpus tests pass.
 - [ ] Nightly optional CI job is defined and runs green against pinned DuckDB/DuckLake.
 - [ ] `docs/compatibility.md` states DuckLake v1.0 compatibility with CI evidence.
-- [ ] All acceptance criteria from `plans/ducklake-1.0-spec-gaps-2.md` are met.
+- [ ] All acceptance criteria from `plans/ducklake-1.0-spec-gaps-3.md` are met.
 
 ---
 
@@ -3515,6 +3517,15 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Ensure that if `LOAD ducklake` attempts to fetch the extension over restricted or slow networks, the invocation times out gracefully and the test skips or fails cleanly rather than hanging the entire runner.
 - [ ] Audit and apply similar timeout controls to all other integration test targets spawning external processes.
 
+#### Mitigation 6: Schema Registry Refactoring & Schema Facade Alignment
+
+- [ ] Align all 28 catalog table definitions in `crates/slateduck-pgwire/src/schema_registry.rs` to match the exact DuckLake v1.0 specifications.
+- [ ] Rename `metadata_key` and `metadata_value` columns in `ducklake_metadata` to `key` and `value`.
+- [ ] Rename `view_definition` in `ducklake_view` to `sql`.
+- [ ] Define missing schemas for `ducklake_file_variant_stats`, `ducklake_column_mapping`, and `ducklake_name_mapping` in the shared registry.
+- [ ] Refactor `ducklake_tag` and `ducklake_column_tag` schemas to map columns exactly to spec-defined `key` and `value` names (and remove `tag_id`).
+- [ ] Correct column mapping structures for `ducklake_partition_column` and `ducklake_sort_expression` to match upstream naming conventions.
+
 ### Definition of Done
 
 - [ ] In-memory DataFusion `SessionContext` registers all 28 virtual catalog tables and handles complex SQL.
@@ -3522,6 +3533,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] PgWire `SessionState` stores generic settings dynamically and returns `"SET"` complete tags.
 - [ ] Fuzz test suite `tests/dialect_fuzz.rs` is active and asserts non-blocking behavior and SQLSTATE `0A000` conformance.
 - [ ] All external shell commands in `v0276_lifecycle_tests.rs` (especially `ducklake_available`) are run asynchronously under a 5-second `tokio::time::timeout` and do not block the suite on network constraints.
+- [ ] Schema registry (`crates/slateduck-pgwire/src/schema_registry.rs`) is completely refactored with all 28 tables fully aligned with the DuckLake v1.0 specification (renamed columns, OIDs, OID describe checks pass).
 
 ---
 
@@ -3546,10 +3558,15 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Run the unified suite—including open/create, snapshot commit, read-after-write, prefix listings, writer fencing, and post-crash recovery—across MinIO, GCS, and Azure emulators.
 - [ ] Wire emulator tests into scheduled and release-candidate CI pipelines.
 
+#### Data-File & Delete-File Conformance
+- [ ] Extend data file and delete file registrations in the catalog writer to persist and expose `footer_size` (as `BIGINT`), `partition_id`, `encryption_key`, `mapping_id`, and `partial_max` columns.
+- [ ] Verify that `ducklake_data_file` and `ducklake_delete_file` fields are correctly mapped under S3, GCS, and Azure emulation environments.
+
 ### Definition of Done
 - [ ] `GcsEmulatorHarness` compiles and successfully passes a GCS-backend catalog smoke test.
 - [ ] `AzureEmulatorHarness` compiles and successfully passes an Azure-backend catalog smoke test.
 - [ ] Shared backend integration tests pass reliably for GCS, Azure, and MinIO in CI without flaky failures.
+- [ ] The catalog writer correctly serializes and exposes the extended DuckLake v1.0 data-file and delete-file parameters (`footer_size`, `partition_id`, `encryption_key`, `mapping_id`, `partial_max`).
 
 ---
 
@@ -3569,10 +3586,16 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Create headless verification tests simulating DBeaver and Metabase metadata schema discovery and catalog scans.
 - [ ] Verify all driver parameter-negotiation handshakes run to completion without unsupported feature errors.
 
+#### MVCC Visibility & File Order Sorting
+- [ ] Enforce visibility constraints on external files where `begin_snapshot <= snapshot_id` and `(end_snapshot IS NULL OR end_snapshot > snapshot_id)`.
+- [ ] Ensure `list_data_files` results are sorted ascending by the persisted `file_order` attribute.
+- [ ] Validate file listings and sorting rules against standard PostgreSQL drivers (e.g. `psql`, `pgcli`) to prevent query planner regressions.
+
 ### Definition of Done
 - [ ] `tests/driver_compat.rs` executes successfully against Rust, Node.js, Python, and Go postgres clients.
 - [ ] `psql` and `pgcli` CLI loopback connection tests pass.
 - [ ] DBeaver and Metabase schema scans return correct columns and formats without failing.
+- [ ] MVCC data-file and delete-file visibility filtering is fully verified, and files are correctly sorted by `file_order`.
 
 ---
 
@@ -3595,10 +3618,17 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Verify that loopback clients attempting TLS 1.2 and TLS 1.3 connections are accepted.
 - [ ] Verify that loopback clients attempting insecure handshakes (TLS 1.1 or older) are strictly rejected at the socket layer.
 
+#### Atomic Commit Batching & Transaction Isolation
+- [ ] Group multi-statement metadata inserts/updates from a single commit transaction into atomic commit blocks.
+- [ ] Consolidate stats deltas before performing `ducklake_table_stats` updates to guarantee accurate record counts.
+- [ ] Enforce repeatable-read transaction isolation barriers on the catalog writer, rejecting stale snapshot commits with SQLSTATE `40001` (serialization failure) to drive retry loops.
+- [ ] Verify cascading dropping logic retires table, columns, column tags, data/delete files, tags, and partitions under test.
+
 ### Definition of Done
 - [ ] Timing analysis test proves constant-time password verification within tight statistical deviation boundaries.
 - [ ] SCRAM-SHA-256 authentication tests run and pass.
 - [ ] Insecure TLS handshakes (TLS 1.1 and below) are rejected under test, and TLS 1.2/1.3 are verified as accepted.
+- [ ] Multi-statement catalog writes are verified as atomic, stats deltas consolidate accurately, repeatable-read writer fencing (SQLSTATE `40001`) operates correctly under conflicts, and cascading drops cascade properly.
 
 ---
 
