@@ -79,7 +79,7 @@ binding on every roadmap release below.
 | **v0.27.8 — DuckLake Transaction Atomicity & Snapshot Changes Conformance** | Group all statements in one logical DuckLake commit into an atomic batch; spec-complete `ducklake_snapshot_changes` with `changes_made`, `author`, `commit_message`, `commit_extra_info`; interleaved writer and rollback tests; writer fencing validation; type-aware column stats for dates, timestamps, decimals | Done |
 | **v0.27.9 — DuckLake Advanced Metadata Validation** | End-to-end DuckDB tests for views, macros, tags, column tags, sort info, and partition info; DROP/ALTER cascade covering all metadata types; ALTER TABLE time-travel tests; imported existing DuckLake catalog support | Done |
 | **v0.27.10 — DuckLake Compatibility CI** | Pin known-good DuckDB and DuckLake versions in CI; nightly optional jobs; durable compatibility corpus covering PQsendQuery pg_catalog scans; exact column schema/OID describe checks | Done |
-| **v0.27.11 — Wire & SQL Resiliency Hardening** | Implement DataFusion virtual catalog, AST visitor, settings registry, fuzzer; fully refactor schema registry (matching all 28 tables exactly, renaming key/value, sql, tag columns) | Planning |
+| **v0.27.11 — Wire & SQL Resiliency Hardening** | Implement DataFusion virtual catalog, AST visitor, settings registry, fuzzer; fully refactor schema registry (matching all 28 tables exactly, renaming key/value, sql, tag columns); expose `ducklake_latest_snapshot_id(regclass)` for pg-trickle CDC startup | Planning |
 | **v0.27.12 — Containerized Multi-Backend Object Store Emulator Testing** | Implement containerized GCS/Azure emulators; verify catalog CRUD, snapshot commit, and epoch fencing; persist/expose data-file and delete-file spec fields (footer_size, partition_id, encryption_key) | Planning |
 | **v0.27.13 — Real Multi-Client & Multi-Driver Interoperability Certification** | Build multi-driver compat suite; verify binary formats; validate client schema discovery; enforce visibility constraints (begin_snapshot/end_snapshot) and sort data files by file_order | Planning |
 | **v0.27.14 — Security Hardening & Protocol-Level Testing** | Verify constant-time auth; SCRAM-SHA-256; TLS version gating; implement atomic metadata commits, consolidated stats deltas, and repeatable-read writer fencing (SQLSTATE 40001) | Planning |
@@ -3528,6 +3528,23 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Refactor `ducklake_tag` and `ducklake_column_tag` schemas to map columns exactly to spec-defined `key` and `value` names (and remove `tag_id`).
 - [ ] Correct column mapping structures for `ducklake_partition_column` and `ducklake_sort_expression` to match upstream naming conventions.
 
+#### Mitigation 7: pg-trickle CDC Startup Query — `ducklake_latest_snapshot_id(regclass)`
+
+> **Discovered during audit of `pg-trickle/src/cdc/polling.rs` (L344–L348).** Before pg-trickle ever calls `table_changes()`, it resolves the latest snapshot boundary via `SELECT ducklake_latest_snapshot_id($1::regclass)`. This function is absent from RockLake's bounded SQL dispatcher, causing an immediate `SQLSTATE 42883` (undefined function) crash when pg-trickle registers a DuckLake change feed. All Gaps 1–8 already in the roadmap are unreachable without this.
+
+- [ ] Add `ducklake_latest_snapshot_id(regclass)` to the bounded SQL dispatcher in `crates/rocklake-sql/src/`. The function accepts a table qualified name cast to `regclass` and returns the `snapshot_id BIGINT` of the latest visible snapshot for that table (equivalent to `SELECT max(snapshot_id) FROM ducklake_snapshot` scoped appropriately).
+- [ ] Ensure the function is recognized by the AST classifier and routed through the same `CatalogReader` path as `get_current_snapshot()`.
+- [ ] Add a wire-corpus fixture for `SELECT ducklake_latest_snapshot_id($1::regclass)` covering the exact parameter binding shape pg-trickle sends.
+- [ ] Add an end-to-end test that simulates pg-trickle's CDC registration handshake: connect via PG-wire, call `ducklake_latest_snapshot_id`, assert a valid snapshot ID is returned, then confirm `table_changes()` is callable with that ID as `start_snapshot`.
+
+#### Architectural Note: Gap 3 — Inlined-Data Trigger CDC (De-prioritized for Remote RockLake)
+
+> **Audit finding.** The original `plans/pg-trickle-ducklake-support.md` Gap 3 assumes pg-trickle can attach PostgreSQL `AFTER` triggers to inlined-data tables virtualized over PG-wire. This is architecturally impossible for **remote** RockLake deployments: PostgreSQL triggers only fire when DML is executed locally on the host PostgreSQL server. When a DuckDB or other remote client writes inlined data directly to RockLake over PG-wire, it bypasses the host PostgreSQL entirely — the FDW trigger never fires.
+
+- [ ] Document in `plans/pg-trickle-ducklake-support.md` §2.5 that trigger-based inlined-data CDC is unsupported for remote RockLake deployments, and that pg-trickle must fall back to the unified `DUCKLAKE_CHANGE_FEED` polling path (`table_changes()`) for all remote catalog targets.
+- [ ] Verify in the pg-trickle × RockLake integration test (Tier A) that pg-trickle automatically selects `DUCKLAKE_CHANGE_FEED` mode (not trigger mode) when the catalog backend is RockLake.
+
+
 ### Definition of Done
 
 - [ ] In-memory DataFusion `SessionContext` registers all 28 virtual catalog tables and handles complex SQL.
@@ -3536,6 +3553,8 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Fuzz test suite `tests/dialect_fuzz.rs` is active and asserts non-blocking behavior and SQLSTATE `0A000` conformance.
 - [ ] All external shell commands in `v0276_lifecycle_tests.rs` (especially `ducklake_available`) are run asynchronously under a 5-second `tokio::time::timeout` and do not block the suite on network constraints.
 - [ ] Schema registry (`crates/rocklake-pgwire/src/schema_registry.rs`) is completely refactored with all 28 tables fully aligned with the DuckLake v1.0 specification (Catalog Version 7), and any future v1.1 schemas are explicitly out of scope (renamed columns, OIDs, OID describe checks pass).
+- [ ] `ducklake_latest_snapshot_id(regclass)` is exposed in the bounded SQL dispatcher; pg-trickle's CDC startup handshake completes without `SQLSTATE 42883`; wire-corpus fixture and end-to-end CDC registration test are green.
+- [ ] Gap 3 architectural constraint documented in `plans/pg-trickle-ducklake-support.md`; Tier A integration test confirms pg-trickle selects `DUCKLAKE_CHANGE_FEED` mode (not trigger mode) against RockLake.
 
 ---
 
