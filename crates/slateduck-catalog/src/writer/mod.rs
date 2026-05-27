@@ -566,6 +566,65 @@ impl CatalogWriter {
         Ok(None)
     }
 
+    /// Rename a column by retiring the existing row and inserting a new row
+    /// with the updated name (MVCC-safe schema change).
+    ///
+    /// Scans all live column rows for `table_id` to find `column_id`, then
+    /// retires the old row and stages a new row with `new_name`.
+    pub async fn rename_column(
+        &mut self,
+        table_id: u64,
+        column_id: u64,
+    ) -> CatalogResult<ColumnRow> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let prefix = keys::prefix_columns_for_table(table_id);
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        let mut found: Option<(Vec<u8>, ColumnRow)> = None;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ColumnRow = values::decode_value(&kv.value)?;
+            if row.column_id == column_id && row.end_snapshot.is_none() {
+                found = Some((kv.key.to_vec(), row));
+                break;
+            }
+        }
+        let (old_key, old_row) =
+            found.ok_or_else(|| CatalogError::NotFound(format!("column {column_id}")))?;
+
+        // Retire the old row.
+        let mut retired = old_row.clone();
+        retired.end_snapshot = Some(snapshot_id);
+        self.stage(old_key, values::encode_value(&retired));
+
+        // Return the old row for the caller to update and re-insert.
+        Ok(old_row)
+    }
+
+    /// Insert a renamed column row (new name, new begin_snapshot).
+    ///
+    /// Call this after `rename_column()` to stage the new name row.
+    pub async fn insert_renamed_column(
+        &mut self,
+        mut row: ColumnRow,
+        new_name: &str,
+    ) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        row.column_name = new_name.to_string();
+        row.begin_snapshot = snapshot_id;
+        row.end_snapshot = None;
+        let key = keys::key_column(row.table_id, row.column_id, snapshot_id);
+        self.stage(key, values::encode_value(&row));
+        self.mark_schema_changed();
+        Ok(())
+    }
+
     pub async fn register_data_file(
         &mut self,
         table_id: u64,
