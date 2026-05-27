@@ -357,3 +357,129 @@ impl CatalogWriter {
         Ok(())
     }
 }
+
+// ── v0.27.6 unit tests for stats_value_less_or_equal ─────────────────────────
+
+#[cfg(test)]
+mod stats_unit_tests {
+    use super::stats_value_less_or_equal;
+
+    // ── Negative integers ──────────────────────────────────────────────────
+
+    /// `-10` < `-2` numerically but `"-10"` > `"-2"` lexicographically.
+    #[test]
+    fn negative_integer_less_or_equal_is_numeric() {
+        assert!(stats_value_less_or_equal("-10", "-2"), "-10 <= -2");
+        assert!(!stats_value_less_or_equal("-2", "-10"), "-2 is not <= -10");
+        assert!(stats_value_less_or_equal("-10", "-10"), "-10 <= -10 (equal)");
+    }
+
+    /// Mixed sign: `-5` < `0` < `5`.
+    #[test]
+    fn negative_to_positive_crossing_zero_is_numeric() {
+        assert!(stats_value_less_or_equal("-5", "0"), "-5 <= 0");
+        assert!(stats_value_less_or_equal("0", "5"), "0 <= 5");
+        assert!(stats_value_less_or_equal("-5", "5"), "-5 <= 5");
+        assert!(!stats_value_less_or_equal("5", "-5"), "5 is not <= -5");
+    }
+
+    // ── Multi-digit integers ───────────────────────────────────────────────
+
+    /// `"10"` > `"2"` numerically but `"10"` < `"2"` lexicographically.
+    #[test]
+    fn multi_digit_integer_is_numeric() {
+        assert!(stats_value_less_or_equal("2", "10"), "2 <= 10");
+        assert!(!stats_value_less_or_equal("10", "2"), "10 is not <= 2");
+        assert!(stats_value_less_or_equal("10", "10"), "10 <= 10 (equal)");
+    }
+
+    // ── Floats that differ only in fractional part ─────────────────────────
+
+    /// `"1.10"` and `"1.9"`: lexicographically `"1.10"` < `"1.9"` (correct),
+    /// but only because the decimal digits happen to align.  The f64 path
+    /// ensures we use numeric comparison throughout.
+    #[test]
+    fn float_fractional_part_is_numeric() {
+        // 1.1 < 1.9 — both numerically and lexicographically, but via f64 path
+        assert!(stats_value_less_or_equal("1.1", "1.9"), "1.1 <= 1.9");
+        assert!(!stats_value_less_or_equal("1.9", "1.1"), "1.9 is not <= 1.1");
+    }
+
+    /// `"1.10"` vs `"1.9"`: f64 parse gives 1.10 == 1.1 < 1.9.
+    #[test]
+    fn float_trailing_zero_fractional_is_numeric() {
+        assert!(stats_value_less_or_equal("1.10", "1.9"), "1.10 <= 1.9");
+        assert!(!stats_value_less_or_equal("1.9", "1.10"), "1.9 is not <= 1.10");
+    }
+
+    /// Negative floats: `-1000.0` < `-3.14`.
+    #[test]
+    fn negative_float_is_numeric() {
+        assert!(stats_value_less_or_equal("-1000.0", "-3.14"), "-1000.0 <= -3.14");
+        assert!(!stats_value_less_or_equal("-3.14", "-1000.0"), "-3.14 is not <= -1000.0");
+    }
+
+    // ── String values where lexicographic order differs from numeric order ─
+
+    /// Decimal strings like `"12.5"` vs `"9.8"`: lexicographically `"12.5"` < `"9.8"`
+    /// (because `"1"` < `"9"`), but numerically 12.5 > 9.8.
+    /// These parse as f64, so the numeric path correctly returns false for `"12.5" <= "9.8"`.
+    #[test]
+    fn decimal_string_lexicographic_order_differs_from_numeric() {
+        // Numerically: 9.8 < 12.5, so 9.8 <= 12.5 is true
+        assert!(stats_value_less_or_equal("9.8", "12.5"), "9.8 <= 12.5 (numeric)");
+        // Numerically: 12.5 > 9.8, so 12.5 <= 9.8 is false
+        assert!(!stats_value_less_or_equal("12.5", "9.8"), "12.5 is not <= 9.8 (numeric)");
+    }
+
+    /// Integer strings where the multi-digit case is larger: `"100"` vs `"9"`.
+    /// Lexicographically `"100"` < `"9"`, but numerically 100 > 9.
+    #[test]
+    fn multi_digit_string_lexicographic_vs_numeric() {
+        assert!(stats_value_less_or_equal("9", "100"), "9 <= 100 (numeric)");
+        assert!(!stats_value_less_or_equal("100", "9"), "100 is not <= 9 (numeric)");
+    }
+
+    // ── Boolean ordering ───────────────────────────────────────────────────
+
+    #[test]
+    fn boolean_false_less_than_true() {
+        assert!(stats_value_less_or_equal("false", "true"), "false <= true");
+        assert!(!stats_value_less_or_equal("true", "false"), "true is not <= false");
+        assert!(stats_value_less_or_equal("false", "false"), "false <= false (equal)");
+        assert!(stats_value_less_or_equal("true", "true"), "true <= true (equal)");
+    }
+
+    // ── ISO-8601 date/timestamp strings ────────────────────────────────────
+
+    #[test]
+    fn iso_date_lexicographic_order_is_correct() {
+        assert!(stats_value_less_or_equal("2024-01-01", "2024-12-31"), "earlier date <= later date");
+        assert!(!stats_value_less_or_equal("2024-12-31", "2024-01-01"), "later is not <= earlier");
+        assert!(stats_value_less_or_equal("2023-06-15", "2024-01-01"), "2023 date <= 2024 date");
+    }
+
+    #[test]
+    fn iso_timestamp_lexicographic_order_is_correct() {
+        assert!(
+            stats_value_less_or_equal("2024-01-01T00:00:00", "2024-12-31T23:59:59"),
+            "earlier timestamp <= later"
+        );
+        assert!(
+            !stats_value_less_or_equal("2024-12-31T23:59:59", "2024-01-01T00:00:00"),
+            "later is not <= earlier"
+        );
+    }
+
+    // ── Confirm existing comparisons still correct after any refactoring ───
+
+    #[test]
+    fn existing_numeric_comparisons_still_correct() {
+        // These are the original motivating cases from the v0.27.5 implementation.
+        assert!(stats_value_less_or_equal("2", "10"), "2 <= 10 (multi-digit)");
+        assert!(!stats_value_less_or_equal("10", "2"), "10 not <= 2 (multi-digit)");
+        assert!(stats_value_less_or_equal("-10", "-2"), "-10 <= -2 (negative)");
+        assert!(!stats_value_less_or_equal("-2", "-10"), "-2 not <= -10 (negative)");
+        assert!(stats_value_less_or_equal("-3.14", "100.5"), "-3.14 <= 100.5 (float)");
+    }
+}
