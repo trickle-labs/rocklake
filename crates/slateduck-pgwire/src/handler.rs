@@ -1082,6 +1082,54 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             sql,
             (*crate::schema_registry::inlined_data_tables_schema()).clone(),
         ),
+        // ── Additional catalog table schemas from registry ─────────────────
+        slateduck_sql::StatementKind::SelectSnapshot
+        | slateduck_sql::StatementKind::SelectFirstSnapshot => {
+            project_described_fields(sql, (*crate::schema_registry::snapshot_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectSnapshotChanges => project_described_fields(
+            sql,
+            (*crate::schema_registry::snapshot_changes_schema()).clone(),
+        ),
+        slateduck_sql::StatementKind::SelectDeleteFiles => {
+            project_described_fields(sql, (*crate::schema_registry::delete_file_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectViews => {
+            project_described_fields(sql, (*crate::schema_registry::view_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectMacros => {
+            project_described_fields(sql, (*crate::schema_registry::macro_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectMacroImpls => {
+            project_described_fields(sql, (*crate::schema_registry::macro_impl_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectMacroParameters => project_described_fields(
+            sql,
+            (*crate::schema_registry::macro_parameters_schema()).clone(),
+        ),
+        slateduck_sql::StatementKind::SelectTags => {
+            project_described_fields(sql, (*crate::schema_registry::tag_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectColumnTags => {
+            project_described_fields(sql, (*crate::schema_registry::column_tag_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectSortInfo => {
+            project_described_fields(sql, (*crate::schema_registry::sort_info_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectMetadata => {
+            project_described_fields(sql, (*crate::schema_registry::metadata_schema()).clone())
+        }
+        slateduck_sql::StatementKind::SelectSchemaVersion => project_described_fields(
+            sql,
+            (*crate::schema_registry::schema_version_schema()).clone(),
+        ),
+        slateduck_sql::StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
+            if let Some(schema) = crate::schema_registry::fields_for_table(table_name) {
+                project_described_fields(sql, (*schema).clone())
+            } else {
+                vec![]
+            }
+        }
         _ => vec![],
     }
 }
