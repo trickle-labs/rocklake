@@ -980,8 +980,7 @@ async fn cmd_corpus(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 for entry in entries {
                     let file = std::fs::File::open(entry.path())
                         .map_err(|e| format!("Cannot open corpus file: {e}"))?;
-                    let mut records =
-                        rocklake_catalog::parse_corpus(std::io::BufReader::new(file));
+                    let mut records = rocklake_catalog::parse_corpus(std::io::BufReader::new(file));
                     all_records.append(&mut records);
                 }
             } else {

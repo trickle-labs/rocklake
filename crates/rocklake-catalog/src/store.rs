@@ -1,12 +1,12 @@
 //! CatalogStore: the main entry point for catalog operations.
 
 use object_store::path::Path as ObjectPath;
-use slatedb::{Db, IsolationLevel};
 use rocklake_core::counters::CounterCache;
 use rocklake_core::keys;
 use rocklake_core::mvcc::SnapshotId;
 use rocklake_core::tags::*;
 use rocklake_core::values;
+use slatedb::{Db, IsolationLevel};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 

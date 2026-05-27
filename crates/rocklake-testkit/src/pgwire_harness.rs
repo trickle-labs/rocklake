@@ -69,8 +69,7 @@ impl PgWireHarness {
         let server_catalog = catalog.clone();
         let server_handle = tokio::spawn(async move {
             if let Err(e) =
-                rocklake_pgwire::run_server_with_shutdown(config, server_catalog, shutdown_rx)
-                    .await
+                rocklake_pgwire::run_server_with_shutdown(config, server_catalog, shutdown_rx).await
             {
                 tracing::error!("PgWire test server error: {e}");
             }

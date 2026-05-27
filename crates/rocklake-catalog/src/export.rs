@@ -7,13 +7,13 @@
 
 #![allow(missing_docs)]
 
-use serde::{Deserialize, Serialize};
-use slatedb::Db;
 use rocklake_core::keys;
 use rocklake_core::mvcc::{self, SnapshotId};
 use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values;
+use serde::{Deserialize, Serialize};
+use slatedb::Db;
 use std::io::{BufRead, Write};
 
 use crate::error::{CatalogError, CatalogResult};

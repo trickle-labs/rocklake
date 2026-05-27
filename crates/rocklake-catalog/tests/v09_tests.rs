@@ -56,10 +56,7 @@ async fn writer_endpoint_publish_and_read() {
         .unwrap();
 
     let ep = read_writer_endpoint(catalog.db()).await.unwrap();
-    assert_eq!(
-        ep.as_deref(),
-        Some("pod-a.rocklake.svc.cluster.local:5432")
-    );
+    assert_eq!(ep.as_deref(), Some("pod-a.rocklake.svc.cluster.local:5432"));
 
     let epoch = read_writer_epoch(catalog.db()).await.unwrap();
     assert_eq!(epoch, 1);

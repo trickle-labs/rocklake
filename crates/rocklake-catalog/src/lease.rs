@@ -5,9 +5,9 @@
 //! Leases have a TTL to prevent leaked leases from blocking GC indefinitely.
 
 use prost::Message;
-use slatedb::Db;
 use rocklake_core::keys;
 use rocklake_core::rows::SnapshotLeaseRow;
+use slatedb::Db;
 
 use crate::error::{CatalogError, CatalogResult};
 

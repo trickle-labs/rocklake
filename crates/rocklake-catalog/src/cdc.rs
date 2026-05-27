@@ -14,8 +14,8 @@
 
 #![allow(missing_docs)]
 
-use serde::{Deserialize, Serialize};
 use rocklake_core::mvcc::SnapshotId;
+use serde::{Deserialize, Serialize};
 
 use crate::error::CatalogResult;
 use crate::reader::SnapshotDiff;

@@ -95,10 +95,7 @@ pub(super) fn classify_table_select_with_query(
         s if s.starts_with("pg_catalog.pg_type") || s == "pg_type" => StatementKind::SelectPgType,
         // Virtual catalog schema: rocklake_catalog.{table}
         s if s.starts_with("rocklake_catalog.") => {
-            let table_name = s
-                .strip_prefix("rocklake_catalog.")
-                .unwrap_or(s)
-                .to_string();
+            let table_name = s.strip_prefix("rocklake_catalog.").unwrap_or(s).to_string();
             StatementKind::VirtualCatalogScan { table_name }
         }
         // Extension schemas (e.g., pgtrickle.pgt_ducklake_provenance)

@@ -5,9 +5,9 @@
 //! a separate SQLite sidecar and guarantees crash-consistent storage.
 
 use prost::Message;
-use slatedb::{Db, IsolationLevel};
 use rocklake_core::keys;
 use rocklake_core::rows::ExtensionSchemaRow;
+use slatedb::{Db, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 

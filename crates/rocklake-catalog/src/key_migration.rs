@@ -13,12 +13,12 @@
 //! is a no-op (the marker is present → skip scan entirely).
 
 use prost::Message;
-use slatedb::Db;
 use rocklake_core::keys;
 use rocklake_core::rows::{ExtensionSchemaRow, SnapshotLeaseRow};
 use rocklake_core::tags::{
     SYSTEM_KEY_ENCODING_V020_MIGRATED, TAG_EXTENSION_SCHEMA, TAG_SNAPSHOT_LEASE,
 };
+use slatedb::Db;
 
 use crate::error::{CatalogError, CatalogResult};
 

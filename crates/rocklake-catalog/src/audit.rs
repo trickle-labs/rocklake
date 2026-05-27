@@ -3,9 +3,9 @@
 //! Records who committed, when, and what changed in each snapshot.
 //! Stored under `0xFF | "audit"` prefix for accumulation without overwriting.
 
-use slatedb::Db;
 use rocklake_core::keys;
 use rocklake_core::values;
+use slatedb::Db;
 
 use crate::error::{CatalogError, CatalogResult};
 

@@ -9,11 +9,11 @@
 //! with the fencing epoch so reader replicas can forward write requests to
 //! the current writer without external service discovery.
 
-use slatedb::Db;
 use rocklake_core::keys;
 use rocklake_core::rows::*;
 use rocklake_core::tags::{SYSTEM_ENDPOINT, SYSTEM_WRITER_EPOCH};
 use rocklake_core::values;
+use slatedb::Db;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::gc;

@@ -5,11 +5,11 @@
 //!
 //! Never deletes bytes. Only changes the query-visibility floor.
 
-use slatedb::{Db, IsolationLevel};
 use rocklake_core::keys;
 use rocklake_core::rows::SnapshotRow;
 use rocklake_core::tags::*;
 use rocklake_core::values;
+use slatedb::{Db, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 

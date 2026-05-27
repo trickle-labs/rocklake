@@ -762,10 +762,7 @@ async fn execute_classified<'a>(
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
                     .map_err(RockLakeError::from)?
             };
-            let rows = reader
-                .list_all_views()
-                .await
-                .map_err(RockLakeError::from)?;
+            let rows = reader.list_all_views().await.map_err(RockLakeError::from)?;
             Ok(vec![make_views_response(rows)])
         }
         StatementKind::SelectMacros => {

@@ -1,10 +1,10 @@
 //! Catalog initialization: safe `open_or_create` using transactions.
 
-use slatedb::{Db, DbTransaction, IsolationLevel};
 use rocklake_core::counters::CounterCache;
 use rocklake_core::keys;
 use rocklake_core::tags::*;
 use rocklake_core::values;
+use slatedb::{Db, DbTransaction, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 

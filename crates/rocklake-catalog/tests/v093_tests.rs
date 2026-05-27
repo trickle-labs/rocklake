@@ -135,9 +135,7 @@ async fn excise_plan_shows_unsafe_when_retain_from_is_zero() {
     let db = open_db(&dir).await;
 
     // retain_from is 0 — plan should mark is_safe = false
-    let plan = rocklake_catalog::excise::excise_plan(&db, 1)
-        .await
-        .unwrap();
+    let plan = rocklake_catalog::excise::excise_plan(&db, 1).await.unwrap();
     assert!(
         !plan.is_safe,
         "excise_plan must report is_safe=false when retain_from == 0"

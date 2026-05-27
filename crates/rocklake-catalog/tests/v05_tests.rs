@@ -576,14 +576,12 @@ async fn strategy_b_c_equivalence() {
 
             // Describe table
             let table_id_val = unsafe { (*tables.tables).table_id };
-            let columns =
-                rocklake_ffi::rocklake_describe_table(catalog, table_id_val, 1, &mut err);
+            let columns = rocklake_ffi::rocklake_describe_table(catalog, table_id_val, 1, &mut err);
             assert_eq!(err.code, 0);
             let col_count = columns.count;
 
             // List data files
-            let files =
-                rocklake_ffi::rocklake_list_data_files(catalog, table_id_val, 1, &mut err);
+            let files = rocklake_ffi::rocklake_list_data_files(catalog, table_id_val, 1, &mut err);
             assert_eq!(err.code, 0);
             assert_eq!(files.count, 1);
             let ffi_fid = unsafe { (*files.files).data_file_id };

@@ -141,9 +141,7 @@ async fn excise_plan_shows_eligible_rows() {
     store.close().await.unwrap();
 
     let db = open_db(&dir).await;
-    let plan = rocklake_catalog::excise::excise_plan(&db, 2)
-        .await
-        .unwrap();
+    let plan = rocklake_catalog::excise::excise_plan(&db, 2).await.unwrap();
     assert!(plan.version_rows_eligible > 0);
     db.close().await.unwrap();
 }
@@ -436,9 +434,7 @@ async fn verify_catalog_passes_on_healthy_catalog() {
     store.close().await.unwrap();
 
     let db = open_db(&dir).await;
-    let result = rocklake_catalog::verify::verify_catalog(&db)
-        .await
-        .unwrap();
+    let result = rocklake_catalog::verify::verify_catalog(&db).await.unwrap();
     assert!(result.is_ok());
     db.close().await.unwrap();
 }

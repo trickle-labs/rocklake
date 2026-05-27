@@ -6,11 +6,11 @@
 
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectStore;
-use slatedb::Db;
 use rocklake_core::keys;
 use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values;
+use slatedb::Db;
 use std::collections::HashSet;
 use std::sync::Arc;
 

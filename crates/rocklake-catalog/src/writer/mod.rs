@@ -34,12 +34,12 @@
 pub mod snapshot;
 pub mod stats;
 
-use slatedb::{Db, IsolationLevel};
 use rocklake_core::counters::CounterCache;
 use rocklake_core::keys;
 use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values::{self, MAX_INLINED_VALUE_SIZE};
+use slatedb::{Db, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 

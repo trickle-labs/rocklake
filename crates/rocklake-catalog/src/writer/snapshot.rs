@@ -1,6 +1,5 @@
 //! Snapshot commit: create_snapshot and transaction helpers.
 
-use slatedb::{DbTransaction, IsolationLevel};
 use rocklake_core::keys;
 use rocklake_core::mvcc::SnapshotId;
 use rocklake_core::rows::{SnapshotChangesRow, SnapshotRow};
@@ -8,6 +7,7 @@ use rocklake_core::tags::{
     COUNTER_NEXT_CATALOG_ID, COUNTER_NEXT_FILE_ID, COUNTER_NEXT_SNAPSHOT_ID, SYSTEM_WRITER_EPOCH,
 };
 use rocklake_core::values;
+use slatedb::{DbTransaction, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 

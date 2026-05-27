@@ -2,11 +2,11 @@
 
 #![allow(missing_docs)]
 
-use slatedb::Db;
 use rocklake_core::keys;
 use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values;
+use slatedb::Db;
 
 use crate::error::{CatalogError, CatalogResult};
 
