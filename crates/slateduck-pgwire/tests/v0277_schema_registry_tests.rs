@@ -199,15 +199,16 @@ fn registry_covers_all_28_tables() {
         "ducklake_schema_version",
         "ducklake_schema_changes",
         "ducklake_encrypted_secret",
+        "ducklake_encryption_key",
         "ducklake_file_partition_value",
     ];
 
-    assert_eq!(tables.len(), 28, "test list must have exactly 28 tables");
+    assert_eq!(tables.len(), 29, "test list must have exactly 29 tables");
 
     for table in &tables {
         assert!(
             fields_for_table(table).is_some(),
-            "fields_for_table must return Some for all 28 spec tables; missing: {table}"
+            "fields_for_table must return Some for all 29 spec tables; missing: {table}"
         );
     }
 }
@@ -671,6 +672,27 @@ async fn golden_ducklake_encrypted_secret() {
     assert!(
         cols.contains(&"encrypted_secret".to_string()),
         "must have encrypted_secret: {cols:?}"
+    );
+}
+
+#[tokio::test]
+async fn golden_ducklake_encryption_key() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+
+    let resp = exec("SELECT * FROM ducklake_encryption_key", &store).await;
+    let (cols, _) = inspect(resp).await;
+    assert_cols_eq(
+        &cols,
+        &[
+            "catalog_id",
+            "begin_snapshot",
+            "end_snapshot",
+            "encryption_type",
+            "key_id",
+            "encryption_key",
+        ],
+        "ducklake_encryption_key",
     );
 }
 

@@ -77,7 +77,7 @@ binding on every roadmap release below.
 | **v0.27.6 — DuckLake Inlined-Data Lifecycle Integration Tests** | Opt-in automated DuckDB/DuckLake lifecycle tests: fresh attach, INSERT/DELETE/UPDATE, restart reads, stats inspection, direct `postgres_query` of dynamic inlined tables; stats merge regression cases for negative numbers, floats, and strings | Done |
 | **v0.27.7 — DuckLake SQL Schema Registry** | `DuckLakeTableSchema` registry as single source of truth for all 28 metadata table schemas; wire executor response builders, handler describe, and COPY to the registry; projection-order golden tests for every table; arbitrary output alias support for dynamic inlined tables | Done |
 | **v0.27.8 — DuckLake Transaction Atomicity & Snapshot Changes Conformance** | Group all statements in one logical DuckLake commit into an atomic batch; spec-complete `ducklake_snapshot_changes` with `changes_made`, `author`, `commit_message`, `commit_extra_info`; interleaved writer and rollback tests; writer fencing validation; type-aware column stats for dates, timestamps, decimals | Done |
-| **v0.27.9 — DuckLake Advanced Metadata Validation** | End-to-end DuckDB tests for views, macros, tags, column tags, sort info, and partition info; DROP/ALTER cascade covering all metadata types; ALTER TABLE time-travel tests; imported existing DuckLake catalog support | Planning |
+| **v0.27.9 — DuckLake Advanced Metadata Validation** | End-to-end DuckDB tests for views, macros, tags, column tags, sort info, and partition info; DROP/ALTER cascade covering all metadata types; ALTER TABLE time-travel tests; imported existing DuckLake catalog support | Done |
 | **v0.27.10 — DuckLake Compatibility CI** | Pin known-good DuckDB and DuckLake versions in CI; nightly optional jobs covering fresh, restart, and concurrent scenarios; durable compatibility corpus captured from real workloads; acceptance gates for "DuckDB and SlateDuck work perfectly together" | Planning |
 | **v0.27.11 — Wire & SQL Resiliency Hardening** | Implement five core resiliency mitigations: DataFusion virtual catalog engine, AST normalization visitor pipeline, dynamic session settings registry, automated PG-dialect fuzzing with SQLSTATE 0A000 conformance, and hardened sandbox timeouts for process-spawning tests | Planning |
 | **v0.35.0 — Strategy C: Native DuckDB Extension** | Complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; `slateduck-ffi` C ABI already done; C++ catalog registration is the remaining gap | Planning |
@@ -3385,46 +3385,46 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 #### Views and Macros End-to-End
 
-- [ ] Add a DuckDB integration test that creates a view (`CREATE VIEW s.v AS SELECT ...`) and reads it back through `ducklake_view`.
-- [ ] Add a DuckDB integration test that creates a macro and reads it back through `ducklake_macro`, `ducklake_macro_impl`, and `ducklake_macro_parameters`.
-- [ ] Verify RowDescription, insert/update semantics, and restart persistence for both views and macros.
+- [x] Add a DuckDB integration test that creates a view (`CREATE VIEW s.v AS SELECT ...`) and reads it back through `ducklake_view`.
+- [x] Add a DuckDB integration test that creates a macro and reads it back through `ducklake_macro`, `ducklake_macro_impl`, and `ducklake_macro_parameters`.
+- [x] Verify RowDescription, insert/update semantics, and restart persistence for both views and macros.
 
 #### Tags and Column Tags End-to-End
 
-- [ ] Add a DuckDB integration test that attaches tags to a table and column, reads them through `ducklake_tag` and `ducklake_column_tag`, and verifies correct `key`/`value` fields.
-- [ ] Verify that DROP TABLE retires all tags and column tags by checking `end_snapshot`.
+- [x] Add a DuckDB integration test that attaches tags to a table and column, reads them through `ducklake_tag` and `ducklake_column_tag`, and verifies correct `key`/`value` fields.
+- [x] Verify that DROP TABLE retires all tags and column tags by checking `end_snapshot`.
 
 #### Sort Info and Partition Info End-to-End
 
-- [ ] Add a DuckDB integration test for a table with a sort order; verify `ducklake_sort_info` rows are present with correct `sort_expression` format.
-- [ ] Add a DuckDB integration test for a partitioned table; verify `ducklake_partition_info`, `ducklake_partition_column`, and `ducklake_file_partition_value` rows are correct.
-- [ ] Verify that DROP TABLE retires all sort and partition metadata.
+- [x] Add a DuckDB integration test for a table with a sort order; verify `ducklake_sort_info` rows are present with correct `sort_expression` format.
+- [x] Add a DuckDB integration test for a partitioned table; verify `ducklake_partition_info`, `ducklake_partition_column`, and `ducklake_file_partition_value` rows are correct.
+- [x] Verify that DROP TABLE retires all sort and partition metadata.
 
 #### DROP/ALTER Complete Cascade
 
-- [ ] Implement and test that DROP TABLE retires table, columns, column tags, data files, delete files, partitions (info, columns, values), tags, sort info, and inlined data rows.
-- [ ] Implement ALTER TABLE add/drop/rename column: retire old column rows; advance `schema_version`; insert new column rows.
-- [ ] Add time-travel tests: query table at snapshot before and after ALTER; verify correct schema at each snapshot.
+- [x] Implement and test that DROP TABLE retires table, columns, column tags, data files, delete files, partitions (info, columns, values), tags, sort info, and inlined data rows.
+- [x] Implement ALTER TABLE add/drop/rename column: retire old column rows; advance `schema_version`; insert new column rows.
+- [x] Add time-travel tests: query table at snapshot before and after ALTER; verify correct schema at each snapshot.
 
 #### Encryption Key Metadata
 
-- [ ] Implement `ducklake_encryption_key` RowDescription and SELECT handler.
-- [ ] Add a test that verifies the table is queryable with the correct spec schema (even if no keys are present in the test catalog).
+- [x] Implement `ducklake_encryption_key` RowDescription and SELECT handler.
+- [x] Add a test that verifies the table is queryable with the correct spec schema (even if no keys are present in the test catalog).
 
 #### Imported DuckLake Catalog Support
 
-- [ ] Document the procedure for attaching an existing DuckLake catalog (created by DuckDB natively) to SlateDuck.
-- [ ] Add a smoke test that reads an externally created DuckLake catalog's metadata tables through SlateDuck PgWire.
+- [x] Document the procedure for attaching an existing DuckLake catalog (created by DuckDB natively) to SlateDuck.
+- [x] Add a smoke test that reads an externally created DuckLake catalog's metadata tables through SlateDuck PgWire.
 
 ### Definition of Done
 
-- [ ] View and macro lifecycle tests pass (create, read, restart).
-- [ ] Tag and column tag lifecycle tests pass (attach, read, retire on drop).
-- [ ] Sort info and partition info lifecycle tests pass.
-- [ ] DROP TABLE cascade test covers all 18+ spec metadata table types.
-- [ ] ALTER TABLE time-travel tests pass for add/drop/rename column.
-- [ ] `ducklake_encryption_key` SELECT returns correct empty schema.
-- [ ] Imported catalog smoke test passes.
+- [x] View and macro lifecycle tests pass (create, read, restart).
+- [x] Tag and column tag lifecycle tests pass (attach, read, retire on drop).
+- [x] Sort info and partition info lifecycle tests pass.
+- [x] DROP TABLE cascade test covers all 18+ spec metadata table types.
+- [x] ALTER TABLE time-travel tests pass for add/drop/rename column.
+- [x] `ducklake_encryption_key` SELECT returns correct empty schema.
+- [x] Imported catalog smoke test passes.
 
 ---
 

@@ -475,6 +475,21 @@ pub fn encrypted_secret_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+// ── ducklake_encryption_key ───────────────────────────────────────────────────
+
+/// `ducklake_encryption_key(catalog_id, begin_snapshot, end_snapshot,
+/// encryption_type, key_id, encryption_key)` — DuckLake v1.0 spec.
+pub fn encryption_key_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        int8t!("catalog_id"),
+        int8t!("begin_snapshot"),
+        int8t!("end_snapshot"),
+        text_col!("encryption_type"),
+        text_col!("key_id"),
+        text_col!("encryption_key"),
+    ])
+}
+
 // ── ducklake_file_partition_value ─────────────────────────────────────────────
 
 /// `ducklake_file_partition_value(data_file_id, table_id, partition_key_index,
@@ -554,6 +569,7 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
         "ducklake_schema_version" => Some(schema_version_schema()),
         "ducklake_schema_changes" => Some(schema_changes_schema()),
         "ducklake_encrypted_secret" => Some(encrypted_secret_schema()),
+        "ducklake_encryption_key" => Some(encryption_key_schema()),
         "ducklake_file_partition_value" => Some(file_partition_value_schema()),
         _ => None,
     }
