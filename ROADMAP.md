@@ -2873,7 +2873,7 @@ SlateDuck claims DuckLake v1.0 catalog compatibility when all of the following a
 
 ## v0.27.4 — DuckDB 1.5.x PostgreSQL Scanner Compatibility
 
-> Close the gap between the existing DuckDB 1.2.2 wire corpus and the full initialization sequence sent by DuckDB 1.5.x when attaching via `ATTACH 'ducklake:postgres:...'`. DuckDB 1.5.x uses the postgres scanner extension which probes the server with system catalog queries before DuckLake metadata initialization can begin. This release targets DuckDB 1.5.x only; older DuckDB versions are out of scope.
+> Close the gap between the existing DuckDB 1.5.x wire corpus and the full initialization sequence sent by DuckDB 1.5.x when attaching via `ATTACH 'ducklake:postgres:...'`. DuckDB 1.5.x uses the postgres scanner extension which probes the server with system catalog queries before DuckLake metadata initialization can begin. This release targets DuckDB 1.5.x only; older DuckDB versions are out of scope.
 
 ### Context
 
@@ -2948,7 +2948,7 @@ DuckDB expects five result sets (one per SELECT) in sequence before the final `R
 - [x] The fixture must capture the full ATTACH sequence: connection, version check, `DISCARD ALL`, `to_regclass`, `information_schema.tables`, multi-statement catalog scan, and at least one DuckLake metadata query.
 - [x] Add a corpus replay test that validates every message in the fixture against the running SlateDuck server.
 - [x] Update `docs/compatibility.md` and `tests/fixtures/compatibility-matrix.toml` (from v0.40.0 scope) to record DuckDB 1.5.x as the primary supported version.
-- [x] Remove or demote DuckDB 1.2.2 from the supported matrix to `legacy` / `untested`.
+- [x] Remove DuckDB versions older than 1.5.2 from the supported matrix.
 
 ### Definition of Done
 
@@ -2960,7 +2960,7 @@ DuckDB expects five result sets (one per SELECT) in sequence before the final `R
 - [x] DuckDB 1.5.x `ATTACH 'ducklake:postgres:...'` completes without error in CI.
 - [x] A new `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` fixture is captured and replayed by CI.
 - [x] `docs/compatibility.md` states DuckDB 1.5.x as supported with CI evidence.
-- [x] DuckDB 1.2.2 is downgraded to `legacy` in the compatibility matrix.
+- [x] DuckDB versions older than 1.5.2 are removed from the compatibility matrix.
 
 ---
 
@@ -3551,7 +3551,7 @@ Strategy B (PG-wire sidecar) remains for use cases that require remote access, m
 
 The workflow named `DuckDB Compatibility Matrix` is not a full compatibility matrix today and does not fully test every variant described in `docs/compatibility.md`.
 
-- [ ] **DuckDB / DuckLake:** CI checks that `tests/fixtures/wire-corpus/duckdb-1.2.2.jsonl` exists, then runs the same package tests for every matrix entry. It does not pass the selected client fixture into the replay test, does not run a real DuckDB process, does not attach the real `ducklake` extension, and does not prove DuckDB 1.3.x or later DuckDB patch streams.
+- [ ] **DuckDB / DuckLake:** CI checks that `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` exists, then runs the same package tests for every matrix entry. It does not pass the selected client fixture into the replay test, does not run a real DuckDB process, does not attach the real `ducklake` extension, and does not prove DuckDB 1.5.x patch streams.
 - [ ] **Wire corpus replay:** The current corpus tests mostly validate fixture presence, JSON shape, or SQL classifier acceptance. They do not replay each selected corpus end-to-end through PG-wire, assert response messages, or compare final catalog state with golden DuckLake-backed output.
 - [ ] **PostgreSQL clients:** The compatibility workflow runs `cargo test --package slateduck-pgwire -- --include-ignored psql_compat`, but no listed test currently contains `psql_compat`; this can pass while running zero client compatibility tests. The workflow also starts PostgreSQL containers even though the compatibility target should be a SlateDuck server exercised by real clients. DBeaver, pgcli, and Metabase have no automated coverage.
 - [ ] **Spark / Trino / Presto:** Spark 3.5 and Trino 432 have small synthetic corpus fixtures and classifier checks only. There is no real Spark connector, Trino connector, or Presto job, and the documented Trino 400-431 / Presto disposition is not actively verified.

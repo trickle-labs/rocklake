@@ -560,7 +560,7 @@ async fn test_create_inlined_table() {
 #[tokio::test]
 async fn test_wire_handshake_replay() {
     // Test that all queries in the Phase 0 handshake fixture can be classified
-    let fixture = include_str!("../../../tests/fixtures/handshake/duckdb-1.2.2.jsonl");
+    let fixture = include_str!("../../../tests/fixtures/handshake/duckdb-1.5.x.jsonl");
     for line in fixture.lines() {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
         if v["direction"] == "client_to_server" && v["type"] == "Query" {
@@ -1319,7 +1319,7 @@ fn test_wire_corpus_fixture_exists() {
         .unwrap()
         .parent()
         .unwrap()
-        .join("tests/fixtures/wire-corpus/duckdb-1.2.2.jsonl");
+        .join("tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl");
     assert!(duckdb_corpus.exists(), "DuckDB wire corpus fixture missing");
 }
 
