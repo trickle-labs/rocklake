@@ -120,7 +120,7 @@ jobs:
       - name: Run ducklake corpus classification tests
         run: cargo test --package rocklake-pgwire --test v02710_corpus_tests -- --nocapture
 
-      - name: Gate: no DuckLake v1.1 (Catalog Version 8) statements in corpus
+      - name: "Gate: no DuckLake v1.1 (Catalog Version 8) statements in corpus"
         run: |
           python3 - <<'EOF'
           import json, sys
