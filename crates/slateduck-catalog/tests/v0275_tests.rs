@@ -53,8 +53,10 @@ async fn snapshot_row_contains_denormalized_counters() {
     );
 }
 
-/// Snapshot row retains author internally (for backward compat); the SQL
-/// facade moves them to snapshot_changes but internal storage keeps them.
+/// v0.27.8: author/message are no longer stored in ducklake_snapshot (SnapshotRow);
+/// they live exclusively in ducklake_snapshot_changes (SnapshotChangesRow).
+/// SnapshotRow still has the fields for backward-compatible decoding of existing
+/// rows but new snapshots set them to None.
 #[tokio::test]
 async fn snapshot_row_retains_author_internally() {
     let dir = TempDir::new().unwrap();
@@ -71,8 +73,18 @@ async fn snapshot_row_retains_author_internally() {
 
     let reader = store.read_at(snap).unwrap();
     let row = reader.get_snapshot().await.unwrap().expect("snapshot row");
-    assert_eq!(row.author.as_deref(), Some("bob"));
-    assert_eq!(row.message.as_deref(), Some("initial commit"));
+    // v0.27.8: SnapshotRow.author and .message are no longer populated.
+    assert_eq!(row.author, None, "author must not be stored in SnapshotRow");
+    assert_eq!(
+        row.message, None,
+        "message must not be stored in SnapshotRow"
+    );
+
+    // Author/message are stored exclusively in ducklake_snapshot_changes.
+    let changes = reader.list_all_snapshot_changes().await.unwrap();
+    assert_eq!(changes.len(), 1, "one changes row per snapshot");
+    assert_eq!(changes[0].author.as_deref(), Some("bob"));
+    assert_eq!(changes[0].commit_message.as_deref(), Some("initial commit"));
 }
 
 // ─── Phase 2: Snapshot changes accumulation ────────────────────────────────────

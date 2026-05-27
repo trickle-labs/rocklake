@@ -59,14 +59,20 @@ fn stats_max<'a>(left: &'a str, right: &'a str) -> &'a str {
 /// compare them semantically so that numeric ordering is respected (e.g.
 /// `-10` < `-2`, `10` < `2` lexicographically but `2` < `10` numerically).
 ///
-/// Comparison priority:
+/// Comparison priority (v0.27.8):
 /// 1. `BOOLEAN`-like tokens: `"false"` < `"true"`.
-/// 2. `INTEGER`/`BIGINT`: parsed as `i128` for signed integer comparison.
-/// 3. `FLOAT`/`DOUBLE`: parsed as `f64` for finite float comparison.
-/// 4. `DATE`: ISO-8601 `YYYY-MM-DD` strings sort correctly lexicographically
-///    so the string comparison path handles them correctly.
-/// 5. `TIMESTAMP`/`TIMESTAMPTZ`: ISO-8601 strings sort correctly lexicographically.
-/// 6. Everything else (strings, UUIDs, decimals, etc.): lexicographic.
+/// 2. `INTEGER`/`BIGINT` and `UBIGINT`/unsigned: parsed as `i128` which
+///    covers the full `u64` range (0 .. u64::MAX = 18_446_744_073_709_551_615)
+///    without overflow.  Negative values are handled correctly.
+/// 3. `DECIMAL`/`NUMERIC`: string-based comparison that avoids f64 precision
+///    loss for large exact decimals (e.g. `"999999999999999999.999"` vs
+///    `"1000000000000000000.000"`).
+/// 4. `FLOAT`/`DOUBLE`: parsed as `f64` for values that have fractional parts
+///    and cannot be exactly represented as integers or decimals.
+/// 5. `DATE`: ISO-8601 `YYYY-MM-DD` strings sort correctly lexicographically.
+/// 6. `TIMESTAMP`/`TIMESTAMPTZ`: ISO-8601 strings sort correctly lexicographically.
+/// 7. `UUID`: lexicographic is correct for RFC-4122 UUIDs.
+/// 8. Everything else (strings, etc.): lexicographic.
 fn stats_value_less_or_equal(left: &str, right: &str) -> bool {
     // BOOLEAN
     match (left, right) {
@@ -76,12 +82,20 @@ fn stats_value_less_or_equal(left: &str, right: &str) -> bool {
         _ => {}
     }
 
-    // INTEGER / BIGINT — covers negative numbers (e.g. "-10" vs "-2").
+    // INTEGER / BIGINT / UBIGINT — i128 covers the full u64 range so unsigned
+    // integer comparison (e.g. u64::MAX = 18446744073709551615) is exact.
     if let (Ok(l), Ok(r)) = (left.parse::<i128>(), right.parse::<i128>()) {
         return l <= r;
     }
 
-    // FLOAT / DOUBLE — covers finite float values with fractional parts.
+    // DECIMAL / NUMERIC — string-based comparison avoids f64 precision loss for
+    // large exact decimals.  Only attempted when both values look like decimal
+    // strings (optional sign, digits, optional dot and more digits).
+    if let Some(ord) = compare_decimal_strings(left, right) {
+        return ord != std::cmp::Ordering::Greater;
+    }
+
+    // FLOAT / DOUBLE — covers remaining finite float values.
     if let (Ok(l), Ok(r)) = (left.parse::<f64>(), right.parse::<f64>()) {
         if l.is_finite() && r.is_finite() {
             return l <= r;
@@ -91,6 +105,82 @@ fn stats_value_less_or_equal(left: &str, right: &str) -> bool {
     // DATE, TIMESTAMP, TIMESTAMPTZ, UUID, and plain strings — ISO-8601 date
     // and timestamp strings sort correctly lexicographically, as do UUIDs.
     left <= right
+}
+
+/// String-based decimal comparison that preserves exact ordering for
+/// `DECIMAL`/`NUMERIC` values without introducing a bigdecimal dependency.
+///
+/// Returns `None` if either string does not look like a decimal literal,
+/// allowing the caller to fall through to the `f64` path.
+fn compare_decimal_strings(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    fn is_decimal(s: &str) -> bool {
+        if s.is_empty() {
+            return false;
+        }
+        let s = s.strip_prefix('-').unwrap_or(s);
+        if s.is_empty() {
+            return false;
+        }
+        // Must contain a '.' (otherwise it's just an integer — handled by i128).
+        let Some(dot_pos) = s.find('.') else {
+            return false;
+        };
+        let int_part = &s[..dot_pos];
+        let frac_part = &s[dot_pos + 1..];
+        !int_part.is_empty()
+            && int_part.chars().all(|c| c.is_ascii_digit())
+            && !frac_part.is_empty()
+            && frac_part.chars().all(|c| c.is_ascii_digit())
+    }
+
+    if !is_decimal(left) || !is_decimal(right) {
+        return None;
+    }
+
+    let (l_neg, l_abs) = if let Some(s) = left.strip_prefix('-') {
+        (true, s)
+    } else {
+        (false, left)
+    };
+    let (r_neg, r_abs) = if let Some(s) = right.strip_prefix('-') {
+        (true, s)
+    } else {
+        (false, right)
+    };
+
+    // Compare absolute values: integer part length first, then lexicographic.
+    let abs_cmp = compare_decimal_abs(l_abs, r_abs);
+
+    Some(match (l_neg, r_neg) {
+        (false, false) => abs_cmp,
+        (true, true) => abs_cmp.reverse(),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+    })
+}
+
+/// Compare two non-negative decimal strings (no sign prefix, must contain '.').
+fn compare_decimal_abs(left: &str, right: &str) -> std::cmp::Ordering {
+    let (l_int, l_frac) = left.split_once('.').unwrap();
+    let (r_int, r_frac) = right.split_once('.').unwrap();
+
+    // Longer integer part means larger number (no leading zeros expected).
+    match l_int.len().cmp(&r_int.len()) {
+        std::cmp::Ordering::Equal => {}
+        other => return other,
+    }
+
+    // Same length integer part — compare lexicographically.
+    match l_int.cmp(r_int) {
+        std::cmp::Ordering::Equal => {}
+        other => return other,
+    }
+
+    // Integer parts equal — compare fractional parts by padding to same length.
+    let max_len = l_frac.len().max(r_frac.len());
+    let l_padded = format!("{l_frac:0<max_len$}");
+    let r_padded = format!("{r_frac:0<max_len$}");
+    l_padded.cmp(&r_padded)
 }
 
 fn merge_optional_bool_or(existing: Option<bool>, incoming: Option<bool>) -> Option<bool> {

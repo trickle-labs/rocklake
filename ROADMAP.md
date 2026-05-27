@@ -76,7 +76,7 @@ binding on every roadmap release below.
 | **v0.27.5 — DuckLake v1.0 Spec Gap Closure** | Close P0/P1/P2 gaps from `plans/ducklake-1.0-spec-gaps.md` and `plans/ducklake-1.0-spec-gaps-2.md`: exact SQL catalog facades for all 28 tables; fix snapshot/snapshot_changes schema; implement spec-complete delete-file semantics; DROP TABLE cascade; inlined data SQL support; data file spec fields; metadata facades; column stats completeness; field naming alignment; stats model semantics cleanup; transaction atomicity; RowDescription centralization; type-aware stats; DROP/ALTER cascade; compatibility corpus | Done |
 | **v0.27.6 — DuckLake Inlined-Data Lifecycle Integration Tests** | Opt-in automated DuckDB/DuckLake lifecycle tests: fresh attach, INSERT/DELETE/UPDATE, restart reads, stats inspection, direct `postgres_query` of dynamic inlined tables; stats merge regression cases for negative numbers, floats, and strings | Done |
 | **v0.27.7 — DuckLake SQL Schema Registry** | `DuckLakeTableSchema` registry as single source of truth for all 28 metadata table schemas; wire executor response builders, handler describe, and COPY to the registry; projection-order golden tests for every table; arbitrary output alias support for dynamic inlined tables | Done |
-| **v0.27.8 — DuckLake Transaction Atomicity & Snapshot Changes Conformance** | Group all statements in one logical DuckLake commit into an atomic batch; spec-complete `ducklake_snapshot_changes` with `changes_made`, `author`, `commit_message`, `commit_extra_info`; interleaved writer and rollback tests; writer fencing validation; type-aware column stats for dates, timestamps, decimals | Planning |
+| **v0.27.8 — DuckLake Transaction Atomicity & Snapshot Changes Conformance** | Group all statements in one logical DuckLake commit into an atomic batch; spec-complete `ducklake_snapshot_changes` with `changes_made`, `author`, `commit_message`, `commit_extra_info`; interleaved writer and rollback tests; writer fencing validation; type-aware column stats for dates, timestamps, decimals | Done |
 | **v0.27.9 — DuckLake Advanced Metadata Validation** | End-to-end DuckDB tests for views, macros, tags, column tags, sort info, and partition info; DROP/ALTER cascade covering all metadata types; ALTER TABLE time-travel tests; imported existing DuckLake catalog support | Planning |
 | **v0.27.10 — DuckLake Compatibility CI** | Pin known-good DuckDB and DuckLake versions in CI; nightly optional jobs covering fresh, restart, and concurrent scenarios; durable compatibility corpus captured from real workloads; acceptance gates for "DuckDB and SlateDuck work perfectly together" | Planning |
 | **v0.27.11 — Wire & SQL Resiliency Hardening** | Implement five core resiliency mitigations: DataFusion virtual catalog engine, AST normalization visitor pipeline, dynamic session settings registry, automated PG-dialect fuzzing with SQLSTATE 0A000 conformance, and hardened sandbox timeouts for process-spawning tests | Planning |
@@ -3343,37 +3343,37 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 #### Transaction Atomicity
 
-- [ ] Buffer all SQL statements arriving within a single logical DuckLake metadata commit (delimited by the DuckLake extension's transaction protocol) before applying any side effects.
-- [ ] Apply stale row ID remapping, stats adjustments, snapshot changes, and catalog counter increments in a single atomic write after the full batch is collected.
-- [ ] Verify that a disconnect mid-batch leaves the catalog in the pre-batch state.
-- [ ] Add tests with two concurrent writers submitting conflicting snapshot IDs; verify exactly one succeeds and the other must retry.
-- [ ] Add writer fencing tests: kill writer mid-batch; start new writer; verify no partial-batch artifacts are visible.
+- [x] Buffer all SQL statements arriving within a single logical DuckLake metadata commit (delimited by the DuckLake extension's transaction protocol) before applying any side effects.
+- [x] Apply stale row ID remapping, stats adjustments, snapshot changes, and catalog counter increments in a single atomic write after the full batch is collected.
+- [x] Verify that a disconnect mid-batch leaves the catalog in the pre-batch state.
+- [x] Add tests with two concurrent writers submitting conflicting snapshot IDs; verify exactly one succeeds and the other must retry.
+- [x] Add writer fencing tests: kill writer mid-batch; start new writer; verify no partial-batch artifacts are visible.
 
 #### Spec-Complete Snapshot Changes
 
-- [ ] Persist `changes_made` strings in the format DuckLake v1.0 expects (e.g., `created_schema:name`, `created_table:id`, `dropped_table:id`, `inserted_rows:table_id:count`, etc.).
-- [ ] Persist `author`, `commit_message`, and `commit_extra_info` in `ducklake_snapshot_changes` rows, not in `ducklake_snapshot`.
-- [ ] Remove `author`/`message` from `SnapshotRow` if they were stored there; migrate existing rows if needed.
-- [ ] Add a test verifying that `SELECT * FROM ducklake_snapshot_changes` after a workload returns one row per commit with correct `changes_made`, `author`, and `commit_message`.
-- [ ] Add a conflict-check test: two writers; one wins; verify the losing writer's snapshot is not present in `ducklake_snapshot_changes`.
+- [x] Persist `changes_made` strings in the format DuckLake v1.0 expects (e.g., `created_schema:name`, `created_table:id`, `dropped_table:id`, `inserted_rows:table_id:count`, etc.).
+- [x] Persist `author`, `commit_message`, and `commit_extra_info` in `ducklake_snapshot_changes` rows, not in `ducklake_snapshot`.
+- [x] Remove `author`/`message` from `SnapshotRow` if they were stored there; migrate existing rows if needed.
+- [x] Add a test verifying that `SELECT * FROM ducklake_snapshot_changes` after a workload returns one row per commit with correct `changes_made`, `author`, and `commit_message`.
+- [x] Add a conflict-check test: two writers; one wins; verify the losing writer's snapshot is not present in `ducklake_snapshot_changes`.
 
 #### Type-Aware Column Stats
 
-- [ ] Implement `DATE` comparison in `stats_value_less_or_equal` by parsing ISO-8601 date strings to days-since-epoch.
-- [ ] Implement `TIMESTAMP`/`TIMESTAMPTZ` comparison by parsing to microseconds-since-epoch.
-- [ ] Implement unsigned integer comparison (treat as `u64` rather than `i64`).
-- [ ] Implement decimal/numeric comparison using bigdecimal or string-based ordering.
-- [ ] Implement boolean comparison (`false < true`).
-- [ ] Implement UUID string comparison (lexicographic is correct for RFC-4122 UUIDs).
-- [ ] Add DuckDB validation tests that verify DuckDB prunes correctly on each new type after SlateDuck stores the stats.
+- [x] Implement `DATE` comparison in `stats_value_less_or_equal` by parsing ISO-8601 date strings to days-since-epoch.
+- [x] Implement `TIMESTAMP`/`TIMESTAMPTZ` comparison by parsing to microseconds-since-epoch.
+- [x] Implement unsigned integer comparison (treat as `u64` rather than `i64`).
+- [x] Implement decimal/numeric comparison using bigdecimal or string-based ordering.
+- [x] Implement boolean comparison (`false < true`).
+- [x] Implement UUID string comparison (lexicographic is correct for RFC-4122 UUIDs).
+- [x] Add DuckDB validation tests that verify DuckDB prunes correctly on each new type after SlateDuck stores the stats.
 
 ### Definition of Done
 
-- [ ] Disconnect mid-batch leaves catalog unchanged; test passes.
-- [ ] Concurrent writer conflict test passes: one commit wins, one is rejected.
-- [ ] `ducklake_snapshot_changes` rows contain spec-correct `changes_made`, `author`, `commit_message`, and `commit_extra_info` after a workload.
-- [ ] Type-aware stats tests for DATE, TIMESTAMP, unsigned integers, decimals, booleans, and UUIDs pass.
-- [ ] DuckDB pruning validation tests pass for all new types.
+- [x] Disconnect mid-batch leaves catalog unchanged; test passes.
+- [x] Concurrent writer conflict test passes: one commit wins, one is rejected.
+- [x] `ducklake_snapshot_changes` rows contain spec-correct `changes_made`, `author`, `commit_message`, and `commit_extra_info` after a workload.
+- [x] Type-aware stats tests for DATE, TIMESTAMP, unsigned integers, decimals, booleans, and UUIDs pass.
+- [x] DuckDB pruning validation tests pass for all new types.
 
 ---
 
