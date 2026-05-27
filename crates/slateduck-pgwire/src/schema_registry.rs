@@ -434,6 +434,60 @@ pub fn inlined_data_tables_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+// ── ducklake_schema_version ───────────────────────────────────────────────────
+
+/// `ducklake_schema_version(schema_version, schema_version_info)` —
+/// DuckLake v1.0 spec.
+pub fn schema_version_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        int8t!("schema_version"),
+        text_col!("schema_version_info"),
+    ])
+}
+
+// ── ducklake_schema_changes ───────────────────────────────────────────────────
+
+/// `ducklake_schema_changes(changes_id, snapshot_id, table_id, schema_id,
+/// change_type, change_info)` — DuckLake v1.0 spec.
+pub fn schema_changes_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        int8t!("changes_id"),
+        int8t!("snapshot_id"),
+        int8t!("table_id"),
+        int8t!("schema_id"),
+        text_col!("change_type"),
+        text_col!("change_info"),
+    ])
+}
+
+// ── ducklake_encrypted_secret ─────────────────────────────────────────────────
+
+/// `ducklake_encrypted_secret(secret_id, begin_snapshot, end_snapshot,
+/// secret_name, secret_type, encrypted_secret)` — DuckLake v1.0 spec.
+pub fn encrypted_secret_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        int8t!("secret_id"),
+        int8t!("begin_snapshot"),
+        int8t!("end_snapshot"),
+        text_col!("secret_name"),
+        text_col!("secret_type"),
+        text_col!("encrypted_secret"),
+    ])
+}
+
+// ── ducklake_file_partition_value ─────────────────────────────────────────────
+
+/// `ducklake_file_partition_value(data_file_id, table_id, partition_key_index,
+/// partition_value)` — DuckLake v1.0 spec.
+pub fn file_partition_value_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        int8t!("data_file_id"),
+        int8t!("table_id"),
+        int8t!("partition_key_index"),
+        text_col!("partition_value"),
+    ])
+}
+
 // ── Global stats (combined table_stats + column_stats) ────────────────────────
 
 /// Combined schema for `SELECT ... FROM ducklake_table_stats INNER JOIN ...`
@@ -497,6 +551,10 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
         "ducklake_sort_expression" => Some(sort_expression_schema()),
         "ducklake_files_scheduled_for_deletion" => Some(files_scheduled_for_deletion_schema()),
         "ducklake_inlined_data_tables" => Some(inlined_data_tables_schema()),
+        "ducklake_schema_version" => Some(schema_version_schema()),
+        "ducklake_schema_changes" => Some(schema_changes_schema()),
+        "ducklake_encrypted_secret" => Some(encrypted_secret_schema()),
+        "ducklake_file_partition_value" => Some(file_partition_value_schema()),
         _ => None,
     }
 }

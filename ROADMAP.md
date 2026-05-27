@@ -75,7 +75,7 @@ binding on every roadmap release below.
 | **v0.27.4 — DuckDB 1.5.x PostgreSQL Scanner Compatibility** | Handle all DuckDB 1.5.x postgres scanner initialization queries: `DISCARD ALL`; `SELECT to_regclass('duckdb_secrets')`; `SELECT EXISTS(... information_schema.tables ...)`; multi-statement catalog scan (`pg_namespace`, `pg_class`/`pg_attribute`/`pg_constraint`, `pg_enum`, `pg_type` composites, `pg_indexes`); `SELECT pg_database_size(current_database())`; capture DuckDB 1.5.x wire-corpus fixture; update compatibility matrix to DuckDB 1.5.x only | Done |
 | **v0.27.5 — DuckLake v1.0 Spec Gap Closure** | Close P0/P1/P2 gaps from `plans/ducklake-1.0-spec-gaps.md` and `plans/ducklake-1.0-spec-gaps-2.md`: exact SQL catalog facades for all 28 tables; fix snapshot/snapshot_changes schema; implement spec-complete delete-file semantics; DROP TABLE cascade; inlined data SQL support; data file spec fields; metadata facades; column stats completeness; field naming alignment; stats model semantics cleanup; transaction atomicity; RowDescription centralization; type-aware stats; DROP/ALTER cascade; compatibility corpus | Done |
 | **v0.27.6 — DuckLake Inlined-Data Lifecycle Integration Tests** | Opt-in automated DuckDB/DuckLake lifecycle tests: fresh attach, INSERT/DELETE/UPDATE, restart reads, stats inspection, direct `postgres_query` of dynamic inlined tables; stats merge regression cases for negative numbers, floats, and strings | Done |
-| **v0.27.7 — DuckLake SQL Schema Registry** | `DuckLakeTableSchema` registry as single source of truth for all 28 metadata table schemas; wire executor response builders, handler describe, and COPY to the registry; projection-order golden tests for every table; arbitrary output alias support for dynamic inlined tables | Planning |
+| **v0.27.7 — DuckLake SQL Schema Registry** | `DuckLakeTableSchema` registry as single source of truth for all 28 metadata table schemas; wire executor response builders, handler describe, and COPY to the registry; projection-order golden tests for every table; arbitrary output alias support for dynamic inlined tables | Done |
 | **v0.27.8 — DuckLake Transaction Atomicity & Snapshot Changes Conformance** | Group all statements in one logical DuckLake commit into an atomic batch; spec-complete `ducklake_snapshot_changes` with `changes_made`, `author`, `commit_message`, `commit_extra_info`; interleaved writer and rollback tests; writer fencing validation; type-aware column stats for dates, timestamps, decimals | Planning |
 | **v0.27.9 — DuckLake Advanced Metadata Validation** | End-to-end DuckDB tests for views, macros, tags, column tags, sort info, and partition info; DROP/ALTER cascade covering all metadata types; ALTER TABLE time-travel tests; imported existing DuckLake catalog support | Planning |
 | **v0.27.10 — DuckLake Compatibility CI** | Pin known-good DuckDB and DuckLake versions in CI; nightly optional jobs covering fresh, restart, and concurrent scenarios; durable compatibility corpus captured from real workloads; acceptance gates for "DuckDB and SlateDuck work perfectly together" | Planning |
@@ -3311,26 +3311,26 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 #### DuckLakeTableSchema Registry
 
-- [ ] Define a `DuckLakeTableSchema` struct (or equivalent constant table) in `crates/slateduck-pgwire/src/` listing, for each of the 28 DuckLake v1.0 metadata tables: field name, wire type OID, and format (text/binary).
-- [ ] Make the registry the single authoritative source for FieldInfo in `describe_fields_for_sql`, `make_*_response` builders, and COPY metadata responses.
-- [ ] For every table that previously hard-coded FieldInfo in multiple locations, replace those duplicates with a registry lookup.
+- [x] Define a `DuckLakeTableSchema` struct (or equivalent constant table) in `crates/slateduck-pgwire/src/` listing, for each of the 28 DuckLake v1.0 metadata tables: field name, wire type OID, and format (text/binary).
+- [x] Make the registry the single authoritative source for FieldInfo in `describe_fields_for_sql`, `make_*_response` builders, and COPY metadata responses.
+- [x] For every table that previously hard-coded FieldInfo in multiple locations, replace those duplicates with a registry lookup.
 
 #### Projection-Order Golden Tests
 
-- [ ] Add a golden test for each of the 28 tables that asserts the RowDescription field names and order match the spec.
-- [ ] Add golden tests for at least three SELECT variants per high-risk table: `SELECT *`, `SELECT <explicit cols>`, and `SELECT <cols with CAST>`.
+- [x] Add a golden test for each of the 28 tables that asserts the RowDescription field names and order match the spec.
+- [x] Add golden tests for at least three SELECT variants per high-risk table: `SELECT *`, `SELECT <explicit cols>`, and `SELECT <cols with CAST>`.
 
 #### Arbitrary Output Alias Support
 
-- [ ] Implement support for arbitrary output alias names in dynamic inlined table projections (e.g., `SELECT row_id AS rid FROM ducklake_inlined_data_*`).
-- [ ] Add a binary COPY test for aliased dynamic inlined projections to confirm correct RowDescription and field encoding.
+- [x] Implement support for arbitrary output alias names in dynamic inlined table projections (e.g., `SELECT row_id AS rid FROM ducklake_inlined_data_*`).
+- [x] Add a binary COPY test for aliased dynamic inlined projections to confirm correct RowDescription and field encoding.
 
 ### Definition of Done
 
-- [ ] Registry exists and is used by all RowDescription, response builder, and COPY paths.
-- [ ] No `FieldInfo` for a metadata table is defined outside the registry.
-- [ ] Projection-order golden tests pass for all 28 tables.
-- [ ] Arbitrary output alias test passes in extended query and binary COPY modes.
+- [x] Registry exists and is used by all RowDescription, response builder, and COPY paths.
+- [x] No `FieldInfo` for a metadata table is defined outside the registry.
+- [x] Projection-order golden tests pass for all 28 tables.
+- [x] Arbitrary output alias test passes in extended query and binary COPY modes.
 
 ---
 

@@ -2560,6 +2560,14 @@ fn decode_bytea_literal(value: &str) -> Vec<u8> {
 }
 
 pub(super) fn make_metadata_table_empty_response(table_name: &str) -> Response<'static> {
+    // Use the schema registry as the single source of truth for all registered
+    // DuckLake metadata tables.
+    if let Some(schema) = crate::schema_registry::fields_for_table(table_name) {
+        let mut resp = QueryResponse::new(schema, futures::stream::iter(vec![]));
+        resp.set_command_tag("SELECT 0");
+        return Response::Query(resp);
+    }
+
     fn field(name: &str, datatype: Type) -> FieldInfo {
         FieldInfo::new(name.to_string(), None, None, datatype, FieldFormat::Text)
     }
@@ -2572,18 +2580,10 @@ pub(super) fn make_metadata_table_empty_response(table_name: &str) -> Response<'
     fn bool_col(name: &str) -> FieldInfo {
         field(name, Type::BOOL)
     }
-    fn timestamp_tz(name: &str) -> FieldInfo {
-        field(name, Type::TIMESTAMPTZ)
-    }
 
-    let schema = match table_name {
-        "ducklake_snapshot_changes" => vec![
-            int8("snapshot_id"),
-            text("changes_made"),
-            text("author"),
-            text("commit_message"),
-            text("commit_extra_info"),
-        ],
+    // Fall back to hard-coded schemas for tables not yet in the registry
+    // (internal or non-spec tables).
+    let schema: Vec<FieldInfo> = match table_name {
         "ducklake_file_variant_stats" => vec![
             int8("data_file_id"),
             int8("table_id"),
@@ -2598,61 +2598,6 @@ pub(super) fn make_metadata_table_empty_response(table_name: &str) -> Response<'
             bool_col("contains_nan"),
             text("extra_stats"),
         ],
-        "ducklake_file_column_stats" => vec![
-            int8("data_file_id"),
-            int8("table_id"),
-            int8("column_id"),
-            int8("column_size_bytes"),
-            int8("value_count"),
-            int8("null_count"),
-            text("min_value"),
-            text("max_value"),
-            bool_col("contains_nan"),
-            text("extra_stats"),
-        ],
-        "ducklake_table_column_stats" => vec![
-            int8("table_id"),
-            int8("column_id"),
-            bool_col("contains_null"),
-            bool_col("contains_nan"),
-            text("min_value"),
-            text("max_value"),
-            text("extra_stats"),
-        ],
-        "ducklake_table_stats" => vec![
-            int8("table_id"),
-            int8("record_count"),
-            int8("next_row_id"),
-            int8("file_size_bytes"),
-        ],
-        "ducklake_partition_info" => vec![
-            int8("partition_id"),
-            int8("table_id"),
-            int8("begin_snapshot"),
-            int8("end_snapshot"),
-        ],
-        "ducklake_partition_column" => vec![
-            int8("partition_id"),
-            int8("table_id"),
-            int8("partition_key_index"),
-            int8("column_id"),
-            text("transform"),
-        ],
-        "ducklake_file_partition_value" => vec![
-            int8("data_file_id"),
-            int8("table_id"),
-            int8("partition_key_index"),
-            text("partition_value"),
-        ],
-        "ducklake_files_scheduled_for_deletion" => vec![
-            int8("data_file_id"),
-            text("path"),
-            bool_col("path_is_relative"),
-            timestamp_tz("schedule_start"),
-        ],
-        "ducklake_inlined_data_tables" => {
-            vec![int8("table_id"), text("table_name"), int8("schema_version")]
-        }
         "ducklake_column_mapping" => {
             vec![int8("mapping_id"), int8("table_id"), text("type")]
         }
@@ -2669,18 +2614,8 @@ pub(super) fn make_metadata_table_empty_response(table_name: &str) -> Response<'
             int8("schema_version"),
             int8("table_id"),
         ],
-        "ducklake_sort_expression" => vec![
-            int8("sort_id"),
-            int8("table_id"),
-            int8("sort_key_index"),
-            text("expression"),
-            text("dialect"),
-            text("sort_direction"),
-            text("null_order"),
-        ],
         _ => vec![],
     };
-
     let schema = Arc::new(schema);
     let mut resp = QueryResponse::new(schema, futures::stream::iter(vec![]));
     resp.set_command_tag("SELECT 0");
@@ -2876,22 +2811,7 @@ pub(super) fn make_sort_info_response(
 /// Spec column names: schema_version, schema_version_info.
 /// Returns the single global catalog schema version row.
 pub(super) fn make_schema_version_response(catalog_schema_version: u64) -> Response<'static> {
-    let schema = Arc::new(vec![
-        FieldInfo::new(
-            "schema_version".to_string(),
-            None,
-            None,
-            Type::INT8,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "schema_version_info".to_string(),
-            None,
-            None,
-            Type::TEXT,
-            FieldFormat::Text,
-        ),
-    ]);
+    let schema = crate::schema_registry::schema_version_schema();
     let mut encoder = DataRowEncoder::new(schema.clone());
     encoder
         .encode_field_with_type_and_format(
