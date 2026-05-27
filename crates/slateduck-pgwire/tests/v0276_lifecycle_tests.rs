@@ -322,10 +322,7 @@ async fn make_store(dir: &TempDir) -> Arc<Mutex<CatalogStore>> {
     Arc::new(Mutex::new(catalog))
 }
 
-async fn exec(
-    sql: &'static str,
-    store: &Arc<Mutex<CatalogStore>>,
-) -> Vec<Response<'static>> {
+async fn exec(sql: &'static str, store: &Arc<Mutex<CatalogStore>>) -> Vec<Response<'static>> {
     let params = ParamValues::default();
     let mut session = SessionState::new();
     executor::execute_sql(sql, &params, store, &mut session, &nm(), &ext())
@@ -333,20 +330,18 @@ async fn exec(
         .unwrap()
 }
 
-async fn first_col_values(resp: Response<'static>) -> Vec<String> {
+async fn row_count_from_response(resp: Response<'static>) -> usize {
     match resp {
         Response::Query(qr) => {
             let stream = qr.data_rows();
             futures::pin_mut!(stream);
-            let mut values = Vec::new();
-            while let Some(Ok(row)) = stream.next().await {
-                if let Some(Some(bytes)) = row.buffer.first() {
-                    values.push(String::from_utf8_lossy(bytes).into_owned());
-                }
+            let mut count = 0usize;
+            while let Some(Ok(_row)) = stream.next().await {
+                count += 1;
             }
-            values
+            count
         }
-        _ => vec![],
+        _ => 0,
     }
 }
 
@@ -382,10 +377,10 @@ async fn stats_merge_negative_integers_via_executor() {
     let mut resps = exec("SELECT * FROM ducklake_table_stats;", &store).await;
     assert!(!resps.is_empty(), "must get a response");
     // Verify record_count is accumulated (5 + 3 = 8).
-    let vals = first_col_values(resps.remove(0)).await;
+    let row_count = row_count_from_response(resps.remove(0)).await;
     // At least one row returned — the executor projection is working.
     assert!(
-        !vals.is_empty(),
+        row_count > 0,
         "ducklake_table_stats must return at least one row after inserts"
     );
 }
@@ -413,7 +408,10 @@ async fn stats_merge_floats_fractional_part() {
         let mut w = store.begin_write();
         let sid = w.create_schema("s").await.unwrap();
         let tid = w.create_table(sid, "t", None).await.unwrap();
-        let cid = w.add_column(tid, "price", "DOUBLE", 0, false, None).await.unwrap();
+        let cid = w
+            .add_column(tid, "price", "DOUBLE", 0, false, None)
+            .await
+            .unwrap();
         let cr = w.create_snapshot(None, None).await.unwrap();
         store.commit_writer(cr);
         (tid, cid)
@@ -490,7 +488,10 @@ async fn stats_merge_string_numeric_order_differs_from_lexicographic() {
         let mut w = store.begin_write();
         let sid = w.create_schema("s").await.unwrap();
         let tid = w.create_table(sid, "t", None).await.unwrap();
-        let cid = w.add_column(tid, "rate", "DOUBLE", 0, false, None).await.unwrap();
+        let cid = w
+            .add_column(tid, "rate", "DOUBLE", 0, false, None)
+            .await
+            .unwrap();
         let cr = w.create_snapshot(None, None).await.unwrap();
         store.commit_writer(cr);
         (tid, cid)
@@ -560,7 +561,10 @@ async fn stats_merge_multi_digit_integer_still_correct() {
         let mut w = store.begin_write();
         let sid = w.create_schema("s").await.unwrap();
         let tid = w.create_table(sid, "t", None).await.unwrap();
-        let cid = w.add_column(tid, "count", "INTEGER", 0, false, None).await.unwrap();
+        let cid = w
+            .add_column(tid, "count", "INTEGER", 0, false, None)
+            .await
+            .unwrap();
         let cr = w.create_snapshot(None, None).await.unwrap();
         store.commit_writer(cr);
         (tid, cid)
