@@ -81,12 +81,16 @@ impl CatalogWriter {
             self.schema_changed = false;
         }
 
+        // v0.27.8: author and message are persisted in ducklake_snapshot_changes
+        // (DuckLake v1.0 spec), not in ducklake_snapshot.  SnapshotRow retains
+        // the fields for backward-compatible decoding of existing rows but new
+        // rows no longer populate them.
         let row = SnapshotRow {
             snapshot_id,
             schema_version: self.current_schema_version,
             snapshot_time: chrono::Utc::now().to_rfc3339(),
-            author: author.map(|s| s.to_string()),
-            message: message.map(|s| s.to_string()),
+            author: None,
+            message: None,
             next_catalog_id: Some(self.counters.peek_catalog_id()),
             next_file_id: Some(self.counters.peek_file_id()),
         };
