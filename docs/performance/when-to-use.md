@@ -1,18 +1,18 @@
-# When to Use SlateDuck
+# When to Use RockLake
 
-Every tool has a sweet spot — a set of conditions where it outperforms alternatives and a set of conditions where it falls short. SlateDuck's sweet spot is precisely defined by its architecture: single-writer, object-storage-backed, bounded-SQL, serverless. This page provides specific, actionable criteria for evaluating whether SlateDuck is right for your workload. It includes both the scenarios where SlateDuck excels (and you should strongly consider it) and the scenarios where it is a poor fit (and you should look elsewhere).
+Every tool has a sweet spot — a set of conditions where it outperforms alternatives and a set of conditions where it falls short. RockLake's sweet spot is precisely defined by its architecture: single-writer, object-storage-backed, bounded-SQL, serverless. This page provides specific, actionable criteria for evaluating whether RockLake is right for your workload. It includes both the scenarios where RockLake excels (and you should strongly consider it) and the scenarios where it is a poor fit (and you should look elsewhere).
 
-The goal is to save you time. If your workload matches the "SlateDuck excels" criteria, you can adopt it with confidence that it will serve you well. If your workload matches the "SlateDuck is not ideal" criteria, you now know before investing deployment effort.
+The goal is to save you time. If your workload matches the "RockLake excels" criteria, you can adopt it with confidence that it will serve you well. If your workload matches the "RockLake is not ideal" criteria, you now know before investing deployment effort.
 
-## SlateDuck Excels When
+## RockLake Excels When
 
 ### You Want a Serverless Data Lakehouse Catalog
 
-This is SlateDuck's primary use case — the scenario it was designed for from the first line of code.
+This is RockLake's primary use case — the scenario it was designed for from the first line of code.
 
 **The situation:** Your data lives in object storage (S3, GCS, Azure Blob) as Parquet files. You want to query it with DuckDB as a proper lakehouse (schema management, time travel, file-level statistics). You do not want to run a database server for the catalog.
 
-**Why SlateDuck excels:**
+**Why RockLake excels:**
 
 - One binary + one bucket path = complete DuckLake catalog
 - No database server to manage (no PostgreSQL, no MySQL)
@@ -23,26 +23,26 @@ This is SlateDuck's primary use case — the scenario it was designed for from t
 
 **The alternative (PostgreSQL) requires:** An always-running database instance ($50+/month minimum), backup procedures, patching, connection management, failover configuration, and monitoring. For teams that just want to query Parquet files, this is over-engineering.
 
-**Decision threshold:** If "running a database server" is a meaningful operational burden for your team (small team, no dedicated DBA, infrastructure-light philosophy), SlateDuck removes that burden entirely.
+**Decision threshold:** If "running a database server" is a meaningful operational burden for your team (small team, no dedicated DBA, infrastructure-light philosophy), RockLake removes that burden entirely.
 
 ### You Are Building on DuckDB
 
-SlateDuck is designed specifically for DuckDB's `ducklake` extension. The integration is native, the protocol is fully supported, and the deployment model aligns with DuckDB's philosophy (simple, embedded, minimal dependencies).
+RockLake is designed specifically for DuckDB's `ducklake` extension. The integration is native, the protocol is fully supported, and the deployment model aligns with DuckDB's philosophy (simple, embedded, minimal dependencies).
 
-**Why SlateDuck excels for DuckDB users:**
+**Why RockLake excels for DuckDB users:**
 
-- DuckDB + SlateDuck gives you a complete lakehouse with two components (no third-party coordination services)
-- The native extension (Strategy C) embeds SlateDuck directly in DuckDB — zero network overhead, single-process deployment
-- SlateDuck's SQL dialect matches DuckLake's protocol exactly (no compatibility layer, no translation)
-- Both DuckDB and SlateDuck share the "do one thing well" philosophy — they compose cleanly
+- DuckDB + RockLake gives you a complete lakehouse with two components (no third-party coordination services)
+- The native extension (Strategy C) embeds RockLake directly in DuckDB — zero network overhead, single-process deployment
+- RockLake's SQL dialect matches DuckLake's protocol exactly (no compatibility layer, no translation)
+- Both DuckDB and RockLake share the "do one thing well" philosophy — they compose cleanly
 
-**When this matters less:** If DuckDB is not your primary query engine (you use Spark, Trino, or Presto), SlateDuck provides less value because those engines do not speak the DuckLake protocol natively. You would need a compatibility layer, which reduces the simplicity advantage.
+**When this matters less:** If DuckDB is not your primary query engine (you use Spark, Trino, or Presto), RockLake provides less value because those engines do not speak the DuckLake protocol natively. You would need a compatibility layer, which reduces the simplicity advantage.
 
 ### Your Catalog Workload Is Moderate
 
 A "moderate" catalog workload for DuckLake means:
 
-| Dimension | Moderate Range | SlateDuck Handles Comfortably |
+| Dimension | Moderate Range | RockLake Handles Comfortably |
 |-----------|---------------|------------------------------|
 | Tables | 10–1,000 | Yes |
 | Columns per table | 5–200 | Yes |
@@ -52,13 +52,13 @@ A "moderate" catalog workload for DuckLake means:
 | Concurrent readers | 1–100 | Yes (unlimited readers) |
 | Schema changes | A few per day | Yes |
 
-**The vast majority of analytics workloads fall within these ranges.** A data warehouse with 500 tables, 50,000 columns, and 10 ETL jobs writing every 15 minutes is well within SlateDuck's capacity. The catalog sees maybe 10–20 writes per hour and a few thousand reads.
+**The vast majority of analytics workloads fall within these ranges.** A data warehouse with 500 tables, 50,000 columns, and 10 ETL jobs writing every 15 minutes is well within RockLake's capacity. The catalog sees maybe 10–20 writes per hour and a few thousand reads.
 
-**Decision threshold:** If your catalog sees fewer than 100 writes per minute and fewer than 10,000 reads per minute, SlateDuck's throughput is not a bottleneck.
+**Decision threshold:** If your catalog sees fewer than 100 writes per minute and fewer than 10,000 reads per minute, RockLake's throughput is not a bottleneck.
 
 ### You Need Reliable Time Travel
 
-SlateDuck's immutable architecture provides time travel as an inherent property, not as an add-on feature:
+RockLake's immutable architecture provides time travel as an inherent property, not as an add-on feature:
 
 - Every mutation creates a new snapshot with a monotonically increasing ID
 - Previous snapshots are never modified (only superseded)
@@ -72,27 +72,27 @@ SlateDuck's immutable architecture provides time travel as an inherent property,
 - **Audit requirements:** "Show the state of all tables at end-of-quarter." — use the snapshot from that date.
 - **Reproducibility:** "Re-run last Thursday's analysis with the same data." — attach the catalog at Thursday's snapshot.
 
-**The alternative with PostgreSQL:** Temporal tables or trigger-based audit logs can provide similar functionality, but they require engineering effort (designing the triggers, managing the audit table growth, querying historical state). SlateDuck provides this out of the box.
+**The alternative with PostgreSQL:** Temporal tables or trigger-based audit logs can provide similar functionality, but they require engineering effort (designing the triggers, managing the audit table growth, querying historical state). RockLake provides this out of the box.
 
 ### You Operate in Multiple Regions
 
-SlateDuck leverages cloud provider infrastructure for multi-region access without application-level replication:
+RockLake leverages cloud provider infrastructure for multi-region access without application-level replication:
 
 **Cross-Region Read Access:**
 
 ```
-us-east-1: SlateDuck writer → s3://bucket/catalog/
-eu-west-1: SlateDuck reader → s3://bucket/catalog/ (S3 Cross-Region Replication)
-ap-southeast-1: SlateDuck reader → s3://bucket/catalog/ (S3 CRR)
+us-east-1: RockLake writer → s3://bucket/catalog/
+eu-west-1: RockLake reader → s3://bucket/catalog/ (S3 Cross-Region Replication)
+ap-southeast-1: RockLake reader → s3://bucket/catalog/ (S3 CRR)
 ```
 
 S3's Cross-Region Replication makes catalog data available globally with infrastructure-level configuration (no application changes). Readers in remote regions access replicated data with local latency.
 
-**The alternative with PostgreSQL:** Cross-region read replicas require configuration (streaming replication, connection routing), introduce replication lag (seconds to minutes), and add operational complexity (monitoring lag, handling failover). SlateDuck delegates all of this to the storage provider.
+**The alternative with PostgreSQL:** Cross-region read replicas require configuration (streaming replication, connection routing), introduce replication lag (seconds to minutes), and add operational complexity (monitoring lag, handling failover). RockLake delegates all of this to the storage provider.
 
 ### You Want Zero-Ops Durability
 
-SlateDuck's durability is inherited from object storage:
+RockLake's durability is inherited from object storage:
 
 | Provider | Durability SLA | Availability SLA | Backup Required? |
 |----------|---------------|-----------------|-----------------|
@@ -102,13 +102,13 @@ SlateDuck's durability is inherited from object storage:
 
 For comparison, a self-managed PostgreSQL deployment achieves high durability only through careful WAL archiving, point-in-time recovery testing, and backup verification. Most teams do not achieve 11 nines of durability for their PostgreSQL instances — they achieve whatever their backup strategy provides (typically 99.99% — four nines — which means potential data loss during failures).
 
-**Decision threshold:** If "we lost the catalog" is unacceptable and you do not want to invest in backup verification, SlateDuck provides durability without engineering effort.
+**Decision threshold:** If "we lost the catalog" is unacceptable and you do not want to invest in backup verification, RockLake provides durability without engineering effort.
 
-## SlateDuck Is Not Ideal When
+## RockLake Is Not Ideal When
 
 ### You Need Sub-Millisecond Catalog Latency
 
-If your use case requires that catalog operations complete in under 1ms — consistently, including cold starts — SlateDuck on S3 Standard cannot provide this. Cold reads take 30–100ms. Even with S3 Express (3–10ms cold), you cannot reach sub-millisecond territory.
+If your use case requires that catalog operations complete in under 1ms — consistently, including cold starts — RockLake on S3 Standard cannot provide this. Cold reads take 30–100ms. Even with S3 Express (3–10ms cold), you cannot reach sub-millisecond territory.
 
 **Scenarios where this matters:**
 
@@ -120,13 +120,13 @@ If your use case requires that catalog operations complete in under 1ms — cons
 
 - **SQLite** for single-machine deployments (sub-0.1ms, in-process)
 - **PostgreSQL with warm buffer pool** for multi-machine (1–3ms, stable)
-- **SlateDuck native extension** brings latency to 0.3ms for cache-hot reads (but cold reads still hit object storage)
+- **RockLake native extension** brings latency to 0.3ms for cache-hot reads (but cold reads still hit object storage)
 
-**Mitigation if you still want SlateDuck:** Use S3 Express One Zone (3–10ms cold, < 1ms warm after cache hits) and ensure your working set fits in cache. After warm-up, most reads are under 2ms. But if you need guaranteed sub-millisecond — including the first read after a restart — SlateDuck cannot provide that.
+**Mitigation if you still want RockLake:** Use S3 Express One Zone (3–10ms cold, < 1ms warm after cache hits) and ensure your working set fits in cache. After warm-up, most reads are under 2ms. But if you need guaranteed sub-millisecond — including the first read after a restart — RockLake cannot provide that.
 
 ### You Have Extreme Write Throughput
 
-If your pipeline registers more than 100 files per second continuously (not in bursts — continuously), SlateDuck's single-writer model on S3 Standard is a bottleneck:
+If your pipeline registers more than 100 files per second continuously (not in bursts — continuously), RockLake's single-writer model on S3 Standard is a bottleneck:
 
 - S3 Standard: ~10–15 writes/second (sequential)
 - At 100 files/batch: ~1,000–1,500 file registrations/second
@@ -137,16 +137,16 @@ If your requirement exceeds these numbers:
 **What to use instead:**
 
 - **PostgreSQL** with concurrent transactions: 5,000–20,000 individual writes/second
-- **Multiple SlateDuck catalogs** (one per dataset): each handles independent writes in parallel
+- **Multiple RockLake catalogs** (one per dataset): each handles independent writes in parallel
 
-**Mitigation if you still want SlateDuck:** Batch more aggressively. If your pipeline can buffer 10,000 file registrations and commit them in one transaction every 10 seconds, SlateDuck handles this easily (one write per 10 seconds). The constraint is not throughput per batch — it is transactions per second.
+**Mitigation if you still want RockLake:** Batch more aggressively. If your pipeline can buffer 10,000 file registrations and commit them in one transaction every 10 seconds, RockLake handles this easily (one write per 10 seconds). The constraint is not throughput per batch — it is transactions per second.
 
 ### You Need Arbitrary Catalog Queries
 
-SlateDuck's bounded SQL means it only supports the ~50 statement patterns that DuckLake needs. You cannot run arbitrary analytical queries against catalog metadata:
+RockLake's bounded SQL means it only supports the ~50 statement patterns that DuckLake needs. You cannot run arbitrary analytical queries against catalog metadata:
 
 ```sql
--- These work in PostgreSQL but NOT in SlateDuck:
+-- These work in PostgreSQL but NOT in RockLake:
 SELECT table_name, count(*) as file_count
 FROM ducklake_tables t JOIN ducklake_data_files f ON t.table_id = f.table_id
 GROUP BY table_name
@@ -157,11 +157,11 @@ SELECT * FROM ducklake_columns WHERE data_type LIKE '%timestamp%';
 SELECT schema_name, count(DISTINCT table_id) FROM ducklake_tables GROUP BY schema_name;
 ```
 
-If you regularly need to query catalog metadata for analytics (data governance dashboards, catalog health reports, metadata search), SlateDuck requires an export-then-query workflow:
+If you regularly need to query catalog metadata for analytics (data governance dashboards, catalog health reports, metadata search), RockLake requires an export-then-query workflow:
 
 ```bash
 # Export to NDJSON
-slateduck export --catalog s3://bucket/catalog/ --output catalog.ndjson
+rocklake export --catalog s3://bucket/catalog/ --output catalog.ndjson
 
 # Then query with DuckDB
 duckdb -c "SELECT * FROM read_ndjson('catalog.ndjson') WHERE ..."
@@ -178,13 +178,13 @@ If your organization already runs managed PostgreSQL (RDS, Cloud SQL, Azure Data
 - Incident runbooks
 - Team expertise
 
-Then the operational advantage of SlateDuck is small. Adding one more database to a fleet of databases you already manage is trivial. The marginal operational cost of "one more PostgreSQL database" is near zero for a team that already operates PostgreSQL.
+Then the operational advantage of RockLake is small. Adding one more database to a fleet of databases you already manage is trivial. The marginal operational cost of "one more PostgreSQL database" is near zero for a team that already operates PostgreSQL.
 
-**Decision threshold:** If adding a PostgreSQL database to your infrastructure takes less than 30 minutes of one-time setup and zero ongoing effort (because all the operational practices already exist), SlateDuck's simplicity advantage is negligible.
+**Decision threshold:** If adding a PostgreSQL database to your infrastructure takes less than 30 minutes of one-time setup and zero ongoing effort (because all the operational practices already exist), RockLake's simplicity advantage is negligible.
 
 ### You Need True Multi-Writer
 
-If multiple independent processes must write to the same catalog concurrently without coordination (and dataset partitioning is not acceptable), SlateDuck's single-writer model is a fundamental limitation.
+If multiple independent processes must write to the same catalog concurrently without coordination (and dataset partitioning is not acceptable), RockLake's single-writer model is a fundamental limitation.
 
 **Scenarios where this matters:**
 
@@ -194,11 +194,11 @@ If multiple independent processes must write to the same catalog concurrently wi
 
 **What to use instead:** PostgreSQL with row-level locking handles concurrent writes natively. DuckLake's PostgreSQL backend supports multiple concurrent connections writing to the same catalog.
 
-**Mitigation if you still want SlateDuck:** Dataset partitioning (one catalog per dataset, one writer per catalog) provides write parallelism across datasets. If your concurrent writes are to different datasets, this pattern eliminates the constraint with no loss of functionality.
+**Mitigation if you still want RockLake:** Dataset partitioning (one catalog per dataset, one writer per catalog) provides write parallelism across datasets. If your concurrent writes are to different datasets, this pattern eliminates the constraint with no loss of functionality.
 
 ## Workload Decision Matrix
 
-| Criterion | Favors SlateDuck | Favors PostgreSQL | Favors SQLite |
+| Criterion | Favors RockLake | Favors PostgreSQL | Favors SQLite |
 |-----------|-----------------|-------------------|---------------|
 | Team size | Small (no DBA) | Any | One developer |
 | Write frequency | < 100/min | > 100/min | Any |
@@ -218,8 +218,8 @@ If multiple independent processes must write to the same catalog concurrently wi
 You do not have to choose one backend for all use cases:
 
 - **Development:** SQLite (zero setup, instant)
-- **Staging:** SlateDuck (matches production architecture)
-- **Production:** SlateDuck or PostgreSQL (depending on your team's profile)
+- **Staging:** RockLake (matches production architecture)
+- **Production:** RockLake or PostgreSQL (depending on your team's profile)
 
 DuckDB's `ducklake` extension works identically against all backends. Your SQL queries, data files, and application code do not change when switching backends. Only the connection string changes.
 
@@ -227,5 +227,5 @@ DuckDB's `ducklake` extension works identically against all backends. Your SQL q
 
 - **[vs. Alternatives](vs-alternatives.md)** — Detailed performance numbers
 - **[Benchmarks](benchmarks.md)** — Reproduce the comparison yourself
-- **[Getting Started: Quickstart](../getting-started/quickstart.md)** — Try SlateDuck in 5 minutes
+- **[Getting Started: Quickstart](../getting-started/quickstart.md)** — Try RockLake in 5 minutes
 - **[Deployment: Configuration](../deployment/configuration.md)** — Production setup guidance

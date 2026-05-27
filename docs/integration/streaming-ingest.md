@@ -1,6 +1,6 @@
 # Streaming Ingest
 
-SlateDuck v0.10 adds a zero-infrastructure streaming ingest path from Kafka or
+RockLake v0.10 adds a zero-infrastructure streaming ingest path from Kafka or
 NATS directly into a DuckLake catalog backed by S3 — with exactly-once delivery
 semantics.
 
@@ -10,7 +10,7 @@ semantics.
 Kafka / NATS
      │
      ▼
-SlateDuckSink  ──── Parquet files ──►  S3 bucket
+RockLakeSink  ──── Parquet files ──►  S3 bucket
      │
      ▼ (one atomic catalog transaction)
 CatalogWriter::set_metadata  ← consumer offset
@@ -20,7 +20,7 @@ CatalogWriter::register_inlined_insert / register_data_file
 DuckLake snapshot committed
 ```
 
-The `SlateDuckSink` connects to the catalog write path (which may sit behind the
+The `RockLakeSink` connects to the catalog write path (which may sit behind the
 PG-wire sidecar via `pg-tide-relay`).  No external database is required.
 
 ## Application Metadata Key Namespace
@@ -56,7 +56,7 @@ The two-phase commit pattern is:
    offset key under `ducklake_metadata`.
 
 ```rust
-let sink = SlateDuckSink::new("pg_tide.orders-to-lake.offset")?;
+let sink = RockLakeSink::new("pg_tide.orders-to-lake.offset")?;
 
 // Phase 1: write Parquet files to S3 (handled by the ingest client)
 
@@ -92,12 +92,12 @@ If `expected_current_offset` is provided and does not match the stored value,
 `commit_batch` returns `CatalogError::InvalidInput`.  This prevents a lagging
 consumer from accidentally overwriting a more advanced offset.
 
-## Kafka → SlateDuck Example
+## Kafka → RockLake Example
 
 ```rust
-use slateduck_catalog::{SlateDuckSink, IngestRecord};
+use rocklake_catalog::{RockLakeSink, IngestRecord};
 
-let sink = SlateDuckSink::new("kafka.orders-topic.offset")?;
+let sink = RockLakeSink::new("kafka.orders-topic.offset")?;
 
 // In your Kafka consumer loop:
 for batch in kafka_consumer.poll() {
@@ -123,10 +123,10 @@ for batch in kafka_consumer.poll() {
 }
 ```
 
-## NATS → SlateDuck Example
+## NATS → RockLake Example
 
 ```rust
-let sink = SlateDuckSink::new("nats.events-subject.seq")?;
+let sink = RockLakeSink::new("nats.events-subject.seq")?;
 
 let mut sub = nats_client.subscribe("events.>").await?;
 while let Some(msg) = sub.next().await {
@@ -151,13 +151,13 @@ while let Some(msg) = sub.next().await {
 ## pg-tide-relay Integration
 
 [pg-tide](https://github.com/trickle-labs/pg-tide) v0.34.0 registers
-`SlateDuckSink` as a valid reverse-pipeline sink.  This allows the following
+`RockLakeSink` as a valid reverse-pipeline sink.  This allows the following
 patterns with no external database other than the SlateDB-backed catalog:
 
-- **Kafka → SlateDuck**
-- **NATS → SlateDuck**
-- **Redis Streams → SlateDuck**
-- **SQS → SlateDuck**
+- **Kafka → RockLake**
+- **NATS → RockLake**
+- **Redis Streams → RockLake**
+- **SQS → RockLake**
 
 The pg-tide SQL corpus is bounded by the patterns validated in v0.6 and v1.0.
 Key additional patterns:
@@ -201,7 +201,7 @@ If a consumer becomes confused about its offset:
 
 ## Performance
 
-In release mode, `SlateDuckSink::commit_batch` achieves:
+In release mode, `RockLakeSink::commit_batch` achieves:
 
 - **Throughput**: ≥ 10,000 records/sec to S3 (catalog commit path only)
 - **p95 commit latency**: ≤ 50ms
