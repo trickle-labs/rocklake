@@ -80,6 +80,9 @@ binding on every roadmap release below.
 | **v0.27.9 — DuckLake Advanced Metadata Validation** | End-to-end DuckDB tests for views, macros, tags, column tags, sort info, and partition info; DROP/ALTER cascade covering all metadata types; ALTER TABLE time-travel tests; imported existing DuckLake catalog support | Planning |
 | **v0.27.10 — DuckLake Compatibility CI** | Pin known-good DuckDB and DuckLake versions in CI; nightly optional jobs covering fresh, restart, and concurrent scenarios; durable compatibility corpus captured from real workloads; acceptance gates for "DuckDB and SlateDuck work perfectly together" | Planning |
 | **v0.27.11 — Wire & SQL Resiliency Hardening** | Implement five core resiliency mitigations: DataFusion virtual catalog engine, AST normalization visitor pipeline, dynamic session settings registry, automated PG-dialect fuzzing with SQLSTATE 0A000 conformance, and hardened sandbox timeouts for process-spawning tests | Planning |
+| **v0.27.12 — Containerized Multi-Backend Object Store Emulator Testing** | Implement containerized Google Cloud Storage and Azure Blob Storage emulator harnesses in `slateduck-testkit` (utilizing `fake-gcs-server` and Azurite); verify full catalog CRUD, transaction commit, and writer-epoch fencing across GCS and Azure in CI | Planning |
+| **v0.27.13 — Real Multi-Client & Multi-Driver Interoperability Certification** | Build automated multi-driver integration test suite executing catalog operations via `psql`, `pgcli`, `tokio-postgres` (Rust), `pg` (Node.js), `psycopg` (Python), and `pgx` (Go); verify binary format codes and metadata descriptions work seamlessly | Planning |
+| **v0.27.14 — Security Hardening & Protocol-Level Testing** | Verify timing-attack resistance for password verification under constant-time tests; integrate SCRAM-SHA-256 database authentication; implement automated SSL/TLS handshaking gates ensuring strict rejection of insecure protocols (TLS 1.1 or older) | Planning |
 | **v0.35.0 — Strategy C: Native DuckDB Extension** | Complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; `slateduck-ffi` C ABI already done; C++ catalog registration is the remaining gap | Planning |
 | **v0.40.0 — Full Ecosystem Compatibility Certification** | Release-blocking CI evidence for every `docs/compatibility.md` row: real DuckDB/DuckLake versions, SQL clients, Spark/Trino/Presto disposition, DataFusion, object stores, TLS/auth, Rust/MSRV, and release platforms | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
@@ -3519,6 +3522,83 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] PgWire `SessionState` stores generic settings dynamically and returns `"SET"` complete tags.
 - [ ] Fuzz test suite `tests/dialect_fuzz.rs` is active and asserts non-blocking behavior and SQLSTATE `0A000` conformance.
 - [ ] All external shell commands in `v0276_lifecycle_tests.rs` (especially `ducklake_available`) are run asynchronously under a 5-second `tokio::time::timeout` and do not block the suite on network constraints.
+
+---
+
+## v0.27.12 — Containerized Multi-Backend Object Store Emulator Testing
+
+> Close the cloud storage interoperability gaps by implementing full containerized integration test harnesses for Google Cloud Storage and Azure Blob Storage in `slateduck-testkit`. This ensures all CRUD operations, snapshot commits, read-after-write latencies, and epoch-based writer fencing are actively verified across all supported clouds.
+
+### Tasks
+
+#### GCS Emulator Harness
+- [ ] Implement `GcsEmulatorHarness` in `crates/slateduck-testkit/src/gcs_emulator_harness.rs` using `fsouza/fake-gcs-server`.
+- [ ] Configure `GoogleCloudStorageBuilder` in `slateduck-core` to resolve against local emulator port endpoints.
+- [ ] Add GCS integration tests gated behind `#[cfg(feature = "gcs-emulator")]` feature flags.
+
+#### Azure Emulator Harness
+- [ ] Implement `AzureEmulatorHarness` in `crates/slateduck-testkit/src/azure_emulator_harness.rs` using the Azurite (`mcr.microsoft.com/azure-storage/azurite`) Docker container.
+- [ ] Configure `MicrosoftAzureBuilder` in `slateduck-core` to resolve against the local emulator container.
+- [ ] Add Azure integration tests gated behind `#[cfg(feature = "azure-emulator")]` feature flags.
+
+#### Shared Catalog Backend Test Suite
+- [ ] Refactor existing MinIO catalog integration tests into a generic `catalog_backend_compat_test!` macro.
+- [ ] Run the unified suite—including open/create, snapshot commit, read-after-write, prefix listings, writer fencing, and post-crash recovery—across MinIO, GCS, and Azure emulators.
+- [ ] Wire emulator tests into scheduled and release-candidate CI pipelines.
+
+### Definition of Done
+- [ ] `GcsEmulatorHarness` compiles and successfully passes a GCS-backend catalog smoke test.
+- [ ] `AzureEmulatorHarness` compiles and successfully passes an Azure-backend catalog smoke test.
+- [ ] Shared backend integration tests pass reliably for GCS, Azure, and MinIO in CI without flaky failures.
+
+---
+
+## v0.27.13 — Real Multi-Client & Multi-Driver Interoperability Certification
+
+> Certify that SlateDuck's PG-Wire catalog facade is fully compliant with standard Postgres database clients, ORM drivers, and analytical applications.
+
+### Tasks
+
+#### Multi-Driver Smoke Test Suite
+- [ ] Create dedicated driver compatibility tests under `tests/driver_compat.rs`.
+- [ ] Verify basic schema list, table query, and inlined table INSERT/SELECT sequences using `tokio-postgres` (Rust), `pg` (Node.js), `psycopg` (Python), and `pgx` (Go).
+- [ ] Verify standard CLI compatibility using real executions of `psql` and `pgcli` loopback connections.
+
+#### BI Tool Facade Validation
+- [ ] Verify that PgWire row descriptions, field formatting, and session commands (`DISCARD ALL`, `SET client_min_messages`, etc.) map correctly to BI tool queries.
+- [ ] Create headless verification tests simulating DBeaver and Metabase metadata schema discovery and catalog scans.
+- [ ] Verify all driver parameter-negotiation handshakes run to completion without unsupported feature errors.
+
+### Definition of Done
+- [ ] `tests/driver_compat.rs` executes successfully against Rust, Node.js, Python, and Go postgres clients.
+- [ ] `psql` and `pgcli` CLI loopback connection tests pass.
+- [ ] DBeaver and Metabase schema scans return correct columns and formats without failing.
+
+---
+
+## v0.27.14 — Security Hardening & Protocol-Level Testing
+
+> Guarantee the cryptographic and authentication safety of the PG-Wire sidecar under strict compliance rules.
+
+### Tasks
+
+#### Timing Attack Verification
+- [ ] Implement automated timing attack verification in `crates/slateduck-pgwire/tests/security_tests.rs`.
+- [ ] Assert that credential evaluations (e.g. password checks) complete in constant-time using statistical timing analysis.
+
+#### Modern SCRAM Authentication
+- [ ] Implement and test `SCRAM-SHA-256` authentication exchange in the PgWire server.
+- [ ] Verify SCRAM-SHA-256 handshakes succeed against standard PG drivers and ORMs.
+
+#### Protocol-Level TLS Version Gates
+- [ ] Add explicit TLS protocol validation tests.
+- [ ] Verify that loopback clients attempting TLS 1.2 and TLS 1.3 connections are accepted.
+- [ ] Verify that loopback clients attempting insecure handshakes (TLS 1.1 or older) are strictly rejected at the socket layer.
+
+### Definition of Done
+- [ ] Timing analysis test proves constant-time password verification within tight statistical deviation boundaries.
+- [ ] SCRAM-SHA-256 authentication tests run and pass.
+- [ ] Insecure TLS handshakes (TLS 1.1 and below) are rejected under test, and TLS 1.2/1.3 are verified as accepted.
 
 ---
 
