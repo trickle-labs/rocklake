@@ -1,11 +1,11 @@
 # Security Guide
 
-This page describes the security configuration options for Rocklake's PG-Wire
+This page describes the security configuration options for RockLake's PG-Wire
 server, the risks of each configuration, and the recommended mitigations.
 
 ## Authentication
 
-Rocklake supports password-based authentication for PG-Wire connections.
+RockLake supports password-based authentication for PG-Wire connections.
 Authentication is configured via the `--auth-user` and `--auth-password` flags
 (or the `ROCKLAKE_AUTH_USER` / `ROCKLAKE_AUTH_PASSWORD` environment
 variables).
@@ -25,7 +25,7 @@ refuses all non-TLS connections (including plain-text clients).
 > **Warning:** Enabling password authentication without TLS transmits
 > credentials in plaintext over the network.
 
-When Rocklake starts with `--auth-user` set but without `--tls-cert` /
+When RockLake starts with `--auth-user` set but without `--tls-cert` /
 `--tls-key`, it emits a startup warning:
 
 ```

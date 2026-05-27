@@ -1,6 +1,6 @@
 # Development Setup
 
-This page walks you through setting up a complete local development environment for Rocklake. By the end, you will be able to build all crates, run the full test suite, start a local Rocklake instance, connect to it with DuckDB, and make changes with confidence that the test suite will catch regressions. The process is straightforward — if you can compile Rust code and have basic command-line skills, you can be contributing within 30 minutes.
+This page walks you through setting up a complete local development environment for RockLake. By the end, you will be able to build all crates, run the full test suite, start a local RockLake instance, connect to it with DuckDB, and make changes with confidence that the test suite will catch regressions. The process is straightforward — if you can compile Rust code and have basic command-line skills, you can be contributing within 30 minutes.
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@ This page walks you through setting up a complete local development environment 
 
 | Tool | Minimum Version | Purpose | Installation |
 |------|----------------|---------|-------------|
-| Rust toolchain | 1.80+ | Build Rocklake | [rustup.rs](https://rustup.rs) |
+| Rust toolchain | 1.80+ | Build RockLake | [rustup.rs](https://rustup.rs) |
 | Git | 2.30+ | Version control | System package manager |
 | C compiler | Any recent | Build native dependencies | Xcode CLI (macOS), gcc (Linux) |
 
@@ -54,7 +54,7 @@ cargo --version    # Should show corresponding cargo version
 | DuckDB | End-to-end protocol testing | Verifying DuckLake compatibility |
 | Python 3.10+ | Documentation builds | When editing docs |
 | MinIO CLI (mc) | Object storage inspection | Debugging storage issues |
-| psql | Manual protocol testing | Sending raw SQL to Rocklake |
+| psql | Manual protocol testing | Sending raw SQL to RockLake |
 
 **DuckDB installation:**
 
@@ -166,12 +166,12 @@ The complete test suite should pass on a fresh clone without any additional conf
 | Benchmark suite | 1–5 minutes | No (cargo bench) |
 | S3 integration tests | 30–120 seconds | No (requires S3) |
 
-## Running Rocklake Locally
+## Running RockLake Locally
 
-For end-to-end testing, run a local Rocklake instance:
+For end-to-end testing, run a local RockLake instance:
 
 ```bash
-# Start Rocklake with local filesystem storage
+# Start RockLake with local filesystem storage
 cargo run -- serve --catalog ./dev-catalog --bind 127.0.0.1:5432
 
 # In another terminal, connect with psql
@@ -198,7 +198,7 @@ docker run -p 9000:9000 -p 9001:9001 \
 mc alias set local http://localhost:9000 minioadmin minioadmin
 mc mb local/rocklake-dev
 
-# Start Rocklake pointing to MinIO
+# Start RockLake pointing to MinIO
 AWS_ACCESS_KEY_ID=minioadmin \
 AWS_SECRET_ACCESS_KEY=minioadmin \
 AWS_ENDPOINT_URL=http://localhost:9000 \
@@ -301,7 +301,7 @@ Open a Pull Request on GitHub. The PR template asks for:
 
 ## Documentation Development
 
-Rocklake's documentation is built with MkDocs Material:
+RockLake's documentation is built with MkDocs Material:
 
 ```bash
 # Install Python dependencies
@@ -357,7 +357,7 @@ pkg-config --modversion openssl
 
 ### Port Already in Use
 
-If Rocklake fails to start with "address already in use":
+If RockLake fails to start with "address already in use":
 
 ```bash
 # Check what is using port 5432
@@ -374,7 +374,7 @@ cargo run -- serve --catalog ./dev-catalog --bind 127.0.0.1:5433
 When you need to capture new SQL patterns from DuckDB:
 
 ```bash
-# Start Rocklake with verbose protocol logging
+# Start RockLake with verbose protocol logging
 RUST_LOG=rocklake_pgwire=trace cargo run -- serve --catalog ./dev-catalog --bind 127.0.0.1:5433
 
 # In another terminal, run DuckDB with the new operation
@@ -414,7 +414,7 @@ flamegraph -- ./target/release/rocklake serve --catalog ./bench-catalog
 
 ### Inspecting Storage Contents
 
-During development, it can be useful to inspect what Rocklake has written to storage:
+During development, it can be useful to inspect what RockLake has written to storage:
 
 ```bash
 # For local filesystem storage

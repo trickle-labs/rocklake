@@ -1,6 +1,6 @@
 # SlateDB Tuning
 
-Rocklake inherits its storage engine from [SlateDB](https://slatedb.io), an
+RockLake inherits its storage engine from [SlateDB](https://slatedb.io), an
 embedded LSM-tree key-value store that writes directly to object storage.
 This page documents the parameters exposed through `rocklake tune` and the
 `--cost-mode` flag, plus guidance on compaction tuning.

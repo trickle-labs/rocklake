@@ -1,6 +1,6 @@
 # Native Extension (Strategy C)
 
-The Rocklake native extension loads directly into DuckDB's process as a shared library, eliminating all network overhead. Catalog operations become in-process function calls with microsecond latency rather than network round-trips with millisecond latency. This is Strategy C in Rocklake's deployment model — the highest-performance option that trades process isolation for raw speed.
+The RockLake native extension loads directly into DuckDB's process as a shared library, eliminating all network overhead. Catalog operations become in-process function calls with microsecond latency rather than network round-trips with millisecond latency. This is Strategy C in RockLake's deployment model — the highest-performance option that trades process isolation for raw speed.
 
 Strategy C is ideal for interactive analytical workloads where every millisecond of catalog overhead is noticeable: dashboards with sub-second query expectations, notebook environments where schema exploration should feel instant, and embedded analytics applications where deploying a separate sidecar process adds unwanted complexity.
 
@@ -8,7 +8,7 @@ Strategy C is ideal for interactive analytical workloads where every millisecond
 
 ```mermaid
 graph LR
-    DuckDB[DuckDB Process] --> Ext[Rocklake Extension<br/>librocklake_ffi]
+    DuckDB[DuckDB Process] --> Ext[RockLake Extension<br/>librocklake_ffi]
     Ext --> SlateDB[SlateDB Library]
     SlateDB --> S3[Object Storage]
     DuckDB --> Parquet[Data Files in S3]
@@ -36,7 +36,7 @@ The extension is built from the `rocklake-ffi` crate, which wraps the full `rock
 ### Build Steps
 
 ```bash
-# Clone the Rocklake repository
+# Clone the RockLake repository
 git clone https://github.com/rocklake/rocklake.git
 cd rocklake
 
@@ -228,7 +228,7 @@ For batch workloads, Strategy B is perfectly fine. For interactive dashboards, S
 
 ## Limitations
 
-The native extension currently exposes a subset of Rocklake's capabilities:
+The native extension currently exposes a subset of RockLake's capabilities:
 
 | Capability | Extension (C) | Sidecar (B) |
 |-----------|---------------|-------------|
@@ -249,7 +249,7 @@ The native extension currently exposes a subset of Rocklake's capabilities:
 
 The extension targets DuckDB's extension ABI. When DuckDB releases a new ABI version (typically with major releases), the extension must be recompiled:
 
-| DuckDB ABI | Rocklake Extension Version | Compatible |
+| DuckDB ABI | RockLake Extension Version | Compatible |
 |-----------|---------------------------|------------|
 | v5000 | 0.8.x | ✅ |
 | v4000 | 0.7.x | ✅ |
@@ -282,7 +282,7 @@ SELECT rocklake_open('s3://bucket/catalog/');
 - **Latency is critical.** Interactive dashboards, notebook exploration, and real-time applications benefit from microsecond catalog access versus millisecond network round-trips.
 - **Single-user deployment.** A data scientist working locally or a batch job that only needs one DuckDB process does not benefit from a separate server.
 - **Minimizing moving parts.** No sidecar to deploy, no port to configure, no health checks to maintain — just a library loaded into DuckDB.
-- **Embedded analytics.** Applications that embed DuckDB can embed the Rocklake extension too, creating a self-contained analytical engine with no external dependencies beyond object storage.
+- **Embedded analytics.** Applications that embed DuckDB can embed the RockLake extension too, creating a self-contained analytical engine with no external dependencies beyond object storage.
 
 ### Choose Strategy B (PG-Wire) When:
 
@@ -297,7 +297,7 @@ SELECT rocklake_open('s3://bucket/catalog/');
 For some deployments, both strategies run simultaneously:
 
 ```
-Writer: Rocklake server (Strategy B) — accepts writes from ETL pipelines
+Writer: RockLake server (Strategy B) — accepts writes from ETL pipelines
 Readers: DuckDB with native extension (Strategy C) — fast reads for dashboards
 ```
 
@@ -323,7 +323,7 @@ DUCKDB_VERSION=1.1.0 cargo build --release -p rocklake-ffi
 
 ### "Cannot open catalog: writer conflict"
 
-The extension attempted to open the catalog in write mode, but another writer (the Rocklake server or another extension instance) already holds the lease. Open in read-only mode:
+The extension attempted to open the catalog in write mode, but another writer (the RockLake server or another extension instance) already holds the lease. Open in read-only mode:
 
 ```sql
 SELECT rocklake_open('s3://bucket/catalog/', read_only := true);
@@ -339,9 +339,9 @@ aws s3 ls s3://bucket/catalog/ --region us-east-1
 
 ### Extension Crashes DuckDB
 
-Because the extension runs in-process, a bug in Rocklake's code (panic, segfault, memory corruption) will crash the entire DuckDB process. This is the fundamental trade-off of Strategy C versus Strategy B. If you experience crashes:
+Because the extension runs in-process, a bug in RockLake's code (panic, segfault, memory corruption) will crash the entire DuckDB process. This is the fundamental trade-off of Strategy C versus Strategy B. If you experience crashes:
 
-1. Update to the latest Rocklake extension release
+1. Update to the latest RockLake extension release
 2. Check for known issues on GitHub
 3. Switch to Strategy B (PG-wire sidecar) as a workaround
 4. Report the crash with a reproduction case

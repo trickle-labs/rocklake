@@ -8,7 +8,7 @@ use pgwire::api::Type;
 use rocklake_core::rows::ColumnRow;
 use rocklake_sql::ParamValues;
 
-use crate::error::RocklakeError;
+use crate::error::RockLakeError;
 use crate::session::SessionState;
 use crate::types;
 
@@ -17,10 +17,10 @@ pub(super) fn require_param_u64(
     params: &ParamValues,
     idx: usize,
     name: &str,
-) -> Result<u64, RocklakeError> {
+) -> Result<u64, RockLakeError> {
     params
         .get_u64(idx)
-        .map_err(|_| RocklakeError::MissingParam {
+        .map_err(|_| RockLakeError::MissingParam {
             name: name.to_string(),
         })
 }

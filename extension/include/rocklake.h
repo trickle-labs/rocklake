@@ -1,5 +1,5 @@
 /**
- * rocklake.h — C ABI header for the Rocklake catalog FFI layer.
+ * rocklake.h — C ABI header for the RockLake catalog FFI layer.
  *
  * This header is consumed by the DuckDB extension to call into the Rust
  * catalog implementation. All types use stable C representations.
@@ -51,7 +51,7 @@ void rocklake_error_free(rocklake_error_t *err);
 
 /* ─── Opaque Catalog Handle ────────────────────────────────────────────── */
 
-typedef struct RocklakeCatalog rocklake_catalog_t;
+typedef struct RockLakeCatalog rocklake_catalog_t;
 
 /* ─── Result Types ─────────────────────────────────────────────────────── */
 

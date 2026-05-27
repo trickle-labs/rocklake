@@ -1,8 +1,8 @@
 # Crate Structure
 
-Rocklake is organized as a Rust workspace with seven crates, each with a distinct responsibility and clear dependency boundaries. This structure is not merely organizational — it enforces separation of concerns at the compilation level. A crate cannot accidentally depend on another crate's internals without an explicit dependency declaration in `Cargo.toml`. If a developer tries to import the PG-Wire server's session type from within the catalog store, the code will not compile. This makes architectural violations impossible rather than merely discouraged.
+RockLake is organized as a Rust workspace with seven crates, each with a distinct responsibility and clear dependency boundaries. This structure is not merely organizational — it enforces separation of concerns at the compilation level. A crate cannot accidentally depend on another crate's internals without an explicit dependency declaration in `Cargo.toml`. If a developer tries to import the PG-Wire server's session type from within the catalog store, the code will not compile. This makes architectural violations impossible rather than merely discouraged.
 
-This page documents each crate's purpose, its key modules, its dependencies, and the layering rules that govern the overall workspace structure. Understanding the crate structure is essential for contributors who want to know where new code belongs, and valuable for users who want to embed specific Rocklake functionality (like the catalog store) without pulling in the entire binary.
+This page documents each crate's purpose, its key modules, its dependencies, and the layering rules that govern the overall workspace structure. Understanding the crate structure is essential for contributors who want to know where new code belongs, and valuable for users who want to embed specific RockLake functionality (like the catalog store) without pulling in the entire binary.
 
 ## Workspace Dependency Graph
 
@@ -118,25 +118,25 @@ The arrows point from dependency to dependent. `rocklake-core` is the leaf (depe
 
 ## rocklake-datafusion
 
-**Role:** Apache DataFusion integration. Exposes Rocklake catalogs as DataFusion catalog providers, enabling query planning against Rocklake-managed tables from pure Rust applications.
+**Role:** Apache DataFusion integration. Exposes RockLake catalogs as DataFusion catalog providers, enabling query planning against RockLake-managed tables from pure Rust applications.
 
-**Why it exists:** DataFusion is a popular embeddable query engine for Rust applications. By providing a `CatalogProvider` implementation, any DataFusion-based application can read from Rocklake catalogs without going through the PG-Wire protocol or depending on DuckDB.
+**Why it exists:** DataFusion is a popular embeddable query engine for Rust applications. By providing a `CatalogProvider` implementation, any DataFusion-based application can read from RockLake catalogs without going through the PG-Wire protocol or depending on DuckDB.
 
 **Key modules:**
 
 | Module | Contents |
 |--------|----------|
-| `catalog_provider.rs` | `RocklakeCatalogProvider`: implements DataFusion's `CatalogProvider` trait. Lists schemas. |
-| `schema_provider.rs` | `RocklakeSchemaProvider`: implements `SchemaProvider`. Lists tables within a schema and provides `TableProvider` instances. |
-| `table_provider.rs` | `RocklakeTableProvider`: implements `TableProvider`. Returns the Arrow schema (mapped from DuckLake column types) and provides scan execution plans that read from the registered Parquet files. |
+| `catalog_provider.rs` | `RockLakeCatalogProvider`: implements DataFusion's `CatalogProvider` trait. Lists schemas. |
+| `schema_provider.rs` | `RockLakeSchemaProvider`: implements `SchemaProvider`. Lists tables within a schema and provides `TableProvider` instances. |
+| `table_provider.rs` | `RockLakeTableProvider`: implements `TableProvider`. Returns the Arrow schema (mapped from DuckLake column types) and provides scan execution plans that read from the registered Parquet files. |
 
 **External dependencies:** `rocklake-core`, `rocklake-catalog`, `datafusion`, `arrow`.
 
 ## rocklake-ffi
 
-**Role:** C/C++ foreign function interface for embedding Rocklake directly in DuckDB as a native extension. Provides `extern "C"` functions with C-compatible types and opaque handle-based resource management.
+**Role:** C/C++ foreign function interface for embedding RockLake directly in DuckDB as a native extension. Provides `extern "C"` functions with C-compatible types and opaque handle-based resource management.
 
-**Why it exists:** The FFI crate enables "Strategy C" — running Rocklake as a DuckDB extension rather than a network server. This eliminates network round-trips entirely, reducing catalog operation latency from milliseconds (network) to microseconds (in-process function calls).
+**Why it exists:** The FFI crate enables "Strategy C" — running RockLake as a DuckDB extension rather than a network server. This eliminates network round-trips entirely, reducing catalog operation latency from milliseconds (network) to microseconds (in-process function calls).
 
 **Key modules:**
 
@@ -180,7 +180,7 @@ The total workspace compiles in approximately 60–90 seconds on a modern machin
 
 ### `rocklake-sqlite-vfs` (removed in v0.27.2)
 
-An experimental crate that aimed to expose the Rocklake catalog via an
+An experimental crate that aimed to expose the RockLake catalog via an
 [SQLite VFS](https://www.sqlite.org/vfs.html) shim was removed in v0.27.2.
 The crate contained no functional code — it was a speculative placeholder
 without a planned near-term implementation. Retaining it inflated the

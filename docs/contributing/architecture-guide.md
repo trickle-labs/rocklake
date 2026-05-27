@@ -1,8 +1,8 @@
 # Architecture Guide for Contributors
 
-This page explains how the Rocklake codebase is organized, what each module does, where to find things, and most importantly — where to make changes for common types of contributions. It is written for someone who has just cloned the repository and needs to orient themselves quickly without reading every file in the project.
+This page explains how the RockLake codebase is organized, what each module does, where to find things, and most importantly — where to make changes for common types of contributions. It is written for someone who has just cloned the repository and needs to orient themselves quickly without reading every file in the project.
 
-Rocklake is a Cargo workspace with seven crates. Each crate has a single, well-defined responsibility. Dependencies flow in one direction (from higher-level crates to lower-level crates), which means you can understand any crate by understanding only what is below it in the dependency graph. You never need to understand the entire codebase to make a contribution — just the crate (or two) that your change touches.
+RockLake is a Cargo workspace with seven crates. Each crate has a single, well-defined responsibility. Dependencies flow in one direction (from higher-level crates to lower-level crates), which means you can understand any crate by understanding only what is below it in the dependency graph. You never need to understand the entire codebase to make a contribution — just the crate (or two) that your change touches.
 
 ## The Dependency Graph
 
@@ -114,7 +114,7 @@ Information flows from top (network layer) to bottom (persistence layer). Each c
 **The DataFusion integration.** Implements Apache DataFusion's `CatalogProvider` trait:
 
 - **Provider** (`catalog_provider.rs`): Implements `CatalogProvider` and `SchemaProvider`
-- **Table** (`table_provider.rs`): Wraps Rocklake tables as DataFusion `TableProvider`
+- **Table** (`table_provider.rs`): Wraps RockLake tables as DataFusion `TableProvider`
 
 **When to modify this crate:**
 - Supporting additional DataFusion query patterns
@@ -234,7 +234,7 @@ In `crates/rocklake-catalog/src/reader.rs` and `writer.rs`.
 
 ### Fixing a Wire Protocol Bug
 
-1. Reproduce the issue by connecting DuckDB to Rocklake and observing the error
+1. Reproduce the issue by connecting DuckDB to RockLake and observing the error
 2. Check `crates/rocklake-pgwire/src/handler.rs` for message handling
 3. Check `crates/rocklake-pgwire/src/session.rs` for session state
 4. Add a regression test in `crates/rocklake-pgwire/tests/`
@@ -270,7 +270,7 @@ Keys are encoded into stack buffers where possible. Values are decoded in place.
 
 ### Keep the SQL Surface Bounded
 
-Do not add support for arbitrary SQL. Every new statement must correspond to an actual DuckDB ducklake pattern (observed in the wire corpus). Rocklake implements DuckLake, not a general-purpose SQL engine.
+Do not add support for arbitrary SQL. Every new statement must correspond to an actual DuckDB ducklake pattern (observed in the wire corpus). RockLake implements DuckLake, not a general-purpose SQL engine.
 
 ### Tests Before Implementation
 

@@ -1,16 +1,16 @@
 # Logging
 
-Rocklake uses structured logging via Rust's `tracing` crate, providing configurable verbosity levels, JSON output for machine parsing, contextual spans for correlating related log entries, and per-crate granularity for targeted debugging. Logs are your primary diagnostic tool when something goes wrong — they tell you what the system was doing, what it encountered, and how it responded.
+RockLake uses structured logging via Rust's `tracing` crate, providing configurable verbosity levels, JSON output for machine parsing, contextual spans for correlating related log entries, and per-crate granularity for targeted debugging. Logs are your primary diagnostic tool when something goes wrong — they tell you what the system was doing, what it encountered, and how it responded.
 
 This page covers log level configuration, structured JSON output, per-module filtering, common diagnostic scenarios, log aggregation integration, and best practices for production logging.
 
 ## Log Output Destination
 
-Rocklake writes all log output to **stderr** by default. It does not write to files, rotate logs, or manage log lifecycle. This is intentional — your deployment platform (Docker, systemd, Kubernetes) handles log collection and rotation. Rocklake's responsibility is producing useful log entries; your platform's responsibility is storing and managing them.
+RockLake writes all log output to **stderr** by default. It does not write to files, rotate logs, or manage log lifecycle. This is intentional — your deployment platform (Docker, systemd, Kubernetes) handles log collection and rotation. RockLake's responsibility is producing useful log entries; your platform's responsibility is storing and managing them.
 
 ## Log Levels
 
-Rocklake uses five standard log levels, each with a clear contract about what it captures:
+RockLake uses five standard log levels, each with a clear contract about what it captures:
 
 | Level | Purpose | Volume | Production Use |
 |-------|---------|--------|----------------|
@@ -41,7 +41,7 @@ WARN rocklake_catalog: GC blocked by 3 pinned snapshots older than 90 days
 **Info** — normal operational events that mark important state transitions:
 
 ```
-INFO rocklake: Rocklake v0.8.0 starting
+INFO rocklake: RockLake v0.8.0 starting
 INFO rocklake: Storage: s3://my-bucket/catalog/
 INFO rocklake: Listening on 0.0.0.0:5432
 INFO rocklake: Writer epoch acquired: 42
@@ -101,7 +101,7 @@ The `--log-level` flag sets a global level. For per-module control, use `RUST_LO
 
 ### Module Names
 
-Rocklake's log targets correspond to its crate names:
+RockLake's log targets correspond to its crate names:
 
 | Target | Crate | What It Logs |
 |--------|-------|-------------|
@@ -176,7 +176,7 @@ cat /var/log/rocklake.json | jq 'select(.target == "rocklake_sql") | .fields.sta
 
 ## Request Correlation
 
-Rocklake uses tracing spans to correlate log entries belonging to the same operation:
+RockLake uses tracing spans to correlate log entries belonging to the same operation:
 
 ```json
 {"timestamp":"...","level":"DEBUG","message":"Prefix scan started","span":{"session_id":"abc123","query_id":"q-789"}}
@@ -263,7 +263,7 @@ services:
 Kubernetes captures stdout/stderr automatically. Use a DaemonSet log collector (Fluentd, Fluent Bit, Vector):
 
 ```yaml
-# Fluent Bit parser for Rocklake JSON logs
+# Fluent Bit parser for RockLake JSON logs
 [PARSER]
     Name        rocklake
     Format      json
@@ -276,7 +276,7 @@ Kubernetes captures stdout/stderr automatically. Use a DaemonSet log collector (
 When running under systemd, logs go to the journal automatically:
 
 ```bash
-# View Rocklake logs
+# View RockLake logs
 journalctl -u rocklake -f
 
 # Filter by level
@@ -338,7 +338,7 @@ The overhead comes from:
 A healthy startup produces exactly this sequence:
 
 ```
-INFO rocklake: Rocklake v0.8.0 starting
+INFO rocklake: RockLake v0.8.0 starting
 INFO rocklake: Storage: s3://my-bucket/catalog/
 INFO rocklake_catalog: Opening SlateDB at s3://my-bucket/catalog/
 INFO rocklake_catalog: Manifest loaded: format_version=1, latest_snapshot=1247
@@ -380,17 +380,17 @@ This suggests the instance needs more memory or the `max-sessions` limit should 
 
 ## Correlating Logs Across Components
 
-In a production deployment with multiple components (DuckDB clients, Rocklake server, object storage), correlating events across systems requires shared identifiers:
+In a production deployment with multiple components (DuckDB clients, RockLake server, object storage), correlating events across systems requires shared identifiers:
 
 | Component | Correlation Key | Where to Find |
 |-----------|----------------|---------------|
 | DuckDB | Connection ID | Client-side connection string |
-| Rocklake | Session ID | Logged with every session event |
+| RockLake | Session ID | Logged with every session event |
 | Object Storage | Request ID | S3 response headers (x-amz-request-id) |
 | Load Balancer | Trace ID | X-Request-ID header (if configured) |
 
 When investigating a slow query reported by a DuckDB user:
-1. Get the session ID from Rocklake logs (correlate by timestamp and client IP)
+1. Get the session ID from RockLake logs (correlate by timestamp and client IP)
 2. Filter all logs for that session: `session_id=abc123`
 3. Look for storage latency spikes in that session's operations
 4. If storage was slow, use the S3 request ID from debug logs to check CloudTrail

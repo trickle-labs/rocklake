@@ -245,7 +245,7 @@ async fn ducklake_sort_info_select_returns_correct_schema() {
 
 // ── 6. Imported catalog smoke test ───────────────────────────────────────────
 
-/// Verify that a freshly initialised Rocklake catalog has readable metadata
+/// Verify that a freshly initialised RockLake catalog has readable metadata
 /// tables — this models an externally-attached catalog scenario.
 #[tokio::test]
 async fn imported_catalog_smoke_test() {
@@ -312,7 +312,7 @@ async fn view_lifecycle_via_duckdb() {
     }
 
     // When DuckDB is available, verify that CREATE VIEW writes to ducklake_view.
-    // The full lifecycle test would require a running Rocklake PgWire server;
+    // The full lifecycle test would require a running RockLake PgWire server;
     // here we verify the schema is correct for the response.
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;

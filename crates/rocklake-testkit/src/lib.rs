@@ -1,4 +1,4 @@
-//! rocklake-testkit: shared test utilities for Rocklake integration tests.
+//! rocklake-testkit: shared test utilities for RockLake integration tests.
 //!
 //! ## Modules
 //! - `clock` — `DeterministicClock`: wraps `tokio::time::pause()` for
@@ -12,7 +12,7 @@
 //! - `pgwire_harness` — `PgWireHarness`: spins up a PG-Wire server on a
 //!   random port for client compatibility tests (Tier 5+).
 //!
-//! All timing tests in Rocklake use `DeterministicClock` so that:
+//! All timing tests in RockLake use `DeterministicClock` so that:
 //! - Tests run in constant CI time regardless of hardware.
 //! - Flaky sleep-based assertions are eliminated.
 

@@ -2,7 +2,7 @@
 
 The inspect command provides a comprehensive summary of a catalog's internal state without requiring a DuckDB connection. It reads system keys, entity counts, snapshot metadata, and storage configuration directly from SlateDB, presenting them in a human-readable format. Inspect is the first tool you should reach for when diagnosing operational issues, verifying deployments, or simply understanding what a catalog contains.
 
-Think of inspect as Rocklake's equivalent of `SHOW STATUS` in MySQL or `pg_stat_activity` in PostgreSQL — a quick health check that reveals the catalog's vital signs.
+Think of inspect as RockLake's equivalent of `SHOW STATUS` in MySQL or `pg_stat_activity` in PostgreSQL — a quick health check that reveals the catalog's vital signs.
 
 ## Basic Usage
 
@@ -25,7 +25,7 @@ rocklake inspect --catalog s3://bucket/catalog/ --at-snapshot 500
 ### Human-Readable Format
 
 ```
-Rocklake Catalog Inspection
+RockLake Catalog Inspection
 ════════════════════════════════════════════════════════════════
 Storage:           s3://my-bucket/lakehouse/catalog/
 Format Version:    1
@@ -249,7 +249,7 @@ echo "rocklake.data_files:$(echo $OUTPUT | jq '.counts.data_files')|g" | nc -u -
 
 ### Deployment Verification
 
-After deploying a new Rocklake instance:
+After deploying a new RockLake instance:
 
 ```bash
 # Verify the new instance can read the catalog
@@ -355,7 +355,7 @@ AGE=$((NOW - LATEST_EPOCH))
 if [ "$AGE" -gt 3600 ]; then
     curl -X POST "$SLACK_WEBHOOK" \
         -H 'Content-Type: application/json' \
-        -d "{\"text\":\"⚠️ Rocklake catalog stale: last snapshot was ${AGE}s ago\"}"
+        -d "{\"text\":\"⚠️ RockLake catalog stale: last snapshot was ${AGE}s ago\"}"
 fi
 ```
 

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This page provides a comprehensive guide to diagnosing and resolving problems with Rocklake. It is organized by symptom — start with what you observe, then follow the diagnostic steps to identify root causes and apply fixes.
+This page provides a comprehensive guide to diagnosing and resolving problems with RockLake. It is organized by symptom — start with what you observe, then follow the diagnostic steps to identify root causes and apply fixes.
 
 ## Quick Diagnostic Checklist
 
@@ -27,15 +27,15 @@ If `inspect` succeeds, the catalog is healthy and the problem is likely on the c
 
 **Possible Causes:**
 
-1. Rocklake is not running
-2. Rocklake is listening on a different address or port
+1. RockLake is not running
+2. RockLake is listening on a different address or port
 3. A firewall or security group is blocking the connection
 4. The DuckDB extension is using the wrong host/port
 
 **Diagnostic Steps:**
 
 ```bash
-# Is Rocklake running?
+# Is RockLake running?
 ps aux | grep rocklake
 
 # What address is it listening on?
@@ -46,29 +46,29 @@ lsof -i -P | grep rocklake
 # Can we reach the port from the client?
 nc -zv <hostname> 5432
 
-# Check Rocklake's startup log for the actual bind address
+# Check RockLake's startup log for the actual bind address
 rocklake logs --last 10 | grep "listening"
 ```
 
 **Solutions:**
 
-- If Rocklake is not running, start it: `rocklake serve --catalog s3://bucket/catalog/`
+- If RockLake is not running, start it: `rocklake serve --catalog s3://bucket/catalog/`
 - If it is listening on `127.0.0.1`, change to `0.0.0.0` for remote access: `--bind 0.0.0.0:5432`
 - If a security group blocks port 5432, add an inbound rule for the client's IP range
 - Verify the DuckDB connection string matches: `ATTACH 'dbname=ducklake host=<correct-host> port=<correct-port>' AS lake (TYPE ducklake)`
 
 ### "WriterFenced" Error (SQLSTATE 57P04)
 
-**Symptom:** DuckDB queries fail with `WriterFenced` error. Rocklake logs show "fenced by newer epoch."
+**Symptom:** DuckDB queries fail with `WriterFenced` error. RockLake logs show "fenced by newer epoch."
 
 **What This Means:**
 
-Another Rocklake instance has taken over the writer role by incrementing the writer epoch in SlateDB. The fenced instance can no longer write — it is permanently blocked until restarted.
+Another RockLake instance has taken over the writer role by incrementing the writer epoch in SlateDB. The fenced instance can no longer write — it is permanently blocked until restarted.
 
 **Common Causes:**
 
 1. **Intentional failover.** You deployed a new instance and the old one was fenced. Expected behavior.
-2. **Duplicate processes.** Two Rocklake processes are pointing at the same catalog storage path.
+2. **Duplicate processes.** Two RockLake processes are pointing at the same catalog storage path.
 3. **Kubernetes pod restart.** A crashed pod restarted and the new pod fenced the old one (which hadn't fully terminated yet).
 4. **Misconfigured health check.** The orchestrator killed a "unhealthy" instance and started a replacement.
 
@@ -78,7 +78,7 @@ Another Rocklake instance has taken over the writer role by incrementing the wri
 # Check the current epoch
 rocklake inspect --catalog s3://bucket/catalog/ --format json | jq '.writer_epoch'
 
-# Check how many Rocklake processes exist
+# Check how many RockLake processes exist
 ps aux | grep rocklake | grep -v grep
 
 # In Kubernetes
@@ -93,20 +93,20 @@ kubectl get pods -l app=rocklake
 
 ### "FormatVersionMismatch" on Startup
 
-**Symptom:** Rocklake refuses to start, logging `FormatVersionMismatch: catalog requires format version 2, binary supports version 1`.
+**Symptom:** RockLake refuses to start, logging `FormatVersionMismatch: catalog requires format version 2, binary supports version 1`.
 
 **What This Means:**
 
-The catalog was created or migrated by a newer version of Rocklake that uses a format version your current binary does not understand.
+The catalog was created or migrated by a newer version of RockLake that uses a format version your current binary does not understand.
 
 **Solutions:**
 
-- **Upgrade** to the Rocklake version that created the catalog (check release notes for format version changes)
+- **Upgrade** to the RockLake version that created the catalog (check release notes for format version changes)
 - **If you recently downgraded:** you cannot downgrade across format version boundaries without restoring from an NDJSON backup taken before the upgrade
 
 ### "ObjectStore: 403 Forbidden"
 
-**Symptom:** Rocklake fails to start or intermittently fails with `ObjectStore: 403 Forbidden`.
+**Symptom:** RockLake fails to start or intermittently fails with `ObjectStore: 403 Forbidden`.
 
 **Cause:** Insufficient IAM permissions for the configured storage path.
 
@@ -153,7 +153,7 @@ S3 is throttling requests. S3 supports 3,500 PUT/COPY/POST/DELETE and 5,500 GET/
 
 **Solutions:**
 
-- Rocklake retries automatically with exponential backoff (usually self-resolving)
+- RockLake retries automatically with exponential backoff (usually self-resolving)
 - If sustained: reduce concurrent readers, or restructure the catalog path to spread across prefixes
 - Consider S3 Express One Zone for higher throughput
 
@@ -246,7 +246,7 @@ rocklake repair --catalog s3://bucket/catalog/
 
 1. Restore from the most recent NDJSON backup
 2. If no backup: check if object storage versioning is enabled (you may recover previous SST files)
-3. Contact the Rocklake maintainers with the verify output
+3. Contact the RockLake maintainers with the verify output
 
 ### Unexpected Empty Results
 

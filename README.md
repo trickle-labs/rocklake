@@ -1,4 +1,4 @@
-# Rocklake
+# RockLake
 
 **Your entire lakehouse — data, catalog, and streaming pipeline — in a single S3 bucket. No database server required.**
 
@@ -8,27 +8,27 @@
 
 ---
 
-![Rocklake](images/logo.png)
+![RockLake](images/logo.png)
 
-## What Is Rocklake?
+## What Is RockLake?
 
-Modern data teams are drowning in infrastructure. You want a lakehouse — fast analytical queries over Parquet files in object storage — but every existing solution demands a zoo of running services: a managed PostgreSQL for catalog metadata, a Kafka cluster for streaming, a Flink or Spark job for maintaining fresh aggregates, and a dedicated database to serve the results. Rocklake makes the entire zoo disappear.
+Modern data teams are drowning in infrastructure. You want a lakehouse — fast analytical queries over Parquet files in object storage — but every existing solution demands a zoo of running services: a managed PostgreSQL for catalog metadata, a Kafka cluster for streaming, a Flink or Spark job for maintaining fresh aggregates, and a dedicated database to serve the results. RockLake makes the entire zoo disappear.
 
-Rocklake is a catalog backend for [DuckLake](https://ducklake.select/), the elegant open-source lakehouse format from the DuckDB team. Instead of routing catalog metadata through an external database, Rocklake stores it directly in [SlateDB](https://slatedb.io/) — a battle-hardened, LSM-based embedded key-value store that runs entirely inside object storage. The result is a lakehouse where **both your Parquet data files and your catalog live in the same S3 bucket**, connected to DuckDB over the standard PostgreSQL wire protocol, requiring absolutely no servers beyond lightweight stateless binaries. Point at a bucket, start the sidecar, and you are querying within seconds.
+RockLake is a catalog backend for [DuckLake](https://ducklake.select/), the elegant open-source lakehouse format from the DuckDB team. Instead of routing catalog metadata through an external database, RockLake stores it directly in [SlateDB](https://slatedb.io/) — a battle-hardened, LSM-based embedded key-value store that runs entirely inside object storage. The result is a lakehouse where **both your Parquet data files and your catalog live in the same S3 bucket**, connected to DuckDB over the standard PostgreSQL wire protocol, requiring absolutely no servers beyond lightweight stateless binaries. Point at a bucket, start the sidecar, and you are querying within seconds.
 
 
 ---
 
-## Why Rocklake?
+## Why RockLake?
 
 ### Truly Serverless — All the Way Down
 
-There is no "catalog database" to operate. The entire durable state of your catalog — schemas, tables, columns, snapshots, and data-file references — is stored as SlateDB key-value pairs that live as ordinary objects in S3 (or GCS, Azure Blob Storage, or even the local filesystem for development). Every Rocklake binary is stateless. If it crashes, you restart it; no recovery ceremony, no WAL replays, no replica promotion. The ground truth is always in object storage, and it always has been.
+There is no "catalog database" to operate. The entire durable state of your catalog — schemas, tables, columns, snapshots, and data-file references — is stored as SlateDB key-value pairs that live as ordinary objects in S3 (or GCS, Azure Blob Storage, or even the local filesystem for development). Every RockLake binary is stateless. If it crashes, you restart it; no recovery ceremony, no WAL replays, no replica promotion. The ground truth is always in object storage, and it always has been.
 
 
 ### Immutability as the Load-Bearing Foundation
 
-Rocklake makes a binding architectural promise: **committed facts are never physically deleted by normal operation.** Every schema change, every table creation, every file addition, every checkpoint advance is recorded as a versioned fact. The default `rocklake gc` command only advances the query-visibility floor — it never deletes bytes. Physical deletion is reserved for the explicit, audited `rocklake excise` command, which exists for compliance erasure and is designed to be rare. This immutability is not a safety blanket bolted on afterward; it is the principle that makes time travel trivial and read scale-out free.
+RockLake makes a binding architectural promise: **committed facts are never physically deleted by normal operation.** Every schema change, every table creation, every file addition, every checkpoint advance is recorded as a versioned fact. The default `rocklake gc` command only advances the query-visibility floor — it never deletes bytes. Physical deletion is reserved for the explicit, audited `rocklake excise` command, which exists for compliance erasure and is designed to be rare. This immutability is not a safety blanket bolted on afterward; it is the principle that makes time travel trivial and read scale-out free.
 
 ### Time Travel That Actually Works
 
@@ -42,7 +42,7 @@ Because catalog keys are stable once written, an **unbounded number of stateless
 
 ## Architecture at a Glance
 
-Rocklake operates as three logically separable planes, all sharing the same SlateDB/object-store substrate:
+RockLake operates as three logically separable planes, all sharing the same SlateDB/object-store substrate:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -70,7 +70,7 @@ Rocklake operates as three logically separable planes, all sharing the same Slat
                       └───────────────────────────────────────┘
 ```
 
-DuckDB speaks to Rocklake using the PostgreSQL wire protocol — the same protocol it already uses for PostgreSQL-backed DuckLake. No changes to DuckDB, no patched extensions, no custom drivers.
+DuckDB speaks to RockLake using the PostgreSQL wire protocol — the same protocol it already uses for PostgreSQL-backed DuckLake. No changes to DuckDB, no patched extensions, no custom drivers.
 
 The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements exactly the finite set of SQL shapes that DuckDB's `ducklake` extension emits. The vocabulary is small, the conformance test suite is exhaustive, and the security profile is tight.
 
@@ -112,7 +112,7 @@ cargo build --release
 INSTALL ducklake;
 LOAD ducklake;
 
--- Attach Rocklake as your catalog backend
+-- Attach RockLake as your catalog backend
 ATTACH 'ducklake:postgres:host=localhost port=5432 dbname=rocklake' AS my_lake (DATA_PATH '/tmp/ducklake');
 USE my_lake;
 
@@ -127,7 +127,7 @@ SELECT * FROM events;
 
 ## Workspace Layout
 
-Rocklake is a Cargo workspace of focused crates, each with a clear responsibility boundary:
+RockLake is a Cargo workspace of focused crates, each with a clear responsibility boundary:
 
 | Crate | Purpose |
 |---|---|
@@ -145,11 +145,11 @@ Rocklake is a Cargo workspace of focused crates, each with a clear responsibilit
 
 ## Design Principles
 
-Rocklake is an opinionated piece of software. It makes strong bets and does not try to be all things to all people. These bets are worth stating plainly:
+RockLake is an opinionated piece of software. It makes strong bets and does not try to be all things to all people. These bets are worth stating plainly:
 
 **Immutability everywhere.** No data, intermediate or final, is ever overwritten. State advances by appending new immutable batches; obsolete data is reclaimed only by retention-bounded compaction. This makes time travel and read scale-out fall out of the same substrate for free.
 
-**Stateless workers.** Every Rocklake binary is designed to be killed and restarted at any time with no ceremony. All durable progress lives in the catalog in object storage. Killing a process loses no progress.
+**Stateless workers.** Every RockLake binary is designed to be killed and restarted at any time with no ceremony. All durable progress lives in the catalog in object storage. Killing a process loses no progress.
 
 
 

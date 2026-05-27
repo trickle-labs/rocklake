@@ -1,8 +1,8 @@
 # Your First Lakehouse
 
-The quickstart guides showed you how to start Rocklake and create a table. But a single table is not a lakehouse. A lakehouse is an evolving system — schemas change as business requirements shift, data accumulates across dozens or hundreds of tables, multiple teams query the same catalog concurrently, and operational tasks like garbage collection and inspection become part of the daily rhythm. This tutorial builds a realistic lakehouse from scratch and exercises every major feature of Rocklake along the way.
+The quickstart guides showed you how to start RockLake and create a table. But a single table is not a lakehouse. A lakehouse is an evolving system — schemas change as business requirements shift, data accumulates across dozens or hundreds of tables, multiple teams query the same catalog concurrently, and operational tasks like garbage collection and inspection become part of the daily rhythm. This tutorial builds a realistic lakehouse from scratch and exercises every major feature of RockLake along the way.
 
-By the end of this guide, you will have created a multi-table schema, loaded data, evolved the schema over time, performed time travel queries, run garbage collection, inspected internal state, and configured retention policies. More importantly, you will have developed the mental model of how Rocklake behaves in production — not as a toy with one table, but as a system managing real-world complexity.
+By the end of this guide, you will have created a multi-table schema, loaded data, evolved the schema over time, performed time travel queries, run garbage collection, inspected internal state, and configured retention policies. More importantly, you will have developed the mental model of how RockLake behaves in production — not as a toy with one table, but as a system managing real-world complexity.
 
 ## The Scenario
 
@@ -16,7 +16,7 @@ Over the next several months, the business will evolve: new columns will be need
 
 ## Setting Up the Environment
 
-Start Rocklake with local storage for this tutorial. Everything you learn here applies identically to cloud storage — the only difference is the `--storage` path:
+Start RockLake with local storage for this tutorial. Everything you learn here applies identically to cloud storage — the only difference is the `--storage` path:
 
 ```bash
 rocklake serve --catalog file:///tmp/techmart-lakehouse --bind 127.0.0.1:5432
@@ -93,7 +93,7 @@ You should see 6 snapshots, each representing a state transition in the catalog.
 
 ### What Happened Internally
 
-When you created `raw.customers`, Rocklake:
+When you created `raw.customers`, RockLake:
 
 1. Allocated a unique `schema_id` for `raw` and a unique `table_id` for `customers`
 2. Created column rows for each of the 5 columns, each with a unique `column_id`
@@ -144,7 +144,7 @@ INSERT INTO raw.order_items VALUES
     (8, 1005, 101, 1, 89.99);
 ```
 
-Each INSERT causes DuckDB to write one or more Parquet files and register them with Rocklake. The catalog now stores not just the schema but also the metadata for each data file: its path, row count, file size, and column-level statistics (min/max values) that enable predicate pushdown during query planning.
+Each INSERT causes DuckDB to write one or more Parquet files and register them with RockLake. The catalog now stores not just the schema but also the metadata for each data file: its path, row count, file size, and column-level statistics (min/max values) that enable predicate pushdown during query planning.
 
 Let's verify the data is accessible:
 
@@ -201,7 +201,7 @@ UPDATE raw.products SET stock_quantity = 0 WHERE product_id = 105;
 
 ### What Happened to the Schema
 
-Let's look at what Rocklake did internally during these schema changes:
+Let's look at what RockLake did internally during these schema changes:
 
 - **ADD COLUMN** created a new `ColumnRow` with `begin_snapshot = current`. Queries at older snapshots do not see this column because their snapshot ID is less than the column's `begin_snapshot`.
 
@@ -354,7 +354,7 @@ If you also want to reclaim storage (optional and irreversible):
 rocklake excise --catalog file:///tmp/techmart-lakehouse
 ```
 
-Excision deletes key-value pairs from SlateDB that are no longer needed — old versions of columns that have been superseded, data file entries that have been deleted, and snapshot records older than the horizon. This is the only destructive operation in Rocklake, and it requires explicit invocation.
+Excision deletes key-value pairs from SlateDB that are no longer needed — old versions of columns that have been superseded, data file entries that have been deleted, and snapshot records older than the horizon. This is the only destructive operation in RockLake, and it requires explicit invocation.
 
 ### Pinning Important Snapshots
 
@@ -378,7 +378,7 @@ rocklake inspect --catalog file:///tmp/techmart-lakehouse
 Expected output (approximately):
 
 ```
-Rocklake Catalog Inspector
+RockLake Catalog Inspector
 ============================
 Storage:        file:///tmp/techmart-lakehouse
 Format version: 8
@@ -405,7 +405,7 @@ The catalog for this tutorial — with 4 tables, 2 views, 21 snapshots, and all 
 
 ## What You Have Learned
 
-This tutorial exercised the complete lifecycle of a Rocklake lakehouse:
+This tutorial exercised the complete lifecycle of a RockLake lakehouse:
 
 1. **Schema design** — Creating schemas to organize tables by domain (raw vs. analytics)
 2. **Table creation** — Each DDL creates a new snapshot, tables are fully versioned from birth
@@ -418,11 +418,11 @@ This tutorial exercised the complete lifecycle of a Rocklake lakehouse:
 9. **Snapshot pinning** — Protect important snapshots from GC for compliance or audit requirements
 10. **Inspection** — Full visibility into catalog internals at any time
 
-The key mental model: Rocklake is an append-only catalog where every mutation creates a new version. History accumulates naturally. You choose how much history to keep through retention policies. Readers can query any retained snapshot without coordination with the writer.
+The key mental model: RockLake is an append-only catalog where every mutation creates a new version. History accumulates naturally. You choose how much history to keep through retention policies. Readers can query any retained snapshot without coordination with the writer.
 
 ## Next Steps
 
-You now have a solid foundation for working with Rocklake. Here are the recommended paths depending on your role:
+You now have a solid foundation for working with RockLake. Here are the recommended paths depending on your role:
 
 - **For architects:** [Concepts](../concepts/index.md) — Deep understanding of immutability, MVCC, time travel, and scale-out
 - **For operators:** [Operations](../operations/index.md) — Production operational procedures for GC, monitoring, backup, and troubleshooting

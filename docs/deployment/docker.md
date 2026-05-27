@@ -1,12 +1,12 @@
 # Docker Deployment
 
-Running Rocklake in Docker provides process isolation, reproducible environments, and seamless integration with container orchestration platforms. Because Rocklake is a single stateless binary with no local storage requirements, it is an ideal containerization candidate — the container needs no volumes, no init systems, and no sidecar processes. The official Docker image is minimal (based on `distroless/static`) and contains only the Rocklake binary plus root CA certificates for TLS to object storage.
+Running RockLake in Docker provides process isolation, reproducible environments, and seamless integration with container orchestration platforms. Because RockLake is a single stateless binary with no local storage requirements, it is an ideal containerization candidate — the container needs no volumes, no init systems, and no sidecar processes. The official Docker image is minimal (based on `distroless/static`) and contains only the RockLake binary plus root CA certificates for TLS to object storage.
 
 This page covers everything from a one-line quick start to production-ready Docker Compose stacks, custom image builds, security hardening, and operational patterns.
 
 ## Official Image
 
-The official Rocklake container image is published to GitHub Container Registry:
+The official RockLake container image is published to GitHub Container Registry:
 
 ```
 ghcr.io/rocklake/rocklake:latest
@@ -24,7 +24,7 @@ Image characteristics:
 
 ## Quick Start
 
-The simplest possible Docker deployment — connect Rocklake to an S3 bucket:
+The simplest possible Docker deployment — connect RockLake to an S3 bucket:
 
 ```bash
 docker run -d \
@@ -42,7 +42,7 @@ Verify it is running:
 
 ```bash
 docker logs rocklake
-# INFO  Rocklake v0.8.0 starting
+# INFO  RockLake v0.8.0 starting
 # INFO  Storage: s3://my-bucket/catalog/
 # INFO  Listening on 0.0.0.0:5432
 
@@ -52,7 +52,7 @@ duckdb -c "ATTACH 'ducklake:host=localhost;port=5432' AS lake;"
 
 ## Docker Compose: Development Stack
 
-For local development, use Docker Compose to run Rocklake with MinIO (S3-compatible local storage). This gives you a fully functional lakehouse environment without any cloud credentials:
+For local development, use Docker Compose to run RockLake with MinIO (S3-compatible local storage). This gives you a fully functional lakehouse environment without any cloud credentials:
 
 ```yaml
 services:
@@ -274,7 +274,7 @@ docker push my-registry/rocklake:0.8.0
 
 ## Health Checks
 
-Rocklake accepts PostgreSQL protocol connections, so standard PostgreSQL health check tools work:
+RockLake accepts PostgreSQL protocol connections, so standard PostgreSQL health check tools work:
 
 ```yaml
 healthcheck:
@@ -299,7 +299,7 @@ Or install a small binary health checker during the build.
 
 ## Graceful Shutdown
 
-Rocklake handles `SIGTERM` (sent by `docker stop`) gracefully:
+RockLake handles `SIGTERM` (sent by `docker stop`) gracefully:
 
 1. Stops accepting new connections
 2. Waits for in-flight transactions to complete (up to 30 seconds)
@@ -328,7 +328,7 @@ USER nonroot:nonroot
 
 ### Read-Only Filesystem
 
-Rocklake does not write to local disk, so you can mount the filesystem read-only:
+RockLake does not write to local disk, so you can mount the filesystem read-only:
 
 ```yaml
 services:
@@ -340,7 +340,7 @@ services:
 
 ### No Capabilities
 
-Drop all Linux capabilities since Rocklake needs none:
+Drop all Linux capabilities since RockLake needs none:
 
 ```yaml
 services:
@@ -385,7 +385,7 @@ Useful for bare-metal deployments where Docker provides isolation but not networ
 
 ### Bridge Networking with DNS
 
-Within a Docker Compose network, other containers reach Rocklake by service name:
+Within a Docker Compose network, other containers reach RockLake by service name:
 
 ```sql
 -- From another container in the same Compose stack
@@ -394,7 +394,7 @@ ATTACH 'ducklake:host=rocklake;port=5432' AS lake;
 
 ### Reverse Proxy (Nginx / Traefik)
 
-Rocklake uses the PostgreSQL wire protocol, which is TCP-based. Configure TCP proxying (not HTTP):
+RockLake uses the PostgreSQL wire protocol, which is TCP-based. Configure TCP proxying (not HTTP):
 
 ```yaml
 # Traefik TCP router example
@@ -432,7 +432,7 @@ services:
 
 ## Upgrading
 
-To upgrade Rocklake in Docker:
+To upgrade RockLake in Docker:
 
 ```bash
 # Pull new version

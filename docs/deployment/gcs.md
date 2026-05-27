@@ -1,12 +1,12 @@
 # Deploying on Google Cloud Storage
 
-Google Cloud Storage (GCS) is a natural choice for Rocklake deployments running on Google Cloud Platform. It provides eleven-nines durability, deep integration with GCP's IAM system, competitive pricing, and consistent performance across regions. This guide covers everything from creating your bucket to configuring authentication in Cloud Run, GKE, or on bare Compute Engine instances — including the authentication subtleties that trip up most first-time GCS users.
+Google Cloud Storage (GCS) is a natural choice for RockLake deployments running on Google Cloud Platform. It provides eleven-nines durability, deep integration with GCP's IAM system, competitive pricing, and consistent performance across regions. This guide covers everything from creating your bucket to configuring authentication in Cloud Run, GKE, or on bare Compute Engine instances — including the authentication subtleties that trip up most first-time GCS users.
 
 ## Prerequisites
 
 - A Google Cloud project with billing enabled
 - The `gcloud` CLI installed and authenticated (`gcloud auth login`)
-- Rocklake binary or Docker image
+- RockLake binary or Docker image
 - IAM permissions to create GCS buckets and service accounts (typically `roles/storage.admin` and `roles/iam.admin`)
 
 ## Creating the Bucket
@@ -46,12 +46,12 @@ GCS uses a different IAM model from AWS: permissions are granted as predefined r
 
 ### Creating a Service Account
 
-Never use your personal credentials or the default Compute Engine service account for Rocklake in production. Create a dedicated service account:
+Never use your personal credentials or the default Compute Engine service account for RockLake in production. Create a dedicated service account:
 
 ```bash
 # Create the service account
 gcloud iam service-accounts create rocklake-catalog \
-  --display-name="Rocklake Catalog Service Account" \
+  --display-name="RockLake Catalog Service Account" \
   --project=my-project
 
 # The full email will be: rocklake-catalog@my-project.iam.gserviceaccount.com
@@ -59,7 +59,7 @@ gcloud iam service-accounts create rocklake-catalog \
 
 ### Granting Bucket Access
 
-Rocklake needs to read and write SlateDB's SST files and WAL segments. The `roles/storage.objectAdmin` role on the catalog prefix is the appropriate permission:
+RockLake needs to read and write SlateDB's SST files and WAL segments. The `roles/storage.objectAdmin` role on the catalog prefix is the appropriate permission:
 
 ```bash
 # Grant access to the catalog prefix only
@@ -100,7 +100,7 @@ gcloud storage buckets add-iam-policy-binding gs://my-lakehouse \
 
 ## Authentication Methods
 
-GCS authentication works differently from AWS, and the differences matter for how you configure Rocklake. There are three main approaches:
+GCS authentication works differently from AWS, and the differences matter for how you configure RockLake. There are three main approaches:
 
 ### Application Default Credentials (ADC)
 
@@ -109,7 +109,7 @@ ADC is the recommended approach for GCP-managed environments (Compute Engine, GK
 To use ADC:
 
 1. Attach the service account to your Compute Engine instance, GKE node pool, or Cloud Run service (see the section for your deployment target below).
-2. Run Rocklake with a GCS storage URL and no credential configuration.
+2. Run RockLake with a GCS storage URL and no credential configuration.
 
 ```bash
 rocklake serve \
@@ -117,7 +117,7 @@ rocklake serve \
   --bind 0.0.0.0:5432
 ```
 
-Rocklake will automatically discover the ADC credentials from the metadata server.
+RockLake will automatically discover the ADC credentials from the metadata server.
 
 ### Service Account JSON Key
 
@@ -148,7 +148,7 @@ See the [Google Cloud documentation on Workload Identity Federation](https://clo
 
 ### Compute Engine
 
-Create an instance with the Rocklake service account attached:
+Create an instance with the RockLake service account attached:
 
 ```bash
 gcloud compute instances create rocklake-server \
@@ -160,7 +160,7 @@ gcloud compute instances create rocklake-server \
   --image-project=debian-cloud
 ```
 
-SSH to the instance and start Rocklake:
+SSH to the instance and start RockLake:
 
 ```bash
 gcloud compute ssh rocklake-server
@@ -193,7 +193,7 @@ kubectl annotate serviceaccount rocklake \
   iam.gke.io/gcp-service-account=rocklake-catalog@my-project.iam.gserviceaccount.com
 ```
 
-Deploy Rocklake:
+Deploy RockLake:
 
 ```yaml
 apiVersion: apps/v1
@@ -240,27 +240,27 @@ gcloud run deploy rocklake \
   --min-instances=1
 ```
 
-Note `--min-instances=1`: Rocklake must maintain its writer lock to function as a catalog. Cloud Run's default scale-to-zero behavior would drop the writer lock. Setting a minimum of 1 instance keeps Rocklake alive continuously.
+Note `--min-instances=1`: RockLake must maintain its writer lock to function as a catalog. Cloud Run's default scale-to-zero behavior would drop the writer lock. Setting a minimum of 1 instance keeps RockLake alive continuously.
 
 ## Connecting DuckDB
 
-Connect DuckDB to a Rocklake instance running on GCS:
+Connect DuckDB to a RockLake instance running on GCS:
 
 ```sql
 INSTALL ducklake;
 LOAD ducklake;
 
--- Connect to local Rocklake
+-- Connect to local RockLake
 ATTACH 'ducklake:host=localhost;port=5432' AS lake;
 
--- Or connect to a remote Rocklake endpoint
+-- Or connect to a remote RockLake endpoint
 ATTACH 'ducklake:host=rocklake.internal;port=5432' AS lake;
 
 -- Verify the catalog is accessible
 SELECT * FROM lake.information_schema.tables;
 ```
 
-DuckDB communicates with Rocklake over the PostgreSQL wire protocol. DuckDB's own GCS credentials (for reading Parquet data files) are configured separately using DuckDB's `gcs_hmac_key_id` and `gcs_hmac_secret` settings or by using the `google_cloud_storage_oauth_token` secret type.
+DuckDB communicates with RockLake over the PostgreSQL wire protocol. DuckDB's own GCS credentials (for reading Parquet data files) are configured separately using DuckDB's `gcs_hmac_key_id` and `gcs_hmac_secret` settings or by using the `google_cloud_storage_oauth_token` secret type.
 
 ## Performance Characteristics
 

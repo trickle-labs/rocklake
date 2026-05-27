@@ -3,14 +3,14 @@
 **Audited repository:** `../ducklake` (DuckDB ducklake extension)
 **Source cross-referenced:** `github.com/duckdb/duckdb-postgres` (postgres scanner extension)
 **Date:** 2026-05-26
-**Context:** DuckDB v1.5.3 connecting to Rocklake via `ATTACH 'ducklake:postgres:...' AS lake`
+**Context:** DuckDB v1.5.3 connecting to RockLake via `ATTACH 'ducklake:postgres:...' AS lake`
 
 ---
 
 ## How the Attach Sequence Works
 
 When DuckDB executes `ATTACH 'ducklake:postgres:host=... dbname=...' AS lake`, it triggers
-two separate code paths that both send SQL over the PostgreSQL wire protocol to Rocklake:
+two separate code paths that both send SQL over the PostgreSQL wire protocol to RockLake:
 
 1. **Postgres scanner extension** (`duckdb/duckdb-postgres`) — manages the underlying
    PostgreSQL connection. Sends version probes, catalog scans, and connection resets before
@@ -38,7 +38,7 @@ SELECT version(), (SELECT COUNT(*) FROM pg_settings WHERE name LIKE 'rds%')
 - col 0 — `TEXT` — PostgreSQL version string (e.g. `"PostgreSQL 15.0 on x86_64-..."`)
 - col 1 — `INT8` — count of RDS settings (0 = not RDS, >0 = Aurora/RDS)
 
-**Rocklake status:** ✅ **Fixed** — `SelectVersionWithRdsCheck` handler returns
+**RockLake status:** ✅ **Fixed** — `SelectVersionWithRdsCheck` handler returns
 `("PostgreSQL 15.0 on x86_64-pc-linux-gnu", 0)`.
 
 **Failure mode if broken:** "Postgres scanner - failed to fetch value for row 0 col 1"
@@ -56,7 +56,7 @@ SELECT 1
 **Columns expected:**
 - col 0 — `INT4` — literal `1`
 
-**Rocklake status:** ✅ **Fixed** — `SelectOne` handler returns `1`.
+**RockLake status:** ✅ **Fixed** — `SelectOne` handler returns `1`.
 
 **Failure mode if broken:** Connection ping fails, connection pool considers connection dead.
 
@@ -73,13 +73,13 @@ DISCARD ALL
 **Expected result:** Command tag `DISCARD` (no rows). This is a PostgreSQL session cleanup
 command. DuckDB sends this when returning a connection to the pool.
 
-**Rocklake status:** ❌ **Unsupported** — classified as `Unsupported("DISCARD ALL")`.
+**RockLake status:** ❌ **Unsupported** — classified as `Unsupported("DISCARD ALL")`.
 
 **Failure mode if broken:** DuckDB logs a warning but continues. The connection is not
 returned cleanly to the pool; a `PQreset()` is attempted as a fallback (which opens a new
 TCP connection).
 
-**Required response:** `DISCARD` command tag with zero rows, no error. Since Rocklake is
+**Required response:** `DISCARD` command tag with zero rows, no error. Since RockLake is
 stateless per connection this could simply return `Ok` with a command tag response.
 
 ---
@@ -95,7 +95,7 @@ SELECT to_regclass('duckdb_secrets')
 **Columns expected:**
 - col 0 — `TEXT` or `NULL` — OID-as-text if table exists, `NULL` if not
 
-**Rocklake status:** ❌ **Unsupported** — `to_regclass` is not a recognised pattern.
+**RockLake status:** ❌ **Unsupported** — `to_regclass` is not a recognised pattern.
 
 **Failure mode if broken:** DuckDB falls through to the information_schema fallback (see 1.5).
 If _both_ 1.4 and 1.5 fail (return errors), the `RegisterSecretStorage()` call is aborted
@@ -131,13 +131,13 @@ SELECT EXISTS (
 **Columns expected:**
 - col 0 — `BOOL` — `true` if table exists, `false` otherwise
 
-**Rocklake status:** ❌ **Unsupported** — sub-SELECT against `information_schema.tables` 
+**RockLake status:** ❌ **Unsupported** — sub-SELECT against `information_schema.tables` 
 is not classified.
 
 **Failure mode if broken:** If this errors (rather than returns `false`), DuckDB silently
 skips registering a secret storage backend. Non-fatal for attach.
 
-**Required response:** Return `false`. Since Rocklake has no `duckdb_secrets` table, the
+**Required response:** Return `false`. Since RockLake has no `duckdb_secrets` table, the
 correct answer is always `false`.
 
 ---
@@ -206,7 +206,7 @@ ROLLBACK;
 4. `pg_type` composites: `(oid INT8, id INT8, type TEXT, attname TEXT, typname TEXT)`
 5. `pg_indexes`: `(oid INT8, tablename TEXT, indexname TEXT)`
 
-**Rocklake status:** ❌ **Partially handled** — `Begin` and `Rollback` are handled, but the
+**RockLake status:** ❌ **Partially handled** — `Begin` and `Rollback` are handled, but the
 five inner SELECT statements against system catalog tables are classified as `Unsupported`.
 
 **Failure mode if broken:** DuckDB's `PostgresSchemaSet::LoadEntries()` receives empty or
@@ -214,18 +214,18 @@ error results and crashes with "Attempted to access index 0 within vector of siz
 trying to look up tables by schema OID.
 
 **Required response:** This is the most complex requirement. The postgres scanner needs to
-build its internal schema map from these results. Rocklake must return:
+build its internal schema map from these results. RockLake must return:
 
 | Query | Required behavior |
 |---|---|
 | `pg_namespace` | At minimum one row: `(1, 'public')`. For ducklake compatibility, also expose `(2, 'main')` or whatever schema the ducklake catalog uses. |
-| `pg_class` UNION | Rows for every table Rocklake exposes (all `ducklake_*` tables). Each row needs `namespace_id`, `relname`, column info or constraint info. |
+| `pg_class` UNION | Rows for every table RockLake exposes (all `ducklake_*` tables). Each row needs `namespace_id`, `relname`, column info or constraint info. |
 | `pg_enum` | Empty result set (no rows, but valid schema). |
 | `pg_type` composites | Empty result set. |
 | `pg_indexes` | Empty result set or index info for ducklake tables. |
 
 > **Note:** The multi-statement batch is sent via `PQsendQuery` (simple query protocol),
-> which means Rocklake receives it as a single SQL string and must respond with _multiple_
+> which means RockLake receives it as a single SQL string and must respond with _multiple_
 > result sets in sequence before the final command-complete. This requires significant
 > protocol-level work.
 
@@ -242,7 +242,7 @@ SELECT pg_database_size(current_database());
 **Columns expected:**
 - col 0 — `INT8` — database size in bytes
 
-**Rocklake status:** ❌ **Unsupported** — neither `pg_database_size` nor `current_database()`
+**RockLake status:** ❌ **Unsupported** — neither `pg_database_size` nor `current_database()`
 are recognised.
 
 **Failure mode if broken:** Non-fatal; DuckDB uses this only for informational `duckdb_databases()` reporting.
@@ -266,12 +266,12 @@ FROM duckdb_secrets()
 
 **Columns expected:** Multiple columns from DuckDB's built-in secrets table function.
 
-**Rocklake status:** ❌ **Unsupported** — `duckdb_secrets()` is a DuckDB-internal table
+**RockLake status:** ❌ **Unsupported** — `duckdb_secrets()` is a DuckDB-internal table
 function, not a standard SQL construct.
 
-**Note:** This query runs over the _DuckDB internal connection_, not Rocklake — it is
+**Note:** This query runs over the _DuckDB internal connection_, not RockLake — it is
 routed to DuckDB's own metadata. It appears in debug logs because the underlying connection
-happens to be the same postgres connection object. This may not actually reach Rocklake.
+happens to be the same postgres connection object. This may not actually reach RockLake.
 
 ---
 
@@ -288,10 +288,10 @@ Where `{METADATA_CATALOG}` is resolved to the schema name (e.g. `main`).
 **Columns expected:**
 - col 0 — any type — `NULL` (ignored; DuckDB only checks for error vs. success)
 
-**Rocklake status:** ⚠️ **Depends on Phase 1 success** — this query is routed through
+**RockLake status:** ⚠️ **Depends on Phase 1 success** — this query is routed through
 the postgres scanner and calls `Query()` on the metadata connection. If the catalog scan
 (Phase 1, 1.6) fails, DuckLake never reaches this step. If Phase 1 passes, this query
-hits Rocklake's `ducklake_metadata` table handler.
+hits RockLake's `ducklake_metadata` table handler.
 
 ---
 
@@ -310,10 +310,10 @@ SELECT * FROM postgres_query('rocklake',
      );')
 ```
 
-**Rocklake status:** ⚠️ **Not applicable in current test** — `postgres_query` is a 
+**RockLake status:** ⚠️ **Not applicable in current test** — `postgres_query` is a 
 DuckDB postgres extension function that DuckDB calls _locally_. These queries are only
 relevant when ducklake is attached with a DuckDB postgres catalog underneath, not when
-Rocklake is the server. When Rocklake is the server, standard SQL queries are sent
+RockLake is the server. When RockLake is the server, standard SQL queries are sent
 directly without the `postgres_query()` wrapper.
 
 ---
@@ -346,7 +346,7 @@ directly without the `postgres_query()` wrapper.
 
 ### Step 1 — `DISCARD ALL` (easy, high impact)
 
-Return a command-complete tag with no rows. Rocklake is already stateless per connection so
+Return a command-complete tag with no rows. RockLake is already stateless per connection so
 no actual session state needs to be cleared.
 
 ```sql
@@ -373,10 +373,10 @@ Return a single boolean `false`:
 
 ### Step 4 — pg_namespace mock (medium, unblocks Phase 2)
 
-Return a minimal namespace list matching Rocklake's schema:
+Return a minimal namespace list matching RockLake's schema:
 
 ```sql
--- Response: (1, 'public'), (2, 'main')  [or whatever schemas Rocklake exposes]
+-- Response: (1, 'public'), (2, 'main')  [or whatever schemas RockLake exposes]
 ```
 
 ### Step 5 — pg_class / pg_attribute catalog scan (hard, critical)
@@ -387,7 +387,7 @@ listing for every table it will query. Two options:
 **Option A — Full catalog emulation:**  
 Implement `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`, `pg_constraint`,
 `pg_enum`, and `pg_indexes` as virtual tables returning real metadata about the
-ducklake tables Rocklake manages.
+ducklake tables RockLake manages.
 
 **Option B — Multi-statement batch handler:**  
 Intercept the specific 6-query batch that DuckDB sends (recognisable by the `BEGIN
@@ -410,16 +410,16 @@ Return `0::int8` or an approximation of the SlateDB store size.
 
 The catalog scan (Step 5) is sent as a **single string via the simple query protocol**
 containing `BEGIN; query1; query2; ... ROLLBACK;`. PostgreSQL handles this by sending
-back multiple result sets in sequence. Rocklake currently processes one statement at a
+back multiple result sets in sequence. RockLake currently processes one statement at a
 time (splitting on `;`) and routes each through `classify_statement`.
 
-To support this, Rocklake either needs to:
+To support this, RockLake either needs to:
 1. Detect the catalog scan batch as a named pattern (e.g. starts with
    `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ`) and return all 6 result sets
    as a pre-built response sequence, or
 2. Implement a general multi-result-set response path for the simple query protocol.
 
-The `pgwire` crate supports multiple responses per query; Rocklake's `Begin` handler
+The `pgwire` crate supports multiple responses per query; RockLake's `Begin` handler
 already returns `Response::TransactionStart`. The challenge is accumulating the five
 inner query results and returning them before the `ROLLBACK`.
 

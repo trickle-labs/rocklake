@@ -1,7 +1,7 @@
 //! Extension schema: first-class catalog objects for application-defined metadata.
 //!
 //! Registered extensions (e.g., `pgtrickle`) can create, read, and delete rows
-//! in their own tables within the Rocklake catalog. This avoids the need for
+//! in their own tables within the RockLake catalog. This avoids the need for
 //! a separate SQLite sidecar and guarantees crash-consistent storage.
 
 use prost::Message;

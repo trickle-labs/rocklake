@@ -1,24 +1,24 @@
 # Credential Isolation
 
-One of the most important security practices for a Rocklake deployment is keeping the credentials for the **catalog plane** (Rocklake's access to SlateDB's SST files and WAL segments) completely separate from the credentials for the **data plane** (DuckDB's access to Parquet data files). When credentials are isolated, a compromise of any single component can only access what that component legitimately needs — it cannot pivot to the other plane. This page explains why isolation matters, how to implement it on each major cloud provider, and how to verify that your isolation is effective.
+One of the most important security practices for a RockLake deployment is keeping the credentials for the **catalog plane** (RockLake's access to SlateDB's SST files and WAL segments) completely separate from the credentials for the **data plane** (DuckDB's access to Parquet data files). When credentials are isolated, a compromise of any single component can only access what that component legitimately needs — it cannot pivot to the other plane. This page explains why isolation matters, how to implement it on each major cloud provider, and how to verify that your isolation is effective.
 
 ## Why Credential Isolation Matters
 
 Without isolation, a single set of credentials provides access to both your catalog metadata and your analytical data. This creates unnecessary risk:
 
-**Compromised catalog → data exfiltration.** If an attacker gains the credentials used by Rocklake (perhaps through a configuration file in a compromised container or a logged environment variable), they can use those credentials to read all your Parquet data files — even though Rocklake itself never reads those files. The credentials did not need to grant data access, but they did.
+**Compromised catalog → data exfiltration.** If an attacker gains the credentials used by RockLake (perhaps through a configuration file in a compromised container or a logged environment variable), they can use those credentials to read all your Parquet data files — even though RockLake itself never reads those files. The credentials did not need to grant data access, but they did.
 
 **Compromised data writer → catalog corruption.** If an attacker gains the write credentials used by a data ingestion pipeline, without isolation they could also write to the catalog prefix — corrupting catalog metadata or injecting malicious file registrations that point DuckDB at attacker-controlled files.
 
 **Broad blast radius.** Without isolation, the failure mode for any credential compromise is "full lakehouse access." With isolation, the failure mode is either "catalog metadata access" (limited impact on confidentiality) or "data access" (limited impact on integrity), never both simultaneously.
 
-The principle of least privilege — giving each component only the permissions it needs to function — is the right design for any production system, and the catalog/data plane separation makes it unusually clean to implement for Rocklake.
+The principle of least privilege — giving each component only the permissions it needs to function — is the right design for any production system, and the catalog/data plane separation makes it unusually clean to implement for RockLake.
 
 ## What Each Component Needs
 
 Before configuring credentials, map out what each component actually accesses:
 
-**Rocklake (catalog plane):**
+**RockLake (catalog plane):**
 - Needs: Read/write/delete on the catalog prefix (e.g., `s3://bucket/catalog/`)
 - Needs: List on the catalog prefix (for SST file enumeration during manifest reconciliation)
 - Does NOT need: Any access to the data prefix (e.g., `s3://bucket/data/`)
@@ -27,21 +27,21 @@ Before configuring credentials, map out what each component actually accesses:
 **DuckDB data writer (ingestion pipelines):**
 - Needs: Write and delete on the data prefix (e.g., `s3://bucket/data/`)
 - Needs: List on the data prefix (for pipeline coordination)
-- Needs: Write to Rocklake via PG wire (to register files in the catalog)
+- Needs: Write to RockLake via PG wire (to register files in the catalog)
 - Does NOT need: Direct access to the catalog prefix
 - Does NOT need: Read access to catalog SST files
 
 **DuckDB data reader (query execution):**
 - Needs: Read on the data prefix (e.g., `s3://bucket/data/`)
-- Needs: Read from Rocklake via PG wire (to look up catalog metadata)
+- Needs: Read from RockLake via PG wire (to look up catalog metadata)
 - Does NOT need: Any direct bucket access beyond the data prefix
 - Does NOT need: Write access anywhere
 
 ## AWS S3: IAM Policy Design
 
-Create three separate IAM identities: one for Rocklake, one for data writers, one for data readers.
+Create three separate IAM identities: one for RockLake, one for data writers, one for data readers.
 
-### Rocklake Catalog Policy
+### RockLake Catalog Policy
 
 ```json
 {
@@ -141,7 +141,7 @@ For EC2/ECS/EKS workloads, create IAM roles instead of static users:
 
 ```bash
 # Create roles
-aws iam create-role --role-name RocklakeCatalogRole \
+aws iam create-role --role-name RockLakeCatalogRole \
   --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
 
 aws iam create-role --role-name DuckDBWriterRole \
@@ -151,22 +151,22 @@ aws iam create-role --role-name DuckDBReaderRole \
   --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
 
 # Create and attach policies
-aws iam create-policy --policy-name RocklakeCatalogPolicy \
+aws iam create-policy --policy-name RockLakeCatalogPolicy \
   --policy-document file://rocklake-catalog-policy.json
-aws iam attach-role-policy --role-name RocklakeCatalogRole \
-  --policy-arn arn:aws:iam::123456789012:policy/RocklakeCatalogPolicy
+aws iam attach-role-policy --role-name RockLakeCatalogRole \
+  --policy-arn arn:aws:iam::123456789012:policy/RockLakeCatalogPolicy
 
 # Repeat for writer and reader roles...
 ```
 
 ### Verifying the Isolation
 
-Test that the Rocklake role cannot access data files:
+Test that the RockLake role cannot access data files:
 
 ```bash
-# Assume the Rocklake role
+# Assume the RockLake role
 aws sts assume-role \
-  --role-arn arn:aws:iam::123456789012:role/RocklakeCatalogRole \
+  --role-arn arn:aws:iam::123456789012:role/RockLakeCatalogRole \
   --role-session-name test-isolation
 
 # Export the temporary credentials
@@ -192,7 +192,7 @@ If the data access check succeeds when it should fail, your policy conditions ar
 ```bash
 # Create the service accounts
 gcloud iam service-accounts create rocklake-catalog \
-  --display-name="Rocklake Catalog" --project=my-project
+  --display-name="RockLake Catalog" --project=my-project
 
 gcloud iam service-accounts create duckdb-writer \
   --display-name="DuckDB Data Writer" --project=my-project
@@ -209,7 +209,7 @@ Grant each service account access only to its respective prefix using IAM condit
 STORAGE_ID=$(gcloud storage buckets describe gs://my-lakehouse \
   --format="value(name)")
 
-# Rocklake: catalog prefix only
+# RockLake: catalog prefix only
 gcloud storage buckets add-iam-policy-binding gs://my-lakehouse \
   --member="serviceAccount:rocklake-catalog@my-project.iam.gserviceaccount.com" \
   --role="roles/storage.objectAdmin" \
@@ -244,7 +244,7 @@ STORAGE_ID=$(az storage account show --name mylakehouse \
 ### Scoped RBAC Assignments
 
 ```bash
-# Rocklake: catalog container access
+# RockLake: catalog container access
 CATALOG_SCOPE="${STORAGE_ID}/blobServices/default/containers/catalog"
 
 ROCKLAKE_PRINCIPAL=$(az identity show --name rocklake-catalog \
@@ -286,7 +286,7 @@ az role assignment create \
 In Kubernetes, create separate pods/deployments with different service accounts:
 
 ```yaml
-# Rocklake deployment with catalog credentials
+# RockLake deployment with catalog credentials
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -312,7 +312,7 @@ spec:
       containers:
         - name: ingestion
           image: duckdb/duckdb:latest
-          # DuckDB connects to Rocklake via PG wire for catalog,
+          # DuckDB connects to RockLake via PG wire for catalog,
           # and uses AWS credentials for direct S3 data writes
 ```
 
@@ -344,9 +344,9 @@ services:
 
 Beyond IAM/RBAC isolation, consider network-level controls:
 
-**VPC/VNet placement.** Run Rocklake and DuckDB within the same VPC/VNet, with the Rocklake port (5432) accessible only within the VPC. This prevents external access to the catalog even if credentials are leaked — an attacker would also need network access.
+**VPC/VNet placement.** Run RockLake and DuckDB within the same VPC/VNet, with the RockLake port (5432) accessible only within the VPC. This prevents external access to the catalog even if credentials are leaked — an attacker would also need network access.
 
-**Security groups/firewall rules.** Restrict inbound connections to Rocklake's port to only the IP ranges of known DuckDB clients:
+**Security groups/firewall rules.** Restrict inbound connections to RockLake's port to only the IP ranges of known DuckDB clients:
 
 ```bash
 # AWS Security Group: allow port 5432 only from the ingestion subnet
@@ -386,9 +386,9 @@ aws s3api put-bucket-logging \
 ```
 
 Set up monitoring rules that alert when:
-- The Rocklake IAM role accesses any path outside `catalog/`
+- The RockLake IAM role accesses any path outside `catalog/`
 - The DuckDB writer role accesses any path outside `data/`
-- Any identity accesses the `catalog/` prefix directly (bypassing Rocklake)
+- Any identity accesses the `catalog/` prefix directly (bypassing RockLake)
 
 Unexpected cross-prefix access is a signal that either the IAM configuration is wrong or credentials have been misappropriated.
 
@@ -397,5 +397,5 @@ Unexpected cross-prefix access is a signal that either the IAM configuration is 
 - **[AWS S3 Deployment](aws-s3.md)** — Full AWS S3 deployment guide with IAM role setup
 - **[GCS Deployment](gcs.md)** — Full GCS deployment guide with service account setup
 - **[Azure Deployment](azure.md)** — Full Azure deployment guide with Managed Identity setup
-- **[TLS and Authentication](tls.md)** — Securing the PG-wire channel between DuckDB and Rocklake
+- **[TLS and Authentication](tls.md)** — Securing the PG-wire channel between DuckDB and RockLake
 - **[Concepts: Catalog vs Data](../concepts/catalog-vs-data.md)** — The architectural basis for the two-plane separation

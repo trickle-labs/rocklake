@@ -1,4 +1,4 @@
-# Rocklake: A DuckLake Catalog on SlateDB
+# RockLake: A DuckLake Catalog on SlateDB
 
 ## Introduction (for a non-technical audience)
 
@@ -24,14 +24,14 @@ Blob Storage). It has no servers to run, no disks to manage, and yet it
 behaves like a real transactional database. It is "embedded" — your
 application links to it as a library, the same way it might link to SQLite.
 
-**Rocklake** is the project of marrying the two: using SlateDB as the
+**RockLake** is the project of marrying the two: using SlateDB as the
 catalog backend for DuckLake. The result would be:
 
 - A lakehouse where **both the catalog and the data live in the same S3
   bucket** — no separate database server to provision, monitor, patch, or
   back up.
 - **Serverless-friendly**: the catalog state itself needs no database server.
-  In the B-first plan, clients contact a stateless Rocklake sidecar plus S3;
+  In the B-first plan, clients contact a stateless RockLake sidecar plus S3;
   in the long-term native path, a Lambda function, container, or stream
   processor can read or write without contacting any external service besides
   S3.
@@ -41,7 +41,7 @@ catalog backend for DuckLake. The result would be:
 - **Cheap**: object storage is the cheapest durable storage available, and
   SlateDB is engineered to minimize the number of API calls it makes.
 
-If it works, Rocklake would be the first DuckLake catalog whose durable state
+If it works, RockLake would be the first DuckLake catalog whose durable state
 is *truly* zero-infrastructure for cloud deployments — a real "lakehouse in a
 bucket". Strategy B still has a small stateless service; Strategy C removes
 that service.
@@ -60,7 +60,7 @@ things that matter for the long term:
 2. **Time as a first-class dimension.** Time travel stops being a feature
    layered on top of MVCC and becomes the natural read mode. The "current"
    view is just "as of the largest committed `dl_snapshot_id`".
-3. **A path to a general fact store.** DuckLake is the first schema Rocklake
+3. **A path to a general fact store.** DuckLake is the first schema RockLake
    ships, but the same storage substrate — append-only keys scoped by
    `dl_snapshot_id`, rebuildable from object storage, queryable at any
    historical point — can host other relational schemas in future releases.
@@ -159,11 +159,11 @@ oracle. Strategy A should not block Phase 4.
   text/binary formats, session `SET`/`SHOW`, and extended query protocol are
   Phase 4 requirements.
 - Keep the data plane and catalog plane separate: DuckDB writes Parquet files
-  directly, while Rocklake writes only the catalog.
+  directly, while RockLake writes only the catalog.
 
 ### 1.4 Architectural Principle: Catalog-Data Immutability
 
-Rocklake's durability commitment is: **every catalog fact committed at
+RockLake's durability commitment is: **every catalog fact committed at
 `dl_snapshot_id = N` is always readable at N via time travel, and can only be
 physically removed via the explicit, audited `rocklake excise` command.** This
 is the hard constraint. Everything else in this section derives from it.
@@ -188,7 +188,7 @@ transactionally updated.
 
 #### What this means concretely
 
-| DuckLake-level concept | Naive (rejected) | Rocklake |
+| DuckLake-level concept | Naive (rejected) | RockLake |
 | --- | --- | --- |
 | `UPDATE … SET end_snapshot = N` | Delete the old row or treat as general mutation | Write `end_snapshot` into the version's value in one SlateDB transaction; this is the only permitted update in the version's lifetime, bounded because `end_snapshot` can be set at most once |
 | Counter increment (`next_catalog_id += 1`) | Separate counter write and row write | Transactional read-modify-write of the counter key, committed atomically with the row that consumes the ID; safe because there is exactly one writer |
@@ -338,7 +338,7 @@ rocklake/
 - Complete the SlateDB API validation gates from section 5.26 before
   Phase 1 starts: atomic `WriteBatch`, transaction-based conditional
   initialization, reader visibility after `flush()` or equivalent,
-  distinguishable writer-fencing errors, Rocklake-side batch limits,
+  distinguishable writer-fencing errors, RockLake-side batch limits,
   and prefix-scan latest-value semantics.
 - Check in `docs/phase-0/slatedb-api-validation.md` with working Rust snippets
   against the pinned SlateDB crate version for `DbTransaction::get`/`put`,
@@ -376,11 +376,11 @@ for any failed assumption.
 
 | Failed validation | Fallback decision |
 | --- | --- |
-| Atomic `WriteBatch` is not all-or-none | Stop and pin or upgrade SlateDB; Rocklake should not emulate catalog atomicity above a non-atomic KV write path. |
+| Atomic `WriteBatch` is not all-or-none | Stop and pin or upgrade SlateDB; RockLake should not emulate catalog atomicity above a non-atomic KV write path. |
 | Transactional insert-if-absent cannot be implemented | Require explicit one-time `rocklake init` under an external deployment lock, then reopen read-only until a transactional API is available. |
 | `flush()` does not make fresh `DbReader`s observe commits | Replace `catalog_visibility_barrier` with the verified memtable/manifest flush or serve read-your-writes from the writer process until readers catch up. |
-| Writer-fencing errors are not distinguishable | Keep Rocklake's own epoch check on every commit path and map stale epochs to SQLSTATE `57P04`; treat raw SlateDB errors as internal until classified. |
-| Batch size is effectively unbounded but operationally unsafe | Enforce Rocklake's 64 MiB default limit before writing and make the limit configurable per deployment. |
+| Writer-fencing errors are not distinguishable | Keep RockLake's own epoch check on every commit path and map stale epochs to SQLSTATE `57P04`; treat raw SlateDB errors as internal until classified. |
+| Batch size is effectively unbounded but operationally unsafe | Enforce RockLake's 64 MiB default limit before writing and make the limit configurable per deployment. |
 | Prefix scans expose stale versions or recency order | Add a decode/dedup layer keyed by the table's row identity/version key before applying MVCC filters, and only use recency scans for diagnostics. |
 | `pgwire` cannot handle DuckDB's extended protocol | Switch Strategy B to a lower-level PostgreSQL protocol implementation or defer B in favor of Strategy C; do not build SQL semantics on an incompatible wire layer. |
 | `DbTransaction` cannot provide serializable read-modify-write for counters | Replace transaction-backed counters with an explicit compare-and-swap loop or a single-writer in-memory allocator that persists the counter and consumed rows in one durable batch. |
@@ -435,8 +435,8 @@ tag │ table / namespace                         │ dominant key payload
 1B  │ ducklake_column_tag                       │ table_id | column_id | tag_key | begin_snapshot
 1C  │ ducklake_schema_versions                  │ table_id | begin_snapshot
 FD  │ dynamic inlined row/delete storage        │ subtype | table_id | (schema_version or data_file_id) | row_id
-FE  │ Rocklake counters                        │ counter_id
-FF  │ Rocklake system keys                     │ writer epoch / endpoint / retain-from / catalog-format-version
+FE  │ RockLake counters                        │ counter_id
+FF  │ RockLake system keys                     │ writer epoch / endpoint / retain-from / catalog-format-version
 ```
 
 The `0xFE` counter keys and `0xFF` system keys are managed with simple
@@ -511,7 +511,7 @@ transaction so externally supplied IDs cannot collide silently.
   versions in v1. FlatBuffers remains a performance experiment for Phase 7,
   after real catalog traces show whether decode overhead matters.
 - Each value carries an internal `encoding_version` byte so we can evolve
-  Rocklake's serialized row format without confusing it with DuckLake's
+  RockLake's serialized row format without confusing it with DuckLake's
   `ducklake_snapshot.schema_version` counter.
 
 #### 1.3 Counter / ID allocation
@@ -577,10 +577,10 @@ actor gives us a single serial write order, once Phase 0 has validated
 the exact conflict-detection and durability semantics.
 
 Also implement **multi-process fencing** as defense in depth: store a
-Rocklake writer-epoch token in a dedicated `0xFF | "writer-epoch"` key and
+RockLake writer-epoch token in a dedicated `0xFF | "writer-epoch"` key and
 require every sidecar writer to prove it still owns that epoch before accepting
 writes. This does not replace SlateDB's own zombie-writer fencing; it gives
-Rocklake a catalog-level role marker that can also publish the writer endpoint
+RockLake a catalog-level role marker that can also publish the writer endpoint
 and produce PostgreSQL-compatible failover errors.
 
 **Deliverable:** End-to-end tests that perform the spec's example
@@ -699,7 +699,7 @@ SELECT data_file_id FROM ducklake_file_column_stats
     AND (? <= max_value OR max_value IS NULL);
 ```
 
-The `LEFT JOIN` is not a general SQL join operator in Rocklake. The catalog
+The `LEFT JOIN` is not a general SQL join operator in RockLake. The catalog
 layer implements it as two KV reads: scan the live `ducklake_data_file` rows
 for the table, then scan or point-read `ducklake_delete_file` rows keyed by
 each `data_file_id`, and merge the delete-file lists in memory before building
@@ -953,7 +953,7 @@ inside the catalog rather than creating Parquet data/delete files. The
 creates dynamic per-table inlined insert tables named by table ID and schema
 version, plus inlined delete tables named by table ID.
 
-This has three concrete implications for Rocklake:
+This has three concrete implications for RockLake:
 
 **Key layout.** A dedicated dynamic-storage prefix is required in the Phase 1
 layout, separate from the spec table tag for `ducklake_inlined_data_tables`:
@@ -975,9 +975,9 @@ indexed layout is explicitly added; keeping them in values preserves simple
 prefix scans while matching the generated table schemas.
 
 The row limit is configurable (`DATA_INLINING_ROW_LIMIT`, persistent
-`data_inlining_row_limit`, and DuckDB's global default setting), so Rocklake
+`data_inlining_row_limit`, and DuckDB's global default setting), so RockLake
 cannot assume only 10 rows forever. Enforce a maximum encoded inlined-row value
-size in Rocklake, defaulting to 64 MiB, even though SlateDB values can be much
+size in RockLake, defaulting to 64 MiB, even though SlateDB values can be much
 larger. Oversized inlined rows should return `SQLSTATE 54001` and force the
 client to flush or write Parquet.
 
@@ -996,7 +996,7 @@ materializes inlined inserts and delete markers into Parquet data/delete files.
 **Type caveat.** For non-DuckDB metadata catalogs, DuckLake stores nested
 `STRUCT`, `MAP`, and `LIST` values as strings in generated inlined tables, and
 does not inline `VARIANT` columns because they do not round-trip safely through
-PostgreSQL/SQLite-style string storage. Rocklake should mirror that behavior:
+PostgreSQL/SQLite-style string storage. RockLake should mirror that behavior:
 accept nested values using the captured string representation, and return
 `SQLSTATE 0A000` if DuckDB attempts unsupported `VARIANT` inlining through the
 PG-wire path.
@@ -1160,7 +1160,7 @@ confidence in the encoding layer that everything above depends on.
 1. Run the full DuckLake tutorial against a SQLite-backed DuckLake (the
    reference implementation). Capture the output of every DuckDB statement
    as a golden fixture file.
-2. Replay the identical sequence against Rocklake.
+2. Replay the identical sequence against RockLake.
 3. Diff the outputs byte-for-byte.
 
 Automate this in CI for every supported DuckDB version. Store fixtures in
@@ -1210,7 +1210,7 @@ aspirational rather than verified.
 ### 5.7 Object Store Backend Compatibility
 
 SlateDB supports multiple backends through the
-[`object_store`](https://docs.rs/object_store) crate. Rocklake inherits
+[`object_store`](https://docs.rs/object_store) crate. RockLake inherits
 this, but not all backends behave identically in production.
 
 | Backend | Fencing / conditional-write expectation | Typical round-trip | Recommended use |
@@ -1225,7 +1225,7 @@ this, but not all backends behave identically in production.
 
 **Strong recommendation: develop entirely on `LocalFileSystem` first.**
 SlateDB's backend abstraction means switching to S3 requires zero code
-changes in Rocklake. Local FS eliminates all S3 latency from the
+changes in RockLake. Local FS eliminates all S3 latency from the
 development loop, avoids API costs, and makes debugging straightforward —
 catalog files are visible as ordinary files on disk and can be inspected
 with standard tools (`xxd`, a custom `rocklake inspect` CLI, etc.).
@@ -1302,7 +1302,7 @@ Minimum parsing matrix for Phase 2:
 | `list`, `struct`, `map` | Stats live on child columns | Recurse through child `ducklake_column` rows |
 | `geometry`, `variant` | JSON `extra_stats` | Use specialized handlers; do not treat `min_value`/`max_value` as strings |
 
-If DuckLake adds min/max stats for a type not listed here, Rocklake must fail
+If DuckLake adds min/max stats for a type not listed here, RockLake must fail
 closed: skip pruning for that column or return `SQLSTATE 0A000` for an explicit
 unsupported pruning request. It must never compare unknown typed stats as raw
 strings just to keep planning moving.
@@ -1362,7 +1362,7 @@ commits are visible to the reader.
 
 Multiple independent DuckLake instances sharing the same S3 bucket is a
 common deployment pattern. SlateDB handles this natively — each `Db` is
-isolated to a path prefix — but Rocklake must standardize the path layout
+isolated to a path prefix — but RockLake must standardize the path layout
 before any code writes paths, to prevent ad-hoc string construction that
 becomes inconsistent across deployments.
 
@@ -1392,7 +1392,7 @@ Use this v1 resolution model unless the Phase 0 capture disproves it:
 
 - `CatalogPath` stores `object_store_root`, `catalog_prefix`, `data_prefix`,
   and `data_path_mode` (`Absolute` or `RelativeToDataPrefix`).
-- Internally, Rocklake may store a relative `data_path` only when it is
+- Internally, RockLake may store a relative `data_path` only when it is
   unambiguously relative to the configured `data_prefix`, not to the catalog
   prefix.
 - Preserve DuckLake's path hierarchy: `ducklake_schema.path` is relative to
@@ -1475,7 +1475,7 @@ DuckLake has several ID domains, and they are not all the same. The snapshot
 ID is globally increasing (`max(snapshot_id) + 1`). The snapshot row stores
 `next_catalog_id` for catalog objects such as schemas, tables, and views, and
 `next_file_id` for data/delete files. Some child objects, such as columns, are
-unique only within their parent table over that table's lifetime. Rocklake
+unique only within their parent table over that table's lifetime. RockLake
 must mirror these spec domains rather than inventing one global counter per
 table.
 
@@ -1501,7 +1501,7 @@ spec changes.
 Strategy B must handle two ID sources. The typed Rust/FFI path can allocate IDs
 inside `CatalogWriter`. The DuckDB PG-wire path may instead send explicit IDs
 in `INSERT` statements after reading `next_catalog_id` / `next_file_id` from the
-previous `ducklake_snapshot`. In that path, Rocklake must validate the supplied
+previous `ducklake_snapshot`. In that path, RockLake must validate the supplied
 IDs against the persisted counters and the new snapshot row's advertised next
 IDs, then advance the `0xFE` counters in the same SlateDB transaction. A
 DuckDB-supplied duplicate or regressing ID is a constraint error, not an
@@ -1694,12 +1694,12 @@ cannot automatically reconnect after a writer takeover.
 
 Define the translation function in `rocklake-pgwire` before writing any
 handler code. Every Rust `?` in the handler should flow through a single
-`to_pg_error(err: RocklakeError) -> PgErrorResponse` function, not
+`to_pg_error(err: RockLakeError) -> PgErrorResponse` function, not
 scattered inline.
 
 **Required mapping table (minimum viable):**
 
-| Rocklake / SlateDB error | SQLSTATE | Severity | DuckDB behavior |
+| RockLake / SlateDB error | SQLSTATE | Severity | DuckDB behavior |
 | --- | --- | --- | --- |
 | Writer fenced (`EpochMismatch`) | `57P04` admin_shutdown | FATAL | Client closes connection and reconnects |
 | Snapshot not found (time travel out of retention) | `22023` invalid_parameter_value | ERROR | Surfaces to user with message |
@@ -1781,7 +1781,7 @@ quickly.
 #### Option 3 — Shared Tokio runtime via thread-local (experimental)
 
 If DuckDB allows extensions to run initialization code at extension load
-time, the Rocklake extension can start a background thread running a
+time, the RockLake extension can start a background thread running a
 Tokio runtime and expose a channel-based interface. Catalog calls push a
 request onto the channel, block the calling thread on a `std::sync::mpsc`
 receiver, and the Tokio worker processes the request asynchronously. This
@@ -1902,7 +1902,7 @@ the crate has gaps.
 The `ducklake_metadata` table is a scoped key/value table, not a single-row
 catalog record. Catalog creation writes a coherent initial set of global rows
 (`version`, `created_by`, `data_path`, data-inlining defaults, etc.) plus
-Rocklake counters and system keys. If two DuckDB clients simultaneously attach
+RockLake counters and system keys. If two DuckDB clients simultaneously attach
 to the same previously-uninitialised path, both may attempt to write that
 initial metadata set.
 
@@ -1962,7 +1962,7 @@ tables (`ducklake_macro*`, `ducklake_column_mapping`,
 coverage matrix before implementation is mandatory.
 
 DuckLake-generated inlined data/delete tables are not part of the fixed 28-table
-schema; Rocklake handles them under the reserved dynamic `0xFD` prefix from
+schema; RockLake handles them under the reserved dynamic `0xFD` prefix from
 sections 1.1 and 5.2.
 
 The full schema script is the source of truth for key shapes, not only the
@@ -2219,7 +2219,7 @@ stats rows.
 **Why this table uses a query-first key.** The full DuckLake schema does not
 declare a SQL primary key for `ducklake_file_column_stats`, but its row identity
 is effectively `(data_file_id, column_id)` and the dominant query filters on
-`(table_id, column_id)`. Rocklake therefore keys by the dominant pruning scan
+`(table_id, column_id)`. RockLake therefore keys by the dominant pruning scan
 and must enforce duplicate `(data_file_id, column_id)` stats rows in the typed
 writer/dispatcher. Document this explicitly in `tags.rs` (section 5.20) so the
 design intent is clear during code review.
@@ -2233,7 +2233,7 @@ not. The sidecar is a PostgreSQL-compatible **catalog service**. The DuckLake
 client still writes and reads Parquet data files through DuckDB's DuckLake
 extension and the configured object-store filesystem. The exception is
 DuckLake data inlining: small inserts/deletes may be represented as generated
-catalog tables, which Rocklake stores under the `0xFD` catalog prefix rather
+catalog tables, which RockLake stores under the `0xFD` catalog prefix rather
 than in Parquet.
 
 The practical write path is:
@@ -2241,8 +2241,8 @@ The practical write path is:
 ```
 DuckDB + ducklake extension
   ├── writes Parquet data/delete files directly to object storage when not inlined
-  └── sends catalog SQL over PostgreSQL wire protocol to Rocklake
-          └── Rocklake writes catalog metadata to SlateDB/object storage
+  └── sends catalog SQL over PostgreSQL wire protocol to RockLake
+          └── RockLake writes catalog metadata to SlateDB/object storage
 ```
 
 This creates two separate credential planes:
@@ -2250,7 +2250,7 @@ This creates two separate credential planes:
 | Actor | Needs access to | Minimum permissions |
 | --- | --- | --- |
 | DuckDB client / ingestion job | Data prefix (`s3://bucket/data/...`) | read/write/delete Parquet and delete files |
-| Rocklake sidecar | Catalog prefix (`s3://bucket/catalogs/...`) | read/write SlateDB WAL, SSTs, manifests, checkpoints |
+| RockLake sidecar | Catalog prefix (`s3://bucket/catalogs/...`) | read/write SlateDB WAL, SSTs, manifests, checkpoints |
 | GC / maintenance job | Both catalog and data prefixes | read catalog, delete unreferenced data files |
 
 Do not make the sidecar proxy Parquet bytes unless a future product decision
@@ -2315,7 +2315,7 @@ convert these assumptions into an explicit Phase 0 API validation checklist:
 | `db.flush()` gives `DbReader` visibility | Write with `Db`, call `flush()`, open fresh `DbReader`, verify the key is visible on LocalFS, MinIO, S3 Standard, and S3 Express |
 | Visibility-barrier latency is acceptable | Measure p50/p95/p99 for the verified barrier on LocalFS, MinIO, S3 Standard, and S3 Express |
 | Writer fencing returns a distinguishable error | Force two writers, capture exact error kind, map it in `to_pg_error()` |
-| `WriteBatch` has unlimited logical size | Enforce Rocklake's own batch byte limit before calling SlateDB |
+| `WriteBatch` has unlimited logical size | Enforce RockLake's own batch byte limit before calling SlateDB |
 | Prefix scans use fully merged latest values | Verify `scan_prefix` deduplicates older LSM versions; use `scan_prefix_by_recency` only for specialized freshness probes |
 
 Do not start Phase 1 data-model work until these validations are green. If any
@@ -2333,7 +2333,7 @@ Phase 1 key-layout PR.
 
 ### 5.27 Object-Store Rate Limits, Backpressure, and Compaction Scheduling
 
-Rocklake's operational profile is dominated by object-store requests: WAL
+RockLake's operational profile is dominated by object-store requests: WAL
 writes, manifest reads, SST reads, cache fills, compaction reads/writes, and
 Parquet file verification. A single writer is not enough to protect S3/GCS/Azure
 from bursts: one large snapshot can register thousands of files and emit a very
@@ -2359,7 +2359,7 @@ slowness rather than a saturated catalog backend.
 
 ### 5.28 Catalog Validation and Repair Tooling
 
-Because Rocklake stores a relational catalog in a KV database, operators need
+Because RockLake stores a relational catalog in a KV database, operators need
 tools that understand both layers. A generic SlateDB dump is not enough to
 diagnose DuckLake-level problems.
 
@@ -2475,7 +2475,7 @@ Require before the first Strategy C release:
 | --- | --- | --- | --- |
 | DuckDB extension API turns out to be too closed to add a new catalog backend cleanly. | Medium | High | Fall back permanently to Strategy B (PG-wire). It is a fine product for DuckDB once the captured DuckDB corpus passes; other clients need separate compatibility work. |
 | SlateDB read latency for many small point lookups is too high for interactive query planning. | Medium | Medium | Phase 7 packing + aggressive on-disk caching + DuckDB-side caching of catalog snapshots. |
-| DuckLake spec churn between 1.0 and 1.1. | Low | Low | The spec is versioned and stable as of v1.0; carry DuckLake's `schema_version` in snapshot rows and Rocklake's `encoding_version` in serialized values. |
+| DuckLake spec churn between 1.0 and 1.1. | Low | Low | The spec is versioned and stable as of v1.0; carry DuckLake's `schema_version` in snapshot rows and RockLake's `encoding_version` in serialized values. |
 | Single-writer constraint surprises users. | Medium | Low | Document loudly; SlateDB's fencing means at worst the new writer takes over safely. |
 | The SQLite-VFS-over-LSM approach (Phase 3) is too slow even for a demo. | Medium | Low | Phase 3 is optional and time-boxed. Skip to Phase 4 if it does not produce useful evidence quickly. |
 | SlateDB API assumptions differ from the current crate. | Medium | High | Phase 0 validation gates in section 5.26; no production code based on pseudocode APIs. |
@@ -2489,7 +2489,7 @@ Require before the first Strategy C release:
 
 ## 7. Success Criteria
 
-1. The full DuckLake tutorial runs end-to-end from the standard DuckDB `ducklake` extension through the Rocklake PG-wire sidecar, with the catalog stored in SlateDB/S3 and no PostgreSQL or SQLite catalog database.
+1. The full DuckLake tutorial runs end-to-end from the standard DuckDB `ducklake` extension through the RockLake PG-wire sidecar, with the catalog stored in SlateDB/S3 and no PostgreSQL or SQLite catalog database.
 2. Concurrent reads from a second DuckDB process see consistent, snapshot-isolated views of the catalog.
 3. A kill -9 on the writer mid-commit leaves the catalog readable and internally consistent; the next writer takes over via fencing.
 4. Benchmarks publish p50/p95/p99 catalog operation latency against PostgreSQL-backed DuckLake on RDS and SQLite-backed DuckLake.
@@ -2502,9 +2502,9 @@ Require before the first Strategy C release:
 
 ---
 
-## 8. Performance: Rocklake vs. DuckLake-on-PostgreSQL
+## 8. Performance: RockLake vs. DuckLake-on-PostgreSQL
 
-This section gives an honest assessment of where Rocklake will be faster,
+This section gives an honest assessment of where RockLake will be faster,
 slower, and on-par with the most common production DuckLake deployment today:
 DuckLake backed by PostgreSQL (e.g. AWS RDS in the same region).
 
@@ -2517,7 +2517,7 @@ warm query is **sub-millisecond**. S3 can never match that.
 
 **Application-level filtering.** DuckLake's MVCC filter
 (`begin_snapshot ≤ snapshot_id < end_snapshot`) runs inside PostgreSQL, close
-to the data. In Rocklake it runs in application code after SlateDB returns raw
+to the data. In RockLake it runs in application code after SlateDB returns raw
 rows — this adds deserialization and branching overhead proportional to the
 number of historical (dead) rows in a prefix scan.
 
@@ -2530,7 +2530,7 @@ reader adds object-store GET load.
 workload. Variance between p50 and p99 is low. SlateDB performance at p99
 is more sensitive to compaction, S3 request queuing, and cold-cache reads.
 
-### Where Rocklake wins (or ties)
+### Where RockLake wins (or ties)
 
 **Operational simplicity and cost.** No separate database instance to run,
 monitor, patch, or back up. The catalog lives in the same S3 bucket as the
@@ -2542,7 +2542,7 @@ that register thousands of new data files per minute, it can outperform
 PostgreSQL's synchronous B-tree insert path.
 
 **Embedded single-process scenarios (Strategy C).** A Lambda function or
-stream processor embedding Rocklake avoids the network hop to a PostgreSQL
+stream processor embedding RockLake avoids the network hop to a PostgreSQL
 server entirely. Catalog reads from in-process MemTable and on-disk cache can
 reach PostgreSQL-competitive latency.
 
@@ -2561,7 +2561,7 @@ All figures assume the writer is in the same region as the object-store bucket.
 PostgreSQL rows assume a managed RDS instance (e.g. `db.t4g.medium`) in the
 same AZ as the application.
 
-| Catalog operation | PostgreSQL (same AZ) | Rocklake + S3 Standard | Rocklake + S3 Express One Zone |
+| Catalog operation | PostgreSQL (same AZ) | RockLake + S3 Standard | RockLake + S3 Express One Zone |
 | --- | --- | --- | --- |
 | `get_current_snapshot()` (1 point read) | ~0.5 ms | ~20–50 ms | ~1–5 ms |
 | `list_data_files` (10 K files, scan + filter) | ~5–10 ms | ~50–200 ms | ~10–30 ms |
@@ -2603,9 +2603,9 @@ undermines the "zero-disk" positioning.
 
 **For interactive data-warehouse workloads with a persistent query engine
 and a managed PostgreSQL instance already in the stack, PostgreSQL-backed
-DuckLake is faster and simpler.** Do not choose Rocklake for raw speed.
+DuckLake is faster and simpler.** Do not choose RockLake for raw speed.
 
-**Choose Rocklake when:**
+**Choose RockLake when:**
 - You are serverless or spot-based and cannot afford a persistent database.
 - You want a "lakehouse in a bucket" with no external dependencies.
 - You need cheap, reliable point-in-time catalog snapshots.
@@ -2625,7 +2625,7 @@ SlateDB can satisfy it.
 
 ### Guarantee analysis
 
-| # | Guarantee | What it means | Rocklake verdict |
+| # | Guarantee | What it means | RockLake verdict |
 | --- | --- | --- | --- |
 | G1 | **Atomic transactions** | All writes in a snapshot succeed together or not at all | ✅ SlateDB `DbTransaction` / `WriteBatch` commit atomically once Phase 0 validates the exact API path |
 | G2 | **Durability** | Once `create_snapshot` returns the data survives a crash | ✅ Requires durable write options (`await_durable=true` or equivalent) verified in Phase 0 |
@@ -2647,7 +2647,7 @@ That is still a software invariant, not a storage invariant. Some DuckLake
 tables also intentionally lack SQL primary keys because they store historical
 versions with the same logical ID and different `begin_snapshot` values. For
 tables with declared or effective uniqueness that is not enforced by the hot
-scan key, Rocklake must write a unique-guard key in the same transaction.
+scan key, RockLake must write a unique-guard key in the same transaction.
 Safeguards: validate key/guard absence in release builds for any externally
 supplied ID or SQL-side insert; keep `debug_assert!` checks around internally
 allocated IDs; and rely on integration tests against the DuckDB extension,
@@ -2661,13 +2661,13 @@ interval (`manifest_poll_interval`). A freshly-committed snapshot may
 not be visible to a new reader immediately. The fix is one line:
 call the verified SlateDB visibility barrier after every `create_snapshot`.
 This is expected to be `db.flush()`, but Phase 0 must prove whether the default
-WAL flush is sufficient for fresh `DbReader` visibility or whether Rocklake
+WAL flush is sufficient for fresh `DbReader` visibility or whether RockLake
 must use an explicit memtable/manifest flush mode.
 Estimated cost of the flush: 50–200 ms on S3 Standard, which is
 acceptable for catalog operations that already pay a similar S3 latency
 budget.
 
-### Where Rocklake is strictly stronger than PostgreSQL
+### Where RockLake is strictly stronger than PostgreSQL
 
 PostgreSQL allows concurrent writers and detects write-write conflicts at
 commit time — a transaction can fail and must be retried. SlateDB
@@ -2680,7 +2680,7 @@ they do not hold it and cannot submit writes in the first place.
 
 ## 10. Deployment Architecture
 
-### 10.1 Is the Rocklake process stateless?
+### 10.1 Is the RockLake process stateless?
 
 Almost entirely yes. All correctness-critical state lives in object
 storage:
@@ -2694,7 +2694,7 @@ storage:
 | In-memory MemTable (recent writes) | RAM only | Yes — but WAL recovers these |
 | Block cache (read acceleration) | RAM / local SSD | Yes — automatically rebuilt |
 
-A Rocklake replica can be killed and recreated at any time without data
+A RockLake replica can be killed and recreated at any time without data
 loss or manual recovery steps.
 
 ### 10.2 Kubernetes deployment patterns
@@ -2799,7 +2799,7 @@ updates in < 1 second. Requires K8s API access from the pod.
 #### Option D — Protocol-aware proxy
 
 A thin stateless proxy (itself a `Deployment` with N replicas) sits in
-front of all Rocklake pods and routes traffic by inspecting whether each
+front of all RockLake pods and routes traffic by inspecting whether each
 SQL statement is a read or a write:
 
 ```
@@ -2830,7 +2830,7 @@ catalog reads will be slow (full S3 round-trips). Mitigations:
 - Pre-warm the cache on startup by reading the current snapshot and the
   most recently active tables.
 - DuckDB caches the current snapshot ID client-side; many queries never
-  reach Rocklake after the initial connection.
+  reach RockLake after the initial connection.
 
 ### 10.5 Credential separation in deployment
 

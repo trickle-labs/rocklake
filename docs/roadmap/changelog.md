@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Rocklake are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to RockLake are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Each release is listed with the version number, release date, and categorized changes. Categories follow Keep a Changelog conventions:
 
@@ -16,7 +16,7 @@ Each release is listed with the version number, release date, and categorized ch
 
 ## [0.8.0] - 2025-01-15
 
-This release focuses on production readiness: performance optimization, comprehensive observability, and documentation. The hot key cache and secondary index provide significant latency improvements for large catalogs. Prometheus metrics and health check endpoints make Rocklake monitorable and deployable in Kubernetes environments. The documentation site now covers all aspects of the system with 80+ pages of detailed reference material.
+This release focuses on production readiness: performance optimization, comprehensive observability, and documentation. The hot key cache and secondary index provide significant latency improvements for large catalogs. Prometheus metrics and health check endpoints make RockLake monitorable and deployable in Kubernetes environments. The documentation site now covers all aspects of the system with 80+ pages of detailed reference material.
 
 ### Added
 
@@ -99,7 +99,7 @@ This release adds operational tooling: garbage collection, integrity verificatio
 
 ## [0.6.0] - 2024-10-15
 
-This release implements the PostgreSQL wire protocol (Strategy B), making Rocklake accessible to DuckDB over TCP without requiring a native extension. This is the primary deployment mode for production use.
+This release implements the PostgreSQL wire protocol (Strategy B), making RockLake accessible to DuckDB over TCP without requiring a native extension. This is the primary deployment mode for production use.
 
 ### Added
 
@@ -126,7 +126,7 @@ This release implements the PostgreSQL wire protocol (Strategy B), making Rockla
 
 ## [0.5.0] - 2024-08-01
 
-The native DuckDB extension (Strategy C) — Rocklake integrated directly into the DuckDB process via C FFI.
+The native DuckDB extension (Strategy C) — RockLake integrated directly into the DuckDB process via C FFI.
 
 ### Added
 
@@ -165,11 +165,11 @@ Initial implementation: SlateDB integration and core data model.
 
 ### General Upgrade Process
 
-1. Stop the running Rocklake instance
+1. Stop the running RockLake instance
 2. Replace the binary with the new version
 3. Start the new instance
 
-Rocklake is designed for zero-downtime upgrades when possible — the new instance picks up where the old one left off. However, some version transitions may require additional steps:
+RockLake is designed for zero-downtime upgrades when possible — the new instance picks up where the old one left off. However, some version transitions may require additional steps:
 
 ### Breaking Changes by Version
 

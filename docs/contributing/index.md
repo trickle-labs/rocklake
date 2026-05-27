@@ -1,8 +1,8 @@
-# Contributing to Rocklake
+# Contributing to RockLake
 
-Thank you for your interest in contributing to Rocklake. Whether you are fixing a typo in documentation, adding a test case, implementing a new feature, or reporting a bug — your contribution makes the project better for everyone who uses it. This section provides everything you need to go from "I want to help" to "my PR is merged" with confidence.
+Thank you for your interest in contributing to RockLake. Whether you are fixing a typo in documentation, adding a test case, implementing a new feature, or reporting a bug — your contribution makes the project better for everyone who uses it. This section provides everything you need to go from "I want to help" to "my PR is merged" with confidence.
 
-Contributing to an unfamiliar codebase can feel intimidating. The project uses Rust (which has a learning curve), deals with database internals (which are complex), and targets a specific protocol (DuckLake) that you may not have encountered before. This guide is designed to reduce that intimidation. We assume nothing about your prior experience with Rocklake — only that you know enough Rust to compile and run code, and that you are willing to learn the domain-specific details.
+Contributing to an unfamiliar codebase can feel intimidating. The project uses Rust (which has a learning curve), deals with database internals (which are complex), and targets a specific protocol (DuckLake) that you may not have encountered before. This guide is designed to reduce that intimidation. We assume nothing about your prior experience with RockLake — only that you know enough Rust to compile and run code, and that you are willing to learn the domain-specific details.
 
 The project is structured to make contributions tractable. Each crate has a focused responsibility, the test suite is comprehensive (so you can validate your changes quickly), and the code style is consistent (so you spend less time on formatting decisions and more time on logic). The maintainers are committed to reviewing PRs promptly and providing constructive feedback.
 
@@ -97,15 +97,15 @@ git push origin fix/my-improvement
 - **PR discussions:** Directly on the PR
 
 When opening an issue, include:
-- Rocklake version (from `rocklake --version` or `Cargo.toml`)
+- RockLake version (from `rocklake --version` or `Cargo.toml`)
 - Storage backend (S3 Standard, S3 Express, GCS, local)
 - Steps to reproduce (for bugs)
 - Expected vs. actual behavior
 
 ## Code of Conduct
 
-Rocklake follows the [Rust Code of Conduct](https://www.rust-lang.org/policies/code-of-conduct). Be respectful, constructive, and collaborative. Toxic behavior, harassment, and discrimination are not tolerated.
+RockLake follows the [Rust Code of Conduct](https://www.rust-lang.org/policies/code-of-conduct). Be respectful, constructive, and collaborative. Toxic behavior, harassment, and discrimination are not tolerated.
 
 ## License
 
-Contributions to Rocklake are licensed under the same terms as the project (see the LICENSE file in the repository root). By submitting a PR, you agree that your contribution is licensed under these terms.
+Contributions to RockLake are licensed under the same terms as the project (see the LICENSE file in the repository root). By submitting a PR, you agree that your contribution is licensed under these terms.

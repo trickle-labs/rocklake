@@ -1,8 +1,8 @@
 # Multi-Region Deployment
 
-Multi-region deployment allows Rocklake to serve catalog queries from multiple geographic regions with low latency. A data team in Frankfurt should not wait 150ms for a round-trip to Virginia every time DuckDB resolves a table name — they should hit a local Rocklake instance that responds in 5ms. Because Rocklake uses object storage as its durable layer, multi-region deployment leverages your cloud provider's built-in cross-region replication rather than implementing its own replication protocol.
+Multi-region deployment allows RockLake to serve catalog queries from multiple geographic regions with low latency. A data team in Frankfurt should not wait 150ms for a round-trip to Virginia every time DuckDB resolves a table name — they should hit a local RockLake instance that responds in 5ms. Because RockLake uses object storage as its durable layer, multi-region deployment leverages your cloud provider's built-in cross-region replication rather than implementing its own replication protocol.
 
-This page covers the architecture of multi-region Rocklake deployments, configuration for each cloud provider, replication lag characteristics, failover procedures, and the cost trade-offs of geographic distribution.
+This page covers the architecture of multi-region RockLake deployments, configuration for each cloud provider, replication lag characteristics, failover procedures, and the cost trade-offs of geographic distribution.
 
 ## Architecture
 
@@ -11,19 +11,19 @@ The multi-region pattern is simple: one writer in the primary region, read-only 
 ```mermaid
 flowchart LR
     subgraph "Region A (us-east-1)"
-        W[Rocklake Writer]
+        W[RockLake Writer]
         S3A[(S3 Bucket A)]
         W --> S3A
     end
     
     subgraph "Region B (eu-west-1)"
-        R1[Rocklake Reader]
+        R1[RockLake Reader]
         S3B[(S3 Bucket B)]
         R1 --> S3B
     end
     
     subgraph "Region C (ap-southeast-1)"
-        R2[Rocklake Reader]
+        R2[RockLake Reader]
         S3C[(S3 Bucket C)]
         R2 --> S3C
     end
@@ -36,7 +36,7 @@ The flow is unidirectional: writes go to the primary, replication propagates to 
 
 ### Why This Works
 
-Traditional databases struggle with multi-region because replicating transaction logs across continents introduces latency into the write path. Rocklake does not have this problem because:
+Traditional databases struggle with multi-region because replicating transaction logs across continents introduces latency into the write path. RockLake does not have this problem because:
 
 1. **Writes are local.** The writer commits to its local-region S3 bucket. The write path has zero cross-region latency.
 2. **Replication is asynchronous.** Cross-region copy happens in the background, managed by the cloud provider.
@@ -198,7 +198,7 @@ Cross-region replication is asynchronous. The lag determines how stale your read
 | Azure RA-GRS | Asynchronous | < 15 min typical | No firm SLA |
 | Azure GZRS | Asynchronous | < 15 min typical | No firm SLA |
 
-### What "Lag" Means for Rocklake
+### What "Lag" Means for RockLake
 
 During the replication lag window, readers in secondary regions serve a slightly older catalog snapshot. Concretely:
 
@@ -228,7 +228,7 @@ aws cloudwatch get-metric-statistics \
 
 ## Client Routing
 
-Route clients to their nearest Rocklake instance for lowest latency.
+Route clients to their nearest RockLake instance for lowest latency.
 
 ### DNS-Based Routing (AWS Route 53)
 
@@ -317,7 +317,7 @@ With asynchronous replication, any writes that had not yet replicated are lost. 
 | GCS Multi-Region | ~0 (synchronous) |
 | Azure RA-GRS | Up to 15 minutes |
 
-For Rocklake catalogs, "lost data" means catalog metadata (table definitions, partition registrations) — not the actual data files in the lake. Data files in the lake are independently replicated and are not affected by Rocklake's catalog state.
+For RockLake catalogs, "lost data" means catalog metadata (table definitions, partition registrations) — not the actual data files in the lake. Data files in the lake are independently replicated and are not affected by RockLake's catalog state.
 
 ### Failback Procedure
 
@@ -335,10 +335,10 @@ Multi-region deployment adds costs:
 |---------------|-------------------------|
 | S3 CRR data transfer (per GB replicated) | $0.02/GB |
 | Secondary bucket storage | Same as primary |
-| Secondary Rocklake instance | Same as primary (small) |
+| Secondary RockLake instance | Same as primary (small) |
 | DNS routing (Route 53) | $0.50/hosted zone + $0.60/million queries |
 
-For a typical Rocklake catalog (10–100 MB of metadata), cross-region replication costs are negligible — less than $1/month. The dominant cost is the secondary Rocklake instance, which can be as small as a `t3.micro` ($7/month).
+For a typical RockLake catalog (10–100 MB of metadata), cross-region replication costs are negligible — less than $1/month. The dominant cost is the secondary RockLake instance, which can be as small as a `t3.micro` ($7/month).
 
 ## Example: Three-Region Analytics Platform
 

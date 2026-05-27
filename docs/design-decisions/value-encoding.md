@@ -1,6 +1,6 @@
 # Value Encoding: FlatBuffers Evaluation
 
-Rocklake uses Protocol Buffers (protobuf) for all catalog value encoding.
+RockLake uses Protocol Buffers (protobuf) for all catalog value encoding.
 See [Protobuf Encoding](protobuf-encoding.md) for the full rationale.
 
 During v0.9 planning, FlatBuffers was evaluated as a potential replacement
@@ -47,7 +47,7 @@ justify:
 FlatBuffers remains a viable option for a future version if:
 
 - Catalog row counts exceed ~10M (where decode CPU becomes a bottleneck)
-- Rocklake adds a columnar layout that benefits from random field access
+- RockLake adds a columnar layout that benefits from random field access
 - The FlatBuffers Rust crate matures to offer safe zero-copy with lifetimes
 
 ## Schema evolution compatibility

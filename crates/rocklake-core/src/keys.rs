@@ -1,4 +1,4 @@
-//! Binary key encoding and decoding for the Rocklake catalog.
+//! Binary key encoding and decoding for the RockLake catalog.
 //!
 //! All keys are big-endian encoded for correct lexicographic ordering.
 //! The first byte is always the table tag.

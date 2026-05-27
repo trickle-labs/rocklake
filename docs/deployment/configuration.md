@@ -1,6 +1,6 @@
 # Configuration
 
-Rocklake is configured through a combination of command-line flags, environment variables, and (optionally) a TOML configuration file. The design follows the twelve-factor app methodology: configuration that varies between environments lives in the environment, not in code. Sensible defaults mean that most deployments need only a storage path and a bind address to get started.
+RockLake is configured through a combination of command-line flags, environment variables, and (optionally) a TOML configuration file. The design follows the twelve-factor app methodology: configuration that varies between environments lives in the environment, not in code. Sensible defaults mean that most deployments need only a storage path and a bind address to get started.
 
 This page documents every available configuration option, explains the precedence rules, and provides guidance on which options matter for which deployment scenarios.
 
@@ -47,7 +47,7 @@ rocklake serve [FLAGS] [OPTIONS]
 | `--tls-key PATH` | (none) | Path to PEM-encoded TLS private key file. |
 | `--tls-ca PATH` | (none) | Path to PEM-encoded CA certificate for mutual TLS (client certificate verification). |
 
-When TLS is configured, the server requires all connections to use TLS. There is no mixed-mode listener — either all connections are encrypted or none are. If you need both, run two Rocklake instances on different ports.
+When TLS is configured, the server requires all connections to use TLS. There is no mixed-mode listener — either all connections are encrypted or none are. If you need both, run two RockLake instances on different ports.
 
 ### Authentication Options
 
@@ -69,7 +69,7 @@ When TLS is configured, the server requires all connections to use TLS. There is
 
 Environment variables provide the same configuration surface as command-line flags, plus additional provider-specific settings.
 
-### Core Rocklake Variables
+### Core RockLake Variables
 
 | Variable | Equivalent Flag | Description |
 |----------|----------------|-------------|
@@ -128,7 +128,7 @@ Environment variables provide the same configuration surface as command-line fla
 
 ## Configuration File (TOML)
 
-For complex deployments, you can use a TOML configuration file. By default, Rocklake looks for `rocklake.toml` in the current directory. Override with the `--config` flag or `ROCKLAKE_CONFIG` environment variable:
+For complex deployments, you can use a TOML configuration file. By default, RockLake looks for `rocklake.toml` in the current directory. Override with the `--config` flag or `ROCKLAKE_CONFIG` environment variable:
 
 ```bash
 rocklake --config /etc/rocklake/rocklake.toml
@@ -184,7 +184,7 @@ The trailing slash is optional but recommended for clarity. The specified path b
 
 ### Path Layout Within Storage
 
-Once Rocklake starts writing to a storage path, the internal layout is:
+Once RockLake starts writing to a storage path, the internal layout is:
 
 ```
 s3://my-bucket/catalog/
@@ -194,7 +194,7 @@ s3://my-bucket/catalog/
 └── sst/               # Sorted string table files
 ```
 
-Do not manually modify files under this prefix. Rocklake manages this layout exclusively through SlateDB's compaction and garbage collection.
+Do not manually modify files under this prefix. RockLake manages this layout exclusively through SlateDB's compaction and garbage collection.
 
 ## Deployment-Specific Recipes
 
@@ -251,7 +251,7 @@ rocklake serve --catalog s3://my-bucket/catalog/ --bind 0.0.0.0:5432
 
 ## Validation and Diagnostics
 
-On startup, Rocklake validates all configuration and reports errors clearly:
+On startup, RockLake validates all configuration and reports errors clearly:
 
 ```
 ERROR: --catalog is required but not set
@@ -279,7 +279,7 @@ Most deployments will work well with the defaults, but these settings can have a
 
 ### Write Batch Size (`--batch-size`)
 
-Rocklake accumulates catalog mutations in a batch before committing them to SlateDB. Larger batches mean fewer round trips to object storage per transaction, which reduces latency for write-heavy workloads where many rows change per transaction.
+RockLake accumulates catalog mutations in a batch before committing them to SlateDB. Larger batches mean fewer round trips to object storage per transaction, which reduces latency for write-heavy workloads where many rows change per transaction.
 
 However, larger batches also consume more memory during the commit phase. The default of 1000 is appropriate for most DuckLake workloads where a typical `INSERT` operation registers a small number of Parquet files. If you are running bulk import operations that register tens of thousands of files in a single transaction, consider increasing this to 5000–10000. If you are on memory-constrained hardware, reducing it to 250–500 reduces peak memory use.
 
@@ -313,13 +313,13 @@ rocklake serve --catalog s3://my-bucket/catalog/ --max-sessions 4
 
 ### Prefetch Depth (`--prefetch-depth`)
 
-During SST scans (such as listing all data files for a table, or scanning snapshot history), Rocklake prefetches ahead by this many data blocks. Higher values use more memory but reduce sequential scan latency by overlapping I/O with processing.
+During SST scans (such as listing all data files for a table, or scanning snapshot history), RockLake prefetches ahead by this many data blocks. Higher values use more memory but reduce sequential scan latency by overlapping I/O with processing.
 
 At the default of 4, this is invisible for most workloads. If you are running the `export` command frequently over large catalogs, try `--prefetch-depth 8` or `--prefetch-depth 16` to speed up the sequential passes.
 
 ### Compaction (`--compaction-interval`)
 
-SlateDB compacts SST files in the background to reduce read amplification and garbage-collect superseded versions. By default, Rocklake triggers a compaction check every 300 seconds (5 minutes).
+SlateDB compacts SST files in the background to reduce read amplification and garbage-collect superseded versions. By default, RockLake triggers a compaction check every 300 seconds (5 minutes).
 
 Compaction is a background operation — it does not block reads or writes. However, it does consume CPU and generate object storage I/O. On cost-sensitive deployments (where you are paying per S3 API call), you may want to increase the interval to 1800 or 3600 seconds. On write-heavy deployments that generate many small SSTs, you may want to decrease it to 60–120 seconds.
 
@@ -347,7 +347,7 @@ rocklake serve --catalog s3://my-bucket/catalog/
 
 ### Mutual TLS
 
-When `--tls-ca` is configured, Rocklake requires every connecting client to present a certificate signed by the specified CA. This means clients can only connect if they have a valid client certificate — password authentication becomes a second factor rather than the only factor.
+When `--tls-ca` is configured, RockLake requires every connecting client to present a certificate signed by the specified CA. This means clients can only connect if they have a valid client certificate — password authentication becomes a second factor rather than the only factor.
 
 Mutual TLS is the recommended security configuration for production deployments that are exposed beyond a trusted private network. DuckDB supports client certificates via connection string parameters:
 
@@ -374,7 +374,7 @@ rocklake serve --catalog s3://my-bucket/catalog/ --bind 10.0.0.2:5432 --read-onl
 
 ### Log Levels
 
-Rocklake supports five log levels in increasing verbosity:
+RockLake supports five log levels in increasing verbosity:
 
 | Level | What Is Logged |
 |-------|---------------|
@@ -412,7 +412,7 @@ The `RUST_LOG` environment variable provides per-crate log level control:
 # Debug the PG wire layer only, keep catalog at info
 RUST_LOG=rocklake_pgwire=debug,rocklake_catalog=info
 
-# Suppress SlateDB noise, debug Rocklake
+# Suppress SlateDB noise, debug RockLake
 RUST_LOG=slatedb=warn,rocklake=debug
 
 # Full trace for key encoding

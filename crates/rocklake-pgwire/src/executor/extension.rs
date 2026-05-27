@@ -8,7 +8,7 @@ use pgwire::api::Type;
 use rocklake_catalog::CatalogStore;
 use rocklake_sql::ParamValues;
 
-use crate::error::RocklakeError;
+use crate::error::RockLakeError;
 
 pub(super) fn hash_table_ref(table_ref: &str) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -22,14 +22,14 @@ pub(super) async fn execute_create_extension_table<'a>(
     table_name: &str,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
     extension_schemas: &Arc<Vec<String>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     if !rocklake_catalog::is_registered_extension(schema_name, extension_schemas) {
-        return Err(RocklakeError::PermissionDenied(format!(
+        return Err(RockLakeError::PermissionDenied(format!(
             "extension schema '{schema_name}' is not in the allowed list"
         )));
     }
     let extension_id = rocklake_catalog::resolve_extension_id(schema_name).ok_or_else(|| {
-        RocklakeError::Unsupported(format!(
+        RockLakeError::Unsupported(format!(
             "extension schema '{schema_name}' is not registered"
         ))
     })?;
@@ -37,7 +37,7 @@ pub(super) async fn execute_create_extension_table<'a>(
     let db = store_lock.db();
     rocklake_catalog::create_extension_table(db, extension_id, table_name)
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
     Ok(vec![Response::Execution(Tag::new("CREATE TABLE"))])
 }
 
@@ -48,14 +48,14 @@ pub(super) async fn execute_insert_extension_row<'a>(
     params: &ParamValues,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
     extension_schemas: &Arc<Vec<String>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     if !rocklake_catalog::is_registered_extension(schema_name, extension_schemas) {
-        return Err(RocklakeError::PermissionDenied(format!(
+        return Err(RockLakeError::PermissionDenied(format!(
             "extension schema '{schema_name}' is not in the allowed list"
         )));
     }
     let extension_id = rocklake_catalog::resolve_extension_id(schema_name).ok_or_else(|| {
-        RocklakeError::Unsupported(format!(
+        RockLakeError::Unsupported(format!(
             "extension schema '{schema_name}' is not registered"
         ))
     })?;
@@ -65,7 +65,7 @@ pub(super) async fn execute_insert_extension_row<'a>(
     let data_json = params.to_json_string_with_columns(columns);
     rocklake_catalog::insert_extension_row(db, extension_id, table_name, &data_json)
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
     Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
 }
 
@@ -74,14 +74,14 @@ pub(super) async fn execute_select_extension_table<'a>(
     table_name: &str,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
     extension_schemas: &Arc<Vec<String>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     if !rocklake_catalog::is_registered_extension(schema_name, extension_schemas) {
-        return Err(RocklakeError::PermissionDenied(format!(
+        return Err(RockLakeError::PermissionDenied(format!(
             "extension schema '{schema_name}' is not in the allowed list"
         )));
     }
     let extension_id = rocklake_catalog::resolve_extension_id(schema_name).ok_or_else(|| {
-        RocklakeError::Unsupported(format!(
+        RockLakeError::Unsupported(format!(
             "extension schema '{schema_name}' is not registered"
         ))
     })?;
@@ -89,7 +89,7 @@ pub(super) async fn execute_select_extension_table<'a>(
     let db = store_lock.db();
     let rows = rocklake_catalog::select_extension_rows(db, extension_id, table_name)
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
 
     let schema = Arc::new(vec![
         FieldInfo::new("row_id".into(), None, None, Type::INT8, FieldFormat::Text),
@@ -125,14 +125,14 @@ pub(super) async fn execute_delete_extension_rows<'a>(
     table_name: &str,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
     extension_schemas: &Arc<Vec<String>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     if !rocklake_catalog::is_registered_extension(schema_name, extension_schemas) {
-        return Err(RocklakeError::PermissionDenied(format!(
+        return Err(RockLakeError::PermissionDenied(format!(
             "extension schema '{schema_name}' is not in the allowed list"
         )));
     }
     let extension_id = rocklake_catalog::resolve_extension_id(schema_name).ok_or_else(|| {
-        RocklakeError::Unsupported(format!(
+        RockLakeError::Unsupported(format!(
             "extension schema '{schema_name}' is not registered"
         ))
     })?;
@@ -140,7 +140,7 @@ pub(super) async fn execute_delete_extension_rows<'a>(
     let db = store_lock.db();
     let deleted = rocklake_catalog::delete_extension_rows(db, extension_id, table_name)
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
     Ok(vec![Response::Execution(Tag::new(&format!(
         "DELETE {deleted}"
     )))])

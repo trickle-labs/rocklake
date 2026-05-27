@@ -448,7 +448,7 @@ fn ffi_open_close_roundtrip() {
 
     let dir = TempDir::new().unwrap();
     let path = CString::new(dir.path().to_str().unwrap()).unwrap();
-    let mut err = rocklake_ffi::RocklakeError {
+    let mut err = rocklake_ffi::RockLakeError {
         code: 0,
         message: std::ptr::null_mut(),
     };
@@ -470,7 +470,7 @@ fn ffi_list_operations_empty_catalog() {
 
     let dir = TempDir::new().unwrap();
     let path = CString::new(dir.path().to_str().unwrap()).unwrap();
-    let mut err = rocklake_ffi::RocklakeError {
+    let mut err = rocklake_ffi::RockLakeError {
         code: 0,
         message: std::ptr::null_mut(),
     };
@@ -538,7 +538,7 @@ async fn strategy_b_c_equivalence() {
         tokio::task::spawn_blocking(move || {
             use std::ffi::CString;
             let path = CString::new(dir_path.as_str()).unwrap();
-            let mut err = rocklake_ffi::RocklakeError {
+            let mut err = rocklake_ffi::RockLakeError {
                 code: 0,
                 message: std::ptr::null_mut(),
             };
@@ -589,19 +589,19 @@ async fn strategy_b_c_equivalence() {
             let ffi_fid = unsafe { (*files.files).data_file_id };
 
             // Free and close
-            rocklake_ffi::rocklake_schema_list_free(&mut rocklake_ffi::RocklakeSchemaList {
+            rocklake_ffi::rocklake_schema_list_free(&mut rocklake_ffi::RockLakeSchemaList {
                 schemas: schemas.schemas,
                 count: schemas.count,
             });
-            rocklake_ffi::rocklake_table_list_free(&mut rocklake_ffi::RocklakeTableList {
+            rocklake_ffi::rocklake_table_list_free(&mut rocklake_ffi::RockLakeTableList {
                 tables: tables.tables,
                 count: tables.count,
             });
-            rocklake_ffi::rocklake_column_list_free(&mut rocklake_ffi::RocklakeColumnList {
+            rocklake_ffi::rocklake_column_list_free(&mut rocklake_ffi::RockLakeColumnList {
                 columns: columns.columns,
                 count: columns.count,
             });
-            rocklake_ffi::rocklake_file_list_free(&mut rocklake_ffi::RocklakeFileList {
+            rocklake_ffi::rocklake_file_list_free(&mut rocklake_ffi::RockLakeFileList {
                 files: files.files,
                 count: files.count,
             });

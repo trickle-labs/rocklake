@@ -1,6 +1,6 @@
 //! Real DuckDB binary integration tests (v0.27.4).
 //!
-//! These tests spawn the actual `duckdb` binary against a live Rocklake server
+//! These tests spawn the actual `duckdb` binary against a live RockLake server
 //! to verify that real DuckDB 1.5.x wire-protocol behavior is handled correctly.
 //!
 //! # Running
@@ -83,7 +83,7 @@ async fn start_server(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// Verify DuckDB can connect to Rocklake and execute a simple query using
+/// Verify DuckDB can connect to RockLake and execute a simple query using
 /// `tokio-postgres` (same PgWire path, without triggering COPY).
 ///
 /// This validates the full TCP + PgWire handshake. If this breaks after a
@@ -114,7 +114,7 @@ async fn duckdb_compatible_client_connects_and_pings() {
     assert_eq!(rows.len(), 1, "SELECT 1 must return 1 row");
 }
 
-/// Verify DuckDB binary can connect to Rocklake and that the server handles
+/// Verify DuckDB binary can connect to RockLake and that the server handles
 /// the postgres-scanner handshake without hanging.
 ///
 /// Uses a 20s timeout. If the process doesn't exit within 20s, the server is

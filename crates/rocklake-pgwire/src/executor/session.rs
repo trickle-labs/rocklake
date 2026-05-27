@@ -6,7 +6,7 @@ use pgwire::api::results::Response;
 
 use rocklake_catalog::CatalogStore;
 
-use crate::error::RocklakeError;
+use crate::error::RockLakeError;
 
 use super::helpers::make_single_text_response;
 
@@ -15,12 +15,12 @@ pub(super) async fn execute_hold_snapshot<'a>(
     consumer_id: &str,
     ttl_seconds: u64,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     let store_lock = store.lock().await;
     let db = store_lock.db();
     rocklake_catalog::hold_snapshot(db, consumer_id, min_snapshot_id, ttl_seconds)
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
 
     Ok(vec![make_single_text_response("hold_snapshot", "OK")])
 }
@@ -28,12 +28,12 @@ pub(super) async fn execute_hold_snapshot<'a>(
 pub(super) async fn execute_release_snapshot<'a>(
     consumer_id: &str,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     let store_lock = store.lock().await;
     let db = store_lock.db();
     let released = rocklake_catalog::release_snapshot(db, consumer_id)
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
 
     Ok(vec![make_single_text_response(
         "release_snapshot",

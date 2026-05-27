@@ -1,4 +1,4 @@
-//! Rocklake Catalog: DuckLake catalog operations backed by SlateDB.
+//! RockLake Catalog: DuckLake catalog operations backed by SlateDB.
 
 #![deny(missing_docs)]
 
@@ -51,7 +51,7 @@ pub use partition::{CatalogRegistry, DatasetEntry, PartitionedWriter};
 pub use performance::{BenchmarkReport, HotKeyState, SlateDbTuning};
 pub use reader::{CatalogReader, SnapshotDiff};
 pub use store::{CatalogStore, OpenOptions};
-pub use streaming::{measure_ingest_throughput, IngestRecord, IngestResult, RocklakeSink};
+pub use streaming::{measure_ingest_throughput, IngestRecord, IngestResult, RockLakeSink};
 pub use warmup::{publish_writer_endpoint, read_writer_endpoint, warmup_cache, WarmupResult};
 pub use writer::{
     next_rowid_range,

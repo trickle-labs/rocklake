@@ -4,7 +4,7 @@
 //! - Application metadata key namespace enforcement
 //! - Exactly-once delivery (idempotent retry)
 //! - Consumer offset tracking (monotone across batches)
-//! - RocklakeSink ingest (simulated Kafka/NATS pipeline)
+//! - RockLakeSink ingest (simulated Kafka/NATS pipeline)
 //! - snapshot_diff / CatalogReader::snapshot_diff
 //! - S3 CDC file writer (in-memory)
 //! - CdcTailer poll loop
@@ -14,7 +14,7 @@
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{
     cdc::{CdcChangeKind, CdcTailer},
-    streaming::{measure_ingest_throughput, IngestRecord, RocklakeSink},
+    streaming::{measure_ingest_throughput, IngestRecord, RockLakeSink},
     CatalogError, CatalogStore, OpenOptions,
 };
 use rocklake_core::{keys::MetadataScope, mvcc::SnapshotId};
@@ -128,13 +128,13 @@ fn metadata_empty_key_rejected() {
     );
 }
 
-/// RocklakeSink constructor validates offset key format.
+/// RockLakeSink constructor validates offset key format.
 #[test]
 fn slate_duck_sink_rejects_bad_offset_key() {
-    let result = RocklakeSink::new("bad.key");
+    let result = RockLakeSink::new("bad.key");
     assert!(
         matches!(result, Err(CatalogError::InvalidInput(_))),
-        "RocklakeSink::new must reject keys with < 3 parts"
+        "RockLakeSink::new must reject keys with < 3 parts"
     );
 }
 
@@ -146,7 +146,7 @@ async fn consumer_offset_advances_monotonically() {
     let dir = TempDir::new().unwrap();
     let (mut store, table_id) = open_with_table(&dir).await;
 
-    let sink = RocklakeSink::new("test.consumer.offset").unwrap();
+    let sink = RockLakeSink::new("test.consumer.offset").unwrap();
 
     for batch in 0..10u64 {
         let records = vec![IngestRecord {
@@ -197,7 +197,7 @@ async fn exactly_once_idempotent_retry() {
     let dir = TempDir::new().unwrap();
     let (mut store, table_id) = open_with_table(&dir).await;
 
-    let sink = RocklakeSink::new("myapp.instance1.offset").unwrap();
+    let sink = RockLakeSink::new("myapp.instance1.offset").unwrap();
     let records = vec![IngestRecord {
         key: "id".to_string(),
         value: serde_json::json!(99),
@@ -241,7 +241,7 @@ async fn exactly_once_crash_recovery() {
     let dir = TempDir::new().unwrap();
     let (mut store, table_id) = open_with_table(&dir).await;
 
-    let sink = RocklakeSink::new("svc.pipeline.offset").unwrap();
+    let sink = RockLakeSink::new("svc.pipeline.offset").unwrap();
 
     // Batch 1: committed successfully.
     sink.commit_batch(
@@ -284,7 +284,7 @@ async fn exactly_once_wrong_expected_offset_fences() {
     let dir = TempDir::new().unwrap();
     let (mut store, table_id) = open_with_table(&dir).await;
 
-    let sink = RocklakeSink::new("svc.fence.offset").unwrap();
+    let sink = RockLakeSink::new("svc.fence.offset").unwrap();
 
     // Commit batch 1.
     sink.commit_batch(
@@ -323,16 +323,16 @@ async fn exactly_once_wrong_expected_offset_fences() {
     );
 }
 
-// ─── Simulated Kafka → Rocklake Pipeline ────────────────────────────────────
+// ─── Simulated Kafka → RockLake Pipeline ────────────────────────────────────
 
-/// Simulate Kafka → Rocklake: ingest ≥ 100k records in batches, then verify
+/// Simulate Kafka → RockLake: ingest ≥ 100k records in batches, then verify
 /// all records are queryable via the catalog reader.
 #[tokio::test]
 async fn kafka_simulated_ingest_100k_records() {
     let dir = TempDir::new().unwrap();
     let (mut store, table_id) = open_with_table(&dir).await;
 
-    let sink = RocklakeSink::new("kafka.orders-source.offset").unwrap();
+    let sink = RockLakeSink::new("kafka.orders-source.offset").unwrap();
 
     let total_records = 100_000usize;
     let batch_size = 500usize;
@@ -379,14 +379,14 @@ async fn kafka_simulated_ingest_100k_records() {
     assert_eq!(row.value, num_batches.to_string());
 }
 
-/// Simulate NATS → Rocklake: same test pattern as Kafka, verifying the same
+/// Simulate NATS → RockLake: same test pattern as Kafka, verifying the same
 /// exactly-once semantics work regardless of source.
 #[tokio::test]
 async fn nats_simulated_ingest_100k_records() {
     let dir = TempDir::new().unwrap();
     let (mut store, table_id) = open_with_table(&dir).await;
 
-    let sink = RocklakeSink::new("nats.events-stream.offset").unwrap();
+    let sink = RockLakeSink::new("nats.events-stream.offset").unwrap();
 
     let total_records = 100_000usize;
     let batch_size = 1000usize;
@@ -766,7 +766,7 @@ async fn ingest_throughput_meets_performance_target() {
     let dir = TempDir::new().unwrap();
     let (mut store, table_id) = open_with_table(&dir).await;
 
-    let sink = RocklakeSink::new("perf.test.offset").unwrap();
+    let sink = RockLakeSink::new("perf.test.offset").unwrap();
 
     let (throughput, p95_ms) = measure_ingest_throughput(
         &mut store, &sink, table_id,

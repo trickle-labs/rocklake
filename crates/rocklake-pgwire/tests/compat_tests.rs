@@ -1,8 +1,8 @@
 //! Tier 5: DuckLake compatibility tests — full DuckLake tutorial lifecycle
-//! against a local-FS-backed catalog served via the Rocklake executor.
+//! against a local-FS-backed catalog served via the RockLake executor.
 //!
 //! These tests exercise the complete SQL lifecycle that a DuckDB client would
-//! perform against a production Rocklake catalog using the DuckLake protocol:
+//! perform against a production RockLake catalog using the DuckLake protocol:
 //!
 //! Schema:  `INSERT INTO ducklake_schema (schema_name) VALUES ($1)`
 //! Table:   `INSERT INTO ducklake_table (schema_id, table_name, data_path) VALUES ($1,$2,$3)`

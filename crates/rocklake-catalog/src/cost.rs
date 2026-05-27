@@ -265,7 +265,7 @@ impl ApiCostReport {
         );
         if self.estimated_monthly_usd < self.rds_monthly_usd {
             println!(
-                "  → Rocklake is {:.1}x cheaper than RDS at this ingest rate",
+                "  → RockLake is {:.1}x cheaper than RDS at this ingest rate",
                 self.rds_monthly_usd / self.estimated_monthly_usd.max(0.01)
             );
         } else {

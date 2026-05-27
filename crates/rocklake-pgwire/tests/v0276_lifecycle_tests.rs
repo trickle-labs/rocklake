@@ -1,6 +1,6 @@
 //! v0.27.6 — DuckLake Inlined-Data Lifecycle Integration Tests.
 //!
-//! Exercises the full DuckDB/DuckLake lifecycle against a live Rocklake
+//! Exercises the full DuckDB/DuckLake lifecycle against a live RockLake
 //! PgWire server.  All tests in this file are gated on `duckdb_available()`
 //! so they skip gracefully in environments where the `duckdb` binary is not
 //! installed, without requiring `#[ignore]` or `--include-ignored`.
@@ -243,7 +243,7 @@ async fn inlined_data_restart_lifecycle() {
 }
 
 /// `postgres_query` variant: use DuckDB's built-in `postgres_query()` to read
-/// the raw `ducklake_inlined_data_*` rows from Rocklake and verify the
+/// the raw `ducklake_inlined_data_*` rows from RockLake and verify the
 /// returned schema includes `row_id`, `begin_snapshot`, `end_snapshot`.
 #[tokio::test]
 async fn postgres_query_inlined_data() {

@@ -265,7 +265,7 @@ Combine exports with lifecycle policies to manage storage costs:
 {
   "Rules": [
     {
-      "ID": "RocklakeBackupRetention",
+      "ID": "RockLakeBackupRetention",
       "Status": "Enabled",
       "Filter": { "Prefix": "rocklake/" },
       "Transitions": [

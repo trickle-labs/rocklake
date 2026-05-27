@@ -1,6 +1,6 @@
 # Immutability Trade-offs
 
-Rocklake's append-only, immutable data model is its most distinctive architectural property — and its most controversial. Catalog entries are never modified in place. Updates create new versions, and old versions remain indefinitely until explicitly excised through a deliberate, audited process. This page honestly examines the costs of this approach, quantifies the trade-offs, compares them to mutable alternatives, and explains why immutability is the right choice for lakehouse catalogs despite its costs.
+RockLake's append-only, immutable data model is its most distinctive architectural property — and its most controversial. Catalog entries are never modified in place. Updates create new versions, and old versions remain indefinitely until explicitly excised through a deliberate, audited process. This page honestly examines the costs of this approach, quantifies the trade-offs, compares them to mutable alternatives, and explains why immutability is the right choice for lakehouse catalogs despite its costs.
 
 ## What You Get
 
@@ -16,7 +16,7 @@ In a mutable system, time travel requires either:
 - Change data capture to a separate store (operational overhead, lag)
 - Periodic snapshots (coarse granularity, storage-expensive)
 
-Rocklake provides snapshot-level time travel as a natural consequence of its data model — no additional infrastructure required.
+RockLake provides snapshot-level time travel as a natural consequence of its data model — no additional infrastructure required.
 
 ### Automatic Crash Safety
 
@@ -29,7 +29,7 @@ In a mutable system, crash safety requires:
 - Crash-consistent index maintenance
 - Undo/redo logic for partially-applied transactions
 
-Rocklake needs none of this. SlateDB's atomic `WriteBatch` either makes all new rows visible or none of them. Old rows are never touched.
+RockLake needs none of this. SlateDB's atomic `WriteBatch` either makes all new rows visible or none of them. Old rows are never touched.
 
 ### Lock-Free Readers
 
@@ -41,7 +41,7 @@ In a mutable system, read-write conflicts require:
 - MVCC with visibility checks and vacuum (complex, requires tuning)
 - Snapshot isolation with rollback segments (garbage generation)
 
-Rocklake readers simply seek to the appropriate key prefix and iterate. No visibility check is needed beyond comparing snapshot IDs (two integer comparisons per row).
+RockLake readers simply seek to the appropriate key prefix and iterate. No visibility check is needed beyond comparing snapshot IDs (two integer comparisons per row).
 
 ### Horizontal Read Scale-Out
 
@@ -119,7 +119,7 @@ This is an additional operational task that PostgreSQL-backed DuckLake does not 
 
 **Comparing operational burden:**
 
-| Task | Rocklake | PostgreSQL |
+| Task | RockLake | PostgreSQL |
 |------|-----------|-----------|
 | Retention management | Manual `gc` command (automatable) | Automatic vacuum |
 | Physical cleanup | Manual `excise` (optional, rare) | Automatic vacuum |
@@ -148,7 +148,7 @@ For GDPR compliance, the relevant question is: "when is the data irrecoverable?"
 
 ## The Trade-off Matrix
 
-| Concern | Immutable (Rocklake) | Mutable (PostgreSQL DuckLake) |
+| Concern | Immutable (RockLake) | Mutable (PostgreSQL DuckLake) |
 |---------|----------------------|-------------------------------|
 | Time travel | Free, natural, unlimited (until GC) | Expensive, limited by WAL retention |
 | Crash safety | Automatic (no partial updates possible) | Requires WAL + checkpoint + recovery |
@@ -177,7 +177,7 @@ The costs (storage growth, GC scheduling, delete latency) are real but manageabl
 
 ## When Immutability Is Wrong
 
-If your use case has these characteristics, Rocklake's immutability model may not be appropriate:
+If your use case has these characteristics, RockLake's immutability model may not be appropriate:
 
 - **Very high catalog churn:** Thousands of schema changes per second (rare, but possible in automated testing environments)
 - **Strict immediate-deletion requirements:** Regulations that demand data destruction within seconds, not hours

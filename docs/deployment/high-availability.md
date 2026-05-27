@@ -1,20 +1,20 @@
 # High Availability
 
-Rocklake achieves high availability through rapid failover rather than active-active replication. Because the single-writer model means only one instance can modify the catalog at a time, HA focuses on minimizing the gap between a writer failure and its replacement taking over. The system is designed around a specific insight: for a stateless binary whose entire state lives in durable object storage, "recovery" is not the expensive operation it is in traditional databases — it is simply starting a new process and reading the manifest.
+RockLake achieves high availability through rapid failover rather than active-active replication. Because the single-writer model means only one instance can modify the catalog at a time, HA focuses on minimizing the gap between a writer failure and its replacement taking over. The system is designed around a specific insight: for a stateless binary whose entire state lives in durable object storage, "recovery" is not the expensive operation it is in traditional databases — it is simply starting a new process and reading the manifest.
 
-This page explains the availability model, failover mechanics, monitoring strategies, and how to achieve specific uptime targets with Rocklake.
+This page explains the availability model, failover mechanics, monitoring strategies, and how to achieve specific uptime targets with RockLake.
 
-## Understanding Rocklake's Availability Profile
+## Understanding RockLake's Availability Profile
 
-Rocklake's availability depends on three independent components:
+RockLake's availability depends on three independent components:
 
 | Component | Typical Availability | Your Control |
 |-----------|---------------------|--------------|
 | Object storage (S3/GCS/Azure) | 99.99% (provider SLA) | No — provider-managed |
 | Network (within a region) | 99.99%+ | Partial — VPC design, multiple AZs |
-| Rocklake process | Depends on deployment | Full — orchestration, monitoring, failover |
+| RockLake process | Depends on deployment | Full — orchestration, monitoring, failover |
 
-The first two components are managed by your cloud provider and are effectively always available. The third — the Rocklake process itself — is where your operational decisions matter. Every HA strategy in this page is about keeping the Rocklake process running or replacing it quickly when it fails.
+The first two components are managed by your cloud provider and are effectively always available. The third — the RockLake process itself — is where your operational decisions matter. Every HA strategy in this page is about keeping the RockLake process running or replacing it quickly when it fails.
 
 ### Why Failover is Fast
 
@@ -25,14 +25,14 @@ Traditional database failover is slow because the replacement must:
 3. Verify data integrity
 4. Catch up with replication lag
 
-Rocklake skips all of this. When a new instance starts:
+RockLake skips all of this. When a new instance starts:
 
 1. It reads the manifest from object storage (one GET, ~20ms)
 2. It builds the in-memory catalog index from the manifest (in-memory, ~10ms)
 3. It increments the writer epoch (one PUT, ~20ms)
 4. It starts accepting connections
 
-**Total time from process start to accepting connections: 50–200ms.** The bottleneck is not Rocklake — it is the orchestrator's health check interval.
+**Total time from process start to accepting connections: 50–200ms.** The bottleneck is not RockLake — it is the orchestrator's health check interval.
 
 ## Failover Mechanics
 
@@ -67,7 +67,7 @@ Where:
 
 - $T_{detection}$ = health check interval × failure threshold (e.g., 10s × 3 = 30s)
 - $T_{decision}$ = orchestrator scheduling time (typically 1–5s)
-- $T_{startup}$ = Rocklake cold start (50–200ms, negligible)
+- $T_{startup}$ = RockLake cold start (50–200ms, negligible)
 
 For practical purposes, the startup time is so fast that **detection time dominates the failover window**.
 
@@ -150,7 +150,7 @@ This achieves 2–5 second failover because there is no cold start — the stand
 
 ### Pattern 3: systemd with Socket Activation
 
-For bare-metal deployments, systemd can restart Rocklake within seconds:
+For bare-metal deployments, systemd can restart RockLake within seconds:
 
 ```ini
 [Service]
@@ -166,7 +166,7 @@ With `WatchdogSec=10`, systemd kills the process if it stops sending heartbeats 
 
 ## Read Availability vs. Write Availability
 
-Rocklake's architecture naturally provides higher read availability than write availability:
+RockLake's architecture naturally provides higher read availability than write availability:
 
 ### Read Availability
 
@@ -225,9 +225,9 @@ Brief write unavailability (10–30 seconds) is invisible to most users because 
 
 ### 99.999% (26 seconds downtime/month)
 
-This is **not achievable** with Rocklake's single-writer model. If you need five-nines write availability, consider:
+This is **not achievable** with RockLake's single-writer model. If you need five-nines write availability, consider:
 
-- Active-active replication (not supported by Rocklake's architecture)
+- Active-active replication (not supported by RockLake's architecture)
 - DuckLake's PostgreSQL backend with Aurora Multi-Master
 - Accepting read-only mode during writer failover (reads can achieve 99.999%)
 
@@ -249,32 +249,32 @@ This is **not achievable** with Rocklake's single-writer model. If you need five
 groups:
   - name: rocklake-ha
     rules:
-      - alert: RocklakeWriterDown
+      - alert: RockLakeWriterDown
         expr: up{job="rocklake-writer"} == 0
         for: 30s
         labels:
           severity: critical
         annotations:
-          summary: "Rocklake writer is down"
+          summary: "RockLake writer is down"
 
-      - alert: RocklakeFrequentFailover
+      - alert: RockLakeFrequentFailover
         expr: increase(rocklake_epoch_changes_total[1h]) > 3
         labels:
           severity: warning
         annotations:
-          summary: "Rocklake writer failing over frequently"
+          summary: "RockLake writer failing over frequently"
 ```
 
-## What Rocklake Does NOT Provide
+## What RockLake Does NOT Provide
 
 It is important to set expectations clearly:
 
 - **No active-active writes.** Two writers cannot modify the same catalog simultaneously. This is a fundamental architectural decision (not a missing feature).
 - **No synchronous replication.** Readers see committed data after object storage propagation (typically <1 second, but not zero).
-- **No automatic leader election.** Rocklake relies on an external orchestrator (Kubernetes, ECS, systemd) to restart failed instances.
+- **No automatic leader election.** RockLake relies on an external orchestrator (Kubernetes, ECS, systemd) to restart failed instances.
 - **No sub-second failover** without the hot standby pattern.
 
-If you need these properties for your catalog, consider DuckLake's PostgreSQL backend (which supports Aurora Multi-AZ failover) and treat Rocklake as the cost-optimized option for workloads where brief unavailability is acceptable.
+If you need these properties for your catalog, consider DuckLake's PostgreSQL backend (which supports Aurora Multi-AZ failover) and treat RockLake as the cost-optimized option for workloads where brief unavailability is acceptable.
 
 ## Failure Modes and Recovery
 
@@ -294,13 +294,13 @@ Understanding the specific failure modes helps design appropriate HA strategies:
 
 **Recovery:** When network restores, the writer resumes normally. No data loss, no restart needed.
 
-**Duration tolerance:** Rocklake can serve cached reads indefinitely during a partition. Writes fail immediately with a clear error. Clients should implement retry with backoff.
+**Duration tolerance:** RockLake can serve cached reads indefinitely during a partition. Writes fail immediately with a clear error. Clients should implement retry with backoff.
 
 ### Object Storage Outage (Extremely Rare)
 
 **Impact:** Complete unavailability — cannot read or write anything.
 
-**Recovery:** When storage recovers, Rocklake resumes automatically. Object storage providers have never had a complete regional outage lasting more than a few hours.
+**Recovery:** When storage recovers, RockLake resumes automatically. Object storage providers have never had a complete regional outage lasting more than a few hours.
 
 **Mitigation:** For extreme durability requirements, maintain a cross-region catalog copy that can serve reads during a regional outage.
 
@@ -320,7 +320,7 @@ Track availability using the standard formula:
 Availability = (Total Time - Downtime) / Total Time × 100%
 ```
 
-For Rocklake, "downtime" means "the writer cannot accept new connections." Define this precisely in your SLO:
+For RockLake, "downtime" means "the writer cannot accept new connections." Define this precisely in your SLO:
 
 | Target | Allowed Downtime/Month | Strategy Required |
 |--------|----------------------|------------------|
@@ -329,7 +329,7 @@ For Rocklake, "downtime" means "the writer cannot accept new connections." Defin
 | 99.95% | 21.9 minutes | Kubernetes + aggressive probes |
 | 99.99% | 4.4 minutes | Hot standby + <5s failover |
 
-Most Rocklake deployments achieve 99.9%+ availability with standard Kubernetes deployment and health probes, because the combination of fast startup (200ms) and aggressive liveness probes (10s interval, 2 failure threshold) means failures are detected and recovered within 30 seconds.
+Most RockLake deployments achieve 99.9%+ availability with standard Kubernetes deployment and health probes, because the combination of fast startup (200ms) and aggressive liveness probes (10s interval, 2 failure threshold) means failures are detected and recovered within 30 seconds.
 
 ## Further Reading
 

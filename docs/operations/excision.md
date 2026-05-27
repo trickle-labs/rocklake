@@ -1,6 +1,6 @@
 # Excision
 
-Excision is the physical deletion of catalog entries that are no longer visible to any valid reader. It is the second phase of garbage collection (after advancing the retention horizon) and represents the only operation in Rocklake that permanently destroys data. Because of its destructive and irreversible nature, excision includes multiple safety checks, requires explicit confirmation, and produces a permanent audit trail.
+Excision is the physical deletion of catalog entries that are no longer visible to any valid reader. It is the second phase of garbage collection (after advancing the retention horizon) and represents the only operation in RockLake that permanently destroys data. Because of its destructive and irreversible nature, excision includes multiple safety checks, requires explicit confirmation, and produces a permanent audit trail.
 
 Think of it this way: garbage collection (Phase 1) closes the blinds — old snapshots become invisible to readers, but the data still exists behind the blinds. Excision tears out the walls — the data is gone forever. Most operators never need excision. Those who do should treat it with the same caution as `DROP DATABASE`.
 
@@ -193,7 +193,7 @@ This removes all historical versions of a specific table's catalog entries witho
 
 ## Recovery After Accidental Excision
 
-Excision is irreversible from Rocklake's perspective. Recovery options:
+Excision is irreversible from RockLake's perspective. Recovery options:
 
 | Recovery Method | Availability | Completeness | Complexity |
 |----------------|-------------|--------------|------------|
@@ -294,7 +294,7 @@ For large excision operations, schedule during maintenance windows to avoid bloc
 
 **Q: Does excision delete the actual data files (Parquet files in the data lake)?**
 
-No. Excision removes only catalog metadata — the entries in Rocklake that describe the data files. The Parquet files themselves remain in the data lake untouched. If you need to delete the actual data files for compliance, you must do so separately after identifying them via the export or inspect commands.
+No. Excision removes only catalog metadata — the entries in RockLake that describe the data files. The Parquet files themselves remain in the data lake untouched. If you need to delete the actual data files for compliance, you must do so separately after identifying them via the export or inspect commands.
 
 **Q: Can I excise a single row without affecting everything before a snapshot?**
 

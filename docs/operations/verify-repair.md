@@ -1,8 +1,8 @@
 # Verify & Repair
 
-Rocklake includes tools for verifying catalog integrity and performing conservative repairs when issues are detected. These tools are designed for situations where you suspect corruption — unexpected errors, inconsistent query results, or anomalies reported by monitoring — and need to diagnose and potentially fix the problem without risking further damage.
+RockLake includes tools for verifying catalog integrity and performing conservative repairs when issues are detected. These tools are designed for situations where you suspect corruption — unexpected errors, inconsistent query results, or anomalies reported by monitoring — and need to diagnose and potentially fix the problem without risking further damage.
 
-Verify performs a comprehensive read-only scan of the entire catalog, checking every invariant that Rocklake depends on. Repair takes the findings from verify and applies safe, conservative fixes. The guiding principle is "first, do no harm" — repair will never modify data that might be needed by a valid reader, and it will never act on ambiguous findings.
+Verify performs a comprehensive read-only scan of the entire catalog, checking every invariant that RockLake depends on. Repair takes the findings from verify and applies safe, conservative fixes. The guiding principle is "first, do no harm" — repair will never modify data that might be needed by a valid reader, and it will never act on ambiguous findings.
 
 ## When to Use
 
@@ -111,7 +111,7 @@ Identifies entries that reference deleted parents:
 ### Verify Output
 
 ```
-Rocklake Catalog Verification
+RockLake Catalog Verification
 ═══════════════════════════════════════════════════════════════
 Storage:         s3://my-bucket/lakehouse/catalog/
 Snapshot:        latest (1,247)
@@ -226,7 +226,7 @@ When repair encounters an unfixable error, it logs the error and continues check
 ### Repair Output
 
 ```
-Rocklake Catalog Repair (DRY RUN)
+RockLake Catalog Repair (DRY RUN)
 ═══════════════════════════════════════════════════════════════
 
 Proposed repairs:

@@ -1,12 +1,12 @@
 # Monitoring
 
-A well-monitored Rocklake deployment tells you three things at a glance: Is it healthy? Is it performing well? Is anything trending toward a problem? Rocklake exposes Prometheus-compatible metrics that give you visibility into catalog operations, resource usage, storage interactions, and session state. Combined with proper alerting, these metrics let you catch issues before they affect users.
+A well-monitored RockLake deployment tells you three things at a glance: Is it healthy? Is it performing well? Is anything trending toward a problem? RockLake exposes Prometheus-compatible metrics that give you visibility into catalog operations, resource usage, storage interactions, and session state. Combined with proper alerting, these metrics let you catch issues before they affect users.
 
 This page covers the metrics endpoint configuration, the complete metrics catalog with explanations, alerting rules for common failure modes, Grafana dashboard setup, and integration with cloud-native monitoring services.
 
 ## Enabling Metrics
 
-Rocklake exposes metrics in Prometheus exposition format on a configurable HTTP endpoint:
+RockLake exposes metrics in Prometheus exposition format on a configurable HTTP endpoint:
 
 ```bash
 rocklake \
@@ -107,36 +107,36 @@ These track interactions with the underlying object store (S3/GCS/Azure/local):
 groups:
   - name: rocklake-critical
     rules:
-      - alert: RocklakeDown
+      - alert: RockLakeDown
         expr: up{job="rocklake"} == 0
         for: 30s
         labels:
           severity: critical
         annotations:
-          summary: "Rocklake is down"
-          description: "No metrics received from Rocklake for 30 seconds"
+          summary: "RockLake is down"
+          description: "No metrics received from RockLake for 30 seconds"
 
-      - alert: RocklakeSessionsExhausted
+      - alert: RockLakeSessionsExhausted
         expr: rocklake_active_sessions / rocklake_max_sessions > 0.95
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Rocklake session capacity >95% — new connections will be rejected"
+          summary: "RockLake session capacity >95% — new connections will be rejected"
 ```
 
 ### Warning Alerts (Investigate Within Hours)
 
 ```yaml
-      - alert: RocklakeStorageThrottling
+      - alert: RockLakeStorageThrottling
         expr: rate(rocklake_object_store_throttles_total[5m]) > 1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Object storage is throttling Rocklake requests"
+          summary: "Object storage is throttling RockLake requests"
 
-      - alert: RocklakeHighRetryRate
+      - alert: RockLakeHighRetryRate
         expr: rate(rocklake_object_store_retries_total[5m]) > 5
         for: 10m
         labels:
@@ -144,7 +144,7 @@ groups:
         annotations:
           summary: "Elevated object-store retry rate — transient failures"
 
-      - alert: RocklakeWriterEpochStale
+      - alert: RockLakeWriterEpochStale
         expr: rocklake_writer_epoch_age_ms > 300000
         for: 5m
         labels:
@@ -152,7 +152,7 @@ groups:
         annotations:
           summary: "Writer epoch is more than 5 minutes old — check for stuck writer"
 
-      - alert: RocklakeCDCMismatch
+      - alert: RockLakeCDCMismatch
         expr: increase(rocklake_cdc_record_count_mismatch_total[1h]) > 0
         labels:
           severity: warning
@@ -164,7 +164,7 @@ groups:
 
 ### Recommended Panels
 
-A comprehensive Rocklake dashboard includes these panels:
+A comprehensive RockLake dashboard includes these panels:
 
 **Row 1: Overview**
 
@@ -202,7 +202,7 @@ Use the CloudWatch Agent's Prometheus scraping to forward metrics:
       "prometheus": {
         "prometheus_config_path": "/etc/cwagent/prometheus.yaml",
         "emf_processor": {
-          "metric_namespace": "Rocklake",
+          "metric_namespace": "RockLake",
           "metric_unit": {
             "rocklake_writer_epoch_age_ms": "Milliseconds",
             "rocklake_active_sessions": "Count"

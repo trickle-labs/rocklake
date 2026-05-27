@@ -1,8 +1,8 @@
 # pg-tide-relay
 
-pg-tide-relay is a concept for relaying DuckLake catalog traffic through intermediate infrastructure that provides capabilities beyond what Rocklake offers natively: connection pooling, multi-tenant routing, enhanced authentication, fine-grained authorization, audit logging, and rate limiting. Rather than connecting DuckDB directly to Rocklake, traffic passes through a proxy layer that adds these enterprise features transparently.
+pg-tide-relay is a concept for relaying DuckLake catalog traffic through intermediate infrastructure that provides capabilities beyond what RockLake offers natively: connection pooling, multi-tenant routing, enhanced authentication, fine-grained authorization, audit logging, and rate limiting. Rather than connecting DuckDB directly to RockLake, traffic passes through a proxy layer that adds these enterprise features transparently.
 
-The name "tide-relay" comes from the idea of traffic flowing like tides between DuckDB and Rocklake — the relay simply channels the flow, optionally inspecting or redirecting it along the way.
+The name "tide-relay" comes from the idea of traffic flowing like tides between DuckDB and RockLake — the relay simply channels the flow, optionally inspecting or redirecting it along the way.
 
 ## Architecture
 
@@ -11,37 +11,37 @@ graph LR
     D1[DuckDB Client 1] --> R[pg-tide-relay]
     D2[DuckDB Client 2] --> R
     D3[DuckDB Client 3] --> R
-    R --> S1[Rocklake Instance 1<br/>Tenant A]
-    R --> S2[Rocklake Instance 2<br/>Tenant B]
-    R --> S3[Rocklake Instance 3<br/>Tenant C]
+    R --> S1[RockLake Instance 1<br/>Tenant A]
+    R --> S2[RockLake Instance 2<br/>Tenant B]
+    R --> S3[RockLake Instance 3<br/>Tenant C]
 ```
 
-The relay sits between DuckDB clients and Rocklake instances, intercepting PostgreSQL wire protocol messages. From the client's perspective, the relay looks like a PostgreSQL server. From Rocklake's perspective, the relay looks like a PostgreSQL client. The relay forwards messages bidirectionally, optionally logging, modifying, or routing them.
+The relay sits between DuckDB clients and RockLake instances, intercepting PostgreSQL wire protocol messages. From the client's perspective, the relay looks like a PostgreSQL server. From RockLake's perspective, the relay looks like a PostgreSQL client. The relay forwards messages bidirectionally, optionally logging, modifying, or routing them.
 
 ## Capabilities
 
 ### Connection Pooling
 
-Rocklake handles connections efficiently, but in deployments with hundreds of DuckDB instances, a connection pool reduces the total number of connections Rocklake must maintain:
+RockLake handles connections efficiently, but in deployments with hundreds of DuckDB instances, a connection pool reduces the total number of connections RockLake must maintain:
 
 ```
-100 DuckDB instances → pg-tide-relay (pool: 20 connections) → Rocklake
+100 DuckDB instances → pg-tide-relay (pool: 20 connections) → RockLake
 ```
 
 Benefits:
 
-- Reduces Rocklake's memory footprint (fewer concurrent sessions)
+- Reduces RockLake's memory footprint (fewer concurrent sessions)
 - Reduces connection establishment overhead (pre-warmed connections)
 - Provides connection queuing during bursts
 
 ### Multi-Tenant Routing
 
-Route connections to different Rocklake instances based on client identity:
+Route connections to different RockLake instances based on client identity:
 
 ```
-DuckDB (tenant=acme)     → relay → Rocklake (s3://acme-bucket/catalog/)
-DuckDB (tenant=globex)   → relay → Rocklake (s3://globex-bucket/catalog/)
-DuckDB (tenant=initech)  → relay → Rocklake (s3://initech-bucket/catalog/)
+DuckDB (tenant=acme)     → relay → RockLake (s3://acme-bucket/catalog/)
+DuckDB (tenant=globex)   → relay → RockLake (s3://globex-bucket/catalog/)
+DuckDB (tenant=initech)  → relay → RockLake (s3://initech-bucket/catalog/)
 ```
 
 Routing can be based on:
@@ -54,7 +54,7 @@ Routing can be based on:
 
 ### Enhanced Authentication
 
-Add authentication beyond Rocklake's built-in options:
+Add authentication beyond RockLake's built-in options:
 
 | Auth Method | Description |
 |-------------|-------------|
@@ -109,7 +109,7 @@ Audit logs can be shipped to:
 
 ### Rate Limiting
 
-Protect Rocklake from overload:
+Protect RockLake from overload:
 
 | Limit Type | Example Configuration |
 |-----------|----------------------|
@@ -122,15 +122,15 @@ Protect Rocklake from overload:
 
 ### Good Fit
 
-- **Multi-tenant SaaS:** Each tenant needs isolated catalog access with separate Rocklake instances
+- **Multi-tenant SaaS:** Each tenant needs isolated catalog access with separate RockLake instances
 - **Enterprise compliance:** Regulatory requirements mandate comprehensive audit trails of all data access
 - **Zero-trust environments:** All connections must be authenticated and authorized, even internal ones
 - **High-scale deployments:** Hundreds of DuckDB instances connecting to a shared catalog
-- **Gradual migration:** Route some traffic to Rocklake while keeping some on existing PostgreSQL catalog
+- **Gradual migration:** Route some traffic to RockLake while keeping some on existing PostgreSQL catalog
 
 ### Not Needed
 
-- **Single-tenant, single-client:** Direct DuckDB → Rocklake connection is simpler
+- **Single-tenant, single-client:** Direct DuckDB → RockLake connection is simpler
 - **Development environments:** Authentication and routing add unnecessary complexity
 - **Latency-sensitive workloads:** The relay adds 0.5–2ms per round-trip
 - **Simple deployments:** If you do not need the relay's features, do not add it
@@ -181,7 +181,7 @@ Limitations: Single backend only, no SQL inspection, no multi-tenant routing.
 
 ### Option 3: Custom Rust Proxy
 
-For full control over routing, authentication, authorization, and audit logging, build a custom proxy using the `pgwire` crate (the same crate Rocklake uses for its server):
+For full control over routing, authentication, authorization, and audit logging, build a custom proxy using the `pgwire` crate (the same crate RockLake uses for its server):
 
 ```rust
 use pgwire::api::auth::*;
@@ -270,8 +270,8 @@ For Strategy B deployments where each catalog round-trip is already 1–5ms, the
 ### Sidecar Pattern (Per-Client Relay)
 
 ```
-Pod 1: [DuckDB] → [relay sidecar] → Rocklake
-Pod 2: [DuckDB] → [relay sidecar] → Rocklake
+Pod 1: [DuckDB] → [relay sidecar] → RockLake
+Pod 2: [DuckDB] → [relay sidecar] → RockLake
 ```
 
 Good for per-client authentication and local connection pooling.
@@ -279,7 +279,7 @@ Good for per-client authentication and local connection pooling.
 ### Centralized Relay
 
 ```
-All DuckDB instances → [relay service] → Rocklake
+All DuckDB instances → [relay service] → RockLake
 ```
 
 Good for centralized audit logging and rate limiting.
@@ -287,14 +287,14 @@ Good for centralized audit logging and rate limiting.
 ### Tiered Relay
 
 ```
-DuckDB instances → [edge relay (auth + rate limit)] → [routing relay (tenant routing)] → Rocklake instances
+DuckDB instances → [edge relay (auth + rate limit)] → [routing relay (tenant routing)] → RockLake instances
 ```
 
 Good for large-scale multi-tenant deployments.
 
 ## Implementation Status
 
-pg-tide-relay is currently a design concept. The protocol compatibility between DuckDB, Rocklake, and standard PostgreSQL proxies has been validated — any TCP proxy that passes PostgreSQL wire protocol transparently works as a relay. The project may provide a reference implementation in the future based on community demand.
+pg-tide-relay is currently a design concept. The protocol compatibility between DuckDB, RockLake, and standard PostgreSQL proxies has been validated — any TCP proxy that passes PostgreSQL wire protocol transparently works as a relay. The project may provide a reference implementation in the future based on community demand.
 
 For now, the recommended approach is:
 
@@ -305,7 +305,7 @@ For now, the recommended approach is:
 
 ## Building Your Own Relay
 
-If the recommended approaches above do not meet your needs, building a custom relay is straightforward because the protocol between DuckDB and Rocklake is standard PostgreSQL wire protocol. Here is a high-level architecture for a custom Rust-based relay:
+If the recommended approaches above do not meet your needs, building a custom relay is straightforward because the protocol between DuckDB and RockLake is standard PostgreSQL wire protocol. Here is a high-level architecture for a custom Rust-based relay:
 
 ### Minimal TCP Proxy
 
@@ -376,7 +376,7 @@ rocklake_relay_query_duration_seconds_bucket{le="1.0"} 89400
 rocklake_relay_errors_total{upstream="primary",code="XX000"} 3
 ```
 
-These metrics give you visibility into query patterns, latency distributions, and error rates without modifying Rocklake itself. For teams that cannot instrument DuckDB clients directly, the relay provides the observability layer.
+These metrics give you visibility into query patterns, latency distributions, and error rates without modifying RockLake itself. For teams that cannot instrument DuckDB clients directly, the relay provides the observability layer.
 
 ## Further Reading
 

@@ -1024,7 +1024,7 @@ async fn cmd_tune(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     let report = rocklake_catalog::cost::ApiCostReport::from_snapshot(&snap);
 
-    println!("Rocklake Tuning Recommendations");
+    println!("RockLake Tuning Recommendations");
     println!("=================================");
     println!("Target monthly cost: ${target_cost:.2}");
     println!();
@@ -1177,7 +1177,7 @@ fn resolve_catalog_with_opts(
 
 // ─── migrate-from-ducklake ─────────────────────────────────────────────────
 
-/// Import an existing DuckLake catalog into Rocklake.
+/// Import an existing DuckLake catalog into RockLake.
 ///
 /// The source can be:
 ///   - An NDJSON dump produced by `export-catalog` from a DuckLake deployment.
@@ -1192,7 +1192,7 @@ async fn cmd_migrate_from_ducklake(args: &[String]) -> Result<(), Box<dyn std::e
 
     println!("migrate-from-ducklake: source={source}, catalog={catalog_url}");
 
-    // Open the destination Rocklake catalog.
+    // Open the destination RockLake catalog.
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 

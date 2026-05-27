@@ -188,7 +188,7 @@ async fn aborted_session_mutations_not_visible() {
 mod datafusion_concurrent {
     use super::*;
     use datafusion::catalog::CatalogProvider;
-    use rocklake_datafusion::RocklakeCatalogProvider;
+    use rocklake_datafusion::RockLakeCatalogProvider;
 
     /// schema_names() called from multiple threads concurrently must return
     /// consistent results and not panic.
@@ -219,7 +219,7 @@ mod datafusion_concurrent {
         let obj_store =
             Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&path).unwrap());
         let provider = Arc::new(
-            rt.block_on(RocklakeCatalogProvider::open(
+            rt.block_on(RockLakeCatalogProvider::open(
                 obj_store,
                 ObjectPath::from("catalog"),
                 Some(SnapshotId::new(1)),
@@ -276,7 +276,7 @@ mod datafusion_concurrent {
         let obj_store =
             Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&path).unwrap());
         let provider = Arc::new(
-            rt.block_on(RocklakeCatalogProvider::open(
+            rt.block_on(RockLakeCatalogProvider::open(
                 obj_store,
                 ObjectPath::from("catalog"),
                 Some(SnapshotId::new(1)),

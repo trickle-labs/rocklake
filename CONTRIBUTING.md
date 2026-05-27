@@ -1,6 +1,6 @@
-# Contributing to Rocklake
+# Contributing to RockLake
 
-Thank you for your interest in contributing to Rocklake!
+Thank you for your interest in contributing to RockLake!
 
 ## Development Setup
 
@@ -50,7 +50,7 @@ the Apache License 2.0.
 
 ### Semantic Versioning
 
-Rocklake follows [Semantic Versioning](https://semver.org/). During the 0.x series, minor versions may include breaking changes with advance notice.
+RockLake follows [Semantic Versioning](https://semver.org/). During the 0.x series, minor versions may include breaking changes with advance notice.
 
 | Component | Breaking | Non-breaking |
 |-----------|----------|--------------|
@@ -85,11 +85,11 @@ Before tagging any release:
 
 ### wasmtime Version Upgrade Policy
 
-Rocklake embeds `wasmtime` for WASM UDF execution. The following policy applies:
+RockLake embeds `wasmtime` for WASM UDF execution. The following policy applies:
 
 - **Pinned version:** wasmtime is pinned to a specific major version in the workspace
   `Cargo.toml` (currently `wasmtime = "29"`).
-- **Upgrade cadence:** wasmtime major version may be bumped **once per Rocklake
+- **Upgrade cadence:** wasmtime major version may be bumped **once per RockLake
   release cycle**. The bump must be a **dedicated maintenance PR** (not bundled with
   feature work).
 - **Upgrade PR requirements:**

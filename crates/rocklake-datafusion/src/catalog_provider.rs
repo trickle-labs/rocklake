@@ -1,4 +1,4 @@
-//! DataFusion CatalogProvider implementation backed by Rocklake.
+//! DataFusion CatalogProvider implementation backed by RockLake.
 
 use async_trait::async_trait;
 use datafusion::catalog::{CatalogProvider, SchemaProvider};
@@ -77,27 +77,27 @@ impl AsyncBridge {
     }
 }
 
-/// A DataFusion CatalogProvider backed by Rocklake's CatalogStore.
-/// Provides schema and table discovery from a Rocklake catalog.
-pub struct RocklakeCatalogProvider {
+/// A DataFusion CatalogProvider backed by RockLake's CatalogStore.
+/// Provides schema and table discovery from a RockLake catalog.
+pub struct RockLakeCatalogProvider {
     store: Arc<RwLock<CatalogStore>>,
     snapshot_id: Option<SnapshotId>,
     /// F-14: stored async bridge capturing the construction-time runtime handle.
     bridge: Arc<AsyncBridge>,
     /// F-15: root path of the object store for resolving data file URLs.
-    /// When set, `RocklakeTableProvider::scan()` can read real Parquet files.
+    /// When set, `RockLakeTableProvider::scan()` can read real Parquet files.
     data_root: Option<String>,
 }
 
-impl std::fmt::Debug for RocklakeCatalogProvider {
+impl std::fmt::Debug for RockLakeCatalogProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RocklakeCatalogProvider")
+        f.debug_struct("RockLakeCatalogProvider")
             .field("snapshot_id", &self.snapshot_id)
             .finish_non_exhaustive()
     }
 }
 
-impl RocklakeCatalogProvider {
+impl RockLakeCatalogProvider {
     /// Create a new provider from an existing CatalogStore.
     pub fn new(store: CatalogStore, snapshot_id: Option<SnapshotId>) -> Self {
         Self {
@@ -189,7 +189,7 @@ impl RocklakeCatalogProvider {
     }
 }
 
-impl CatalogProvider for RocklakeCatalogProvider {
+impl CatalogProvider for RockLakeCatalogProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -227,7 +227,7 @@ impl CatalogProvider for RocklakeCatalogProvider {
         let bridge = self.bridge.clone();
         let data_root = self.data_root.clone();
 
-        Some(Arc::new(RocklakeSchemaProvider {
+        Some(Arc::new(RockLakeSchemaProvider {
             store,
             schema_name,
             snapshot_id,
@@ -237,8 +237,8 @@ impl CatalogProvider for RocklakeCatalogProvider {
     }
 }
 
-/// A DataFusion SchemaProvider backed by Rocklake.
-pub struct RocklakeSchemaProvider {
+/// A DataFusion SchemaProvider backed by RockLake.
+pub struct RockLakeSchemaProvider {
     store: Arc<RwLock<CatalogStore>>,
     schema_name: String,
     snapshot_id: Option<SnapshotId>,
@@ -248,9 +248,9 @@ pub struct RocklakeSchemaProvider {
     data_root: Option<String>,
 }
 
-impl std::fmt::Debug for RocklakeSchemaProvider {
+impl std::fmt::Debug for RockLakeSchemaProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RocklakeSchemaProvider")
+        f.debug_struct("RockLakeSchemaProvider")
             .field("schema_name", &self.schema_name)
             .field("snapshot_id", &self.snapshot_id)
             .finish_non_exhaustive()
@@ -258,7 +258,7 @@ impl std::fmt::Debug for RocklakeSchemaProvider {
 }
 
 #[async_trait]
-impl SchemaProvider for RocklakeSchemaProvider {
+impl SchemaProvider for RockLakeSchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -338,7 +338,7 @@ impl SchemaProvider for RocklakeSchemaProvider {
                     .await
                     .unwrap_or_default();
 
-                let table_provider = RocklakeTableProvider::new(
+                let table_provider = RockLakeTableProvider::new(
                     table.table_name.clone(),
                     table.table_id,
                     columns,
@@ -355,10 +355,10 @@ impl SchemaProvider for RocklakeSchemaProvider {
     }
 }
 
-/// A DataFusion TableProvider that exposes table schema from Rocklake catalog
+/// A DataFusion TableProvider that exposes table schema from RockLake catalog
 /// and, when data files are present, reads real Parquet data (F-15).
 #[derive(Debug)]
-pub struct RocklakeTableProvider {
+pub struct RockLakeTableProvider {
     schema: datafusion::arrow::datatypes::SchemaRef,
     /// F-15: data files registered in the catalog at the active snapshot.
     data_files: Vec<DataFileRow>,
@@ -366,7 +366,7 @@ pub struct RocklakeTableProvider {
     data_root: Option<String>,
 }
 
-impl RocklakeTableProvider {
+impl RockLakeTableProvider {
     fn new(
         _table_name: String,
         _table_id: u64,
@@ -415,7 +415,7 @@ impl RocklakeTableProvider {
 }
 
 #[async_trait]
-impl TableProvider for RocklakeTableProvider {
+impl TableProvider for RockLakeTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }

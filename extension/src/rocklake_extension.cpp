@@ -1,6 +1,6 @@
 /**
  * rocklake_extension.cpp — DuckDB extension implementing a DuckLake catalog
- * backed by SlateDB via the Rocklake C FFI.
+ * backed by SlateDB via the RockLake C FFI.
  *
  * Usage in DuckDB:
  *   INSTALL rocklake;
@@ -40,18 +40,18 @@ static bool verify_abi() {
 // ─── Catalog Wrapper ────────────────────────────────────────────────────────
 
 /**
- * RocklakeCatalogWrapper wraps the opaque C handle and provides a C++ interface
+ * RockLakeCatalogWrapper wraps the opaque C handle and provides a C++ interface
  * suitable for integration with DuckDB's Catalog system.
  *
  * In a full DuckDB extension, this class would inherit from duckdb::Catalog
  * and implement all required virtual methods. For the beta release, we provide
  * the foundation that can be plugged into DuckDB's extension loading mechanism.
  */
-class RocklakeCatalogWrapper {
+class RockLakeCatalogWrapper {
 public:
-    RocklakeCatalogWrapper() : catalog_(nullptr) {}
+    RockLakeCatalogWrapper() : catalog_(nullptr) {}
 
-    ~RocklakeCatalogWrapper() {
+    ~RockLakeCatalogWrapper() {
         if (catalog_) {
             rocklake_close(catalog_);
             catalog_ = nullptr;

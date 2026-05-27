@@ -1,12 +1,12 @@
 # Networking
 
-Rocklake has minimal networking requirements compared to traditional databases. It needs exactly two network paths: inbound connections from DuckDB clients, and outbound HTTPS to object storage. There is no replication traffic between nodes, no gossip protocol, no membership discovery, no inter-node communication of any kind. This simplicity makes firewall rules straightforward and security posture easy to reason about.
+RockLake has minimal networking requirements compared to traditional databases. It needs exactly two network paths: inbound connections from DuckDB clients, and outbound HTTPS to object storage. There is no replication traffic between nodes, no gossip protocol, no membership discovery, no inter-node communication of any kind. This simplicity makes firewall rules straightforward and security posture easy to reason about.
 
 This page covers network topology options, firewall configuration, VPC endpoints for cost and latency optimization, service discovery patterns, load balancing, and connection management.
 
 ## Network Requirements
 
-Rocklake requires precisely two network paths:
+RockLake requires precisely two network paths:
 
 ```mermaid
 flowchart LR
@@ -14,8 +14,8 @@ flowchart LR
         D[DuckDB Clients]
     end
     
-    subgraph "Rocklake"
-        S[Rocklake Process<br/>Port 5432]
+    subgraph "RockLake"
+        S[RockLake Process<br/>Port 5432]
     end
     
     subgraph "Storage Network"
@@ -31,10 +31,10 @@ flowchart LR
 | **Inbound** | TCP | 5432 (default) | DuckDB client connections (PG wire protocol) |
 | **Outbound** | HTTPS | 443 | Object storage API (S3, GCS, Azure Blob) |
 
-No other network access is required. Rocklake does not:
+No other network access is required. RockLake does not:
 
 - Phone home or send telemetry
-- Communicate with other Rocklake instances
+- Communicate with other RockLake instances
 - Require DNS resolution beyond object storage endpoints
 - Open listening ports beyond the configured bind address
 - Use UDP for anything
@@ -43,10 +43,10 @@ No other network access is required. Rocklake does not:
 
 ### Topology 1: Same-Host (Development)
 
-The simplest setup — DuckDB and Rocklake on the same machine:
+The simplest setup — DuckDB and RockLake on the same machine:
 
 ```
-DuckDB → localhost:5432 → Rocklake → (internet) → S3
+DuckDB → localhost:5432 → RockLake → (internet) → S3
 ```
 
 **Configuration:**
@@ -60,10 +60,10 @@ rocklake serve --catalog s3://bucket/catalog/ --bind 127.0.0.1:5432
 
 ### Topology 2: Same-VPC (Recommended for Production)
 
-DuckDB and Rocklake in the same VPC with private networking:
+DuckDB and RockLake in the same VPC with private networking:
 
 ```
-DuckDB (10.0.1.x) → rocklake.internal:5432 → Rocklake (10.0.2.x) → VPC Endpoint → S3
+DuckDB (10.0.1.x) → rocklake.internal:5432 → RockLake (10.0.2.x) → VPC Endpoint → S3
 ```
 
 **Configuration:**
@@ -77,11 +77,11 @@ rocklake serve --catalog s3://bucket/catalog/ --bind 0.0.0.0:5432
 
 ### Topology 3: Cross-VPC (Hub-and-Spoke)
 
-Rocklake in a shared-services VPC, DuckDB clients in application VPCs:
+RockLake in a shared-services VPC, DuckDB clients in application VPCs:
 
 ```
 App VPC A ──┐
-            ├──→ Transit Gateway → Shared VPC → Rocklake → VPC Endpoint → S3
+            ├──→ Transit Gateway → Shared VPC → RockLake → VPC Endpoint → S3
 App VPC B ──┘
 ```
 
@@ -91,10 +91,10 @@ App VPC B ──┘
 
 ### Topology 4: Public Internet
 
-Rocklake accessible over the internet (for remote teams, multi-cloud, or hybrid setups):
+RockLake accessible over the internet (for remote teams, multi-cloud, or hybrid setups):
 
 ```
-DuckDB (anywhere) → (internet) → [LB] → Rocklake → S3
+DuckDB (anywhere) → (internet) → [LB] → RockLake → S3
 ```
 
 **Requirements:**
@@ -115,7 +115,7 @@ rocklake \
 
 ## Firewall Rules
 
-### Inbound Rules (to Rocklake)
+### Inbound Rules (to RockLake)
 
 | Source | Port | Protocol | Action | Purpose |
 |--------|------|----------|--------|---------|
@@ -123,7 +123,7 @@ rocklake \
 | Monitoring system | 9090/tcp | TCP | Allow | Prometheus metrics (if enabled) |
 | All other | * | * | Deny | Default deny |
 
-### Outbound Rules (from Rocklake)
+### Outbound Rules (from RockLake)
 
 | Destination | Port | Protocol | Action | Purpose |
 |-------------|------|----------|--------|---------|
@@ -134,10 +134,10 @@ rocklake \
 ### AWS Security Group Example
 
 ```bash
-# Create Rocklake security group
+# Create RockLake security group
 aws ec2 create-security-group \
     --group-name rocklake-sg \
-    --description "Rocklake catalog server" \
+    --description "RockLake catalog server" \
     --vpc-id vpc-12345
 
 # Allow inbound from DuckDB clients
@@ -152,7 +152,7 @@ aws ec2 authorize-security-group-ingress \
 
 ## VPC Endpoints (Private Storage Access)
 
-VPC endpoints let Rocklake reach object storage without traversing the public internet. This provides three benefits:
+VPC endpoints let RockLake reach object storage without traversing the public internet. This provides three benefits:
 
 1. **Lower latency** — no NAT gateway hop, traffic stays on AWS backbone
 2. **No data transfer cost** — Gateway endpoints are free, Interface endpoints cost less than NAT
@@ -192,7 +192,7 @@ aws ec2 create-vpc-endpoint \
 
 ### GCP: Private Google Access
 
-Enable Private Google Access on the subnet where Rocklake runs:
+Enable Private Google Access on the subnet where RockLake runs:
 
 ```bash
 gcloud compute networks subnets update my-subnet \
@@ -217,7 +217,7 @@ az network private-endpoint create \
 
 ### TCP Load Balancer (Recommended)
 
-Rocklake uses the PostgreSQL wire protocol (TCP-based, not HTTP). Use a TCP/Layer 4 load balancer:
+RockLake uses the PostgreSQL wire protocol (TCP-based, not HTTP). Use a TCP/Layer 4 load balancer:
 
 **AWS NLB:**
 ```yaml
@@ -247,7 +247,7 @@ gcloud compute forwarding-rules create rocklake-lb \
 
 ### Health Checks for Load Balancers
 
-Configure the load balancer health check to probe the Rocklake port:
+Configure the load balancer health check to probe the RockLake port:
 
 | Provider | Health Check Type | Configuration |
 |----------|------------------|---------------|
@@ -269,18 +269,18 @@ DuckDB clients
       │
  ┌────┼────┐
  ▼    ▼    ▼
-R1   R2   R3   (read-only Rocklake instances)
+R1   R2   R3   (read-only RockLake instances)
 ```
 
 ### Do NOT Use HTTP Load Balancers
 
-Application load balancers (ALB in AWS, Application Gateway in Azure) operate at Layer 7 (HTTP). Rocklake speaks the PostgreSQL wire protocol, not HTTP. Using an HTTP load balancer will fail silently.
+Application load balancers (ALB in AWS, Application Gateway in Azure) operate at Layer 7 (HTTP). RockLake speaks the PostgreSQL wire protocol, not HTTP. Using an HTTP load balancer will fail silently.
 
 ## Service Discovery
 
 ### Kubernetes DNS
 
-In Kubernetes, Rocklake is automatically discoverable via cluster DNS:
+In Kubernetes, RockLake is automatically discoverable via cluster DNS:
 
 ```
 rocklake-writer.rocklake.svc.cluster.local:5432
@@ -313,7 +313,7 @@ aws servicediscovery create-service \
 
 ## Connection Pooling
 
-Rocklake supports up to `--max-sessions` concurrent connections (default 64). If you have more DuckDB instances than the session limit, you need connection management.
+RockLake supports up to `--max-sessions` concurrent connections (default 64). If you have more DuckDB instances than the session limit, you need connection management.
 
 ### Important: Session State Matters
 
@@ -348,7 +348,7 @@ Each session uses approximately 1 MB of memory. 200 sessions = 200 MB additional
 
 ## Latency Optimization
 
-### Client-to-Rocklake Latency
+### Client-to-RockLake Latency
 
 | Topology | Expected Latency | Impact on DuckDB |
 |----------|-----------------|------------------|
@@ -358,7 +358,7 @@ Each session uses approximately 1 MB of memory. 200 sessions = 200 MB additional
 | Cross-region | 50–150ms | Significant (avoid for interactive queries) |
 | Public internet | 10–200ms | Use only when necessary |
 
-### Rocklake-to-Storage Latency
+### RockLake-to-Storage Latency
 
 | Configuration | Expected Latency | Notes |
 |---------------|-----------------|-------|
@@ -369,7 +369,7 @@ Each session uses approximately 1 MB of memory. 200 sessions = 200 MB additional
 
 ### Optimizing for Low Latency
 
-1. **Deploy Rocklake in the same region as your object storage bucket** — this is the single most important optimization.
+1. **Deploy RockLake in the same region as your object storage bucket** — this is the single most important optimization.
 2. **Use VPC endpoints** — eliminates the NAT gateway hop.
 3. **Deploy in the same AZ** — reduces cross-AZ latency from 1-3ms to <0.5ms.
 4. **Enable hot key cache** — `--hot-key-cache true` (default) reduces repeated storage reads.
@@ -379,14 +379,14 @@ Each session uses approximately 1 MB of memory. 200 sessions = 200 MB additional
 For high-throughput deployments (large catalog scans), ensure jumbo frames are enabled:
 
 ```bash
-# Check MTU on the Rocklake host
+# Check MTU on the RockLake host
 ip link show eth0 | grep mtu
 
 # AWS: VPC supports 9001 MTU by default for instances in the same AZ
 # GCP: Supports 8896 MTU with jumbo frames enabled on the VPC
 ```
 
-Rocklake does not require special TCP tuning. The default Linux/macOS TCP settings work well for the typical catalog operation size (small request/response pairs).
+RockLake does not require special TCP tuning. The default Linux/macOS TCP settings work well for the typical catalog operation size (small request/response pairs).
 
 ## Further Reading
 

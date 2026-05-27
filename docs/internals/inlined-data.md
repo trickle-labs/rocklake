@@ -1,6 +1,6 @@
 # Inlined Data
 
-For very small data files — those below a configurable size threshold — Rocklake stores the file contents directly in the catalog rather than as separate objects in storage. This optimization eliminates the overhead of a separate object storage GET for data that is literally smaller than the HTTP headers of the request to fetch it. This page documents the motivation, implementation, trade-offs, and configuration of data inlining.
+For very small data files — those below a configurable size threshold — RockLake stores the file contents directly in the catalog rather than as separate objects in storage. This optimization eliminates the overhead of a separate object storage GET for data that is literally smaller than the HTTP headers of the request to fetch it. This page documents the motivation, implementation, trade-offs, and configuration of data inlining.
 
 Data inlining is an optimization, not a fundamental architectural feature. Disabling it changes nothing about correctness — only about performance for workloads that produce many tiny files. But for those workloads (single-row inserts, real-time event tables, slowly-changing dimension updates), the performance improvement is substantial: one fewer network round-trip per tiny file.
 
@@ -9,8 +9,8 @@ Data inlining is an optimization, not a fundamental architectural feature. Disab
 Consider what happens when DuckDB queries a table that has had many single-row INSERT statements:
 
 Without inlining:
-1. DuckDB asks Rocklake for the table's data files
-2. Rocklake returns a list of 500 file paths: `s3://bucket/data/file-001.parquet`, `file-002.parquet`, ..., `file-500.parquet`
+1. DuckDB asks RockLake for the table's data files
+2. RockLake returns a list of 500 file paths: `s3://bucket/data/file-001.parquet`, `file-002.parquet`, ..., `file-500.parquet`
 3. DuckDB fetches each file from S3 — 500 GET requests
 4. Each file is 1–2 KB (a Parquet file with a single row)
 5. Total: 500 × 30–100ms = 15–50 seconds just for file fetches
@@ -19,8 +19,8 @@ Without inlining:
 The problem is economic: each S3 GET has a fixed overhead (TCP connection, TLS handshake, HTTP request/response, S3 authentication) regardless of whether you are fetching 1 KB or 100 MB. For a 1 KB file, the overhead vastly exceeds the useful work.
 
 With inlining:
-1. DuckDB asks Rocklake for the table's data files
-2. Rocklake returns a mix: some external file references AND some inline data (the tiny files' contents embedded in the catalog response)
+1. DuckDB asks RockLake for the table's data files
+2. RockLake returns a mix: some external file references AND some inline data (the tiny files' contents embedded in the catalog response)
 3. DuckDB reads the inline data directly from the catalog response — zero additional round-trips
 4. Only the larger files require separate S3 GETs
 
@@ -30,12 +30,12 @@ With inlining:
 
 ### Write Path
 
-When DuckDB registers a data file through the DuckLake protocol, Rocklake checks the file size reported in the registration metadata:
+When DuckDB registers a data file through the DuckLake protocol, RockLake checks the file size reported in the registration metadata:
 
 1. DuckDB sends: `INSERT INTO ducklake_data_file (table_id, file_path, file_size, ...) VALUES (5, 's3://bucket/tiny.parquet', 1500, ...)`
-2. Rocklake checks: `file_size < inline_threshold`
-3. If below threshold: Rocklake fetches the file contents from S3 and stores them as an `inlined_insert` entry (tag 0xFD) in the catalog
-4. If above threshold: Rocklake stores only the file metadata (path, size, stats) — standard behavior
+2. RockLake checks: `file_size < inline_threshold`
+3. If below threshold: RockLake fetches the file contents from S3 and stores them as an `inlined_insert` entry (tag 0xFD) in the catalog
+4. If above threshold: RockLake stores only the file metadata (path, size, stats) — standard behavior
 5. In both cases, the `ducklake_data_file` metadata entry is also created (the inline entry is supplementary)
 
 The key format for inlined data:
@@ -48,7 +48,7 @@ Value: SDKV envelope containing raw file bytes (typically Parquet format)
 
 ### Read Path
 
-When DuckDB requests data files for a table, Rocklake's response includes:
+When DuckDB requests data files for a table, RockLake's response includes:
 
 1. Standard file metadata (all `ducklake_data_file` entries for the table)
 2. For any file that has a corresponding inlined entry, the inline flag is set and the raw bytes are included in the response
@@ -159,7 +159,7 @@ Inlined files still have `ducklake_file_column_stats` entries (min/max values, n
 
 ### Fetch-on-Write
 
-When Rocklake decides to inline a file, it must fetch the file contents from object storage during the write transaction. This adds one S3 GET to the write path:
+When RockLake decides to inline a file, it must fetch the file contents from object storage during the write transaction. This adds one S3 GET to the write path:
 
 ```
 Write path without inlining: 1 WAL PUT
@@ -177,7 +177,7 @@ The inline entry is written in the same write batch as the file metadata entry. 
 
 ### Size Validation
 
-Rocklake validates that the actual file size matches the declared size in the metadata. If the file's actual size exceeds the threshold (even though the declared size was below), the file is not inlined and only the metadata entry is created. This prevents pathological cases where incorrect metadata causes unexpectedly large inline entries.
+RockLake validates that the actual file size matches the declared size in the metadata. If the file's actual size exceeds the threshold (even though the declared size was below), the file is not inlined and only the metadata entry is created. This prevents pathological cases where incorrect metadata causes unexpectedly large inline entries.
 
 ## Metrics
 

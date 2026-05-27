@@ -1,6 +1,6 @@
 # Time Travel
 
-Time travel in Rocklake is not a feature that was layered on top of the system after the fact. It is the natural consequence of the storage model — the thing that happens automatically when you commit to never deleting historical data. If every catalog fact is preserved at its original snapshot ID, then reading the state of the catalog at any historical point is simply an MVCC query parameterized by that snapshot ID. There is no special "time travel mode," no separate historical storage tier, no additional replication or backup infrastructure, and no performance penalty. Querying the catalog as it was six months ago uses the same code path and the same SST files as querying the catalog as it is right now.
+Time travel in RockLake is not a feature that was layered on top of the system after the fact. It is the natural consequence of the storage model — the thing that happens automatically when you commit to never deleting historical data. If every catalog fact is preserved at its original snapshot ID, then reading the state of the catalog at any historical point is simply an MVCC query parameterized by that snapshot ID. There is no special "time travel mode," no separate historical storage tier, no additional replication or backup infrastructure, and no performance penalty. Querying the catalog as it was six months ago uses the same code path and the same SST files as querying the catalog as it is right now.
 
 This page explains what snapshots are, how they are created, how time travel queries work in practice, how retention policies control how far back you can travel, and how time travel interacts with garbage collection and excision. By the end, you will understand not just how to use time travel but why it costs nothing beyond the storage that the immutability guarantee already requires.
 
@@ -87,7 +87,7 @@ This is enormously valuable for reproducibility. If a quarterly report was gener
 
 In systems where time travel is a separate feature (like PostgreSQL's point-in-time recovery or Snowflake's time travel), there is additional infrastructure cost: WAL archives must be stored and retained, periodic base backups must be taken, and restoring a historical point requires replaying logs. The storage cost of time travel is additive — it is paid on top of the cost of storing the current state.
 
-In Rocklake, time travel has zero marginal cost beyond what the immutability guarantee already requires. Here is why:
+In RockLake, time travel has zero marginal cost beyond what the immutability guarantee already requires. Here is why:
 
 1. **No separate historical storage.** Old versions of catalog rows live in the same SST files as current versions. They are not copied to a separate archive or maintained in a separate log.
 
@@ -128,7 +128,7 @@ This design gives operators full control over the trade-off between query range 
 
 Sometimes you need to prevent the retention horizon from advancing past a specific snapshot. For example, a long-running ETL job might need to read at a fixed snapshot throughout its multi-hour execution, or a compliance requirement might mandate preserving a specific catalog state indefinitely.
 
-Rocklake supports pinned snapshots for this use case:
+RockLake supports pinned snapshots for this use case:
 
 ```bash
 rocklake pin-snapshot --catalog s3://bucket/catalog/ --snapshot-id 42 --reason "Quarterly audit"
@@ -144,7 +144,7 @@ Pinned snapshots also block excision: `rocklake excise` will refuse to remove da
 
 ## Finding the Right Snapshot
 
-To travel to a specific point in time, you need to know the snapshot ID. Rocklake provides several ways to discover snapshot IDs:
+To travel to a specific point in time, you need to know the snapshot ID. RockLake provides several ways to discover snapshot IDs:
 
 ```sql
 -- List all snapshots with their timestamps

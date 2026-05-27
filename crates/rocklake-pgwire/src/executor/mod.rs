@@ -22,7 +22,7 @@ use sqlparser::parser::Parser;
 use rocklake_catalog::CatalogStore;
 use rocklake_sql::{classify_statement, ParamValues, StatementKind};
 
-use crate::error::RocklakeError;
+use crate::error::RockLakeError;
 use crate::notify::NotifyManager;
 use crate::session::{BufferedOp, CopyAccumulator, SessionState};
 
@@ -60,7 +60,7 @@ pub async fn execute_sql<'a>(
     session: &mut SessionState,
     notify_manager: &Arc<NotifyManager>,
     extension_schemas: &Arc<Vec<String>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     if let Some(statements) = parse_multi_statement_batch(sql) {
         let mut all_responses = Vec::new();
         for statement_sql in statements {
@@ -315,7 +315,7 @@ async fn execute_classified<'a>(
     session: &mut SessionState,
     notify_manager: &Arc<NotifyManager>,
     extension_schemas: &Arc<Vec<String>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     match kind {
         // ─── Session / Introspection ───────────────────────────────────
         StatementKind::SelectVersion => Ok(vec![make_single_text_response(
@@ -346,17 +346,17 @@ async fn execute_classified<'a>(
         // ─── Session / Connection Management (DuckDB postgres scanner) ─
         StatementKind::DiscardAll => {
             // DISCARD ALL: session cleanup when DuckDB returns a connection to
-            // the pool. Rocklake is stateless per connection so this is a no-op.
+            // the pool. RockLake is stateless per connection so this is a no-op.
             Ok(vec![Response::Execution(Tag::new("DISCARD"))])
         }
         StatementKind::SelectToRegclass => {
             // to_regclass('name') — return NULL to tell DuckDB the relation
-            // does not exist (Rocklake has no duckdb_secrets table).
+            // does not exist (RockLake has no duckdb_secrets table).
             Ok(vec![make_null_text_response("to_regclass")])
         }
         StatementKind::SelectExistsInfoSchema => {
             // EXISTS(SELECT 1 FROM information_schema.tables WHERE ...) — return
-            // false; Rocklake does not expose information_schema.
+            // false; RockLake does not expose information_schema.
             Ok(vec![make_false_bool_response("exists")])
         }
         StatementKind::SelectPgDatabaseSize => {
@@ -370,7 +370,7 @@ async fn execute_classified<'a>(
                     if let Some((_, columns)) = reader
                         .describe_table(table_id)
                         .await
-                        .map_err(RocklakeError::from)?
+                        .map_err(RockLakeError::from)?
                     {
                         return Ok(vec![make_pg_catalog_inlined_table_response(
                             &table_name,
@@ -403,7 +403,7 @@ async fn execute_classified<'a>(
             let mut all_ops: Vec<BufferedOp> = Vec::new();
             if bootstrap.has_snapshot || !bootstrap.schemas.is_empty() {
                 let reader = { store.lock().await.read_latest() };
-                let existing = reader.get_snapshot().await.map_err(RocklakeError::from)?;
+                let existing = reader.get_snapshot().await.map_err(RockLakeError::from)?;
                 if existing.is_none() {
                     // Fresh catalog: create schemas first so next_catalog_id
                     // is correctly captured in the subsequent snapshot row.
@@ -436,26 +436,26 @@ async fn execute_classified<'a>(
         StatementKind::SelectMaxSnapshot => {
             // F-11: clone reader out of mutex, drop lock before async I/O.
             let reader = { store.lock().await.read_latest() };
-            let snap = reader.get_snapshot().await.map_err(RocklakeError::from)?;
+            let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             let id = snap.map(|s| s.snapshot_id).unwrap_or(0);
             Ok(vec![make_single_int_response("max", id as i64)])
         }
         StatementKind::SelectLatestSnapshotInfo => {
             let reader = { store.lock().await.read_latest() };
-            let snap = reader.get_snapshot().await.map_err(RocklakeError::from)?;
+            let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             Ok(vec![make_latest_snapshot_info_response(snap)])
         }
         StatementKind::SelectSnapshotStatsAndChanges => {
             let reader = { store.lock().await.read_latest() };
-            let snap = reader.get_snapshot().await.map_err(RocklakeError::from)?;
+            let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             let stats_rows = reader
                 .list_all_table_stats()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             let column_stats = reader
                 .list_all_table_column_stats()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_snapshot_stats_changes_response(
                 snap,
                 stats_rows,
@@ -467,9 +467,9 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
-            let schemas = reader.list_schemas().await.map_err(RocklakeError::from)?;
+            let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
             Ok(vec![make_schemas_response(schemas)])
         }
         StatementKind::SelectTables => {
@@ -478,22 +478,22 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let tables = if let Some(schema_id) = schema_id {
                 reader
                     .list_tables(schema_id)
                     .await
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             } else {
-                let schemas = reader.list_schemas().await.map_err(RocklakeError::from)?;
+                let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
                 let mut tables = Vec::new();
                 for schema in schemas {
                     tables.extend(
                         reader
                             .list_tables(schema.schema_id)
                             .await
-                            .map_err(RocklakeError::from)?,
+                            .map_err(RockLakeError::from)?,
                     );
                 }
                 tables
@@ -506,27 +506,27 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let columns = if let Some(table_id) = table_id {
                 let result = reader
                     .describe_table(table_id)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
                 result.map(|(_, cols)| cols).unwrap_or_default()
             } else {
-                let schemas = reader.list_schemas().await.map_err(RocklakeError::from)?;
+                let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
                 let mut columns = Vec::new();
                 for schema in schemas {
                     for table in reader
                         .list_tables(schema.schema_id)
                         .await
-                        .map_err(RocklakeError::from)?
+                        .map_err(RockLakeError::from)?
                     {
                         if let Some((_, table_columns)) = reader
                             .describe_table(table.table_id)
                             .await
-                            .map_err(RocklakeError::from)?
+                            .map_err(RockLakeError::from)?
                         {
                             columns.extend(table_columns);
                         }
@@ -542,27 +542,27 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let files = if let Some(table_id) = table_id {
                 reader
                     .list_data_files(table_id)
                     .await
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             } else {
-                let schemas = reader.list_schemas().await.map_err(RocklakeError::from)?;
+                let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
                 let mut files = Vec::new();
                 for schema in schemas {
                     for table in reader
                         .list_tables(schema.schema_id)
                         .await
-                        .map_err(RocklakeError::from)?
+                        .map_err(RockLakeError::from)?
                     {
                         files.extend(
                             reader
                                 .list_data_files(table.table_id)
                                 .await
-                                .map_err(RocklakeError::from)?,
+                                .map_err(RockLakeError::from)?,
                         );
                     }
                 }
@@ -588,28 +588,28 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let predicate = params.get(3).unwrap_or("");
             if predicate.is_empty() {
                 let rows = reader
                     .list_file_column_stats(table_id, column_id)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
                 return Ok(vec![make_file_column_stats_response(_sql, rows)]);
             }
             // v0.26: look up the actual column type for type-aware pruning.
             let col_type = reader
                 .get_column_type(table_id, column_id)
                 .await
-                .map_err(RocklakeError::from)?
+                .map_err(RockLakeError::from)?
                 .as_deref()
                 .map(rocklake_core::types::DuckLakeType::parse)
                 .unwrap_or(rocklake_core::types::DuckLakeType::Varchar);
             let file_ids = reader
                 .prune_files(table_id, column_id, predicate, &col_type)
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_file_ids_response(file_ids)])
         }
         StatementKind::SelectTableStats => {
@@ -618,7 +618,7 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             if _sql
                 .to_ascii_lowercase()
@@ -629,19 +629,19 @@ async fn execute_classified<'a>(
                     reader
                         .get_table_stats(table_id)
                         .await
-                        .map_err(RocklakeError::from)?
+                        .map_err(RockLakeError::from)?
                         .into_iter()
                         .collect()
                 } else {
                     reader
                         .list_all_table_stats()
                         .await
-                        .map_err(RocklakeError::from)?
+                        .map_err(RockLakeError::from)?
                 };
                 let mut column_stats = reader
                     .list_all_table_column_stats()
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
                 if let Some(table_id) = table_id {
                     column_stats.retain(|row| row.table_id == table_id);
                 }
@@ -654,7 +654,7 @@ async fn execute_classified<'a>(
                 let stats = reader
                     .get_table_stats(table_id)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
                 Ok(vec![make_table_stats_rows_response_for_sql(
                     _sql,
                     stats.into_iter().collect(),
@@ -663,7 +663,7 @@ async fn execute_classified<'a>(
                 let rows = reader
                     .list_all_table_stats()
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
                 Ok(vec![make_table_stats_rows_response_for_sql(_sql, rows)])
             }
         }
@@ -672,7 +672,7 @@ async fn execute_classified<'a>(
             let rows = reader
                 .list_all_table_column_stats()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_table_column_stats_response(rows)])
         }
         StatementKind::SelectDeleteFiles => {
@@ -681,27 +681,27 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let files = if let Some(table_id) = table_id {
                 reader
                     .list_delete_files(table_id)
                     .await
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             } else {
-                let schemas = reader.list_schemas().await.map_err(RocklakeError::from)?;
+                let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
                 let mut files = Vec::new();
                 for schema in schemas {
                     for table in reader
                         .list_tables(schema.schema_id)
                         .await
-                        .map_err(RocklakeError::from)?
+                        .map_err(RockLakeError::from)?
                     {
                         files.extend(
                             reader
                                 .list_delete_files(table.table_id)
                                 .await
-                                .map_err(RocklakeError::from)?,
+                                .map_err(RockLakeError::from)?,
                         );
                     }
                 }
@@ -715,14 +715,14 @@ async fn execute_classified<'a>(
                 let s = store.lock().await;
                 if let Some(id) = snap_id {
                     s.read_at(rocklake_core::mvcc::SnapshotId::new(id))
-                        .map_err(RocklakeError::from)?
+                        .map_err(RockLakeError::from)?
                 } else {
                     // No snapshot ID provided (e.g. SELECT * FROM ducklake_snapshot):
                     // return the latest committed snapshot.
                     s.read_latest()
                 }
             };
-            let snap = reader.get_snapshot().await.map_err(RocklakeError::from)?;
+            let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             if let Some(snap) = snap {
                 Ok(vec![make_snapshot_row_response(snap)])
             } else {
@@ -734,12 +734,12 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let rows = reader
                 .list_all_snapshot_changes()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_snapshot_changes_response(rows)])
         }
         StatementKind::SelectMetadata => {
@@ -747,12 +747,12 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let rows = reader
                 .list_all_metadata()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_metadata_response(rows)])
         }
         StatementKind::SelectViews => {
@@ -760,12 +760,12 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let rows = reader
                 .list_all_views()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_views_response(rows)])
         }
         StatementKind::SelectMacros => {
@@ -773,12 +773,12 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let rows = reader
                 .list_all_macros()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_macros_response(rows)])
         }
         StatementKind::SelectMacroImpls => {
@@ -786,19 +786,19 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let macros = reader
                 .list_all_macros()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             let mut rows = Vec::new();
             for macro_row in macros {
                 rows.extend(
                     reader
                         .list_macro_impls(macro_row.macro_id)
                         .await
-                        .map_err(RocklakeError::from)?,
+                        .map_err(RockLakeError::from)?,
                 );
             }
             Ok(vec![make_macro_impls_response(rows)])
@@ -808,24 +808,24 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let macros = reader
                 .list_all_macros()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             let mut rows = Vec::new();
             for macro_row in macros {
                 for impl_row in reader
                     .list_macro_impls(macro_row.macro_id)
                     .await
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
                 {
                     rows.extend(
                         reader
                             .list_macro_parameters(impl_row.macro_id, impl_row.impl_id)
                             .await
-                            .map_err(RocklakeError::from)?,
+                            .map_err(RockLakeError::from)?,
                     );
                 }
             }
@@ -838,9 +838,9 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
-            let rows = reader.list_all_tags().await.map_err(RocklakeError::from)?;
+            let rows = reader.list_all_tags().await.map_err(RockLakeError::from)?;
             Ok(vec![make_tags_response(rows)])
         }
         StatementKind::SelectColumnTags => {
@@ -848,12 +848,12 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let rows = reader
                 .list_all_column_tags()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_column_tags_response(rows)])
         }
         StatementKind::SelectSortInfo => {
@@ -861,12 +861,12 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let rows = reader
                 .list_all_sort_info()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_sort_info_response(rows)])
         }
         StatementKind::SelectSchemaVersion => {
@@ -881,7 +881,7 @@ async fn execute_classified<'a>(
             let rows = reader
                 .list_all_schema_versions()
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_schema_versions_response(rows)])
         }
 
@@ -895,7 +895,7 @@ async fn execute_classified<'a>(
             let rows = reader
                 .list_inlined_data_tables(table_id)
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_inlined_data_tables_response(rows)])
         }
         StatementKind::SelectInlinedRows => {
@@ -909,14 +909,14 @@ async fn execute_classified<'a>(
             let Some((_, columns)) = reader
                 .describe_table(table_id)
                 .await
-                .map_err(RocklakeError::from)?
+                .map_err(RockLakeError::from)?
             else {
                 return Ok(vec![make_empty_response()]);
             };
             let rows = reader
                 .list_inlined_inserts(table_id)
                 .await
-                .map_err(RocklakeError::from)?
+                .map_err(RockLakeError::from)?
                 .into_iter()
                 .filter(|row| row.schema_version == schema_version)
                 .collect::<Vec<_>>();
@@ -927,7 +927,7 @@ async fn execute_classified<'a>(
         StatementKind::SelectMaxSnapshotAfter => {
             let after_id = params.get_u64(0).unwrap_or(0);
             let reader = { store.lock().await.read_latest() };
-            let snap = reader.get_snapshot().await.map_err(RocklakeError::from)?;
+            let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             let id = snap.map(|s| s.snapshot_id).unwrap_or(0);
             if id > after_id {
                 Ok(vec![make_single_int_response("max", id as i64)])
@@ -939,9 +939,9 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(1))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
-            let snap = reader.get_snapshot().await.map_err(RocklakeError::from)?;
+            let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             if let Some(snap) = snap {
                 Ok(vec![make_snapshot_row_response(snap)])
             } else {
@@ -955,12 +955,12 @@ async fn execute_classified<'a>(
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RocklakeError::from)?
+                    .map_err(RockLakeError::from)?
             };
             let mut files = reader
                 .list_data_files(table_id)
                 .await
-                .map_err(RocklakeError::from)?;
+                .map_err(RockLakeError::from)?;
             files.truncate(limit as usize);
             Ok(vec![make_data_files_response(files)])
         }
@@ -1662,12 +1662,12 @@ async fn execute_classified<'a>(
             //
             // For now, return an unsupported error. DuckDB will receive this
             // error after ATTACH when trying to read catalog data.
-            Err(RocklakeError::Unsupported(format!(
+            Err(RockLakeError::Unsupported(format!(
                 "COPY TO STDOUT not yet implemented: {}",
                 query
             )))
         }
 
-        StatementKind::Unsupported(ref desc) => Err(RocklakeError::Unsupported(desc.clone())),
+        StatementKind::Unsupported(ref desc) => Err(RockLakeError::Unsupported(desc.clone())),
     }
 }

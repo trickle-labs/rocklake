@@ -10,7 +10,7 @@ use datafusion::catalog::CatalogProvider;
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_core::mvcc::SnapshotId;
-use rocklake_datafusion::RocklakeCatalogProvider;
+use rocklake_datafusion::RockLakeCatalogProvider;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -41,7 +41,7 @@ fn setup_catalog() -> (TempDir, CatalogStore) {
 
 fn bench_schema_names(c: &mut Criterion) {
     let (_dir, store) = setup_catalog();
-    let provider = RocklakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
 
     c.bench_function("async_bridge_schema_names", |b| {
         b.iter(|| {
@@ -53,7 +53,7 @@ fn bench_schema_names(c: &mut Criterion) {
 
 fn bench_table_names(c: &mut Criterion) {
     let (_dir, store) = setup_catalog();
-    let provider = RocklakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
 
     c.bench_function("async_bridge_table_names", |b| {
         b.iter(|| {

@@ -1,19 +1,19 @@
 # Deploying on Fly.io
 
-Fly.io is a global application platform that runs containers close to users with automatic TLS, global anycast networking, and Machines that boot in milliseconds. Rocklake is an excellent fit for Fly.io: it is a small, stateless binary with fast startup time, low resource requirements, and no need for persistent local storage. You can have a globally-distributed lakehouse catalog running in production for under $5/month.
+Fly.io is a global application platform that runs containers close to users with automatic TLS, global anycast networking, and Machines that boot in milliseconds. RockLake is an excellent fit for Fly.io: it is a small, stateless binary with fast startup time, low resource requirements, and no need for persistent local storage. You can have a globally-distributed lakehouse catalog running in production for under $5/month.
 
 This page covers the complete setup: creating the Fly app, configuring the deployment, managing secrets, connecting DuckDB clients, scaling to multiple regions, and operational patterns specific to Fly.io's platform.
 
-## Why Fly.io for Rocklake
+## Why Fly.io for RockLake
 
-Fly.io offers several properties that align perfectly with Rocklake's architecture:
+Fly.io offers several properties that align perfectly with RockLake's architecture:
 
-- **Fast boot:** Fly Machines start in <300ms. Combined with Rocklake's ~200ms startup, you get cold-start times under 500ms.
+- **Fast boot:** Fly Machines start in <300ms. Combined with RockLake's ~200ms startup, you get cold-start times under 500ms.
 - **Auto-stop/start:** Machines can scale to zero when idle and wake on incoming connections — perfect for infrequently-accessed catalogs.
 - **Global anycast:** A single hostname routes clients to the nearest region automatically.
 - **Built-in TLS:** Fly terminates TLS at the edge, so DuckDB clients get encryption without managing certificates.
 - **Simple deployment:** Push a Docker image with `fly deploy` — no Kubernetes, no Terraform, no infrastructure to manage.
-- **Low cost:** A shared-cpu-1x machine with 256 MB RAM runs Rocklake comfortably for ~$2–5/month.
+- **Low cost:** A shared-cpu-1x machine with 256 MB RAM runs RockLake comfortably for ~$2–5/month.
 
 ## Prerequisites
 
@@ -119,7 +119,7 @@ Never put credentials in `fly.toml`. Use Fly secrets:
 fly secrets set AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
 fly secrets set AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 
-# Rocklake password authentication
+# RockLake password authentication
 fly secrets set ROCKLAKE_PASSWORD=your-secure-random-password
 
 # Verify secrets are set (values are not shown)
@@ -227,7 +227,7 @@ Note: This works for HTTP protocols. For TCP/PostgreSQL wire protocol, you need 
 
 ## Volumes (Optional)
 
-Rocklake does not need local storage (all state is in object storage). However, if you want to cache frequently-accessed catalog data locally for performance:
+RockLake does not need local storage (all state is in object storage). However, if you want to cache frequently-accessed catalog data locally for performance:
 
 ```bash
 fly volumes create rocklake_cache --region iad --size 1
@@ -239,7 +239,7 @@ fly volumes create rocklake_cache --region iad --size 1
   destination = "/cache"
 ```
 
-This is rarely necessary — Rocklake's hot key cache in memory is sufficient for most workloads.
+This is rarely necessary — RockLake's hot key cache in memory is sufficient for most workloads.
 
 ## Monitoring
 
@@ -255,7 +255,7 @@ Access via `fly dashboard` or the Fly web console.
 
 ### Custom Metrics with Prometheus
 
-Export Rocklake metrics to a Prometheus-compatible endpoint:
+Export RockLake metrics to a Prometheus-compatible endpoint:
 
 ```toml
 [metrics]
@@ -277,7 +277,7 @@ fly checks create tcp \
 
 ## Cost Analysis
 
-Fly.io pricing for Rocklake deployments:
+Fly.io pricing for RockLake deployments:
 
 | Configuration | Monthly Cost | Use Case |
 |---------------|-------------|----------|
@@ -291,7 +291,7 @@ Additional costs:
 - Outbound bandwidth: $0.02/GB (first 100 GB/month free)
 - Volumes (if used): $0.15/GB/month
 
-For comparison, the equivalent on AWS (EC2 t3.micro + NLB) costs ~$25/month. Fly.io is significantly more cost-effective for small Rocklake deployments.
+For comparison, the equivalent on AWS (EC2 t3.micro + NLB) costs ~$25/month. Fly.io is significantly more cost-effective for small RockLake deployments.
 
 ## Operational Patterns
 
@@ -364,7 +364,7 @@ fly logs --no-tail | grep -i "error\|panic\|fatal"
 
 Common causes:
 
-- **Missing secrets:** Rocklake cannot authenticate to S3 without credentials. Verify with `fly secrets list`.
+- **Missing secrets:** RockLake cannot authenticate to S3 without credentials. Verify with `fly secrets list`.
 - **Wrong storage URL:** A typo in the bucket name or region causes immediate failure on the first read.
 - **Port conflict:** Ensure `internal_port` in `fly.toml` matches the `--bind` port in the process command.
 
@@ -397,7 +397,7 @@ Fly machines communicate with AWS S3 over the public internet. Each SlateDB read
 **Symptom:** Writer epoch keeps incrementing, or machines show multiple recent starts.
 
 - **OOM kills:** Check if the machine runs out of memory. Increase `memory_mb` in `fly.toml`.
-- **Health check failures:** If the TCP health check fails, Fly restarts the machine. Increase `grace_period` if Rocklake needs more startup time.
+- **Health check failures:** If the TCP health check fails, Fly restarts the machine. Increase `grace_period` if RockLake needs more startup time.
 - **Auto-stop/start cycling:** If traffic arrives in bursts with gaps just long enough to trigger auto-stop, the machine oscillates. Either disable auto-stop or increase the idle timeout.
 
 ## Complete Example: Production Setup

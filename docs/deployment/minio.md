@@ -1,24 +1,24 @@
 # Deploying with MinIO
 
-MinIO is a high-performance, S3-compatible object storage server that you can run on your own infrastructure. It is the ideal backend for Rocklake when you cannot or do not want to use cloud storage: on-premises data centers, air-gapped environments, development workstations without cloud access, CI/CD pipelines, and edge deployments where data sovereignty prevents sending catalog metadata to a public cloud. Because MinIO implements the S3 API, Rocklake treats it identically to Amazon S3 — the only difference is the endpoint URL.
+MinIO is a high-performance, S3-compatible object storage server that you can run on your own infrastructure. It is the ideal backend for RockLake when you cannot or do not want to use cloud storage: on-premises data centers, air-gapped environments, development workstations without cloud access, CI/CD pipelines, and edge deployments where data sovereignty prevents sending catalog metadata to a public cloud. Because MinIO implements the S3 API, RockLake treats it identically to Amazon S3 — the only difference is the endpoint URL.
 
-This guide covers running MinIO alongside Rocklake for development, deploying MinIO in single-node and distributed configurations for production-like environments, configuring Rocklake to connect to MinIO, and the common pitfalls that appear when using S3-compatible APIs.
+This guide covers running MinIO alongside RockLake for development, deploying MinIO in single-node and distributed configurations for production-like environments, configuring RockLake to connect to MinIO, and the common pitfalls that appear when using S3-compatible APIs.
 
 ## Why MinIO?
 
 MinIO occupies a specific niche: it is the best choice when you need S3 API compatibility without S3's cloud costs or data egress restrictions. The most common use cases are:
 
-**Local development.** Running a full lakehouse stack on a developer laptop with no cloud credentials, no network dependency, and no cost. MinIO starts in seconds and provides the full S3 API for testing Rocklake, DuckDB, and data pipelines against a realistic object-store backend.
+**Local development.** Running a full lakehouse stack on a developer laptop with no cloud credentials, no network dependency, and no cost. MinIO starts in seconds and provides the full S3 API for testing RockLake, DuckDB, and data pipelines against a realistic object-store backend.
 
 **CI/CD pipelines.** Integration tests that exercise the full storage stack need a real object store, not a mock. MinIO as a Docker service in a CI pipeline gives tests realistic latency and error modes without requiring cloud credentials in CI secrets.
 
 **On-premises production.** Organizations that require data to remain within their own data centers can deploy MinIO on bare metal or on-premises Kubernetes. MinIO's distributed mode provides erasure coding and cross-node redundancy comparable to cloud storage.
 
-**Edge and air-gapped environments.** Deployments where the Rocklake sidecar runs alongside processing systems in environments without internet connectivity.
+**Edge and air-gapped environments.** Deployments where the RockLake sidecar runs alongside processing systems in environments without internet connectivity.
 
 ## Quick Start: MinIO with Docker
 
-The fastest path to a working local environment combines MinIO and Rocklake using Docker Compose:
+The fastest path to a working local environment combines MinIO and RockLake using Docker Compose:
 
 ```yaml
 # docker-compose.yml
@@ -85,14 +85,14 @@ docker compose up -d
 # Verify everything is running
 docker compose ps
 
-# Watch Rocklake's logs
+# Watch RockLake's logs
 docker compose logs -f rocklake
 ```
 
-Expected Rocklake startup output:
+Expected RockLake startup output:
 
 ```
-INFO  Rocklake v0.8.0 starting
+INFO  RockLake v0.8.0 starting
 INFO  Storage backend: aws-s3 (endpoint: http://minio:9000)
 INFO  Path-style addressing: enabled
 INFO  Catalog path: s3://my-lakehouse/catalog/
@@ -153,7 +153,7 @@ chmod +x mc
 ./mc mb local/my-lakehouse
 ```
 
-Start Rocklake:
+Start RockLake:
 
 ```bash
 export AWS_ENDPOINT_URL=http://localhost:9000
@@ -180,11 +180,11 @@ Without path-style addressing, you will see errors like:
 Error: NoSuchBucket: The specified bucket does not exist
 ```
 
-or connection refused errors as Rocklake tries to connect to a hostname like `my-lakehouse.localhost` that does not exist.
+or connection refused errors as RockLake tries to connect to a hostname like `my-lakehouse.localhost` that does not exist.
 
 ## Endpoint Configuration
 
-Rocklake needs to know MinIO's endpoint URL. There are two ways to configure this:
+RockLake needs to know MinIO's endpoint URL. There are two ways to configure this:
 
 **Environment variable (recommended):**
 
@@ -202,7 +202,7 @@ rocklake serve \
   --bind 127.0.0.1:5432
 ```
 
-For Docker deployments where Rocklake and MinIO are on the same Docker network, use the service name as the hostname:
+For Docker deployments where RockLake and MinIO are on the same Docker network, use the service name as the hostname:
 
 ```bash
 AWS_ENDPOINT_URL=http://minio:9000  # Inside Docker network
@@ -234,7 +234,7 @@ mc admin policy create local rocklake-policy rocklake-policy.json
 mc admin policy attach local rocklake-policy --user rocklake-user
 ```
 
-Then use the dedicated credentials for Rocklake:
+Then use the dedicated credentials for RockLake:
 
 ```bash
 export AWS_ACCESS_KEY_ID=rocklake-user
@@ -361,7 +361,7 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   --certs-dir ~/minio-certs
 ```
 
-Tell Rocklake to use HTTPS and where to find the CA certificate:
+Tell RockLake to use HTTPS and where to find the CA certificate:
 
 ```bash
 export AWS_ENDPOINT_URL=https://localhost:9000
@@ -401,12 +401,12 @@ MinIO is not running or the endpoint URL is wrong. Check `docker ps` or `./minio
 **Bucket names with uppercase letters or special characters:**
 MinIO follows S3's bucket naming rules: lowercase letters, numbers, and hyphens only. Bucket names with uppercase letters or dots cause signature calculation mismatches.
 
-**Rocklake connects but reads/writes fail:**
+**RockLake connects but reads/writes fail:**
 The bucket exists but the user does not have the required permissions. Check MinIO's access policies with `mc admin policy list local`.
 
 ## Further Reading
 
-- **[Docker Deployment](docker.md)** — Running Rocklake and MinIO together with Docker Compose
+- **[Docker Deployment](docker.md)** — Running RockLake and MinIO together with Docker Compose
 - **[AWS S3 Deployment](aws-s3.md)** — When you are ready to move from MinIO to AWS S3 in production
 - **[Credential Isolation](credential-isolation.md)** — Applying the least-privilege principle to MinIO deployments
 - **[Object Store Durability](../concepts/object-store-durability.md)** — The durability model and its implications for MinIO vs. cloud storage

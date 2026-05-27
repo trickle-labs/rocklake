@@ -1,8 +1,8 @@
 # Binary Deployment
 
-The simplest way to run Rocklake is as a standalone binary on a VM or bare-metal server. There is no container runtime to install, no orchestrator to configure, no sidecar to coordinate — just a single executable that reads its configuration from command-line flags and environment variables. This deployment model is appropriate for development, testing, small-scale production, and situations where container infrastructure is unavailable or adds unnecessary complexity.
+The simplest way to run RockLake is as a standalone binary on a VM or bare-metal server. There is no container runtime to install, no orchestrator to configure, no sidecar to coordinate — just a single executable that reads its configuration from command-line flags and environment variables. This deployment model is appropriate for development, testing, small-scale production, and situations where container infrastructure is unavailable or adds unnecessary complexity.
 
-The Rocklake binary is statically linked (on Linux) and has no runtime dependencies beyond libc. It does not require a Java runtime, Python interpreter, or any other language runtime. It does not write to local disk during normal operation (all state goes to object storage). You can literally `scp` the binary to a server and start it.
+The RockLake binary is statically linked (on Linux) and has no runtime dependencies beyond libc. It does not require a Java runtime, Python interpreter, or any other language runtime. It does not write to local disk during normal operation (all state goes to object storage). You can literally `scp` the binary to a server and start it.
 
 ## Obtaining the Binary
 
@@ -46,7 +46,7 @@ Verify the installation:
 
 ```bash
 rocklake --version
-# Rocklake v0.8.0
+# RockLake v0.8.0
 ```
 
 ### Building from Source
@@ -63,11 +63,11 @@ sudo cp target/release/rocklake /usr/local/bin/
 
 Building from source requires Rust 1.75+ and takes approximately 60–90 seconds on a modern machine.
 
-## Running Rocklake
+## Running RockLake
 
 ### Development Mode (Local Filesystem)
 
-For local development and testing, point Rocklake at a filesystem path:
+For local development and testing, point RockLake at a filesystem path:
 
 ```bash
 rocklake serve --catalog ./my-catalog --bind 127.0.0.1:5432
@@ -77,7 +77,7 @@ This creates the catalog in the `./my-catalog` directory. Data is stored as file
 
 ### Production Mode (Cloud Storage)
 
-For production, point Rocklake at a cloud storage location:
+For production, point RockLake at a cloud storage location:
 
 ```bash
 # AWS S3
@@ -108,7 +108,7 @@ rocklake \
 
 ## systemd Service (Linux Production)
 
-For production Linux deployments, run Rocklake as a systemd service. This ensures automatic restart on crash, proper logging integration with journald, and controlled startup/shutdown behavior.
+For production Linux deployments, run RockLake as a systemd service. This ensures automatic restart on crash, proper logging integration with journald, and controlled startup/shutdown behavior.
 
 Create the service user (for privilege separation):
 
@@ -120,7 +120,7 @@ Create the service file at `/etc/systemd/system/rocklake.service`:
 
 ```ini
 [Unit]
-Description=Rocklake Catalog Server
+Description=RockLake Catalog Server
 Documentation=https://rocklake.dev/deployment/binary/
 After=network-online.target
 Wants=network-online.target
@@ -233,7 +233,7 @@ launchctl load ~/Library/LaunchAgents/dev.rocklake.plist
 
 ## Resource Requirements
 
-Rocklake is lightweight compared to traditional database servers:
+RockLake is lightweight compared to traditional database servers:
 
 | Resource | Requirement | Notes |
 |----------|------------|-------|
@@ -242,7 +242,7 @@ Rocklake is lightweight compared to traditional database servers:
 | **Disk** | None required | All state in object storage. No local WAL, no temp files, no swap. |
 | **Network** | Reliable, <100ms to storage | Latency to object storage directly affects catalog operation latency. |
 
-For cost-optimized deployments, Rocklake runs comfortably on the smallest VM instances:
+For cost-optimized deployments, RockLake runs comfortably on the smallest VM instances:
 
 - AWS: `t3.micro` (1 vCPU, 1 GB RAM) — sufficient for light workloads
 - AWS: `t3.small` (2 vCPU, 2 GB RAM) — recommended for production
@@ -251,7 +251,7 @@ For cost-optimized deployments, Rocklake runs comfortably on the smallest VM ins
 
 ## Cloud Credentials
 
-Rocklake uses the standard cloud SDK credential discovery chain. It does not implement its own credential management — it relies on the same mechanisms used by the AWS CLI, gsutil, and az commands.
+RockLake uses the standard cloud SDK credential discovery chain. It does not implement its own credential management — it relies on the same mechanisms used by the AWS CLI, gsutil, and az commands.
 
 ### AWS Credential Chain (in order of precedence)
 
@@ -278,7 +278,7 @@ Rocklake uses the standard cloud SDK credential discovery chain. It does not imp
 
 ## Health Checking
 
-Rocklake exposes a health endpoint that can be used by load balancers and monitoring systems:
+RockLake exposes a health endpoint that can be used by load balancers and monitoring systems:
 
 ```bash
 # TCP health check (connection accepted = healthy)
@@ -298,7 +298,7 @@ NotifyAccess=main
 
 ## Graceful Shutdown
 
-Rocklake handles SIGTERM gracefully:
+RockLake handles SIGTERM gracefully:
 
 1. Stops accepting new connections
 2. Waits for in-flight transactions to complete (up to 30 seconds)
@@ -309,19 +309,19 @@ This ensures no data loss during planned restarts or upgrades. systemd's `Timeou
 
 ## Upgrading
 
-To upgrade Rocklake:
+To upgrade RockLake:
 
 1. Download the new binary
 2. Replace the old binary (`/usr/local/bin/rocklake`)
 3. Restart the service (`sudo systemctl restart rocklake`)
 
-Because all state is in object storage, there is no local state to migrate. The new version reads the catalog from object storage and resumes operation. Format version compatibility is checked on startup — if the catalog was written by an incompatible future version, Rocklake will refuse to start with a clear error message.
+Because all state is in object storage, there is no local state to migrate. The new version reads the catalog from object storage and resumes operation. Format version compatibility is checked on startup — if the catalog was written by an incompatible future version, RockLake will refuse to start with a clear error message.
 
 ## Troubleshooting
 
 ### "Address already in use" on startup
 
-Another process is listening on port 5432 (possibly PostgreSQL, another Rocklake instance, or a stale process). Use `--bind` with a different port or stop the conflicting process.
+Another process is listening on port 5432 (possibly PostgreSQL, another RockLake instance, or a stale process). Use `--bind` with a different port or stop the conflicting process.
 
 ### "Permission denied" accessing credentials
 
@@ -335,7 +335,7 @@ If memory usage exceeds expectations, check the number of concurrent sessions (`
 
 ### Network Isolation
 
-Bind Rocklake to a private interface unless external access is required:
+Bind RockLake to a private interface unless external access is required:
 
 ```bash
 # Only accessible from localhost (development)
@@ -345,7 +345,7 @@ rocklake serve --catalog s3://bucket/catalog/ --bind 127.0.0.1:5432
 rocklake serve --catalog s3://bucket/catalog/ --bind 10.0.1.5:5432
 ```
 
-If external access is needed, place Rocklake behind a reverse proxy or cloud load balancer with TLS termination and IP allowlisting.
+If external access is needed, place RockLake behind a reverse proxy or cloud load balancer with TLS termination and IP allowlisting.
 
 ### Firewall Rules
 
@@ -377,7 +377,7 @@ For production, prefer instance roles (EC2 IAM roles, GCE service accounts) whic
 
 ### Least-Privilege IAM Policy
 
-Rocklake needs only specific S3 permissions for its catalog prefix:
+RockLake needs only specific S3 permissions for its catalog prefix:
 
 ```json
 {
@@ -405,7 +405,7 @@ Rocklake needs only specific S3 permissions for its catalog prefix:
 }
 ```
 
-Do not grant `s3:*` or full bucket access. Rocklake does not need access to data files (Parquet files in the data lake) — only to its own catalog prefix.
+Do not grant `s3:*` or full bucket access. RockLake does not need access to data files (Parquet files in the data lake) — only to its own catalog prefix.
 
 ## Further Reading
 

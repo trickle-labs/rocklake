@@ -1,8 +1,8 @@
 # Garbage Collection
 
-Rocklake's immutable, append-only data model means every catalog change creates new key-value pairs without deleting old ones. A schema alteration does not modify existing rows — it writes new versioned rows that supersede the old ones. Over time, these superseded versions accumulate. Garbage collection (GC) is the process of reclaiming storage by removing data that is no longer accessible to any reader.
+RockLake's immutable, append-only data model means every catalog change creates new key-value pairs without deleting old ones. A schema alteration does not modify existing rows — it writes new versioned rows that supersede the old ones. Over time, these superseded versions accumulate. Garbage collection (GC) is the process of reclaiming storage by removing data that is no longer accessible to any reader.
 
-GC in Rocklake is a two-phase process with an explicit separation between "making data logically inaccessible" and "physically deleting bytes." This separation is intentional — it gives operators a safety window to change their mind and prevents accidental irrecoverable data loss. Phase 1 (advancing the retention horizon) is reversible. Phase 2 (excision) is permanent.
+GC in RockLake is a two-phase process with an explicit separation between "making data logically inaccessible" and "physically deleting bytes." This separation is intentional — it gives operators a safety window to change their mind and prevents accidental irrecoverable data loss. Phase 1 (advancing the retention horizon) is reversible. Phase 2 (excision) is permanent.
 
 This page explains when and why GC is needed, how each phase works internally, scheduling strategies, interaction with pinned snapshots, and storage impact analysis.
 
@@ -184,7 +184,7 @@ spec:
 ```ini
 # /etc/systemd/system/rocklake-gc.timer
 [Unit]
-Description=Rocklake Daily Garbage Collection
+Description=RockLake Daily Garbage Collection
 
 [Timer]
 OnCalendar=*-*-* 03:00:00
@@ -197,7 +197,7 @@ WantedBy=timers.target
 ```ini
 # /etc/systemd/system/rocklake-gc.service
 [Unit]
-Description=Rocklake GC Run
+Description=RockLake GC Run
 
 [Service]
 Type=oneshot
@@ -323,12 +323,12 @@ The improvement comes from reading fewer SST blocks during scans.
 ### Alerting Example
 
 ```yaml
-- alert: RocklakeGCStale
+- alert: RockLakeGCStale
   expr: time() - rocklake_gc_last_run_timestamp > 172800
   labels:
     severity: warning
   annotations:
-    summary: "Rocklake GC has not run in 48 hours"
+    summary: "RockLake GC has not run in 48 hours"
 ```
 
 ## Troubleshooting GC

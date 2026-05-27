@@ -11,7 +11,7 @@
 `ducklake_metadata` and allocates IDs locally within a transaction. It does
 NOT rely on database-generated sequences.
 
-**Implication:** Rocklake's counter-allocation model (read counter →
+**Implication:** RockLake's counter-allocation model (read counter →
 increment → write new value + consuming row atomically in one transaction)
 is the correct approach.
 
@@ -22,7 +22,7 @@ is the correct approach.
 `s3://bucket/data/warehouse/table_uuid/file.parquet`). In SQLite-backed mode,
 paths are relative to the database file location.
 
-**Decision:** Rocklake will store absolute object-store URIs. The
+**Decision:** RockLake will store absolute object-store URIs. The
 `CatalogPath` struct will handle `data_path_mode` (`Absolute` vs
 `RelativeToDataPrefix`) for compatibility with DuckDB's expectations.
 

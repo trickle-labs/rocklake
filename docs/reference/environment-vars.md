@@ -1,8 +1,8 @@
 # Environment Variables Reference
 
-This page provides the complete configuration reference for Rocklake. Every environment variable recognized by the system is documented here: its purpose, type, default value, valid range, and examples. Configuration is the primary way operators control Rocklake's behavior in production — from specifying where catalog data is stored, to tuning performance parameters, to enabling TLS encryption.
+This page provides the complete configuration reference for RockLake. Every environment variable recognized by the system is documented here: its purpose, type, default value, valid range, and examples. Configuration is the primary way operators control RockLake's behavior in production — from specifying where catalog data is stored, to tuning performance parameters, to enabling TLS encryption.
 
-Rocklake follows the twelve-factor app methodology: configuration comes from the environment, not from configuration files. This makes deployment straightforward across diverse environments (Docker, Kubernetes, systemd, Lambda) without needing to manage config file paths or formats.
+RockLake follows the twelve-factor app methodology: configuration comes from the environment, not from configuration files. This makes deployment straightforward across diverse environments (Docker, Kubernetes, systemd, Lambda) without needing to manage config file paths or formats.
 
 ## Precedence Rules
 
@@ -18,7 +18,7 @@ Command-line flags always override environment variables. This allows operators 
 
 ## Storage Configuration
 
-These variables control where Rocklake stores catalog data and how it authenticates to object storage providers.
+These variables control where RockLake stores catalog data and how it authenticates to object storage providers.
 
 ### ROCKLAKE_STORAGE
 
@@ -50,7 +50,7 @@ ROCKLAKE_STORAGE=gs://my-bucket/catalog/
 ROCKLAKE_STORAGE=az://my-container/catalog/
 ```
 
-**Important:** The path should be dedicated to this Rocklake instance. Do not share a storage path between multiple independent catalogs.
+**Important:** The path should be dedicated to this RockLake instance. Do not share a storage path between multiple independent catalogs.
 
 ---
 
@@ -165,7 +165,7 @@ These variables control the network listener, session management, and access con
 
 ### ROCKLAKE_BIND
 
-The address and port Rocklake listens on for PostgreSQL wire protocol connections.
+The address and port RockLake listens on for PostgreSQL wire protocol connections.
 
 | Aspect | Detail |
 |--------|--------|
@@ -348,7 +348,7 @@ ROCKLAKE_LOG_FORMAT=json
 
 ## Performance Tuning
 
-These variables control Rocklake's internal performance behavior. The defaults are appropriate for most workloads. Change them only after benchmarking demonstrates a benefit.
+These variables control RockLake's internal performance behavior. The defaults are appropriate for most workloads. Change them only after benchmarking demonstrates a benefit.
 
 ### ROCKLAKE_HOT_KEY_CACHE
 
@@ -447,7 +447,7 @@ Address and port for the Prometheus metrics HTTP endpoint.
 ROCKLAKE_METRICS_BIND=0.0.0.0:9090
 ```
 
-When set, Rocklake exposes a `/metrics` endpoint in Prometheus exposition format at the specified address.
+When set, RockLake exposes a `/metrics` endpoint in Prometheus exposition format at the specified address.
 
 ---
 

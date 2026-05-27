@@ -1,6 +1,6 @@
 # Upgrades
 
-Upgrading Rocklake involves replacing the binary (or container image) with a newer version and, in some cases, migrating the catalog's internal format. Because Rocklake stores all state in SlateDB on object storage, upgrades are simpler than traditional database upgrades — there is no local data directory to migrate, no WAL to replay, and no cluster coordination to manage.
+Upgrading RockLake involves replacing the binary (or container image) with a newer version and, in some cases, migrating the catalog's internal format. Because RockLake stores all state in SlateDB on object storage, upgrades are simpler than traditional database upgrades — there is no local data directory to migrate, no WAL to replay, and no cluster coordination to manage.
 
 This page covers version compatibility guarantees, the upgrade procedure for every deployment model, format migrations, rollback strategies, and best practices for zero-downtime upgrades.
 
@@ -8,7 +8,7 @@ This page covers version compatibility guarantees, the upgrade procedure for eve
 
 ### Semantic Versioning
 
-Rocklake follows semantic versioning (MAJOR.MINOR.PATCH):
+RockLake follows semantic versioning (MAJOR.MINOR.PATCH):
 
 - **PATCH** (0.8.0 → 0.8.1): Bug fixes only. No format changes. Drop-in replacement.
 - **MINOR** (0.8.x → 0.9.0): New features, possibly new configuration options. May include a format migration (documented in release notes).
@@ -34,7 +34,7 @@ Once a format migration is applied, you cannot downgrade the binary below the ve
 
 The PostgreSQL wire protocol interface maintains backward compatibility within a major version:
 
-- DuckDB clients built for Rocklake 0.7.x will work with Rocklake 0.8.x
+- DuckDB clients built for RockLake 0.7.x will work with RockLake 0.8.x
 - New protocol features are additive (new message types, new columns in results)
 - Breaking wire protocol changes are reserved for major version bumps
 
@@ -66,7 +66,7 @@ aws s3 ls s3://bucket/catalog/ --recursive --summarize | tail -2
 ### Binary Installation
 
 ```bash
-# 1. Stop Rocklake
+# 1. Stop RockLake
 systemctl stop rocklake
 # or: kill $(pgrep rocklake)
 
@@ -159,7 +159,7 @@ When a new version introduces a format change, the migration is handled as follo
 
 Most format migrations are automatic. On first startup with the new binary:
 
-1. Rocklake detects the old format version
+1. RockLake detects the old format version
 2. It reads all catalog data
 3. It rewrites data in the new format
 4. It updates `sys/format_version`
@@ -222,7 +222,7 @@ If a format migration was applied, you cannot simply use the old binary (it will
 
 ## Zero-Downtime Upgrades
 
-Because Rocklake uses a single-writer architecture, true zero-downtime upgrades require careful orchestration:
+Because RockLake uses a single-writer architecture, true zero-downtime upgrades require careful orchestration:
 
 ### Strategy: Quick Restart
 
@@ -365,7 +365,7 @@ Common causes:
 This indicates multiple instances are competing for the writer lease — typically caused by the old deployment not being fully terminated before the new one starts. Ensure only one writer instance is running:
 
 ```bash
-# Find all Rocklake processes
+# Find all RockLake processes
 pgrep -la rocklake
 # Terminate any old instances
 ```

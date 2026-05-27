@@ -1,12 +1,12 @@
 # Release Process
 
-This page documents how Rocklake releases are versioned, built, tested, tagged, and published. It is primarily intended for maintainers who perform releases, but it is documented publicly for transparency — contributors should understand how their merged code reaches users, and users should understand the quality gates that every release passes through.
+This page documents how RockLake releases are versioned, built, tested, tagged, and published. It is primarily intended for maintainers who perform releases, but it is documented publicly for transparency — contributors should understand how their merged code reaches users, and users should understand the quality gates that every release passes through.
 
-Rocklake follows a deliberate, predictable release cadence. Every release goes through the same process regardless of its size. A one-line bug fix and a major feature addition both pass through the same CI pipeline, the same testing matrix, the same review requirements. This consistency ensures that users can upgrade with confidence — if a release is tagged, it has been validated.
+RockLake follows a deliberate, predictable release cadence. Every release goes through the same process regardless of its size. A one-line bug fix and a major feature addition both pass through the same CI pipeline, the same testing matrix, the same review requirements. This consistency ensures that users can upgrade with confidence — if a release is tagged, it has been validated.
 
 ## Version Numbering
 
-Rocklake follows [Semantic Versioning](https://semver.org/) (SemVer):
+RockLake follows [Semantic Versioning](https://semver.org/) (SemVer):
 
 | Version Component | When Incremented | Example |
 |-------------------|-----------------|---------|
@@ -45,7 +45,7 @@ All of these are updated together in the release PR.
 
 ## Release Cadence
 
-Rocklake does not follow a fixed time-based release schedule. Instead, releases happen when:
+RockLake does not follow a fixed time-based release schedule. Instead, releases happen when:
 
 - A meaningful set of changes has accumulated (features, fixes, improvements)
 - A critical bug fix needs to reach users quickly (hotfix release)

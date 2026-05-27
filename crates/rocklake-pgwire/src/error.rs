@@ -5,9 +5,9 @@
 use pgwire::error::{ErrorInfo, PgWireError};
 use rocklake_catalog::CatalogError;
 
-/// Rocklake unified error type.
+/// RockLake unified error type.
 #[derive(Debug, thiserror::Error)]
-pub enum RocklakeError {
+pub enum RockLakeError {
     #[error("catalog error: {0}")]
     Catalog(#[from] CatalogError),
 
@@ -66,7 +66,7 @@ pub enum RocklakeError {
     SqlState { code: String, message: String },
 }
 
-impl RocklakeError {
+impl RockLakeError {
     /// Map to PostgreSQL SQLSTATE code.
     pub fn sqlstate(&self) -> &str {
         match self {
@@ -126,8 +126,8 @@ fn catalog_error_sqlstate(e: &CatalogError) -> &'static str {
     }
 }
 
-impl From<RocklakeError> for PgWireError {
-    fn from(e: RocklakeError) -> PgWireError {
+impl From<RockLakeError> for PgWireError {
+    fn from(e: RockLakeError) -> PgWireError {
         PgWireError::UserError(Box::new(e.to_pg_error_info()))
     }
 }

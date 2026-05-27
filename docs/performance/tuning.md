@@ -1,8 +1,8 @@
 # Performance Tuning
 
-This page covers the configuration options and operational practices that improve Rocklake's performance for specific workloads. The guidance is ordered by impact — the first item provides the largest performance improvement for the least effort, and subsequent items provide diminishing returns. For most deployments, applying the first two or three recommendations is sufficient. Going further is for environments where every millisecond matters.
+This page covers the configuration options and operational practices that improve RockLake's performance for specific workloads. The guidance is ordered by impact — the first item provides the largest performance improvement for the least effort, and subsequent items provide diminishing returns. For most deployments, applying the first two or three recommendations is sufficient. Going further is for environments where every millisecond matters.
 
-Performance tuning in Rocklake is different from tuning a traditional database. There are no query plans to optimize, no indexes to create, no buffer pool sizes to calculate. The primary knobs are: where data lives (storage backend), how much is cached (block cache size), how clean the data is (garbage collection), and how work is organized (write batching). These are operational decisions, not code changes.
+Performance tuning in RockLake is different from tuning a traditional database. There are no query plans to optimize, no indexes to create, no buffer pool sizes to calculate. The primary knobs are: where data lives (storage backend), how much is cached (block cache size), how clean the data is (garbage collection), and how work is organized (write batching). These are operational decisions, not code changes.
 
 ## Storage Backend Selection
 
@@ -51,7 +51,7 @@ You can migrate a catalog between storage backends by copying the SlateDB direct
 aws s3 sync s3://standard-bucket/catalog/ s3express://express-bucket--use1-az4--x-s3/catalog/
 ```
 
-After migration, restart Rocklake pointing to the new location. No catalog modification is needed.
+After migration, restart RockLake pointing to the new location. No catalog modification is needed.
 
 ## Cache Sizing
 
@@ -86,11 +86,11 @@ ROCKLAKE_CACHE_SIZE_MB=256 rocklake serve --catalog s3://bucket/catalog/
 
 ### Cache Cold Start
 
-When Rocklake starts, the cache is empty. The first operations (typically 10–50 depending on catalog size and access pattern) will be slow because they trigger block fetches. After warm-up, the cache contains the active working set and subsequent operations are fast.
+When RockLake starts, the cache is empty. The first operations (typically 10–50 depending on catalog size and access pattern) will be slow because they trigger block fetches. After warm-up, the cache contains the active working set and subsequent operations are fast.
 
 **Strategies to reduce cold-start impact:**
 
-1. **Sticky scheduling:** Deploy Rocklake on the same node across restarts (preserves OS page cache, though not SlateDB's block cache)
+1. **Sticky scheduling:** Deploy RockLake on the same node across restarts (preserves OS page cache, though not SlateDB's block cache)
 2. **Warm-up queries:** After startup, issue a few representative queries to prime the cache before directing production traffic
 3. **Large cache:** A cache that holds the entire catalog means warm-up completes after one full scan of the catalog (a few seconds)
 
@@ -152,7 +152,7 @@ After excision, scan amplification drops to 1.0x (only visible rows remain in st
 
 ## Write Batching
 
-Rocklake's write performance is determined by the number of object storage PUTs, not the number of rows written. A single PUT can carry thousands of key-value pairs. The optimization strategy is to group as many writes as possible into each transaction.
+RockLake's write performance is determined by the number of object storage PUTs, not the number of rows written. A single PUT can carry thousands of key-value pairs. The optimization strategy is to group as many writes as possible into each transaction.
 
 ### How Batching Works
 
@@ -177,11 +177,11 @@ INSERT INTO my_table SELECT * FROM read_parquet('s3://data/*.parquet');
 
 DuckDB writes all the resulting Parquet files, then registers them all in the catalog in a single transaction. You do not need to manually batch — DuckDB does it for you.
 
-Manual batching is only relevant when writing to Rocklake directly (via `psql` or custom clients) outside of DuckDB's extension.
+Manual batching is only relevant when writing to RockLake directly (via `psql` or custom clients) outside of DuckDB's extension.
 
 ## Network Optimization
 
-Network latency is the dominant factor for cache-hot operations (where storage I/O is avoided). Reducing network distance between DuckDB and Rocklake provides consistent latency reduction on every operation.
+Network latency is the dominant factor for cache-hot operations (where storage I/O is avoided). Reducing network distance between DuckDB and RockLake provides consistent latency reduction on every operation.
 
 ### Co-Location Strategies
 
@@ -193,11 +193,11 @@ Network latency is the dominant factor for cache-hot operations (where storage I
 | Same region, different AZ | 2–5ms | Default for HA |
 | Cross-region | 20–100ms | Avoid if possible |
 
-**Recommendation:** Deploy Rocklake in the same availability zone as your DuckDB instances. If DuckDB runs in multiple AZs, deploy Rocklake readers in each AZ with a single writer in one AZ.
+**Recommendation:** Deploy RockLake in the same availability zone as your DuckDB instances. If DuckDB runs in multiple AZs, deploy RockLake readers in each AZ with a single writer in one AZ.
 
 ### VPC Endpoints
 
-When Rocklake accesses S3, the traffic can go through the public internet or through a VPC endpoint. VPC endpoints provide:
+When RockLake accesses S3, the traffic can go through the public internet or through a VPC endpoint. VPC endpoints provide:
 
 - Lower latency (private network path, no internet gateway)
 - Higher bandwidth (not subject to internet routing congestion)
@@ -205,13 +205,13 @@ When Rocklake accesses S3, the traffic can go through the public internet or thr
 
 ```bash
 # Ensure VPC endpoint for S3 is configured in your VPC
-# Rocklake uses it automatically (no configuration needed)
+# RockLake uses it automatically (no configuration needed)
 # Verify with: aws s3 ls --debug 2>&1 | grep endpoint
 ```
 
 ### Native Extension (Strategy C)
 
-For maximum performance, eliminate the network entirely by using Rocklake as a native DuckDB extension. The extension embeds the catalog logic directly in DuckDB's process — there is no TCP connection, no protocol serialization, no network latency.
+For maximum performance, eliminate the network entirely by using RockLake as a native DuckDB extension. The extension embeds the catalog logic directly in DuckDB's process — there is no TCP connection, no protocol serialization, no network latency.
 
 Performance with the native extension:
 
@@ -232,7 +232,7 @@ SlateDB periodically compacts SST files — merging small files into larger ones
 
 ### Default Behavior
 
-SlateDB's compaction runs in the background with conservative settings. For most Rocklake deployments, the defaults are appropriate.
+SlateDB's compaction runs in the background with conservative settings. For most RockLake deployments, the defaults are appropriate.
 
 ### When to Tune Compaction
 
@@ -259,7 +259,7 @@ For a new deployment, walk through this checklist:
 
 - [ ] Storage backend appropriate for latency requirements?
 - [ ] Cache sized to hold working set (or full catalog if small)?
-- [ ] DuckDB and Rocklake in same availability zone?
+- [ ] DuckDB and RockLake in same availability zone?
 - [ ] VPC endpoint configured for object storage access?
 - [ ] GC scheduled to run periodically (daily or weekly)?
 - [ ] Monitoring alerts on cache hit ratio and latency percentiles?

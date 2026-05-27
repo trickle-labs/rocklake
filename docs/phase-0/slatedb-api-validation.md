@@ -1,12 +1,12 @@
 # SlateDB API Validation — Phase 0
 
-> Produced as part of Rocklake v0.1 — Foundation.
+> Produced as part of RockLake v0.1 — Foundation.
 > All validation code lives in `crates/rocklake-core/src/validation.rs`.
 
 ## Summary
 
 All 10 gates **PASS** on LocalFS. SlateDB v0.13 meets every requirement for
-Rocklake's catalog storage layer.
+RockLake's catalog storage layer.
 
 ## Gate Results
 

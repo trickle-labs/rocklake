@@ -6,7 +6,7 @@ Reviewed sources:
 
 - DuckDB source tree: `../duckdb`
 - DuckLake source tree: `../ducklake`
-- Rocklake workspace: `crates/rocklake-core`, `crates/rocklake-catalog`, `crates/rocklake-sql`, `crates/rocklake-pgwire`
+- RockLake workspace: `crates/rocklake-core`, `crates/rocklake-catalog`, `crates/rocklake-sql`, `crates/rocklake-pgwire`
 
 Primary upstream file used for current DuckLake request behavior:
 
@@ -22,7 +22,7 @@ Key upstream areas inspected:
 
 ## Executive Summary
 
-The current DuckDB DuckLake happy path now works against Rocklake for the real inlined-data lifecycle that exposed the regressions in this review:
+The current DuckDB DuckLake happy path now works against RockLake for the real inlined-data lifecycle that exposed the regressions in this review:
 
 1. Attach DuckLake through the PostgreSQL metadata manager.
 2. Create schema and table.
@@ -31,7 +31,7 @@ The current DuckDB DuckLake happy path now works against Rocklake for the real i
 5. Append a row after DuckLake reuses a stale emitted row ID.
 6. Update an existing row through DuckLake's insert-plus-retire inlined-row pattern.
 7. Read the table raw, ordered, and filtered.
-8. Restart Rocklake and repeat the raw, ordered, filtered, stats, and direct dynamic inlined table reads.
+8. Restart RockLake and repeat the raw, ordered, filtered, stats, and direct dynamic inlined table reads.
 
 The major bugs found during this review were fixed in code rather than only documented:
 
@@ -45,13 +45,13 @@ The major bugs found during this review were fixed in code rather than only docu
 - Same-transaction inlined row replacements still preserve DuckLake's update behavior.
 - Extended-query descriptions can now describe dynamic `ducklake_inlined_data_*` tables, including casted projections used through DuckDB `postgres_query`.
 
-The broader conclusion is more cautious: Rocklake is now much closer to DuckDB/DuckLake compatibility for current inlined-data workflows, but full "works perfectly together" compatibility still requires completing the SQL catalog facade for all DuckLake v1.0 tables, especially data files, delete files, advanced metadata, and conformance testing for larger non-inlined data paths.
+The broader conclusion is more cautious: RockLake is now much closer to DuckDB/DuckLake compatibility for current inlined-data workflows, but full "works perfectly together" compatibility still requires completing the SQL catalog facade for all DuckLake v1.0 tables, especially data files, delete files, advanced metadata, and conformance testing for larger non-inlined data paths.
 
 ## Compatibility Status After This Review
 
 ### Works in real DuckDB/DuckLake validation
 
-- DuckLake attach through Rocklake's PgWire endpoint.
+- DuckLake attach through RockLake's PgWire endpoint.
 - Creating a schema and a simple table.
 - Inlined initial insert.
 - Inlined delete.
@@ -95,9 +95,9 @@ Validated final persisted table stats:
 
 ## Upstream Request Matrix
 
-This matrix describes request families observed or inferred from current DuckDB/DuckLake code paths and how Rocklake now responds.
+This matrix describes request families observed or inferred from current DuckDB/DuckLake code paths and how RockLake now responds.
 
-| Request family | Upstream purpose | Current Rocklake status | Notes |
+| Request family | Upstream purpose | Current RockLake status | Notes |
 |---|---|---|---|
 | Startup/auth/session parameters | Allow DuckDB postgres scanner and DuckLake metadata manager to open a PostgreSQL connection | Handled for current tests | The server advertises enough PostgreSQL compatibility for DuckDB to connect. |
 | `SELECT version()` / version checks | Client compatibility probing | Handled | Includes RDS-style version check variant. |
@@ -134,7 +134,7 @@ This matrix describes request families observed or inferred from current DuckDB/
 
 ### 1. Combined snapshot/stats/changelog query returned the wrong behavior
 
-DuckLake issues a conflict/read-state query that unions latest snapshot metadata with global table stats and table column stats. Without a dedicated path, Rocklake either failed to classify it correctly or returned the wrong schema.
+DuckLake issues a conflict/read-state query that unions latest snapshot metadata with global table stats and table column stats. Without a dedicated path, RockLake either failed to classify it correctly or returned the wrong schema.
 
 Fix:
 
@@ -184,7 +184,7 @@ Coverage:
 
 ### 3. Incremental stats inserts replaced global stats
 
-DuckLake can emit repeated `INSERT INTO ducklake_table_stats` statements for incremental batches. Rocklake was replacing the global row, so after delete/append/update the table stats could become stale or too narrow. The most visible failure was restart behavior: raw reads were correct, but filtered and ordered reads could return wrong rows because DuckLake used persisted global stats for pruning and planning.
+DuckLake can emit repeated `INSERT INTO ducklake_table_stats` statements for incremental batches. RockLake was replacing the global row, so after delete/append/update the table stats could become stale or too narrow. The most visible failure was restart behavior: raw reads were correct, but filtered and ordered reads could return wrong rows because DuckLake used persisted global stats for pruning and planning.
 
 Fix:
 
@@ -222,7 +222,7 @@ Coverage:
 
 ### 5. Inlined deletes did not adjust global row count
 
-DuckLake's inlined DELETE is represented as an update of `end_snapshot` on rows in the dynamic inlined table. Rocklake was retiring rows but leaving table stats too high or too stale.
+DuckLake's inlined DELETE is represented as an update of `end_snapshot` on rows in the dynamic inlined table. RockLake was retiring rows but leaving table stats too high or too stale.
 
 Fix:
 
@@ -235,7 +235,7 @@ Coverage:
 
 ### 6. Stale inlined append row IDs could overwrite live rows
 
-DuckLake sometimes emitted an ordinary append row with `row_id = 0` after prior rows already existed. Rocklake previously trusted the incoming key and overwrote the live row, causing missing data.
+DuckLake sometimes emitted an ordinary append row with `row_id = 0` after prior rows already existed. RockLake previously trusted the incoming key and overwrote the live row, causing missing data.
 
 Fix:
 
@@ -276,7 +276,7 @@ Coverage:
 - Real DuckDB direct validation:
   - `SELECT * FROM postgres_query('pg', 'SELECT row_id, CAST(id AS INTEGER) AS id FROM public.ducklake_inlined_data_3_3 ORDER BY row_id')`
 
-## Changed Rocklake Areas
+## Changed RockLake Areas
 
 ### SQL classifier
 
@@ -408,8 +408,8 @@ Result:
 
 Procedure:
 
-1. Stop Rocklake.
-2. Restart Rocklake against the same catalog directory.
+1. Stop RockLake.
+2. Restart RockLake against the same catalog directory.
 3. Reattach DuckLake with the same data path.
 4. Repeat raw, ordered, filtered, stats, and direct dynamic inlined table reads.
 
@@ -432,11 +432,11 @@ Result:
 
 ## Remaining Gaps To Reach Full "Perfect Together" Compatibility
 
-These are not the bugs that blocked the validated inlined-data lifecycle. They are the remaining work needed before Rocklake can claim broad DuckDB/DuckLake compatibility across the full v1.0 spec and larger workloads.
+These are not the bugs that blocked the validated inlined-data lifecycle. They are the remaining work needed before RockLake can claim broad DuckDB/DuckLake compatibility across the full v1.0 spec and larger workloads.
 
 ### P0. Complete exact SQL catalog facade for all DuckLake v1.0 tables
 
-DuckLake treats the metadata database as a SQL catalog with specific tables, columns, types, and field order. Rocklake stores catalog facts as key/value rows and exposes selected virtual result sets through PgWire. That architecture can work, but every public SQL response must match DuckLake exactly.
+DuckLake treats the metadata database as a SQL catalog with specific tables, columns, types, and field order. RockLake stores catalog facts as key/value rows and exposes selected virtual result sets through PgWire. That architecture can work, but every public SQL response must match DuckLake exactly.
 
 Required work:
 
@@ -520,9 +520,9 @@ Required work:
 
 - Rename or wrap internal table stats fields so the code distinguishes clearly between:
   - public DuckLake `next_row_id`,
-  - internal file counts if Rocklake wants to keep them,
+  - internal file counts if RockLake wants to keep them,
   - public `file_size_bytes`.
-- Update `InsertTableStats` parsing so the third v1.0 literal is named and treated as `next_row_id` or ignored deliberately if Rocklake computes `next_row_id` itself.
+- Update `InsertTableStats` parsing so the third v1.0 literal is named and treated as `next_row_id` or ignored deliberately if RockLake computes `next_row_id` itself.
 - Add migration/facade handling for old stats rows if persisted catalogs need backward compatibility.
 
 ### P0. Make snapshot changes spec-complete
@@ -581,7 +581,7 @@ Required work:
 
 ### P1. Validate views, macros, tags, and sort metadata end to end
 
-Rocklake has partial classifier/storage support for several advanced metadata tables, but real DuckDB/DuckLake validation is still needed.
+RockLake has partial classifier/storage support for several advanced metadata tables, but real DuckDB/DuckLake validation is still needed.
 
 Required work:
 
@@ -672,11 +672,11 @@ Tasks:
 - Preserve SQL corpus failures as actionable diffs.
 - Include fresh, restart, and concurrent scenarios.
 
-## Acceptance Criteria For "DuckDB And Rocklake Work Perfectly Together"
+## Acceptance Criteria For "DuckDB And RockLake Work Perfectly Together"
 
-Rocklake should not claim full compatibility until all of the following are true:
+RockLake should not claim full compatibility until all of the following are true:
 
-- DuckDB can attach to a fresh Rocklake catalog with DuckLake and create/drop/read schemas and tables without custom flags.
+- DuckDB can attach to a fresh RockLake catalog with DuckLake and create/drop/read schemas and tables without custom flags.
 - Inlined and file-backed tables both work.
 - INSERT, DELETE, UPDATE, ALTER, DROP, view, macro, tag, partition, and sort metadata operations work.
 - Fresh reads, restart reads, time-travel reads, ordered reads, filtered reads, and projection reads are correct.
@@ -688,4 +688,4 @@ Rocklake should not claim full compatibility until all of the following are true
 
 ## Final Recommendation
 
-The immediate bugs that blocked the reviewed DuckDB/DuckLake inlined-data lifecycle have been fixed and validated. The next best engineering move is not another one-off classifier branch; it is a schema-driven DuckLake SQL facade shared by the PgWire handler, executor, COPY code, and tests. Once that facade exists, the remaining data-file/delete-file and advanced metadata work becomes much more mechanical, and Rocklake can move from "compatible with this current path" toward a defensible full DuckLake v1.0 compatibility claim.
+The immediate bugs that blocked the reviewed DuckDB/DuckLake inlined-data lifecycle have been fixed and validated. The next best engineering move is not another one-off classifier branch; it is a schema-driven DuckLake SQL facade shared by the PgWire handler, executor, COPY code, and tests. Once that facade exists, the remaining data-file/delete-file and advanced metadata work becomes much more mechanical, and RockLake can move from "compatible with this current path" toward a defensible full DuckLake v1.0 compatibility claim.

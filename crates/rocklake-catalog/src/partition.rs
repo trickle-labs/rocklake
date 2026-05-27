@@ -8,7 +8,7 @@
 //! - Global registry catalog: maps logical dataset names to their catalog paths
 //! - Each dataset gets its own isolated SlateDB-backed catalog
 //! - Writers shard across datasets with no cross-dataset contention
-//! - The global registry itself is a Rocklake catalog, providing a queryable inventory
+//! - The global registry itself is a RockLake catalog, providing a queryable inventory
 
 use object_store::path::Path as ObjectPath;
 use rocklake_core::keys;
@@ -34,7 +34,7 @@ pub struct DatasetEntry {
 }
 
 /// The global registry that maps dataset names to their catalog paths.
-/// This is itself a Rocklake catalog, enabling queryable inventory.
+/// This is itself a RockLake catalog, enabling queryable inventory.
 pub struct CatalogRegistry {
     store: CatalogStore,
 }

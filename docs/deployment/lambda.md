@@ -1,12 +1,12 @@
 # Lambda / Serverless Deployment
 
-Rocklake can run as a serverless function for workloads with infrequent catalog access, where keeping a persistent process running would be wasteful and expensive. This deployment model trades latency (cold start penalty) for cost efficiency (pay only for actual milliseconds of computation). For catalogs that are accessed a few times per hour rather than thousands of times per second, serverless is the economically rational choice.
+RockLake can run as a serverless function for workloads with infrequent catalog access, where keeping a persistent process running would be wasteful and expensive. This deployment model trades latency (cold start penalty) for cost efficiency (pay only for actual milliseconds of computation). For catalogs that are accessed a few times per hour rather than thousands of times per second, serverless is the economically rational choice.
 
-The architecture leverages a key property of Rocklake's design: all state is in object storage. There is no local WAL to recover, no in-memory state that must survive across invocations, no warm-up period beyond reading the manifest. A fresh Rocklake instance can serve a catalog operation within 50–100ms of starting.
+The architecture leverages a key property of RockLake's design: all state is in object storage. There is no local WAL to recover, no in-memory state that must survive across invocations, no warm-up period beyond reading the manifest. A fresh RockLake instance can serve a catalog operation within 50–100ms of starting.
 
 ## How It Works
 
-In serverless mode, Rocklake operates with a different lifecycle than the persistent PG-wire server. Each function invocation follows this flow:
+In serverless mode, RockLake operates with a different lifecycle than the persistent PG-wire server. Each function invocation follows this flow:
 
 ```mermaid
 sequenceDiagram
@@ -21,7 +21,7 @@ sequenceDiagram
     Note over Lambda: Runtime may keep process warm
 ```
 
-1. **Cold start (first invocation):** The function initializes a Rocklake instance, reads the SlateDB manifest from object storage (one GET request, 20–50ms), and builds the in-memory catalog index.
+1. **Cold start (first invocation):** The function initializes a RockLake instance, reads the SlateDB manifest from object storage (one GET request, 20–50ms), and builds the in-memory catalog index.
 2. **Execute operation:** Processes one or more catalog operations from the event payload. This may involve additional object storage reads/writes depending on the operation.
 3. **Return result:** Sends the operation result back as structured JSON.
 4. **Warm invocations:** If the runtime reuses the execution environment (which Lambda does for ~5–15 minutes after the last invocation), subsequent requests skip the manifest read and execute immediately.
@@ -32,7 +32,7 @@ The warm path is the common case for any catalog accessed more than once every f
 
 ### Building the Function
 
-Package Rocklake as a Lambda custom runtime (provided.al2023):
+Package RockLake as a Lambda custom runtime (provided.al2023):
 
 ```bash
 # Build for Amazon Linux 2023 (x86_64)
@@ -59,7 +59,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
 Resources:
-  RocklakeFunction:
+  RockLakeFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: rocklake-catalog
@@ -161,7 +161,7 @@ This keeps 2 execution environments warm at all times. Cost is significantly low
 
 ## Google Cloud Functions
 
-Rocklake can also run as a Google Cloud Function:
+RockLake can also run as a Google Cloud Function:
 
 ```bash
 # Build for Cloud Functions (x86_64 Linux)
@@ -191,11 +191,11 @@ func azure functionapp publish rocklake-catalog
 
 ## DuckDB Integration via Proxy
 
-DuckDB's `ducklake` extension expects a persistent PG-wire connection. To use DuckDB with a serverless Rocklake backend, you need a translation layer:
+DuckDB's `ducklake` extension expects a persistent PG-wire connection. To use DuckDB with a serverless RockLake backend, you need a translation layer:
 
 ### Option 1: API Gateway + Lambda (HTTP Mode)
 
-Use Rocklake's HTTP catalog API (separate from PG-wire) with a DuckDB httpfs-based catalog connector:
+Use RockLake's HTTP catalog API (separate from PG-wire) with a DuckDB httpfs-based catalog connector:
 
 ```sql
 -- Future: HTTP-based catalog access
@@ -214,11 +214,11 @@ This is useful when you have many catalogs but few concurrent users per catalog.
 
 ### Option 3: Embedded Mode (FFI)
 
-For batch workloads, use Rocklake's FFI integration to embed the catalog directly in your application, bypassing the network entirely:
+For batch workloads, use RockLake's FFI integration to embed the catalog directly in your application, bypassing the network entirely:
 
 ```python
 import duckdb
-# Load Rocklake as a DuckDB extension (no separate server)
+# Load RockLake as a DuckDB extension (no separate server)
 conn = duckdb.connect()
 conn.execute("LOAD rocklake")
 conn.execute("ATTACH 'ducklake:s3://my-bucket/catalog/' AS lake")
@@ -228,7 +228,7 @@ conn.execute("ATTACH 'ducklake:s3://my-bucket/catalog/' AS lake")
 
 ### Infrequent Access Patterns
 
-If your DuckLake catalog is queried only a few times per hour — for example, a daily ETL job that registers new Parquet files, or a weekly reporting pipeline that reads table metadata — a persistent Rocklake process running 24/7 is economically wasteful. Lambda invocations cost fractions of a cent for the actual milliseconds of execution.
+If your DuckLake catalog is queried only a few times per hour — for example, a daily ETL job that registers new Parquet files, or a weekly reporting pipeline that reads table metadata — a persistent RockLake process running 24/7 is economically wasteful. Lambda invocations cost fractions of a cent for the actual milliseconds of execution.
 
 ### Burst Workloads
 
@@ -288,7 +288,7 @@ For most catalog workloads (metadata operations, not data scanning), 500,000 ops
 
 ### CloudWatch Metrics
 
-Key metrics to monitor for Lambda-deployed Rocklake:
+Key metrics to monitor for Lambda-deployed RockLake:
 
 - **Duration** — P50, P95, P99 execution time. Alert if P99 exceeds 5 seconds.
 - **ConcurrentExecutions** — Detect if reserved concurrency is being exhausted.
@@ -297,7 +297,7 @@ Key metrics to monitor for Lambda-deployed Rocklake:
 
 ### Custom Metrics
 
-Rocklake emits custom CloudWatch metrics in serverless mode:
+RockLake emits custom CloudWatch metrics in serverless mode:
 
 - `rocklake.operation.duration` — Per-operation timing
 - `rocklake.manifest.read_ms` — Manifest read latency (cold start indicator)
@@ -338,13 +338,13 @@ Azure Blob Storage is the natural backend. Configure the storage connection stri
 
 ### Cloudflare Workers (Not Recommended)
 
-While technically possible, Cloudflare Workers have significant limitations for Rocklake:
+While technically possible, Cloudflare Workers have significant limitations for RockLake:
 
 - 50ms CPU time limit (free) / 30s (paid) — tight for catalog operations
 - No TCP socket support — cannot use S3 SDK directly
 - Limited memory (128 MB) — constrains block cache size
 
-Workers are better suited for routing/proxy logic (pointing DuckDB clients to the nearest Rocklake instance) than hosting the catalog itself.
+Workers are better suited for routing/proxy logic (pointing DuckDB clients to the nearest RockLake instance) than hosting the catalog itself.
 
 ## When to Choose Serverless
 
@@ -369,7 +369,7 @@ Workers are better suited for routing/proxy logic (pointing DuckDB clients to th
 A common pattern for cost-optimized deployments:
 
 - **Lambda function** handles infrequent writes (ETL pipeline commits, schema changes) — these are serialized naturally by Lambda's concurrency model
-- **Persistent Rocklake instance** (Fly.io, ECS, Kubernetes) handles reads from DuckDB clients — provides low latency for interactive users
+- **Persistent RockLake instance** (Fly.io, ECS, Kubernetes) handles reads from DuckDB clients — provides low latency for interactive users
 
 This works because SlateDB supports one writer (the Lambda function) and unlimited concurrent readers (the persistent instance in read-only mode).
 

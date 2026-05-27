@@ -1,4 +1,4 @@
-# Rocklake v2.x: A World-Class Fact Store on Object Storage
+# RockLake v2.x: A World-Class Fact Store on Object Storage
 
 > Status: **Exploration / Design**. This document is a forward-looking design
 > blueprint for the v2.x line. It builds on the architectural compass in
@@ -12,7 +12,7 @@
 
 ## Introduction (for a non-technical audience)
 
-Rocklake v1.x ships a **lakehouse catalog**: a way to store metadata about
+RockLake v1.x ships a **lakehouse catalog**: a way to store metadata about
 data files in cloud object storage. The interesting thing about how it does
 that is not the catalog itself — it is the **storage engine underneath the
 catalog**. That engine treats every change as an immutable *fact* with a
@@ -993,7 +993,7 @@ behind a load balancer where retries are routine.
 
 ### 8.7 Stateless multi-producer ingestion (Buffer pattern)
 
-The direct write path routes all clients through the single Rocklake writer
+The direct write path routes all clients through the single RockLake writer
 process. For deployments with application instances spread across
 availability zones this means cross-zone transfer costs and write
 unavailability during writer restarts.
@@ -1013,7 +1013,7 @@ availability using an object-storage queue:
            └──────────┬──────────┘
                       │  poll
            ┌──────────▼──────────┐
-           │  Rocklake Writer  │
+           │  RockLake Writer  │
            │  BufferConsumer    │
            │  → FactStore.write │
            └────────────────────┘
@@ -1023,7 +1023,7 @@ Key properties:
 
 - **Multi-producer, single consumer.** Any number of app instances append
   to the queue manifest concurrently via compare-and-swap. Only the
-  Rocklake writer consumes. This preserves the single-writer guarantee
+  RockLake writer consumes. This preserves the single-writer guarantee
   on the fact store.
 - **Epoch-based consumer fencing.** On writer restart, the consumer
   increments the manifest epoch, fencing any zombie consumer from a
@@ -1056,7 +1056,7 @@ Key properties:
   parses the length-prefixed record entries. This makes it safe to add new
   compression codecs or record types without breaking existing consumers.
 - **Write availability decoupled from writer availability.** Apps continue
-  writing to object storage even while Rocklake is down or deploying.
+  writing to object storage even while RockLake is down or deploying.
 
 Trade-off: a fact is not queryable until the producer flushes its batch
 (default 100 ms), the consumer polls the manifest (default 1 s), and the
@@ -1303,7 +1303,7 @@ query latency against analytical compatibility and storage cost.
 
 - View state stored as memory-mapped Arrow IPC files on the local NVMe
   PVC (the same disk used by the SlateDB block cache).
-- Zero-copy in-process reads: DuckDB, DataFusion, and the Rocklake SQL
+- Zero-copy in-process reads: DuckDB, DataFusion, and the RockLake SQL
   layer can query the view without deserialisation.
 - SIMD-friendly columnar layout — sub-millisecond point lookups for most
   entity snapshot queries.
@@ -1395,13 +1395,13 @@ disaggregated compaction model (§3.8) and the Buffer queue pattern (§8.7).
 The `dbsp` crate (from the Feldera project) provides a complete Rust
 implementation of the DBSP incremental computation model:
 
-| Capability | Relevance to Rocklake |
+| Capability | Relevance to RockLake |
 |------------|------------------------|
 | Full SQL incrementally (joins, aggregates, window functions, recursion) | Enables arbitrary SQL-declared views without hand-writing operators |
 | Datasets larger than RAM via NVMe spill (`FallbackZSet`, `FallbackKeyBatch`) | Handles large entity snapshots without memory pressure |
 | Multi-worker scale-out via timely dataflow | Long-term horizontal partitioning of expensive views |
 | LATENESS annotations for time-series GC | Bounds storage for event/metric views over sliding windows |
-| Ad-hoc queries against materialised state via DataFusion | Consistent with Rocklake's existing DataFusion integration |
+| Ad-hoc queries against materialised state via DataFusion | Consistent with RockLake's existing DataFusion integration |
 | MIT licensed, written in Rust | Fits the crate dependency model |
 
 For Phase 2.2, a hand-written Z-set operator set (filter, project, group-by)
@@ -1507,14 +1507,14 @@ cleanly on the generic substrate, every other schema can too.
   format is identical, the adapter speaks the same wire protocol.
 - v1.x APIs are preserved through the entire v2.x line.
 - The generic API is **independently versioned**: `rocklake-factstore`
-  may reach 1.0 before or after Rocklake v2.0 ships.
+  may reach 1.0 before or after RockLake v2.0 ships.
 
 ### 13.4 Possible standalone-project promotion
 
 Once `rocklake-factstore` stabilises (no breaking changes for two minor
 releases, ≥ 2 production users beyond the lakehouse adapter), the crate
 can be promoted to a **standalone project** with its own repository,
-governance, and release cadence. Rocklake would then depend on it as an
+governance, and release cadence. RockLake would then depend on it as an
 external crate. This is explicitly *not* required for v2.0 to ship —
 in-workspace extraction is sufficient.
 
@@ -1701,7 +1701,7 @@ v2.x succeeds when:
 - What is the right "tag block" allocation policy for user-defined
   schemas? (Tag ranges, dynamic registration, or both?)
 - Should the rule-based query language be standardised (e.g. to an
-  existing dialect) or stay Rocklake-specific to leave room for novel
+  existing dialect) or stay RockLake-specific to leave room for novel
   features?
 - How much of the value-type system should be extensible (custom types
   via plugin?) versus closed (the §3.5 list and no more)?
@@ -1725,7 +1725,7 @@ v2.x succeeds when:
   the assertion version and the excision version.
 - Should entity-level bloom filters and block-level record counts (§3.7) be
   proposed as upstream SlateDB enhancements, or implemented via a
-  Rocklake-specific SST extension? The former is the right long-term path
+  RockLake-specific SST extension? The former is the right long-term path
   but requires coordination with SlateDB maintainers.
 - Should the Buffer front-end (§8.7) use an existing open-source
   object-storage queue crate (lower maintenance, proven) or be

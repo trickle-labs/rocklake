@@ -133,7 +133,7 @@ fn normalize_copy_table(s: &str) -> String {
     s.to_lowercase()
 }
 
-/// The bounded set of SQL statement shapes supported by Rocklake.
+/// The bounded set of SQL statement shapes supported by RockLake.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatementKind {
     // ─── Session / Introspection ───────────────────────────────────────
@@ -154,7 +154,7 @@ pub enum StatementKind {
     /// — DuckDB sends this when returning a connection to the pool.
     DiscardAll,
     /// `SELECT to_regclass('duckdb_secrets')` — DuckDB secret storage fast-path
-    /// check. Returns `NULL` because Rocklake has no `duckdb_secrets` table.
+    /// check. Returns `NULL` because RockLake has no `duckdb_secrets` table.
     SelectToRegclass,
     /// `SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE ...)`
     /// — DuckDB secret storage fallback check. Returns `false`.
@@ -315,7 +315,7 @@ pub enum StatementKind {
     // ─── COPY Protocol ─────────────────────────────────────────────────
     /// `COPY "public"."ducklake_*" FROM STDIN (FORMAT binary)`
     /// DuckDB 1.5+ uses binary COPY for catalog initialization.
-    /// Rocklake accepts and discards the payload (no-op).
+    /// RockLake accepts and discards the payload (no-op).
     CopyFromStdin {
         table: String,
     },

@@ -1,6 +1,6 @@
 # Backup & Restore
 
-Rocklake stores all catalog state in object storage, which provides 99.999999999% (11 nines) durability by default. Your data is already replicated across multiple availability zones by the cloud provider, surviving hardware failures, rack outages, and natural disasters. In many scenarios, you do not need a separate backup mechanism at all — object storage IS the backup.
+RockLake stores all catalog state in object storage, which provides 99.999999999% (11 nines) durability by default. Your data is already replicated across multiple availability zones by the cloud provider, surviving hardware failures, rack outages, and natural disasters. In many scenarios, you do not need a separate backup mechanism at all — object storage IS the backup.
 
 However, durability protects against physical loss, not logical corruption. If a bug corrupts your catalog, if an operator accidentally runs excision with wrong parameters, or if you need to undo a schema migration that went wrong, you need recovery mechanisms that work at the logical level. This page covers all backup and restoration strategies: from zero-cost approaches (leveraging storage durability) to full NDJSON exports and named checkpoints.
 
@@ -21,7 +21,7 @@ However, durability protects against physical loss, not logical corruption. If a
 
 The simplest backup strategy costs nothing and requires no configuration: rely on object storage's built-in durability.
 
-When Rocklake writes data to S3/GCS/Azure:
+When RockLake writes data to S3/GCS/Azure:
 
 - S3 Standard: 99.999999999% durability (data replicated across 3+ AZs)
 - GCS Standard: Same durability class
@@ -38,7 +38,7 @@ You need additional backup when:
 2. **Retention window expires** — GC advances past the state you need
 3. **Human error** — someone accidentally runs excision or deletes the bucket
 4. **Compliance requires** — auditors want archived copies outside the live system
-5. **Cross-system migration** — moving catalog state to a different Rocklake instance
+5. **Cross-system migration** — moving catalog state to a different RockLake instance
 
 ## NDJSON Export (Full Logical Backup)
 
@@ -232,7 +232,7 @@ gsutil mb -l US gs://my-catalog-bucket/
 az storage account create --name mycatalog --sku Standard_RAGRS
 ```
 
-Rocklake does not need to know about cross-region replication — it happens transparently at the storage layer.
+RockLake does not need to know about cross-region replication — it happens transparently at the storage layer.
 
 ## Bucket Versioning (Accidental Deletion Protection)
 
@@ -276,7 +276,7 @@ With versioning enabled, if a SlateDB compaction bug or manual error deletes an 
 ### Scenario: Region Outage
 
 1. Verify replication status of the secondary bucket
-2. Deploy Rocklake in the secondary region pointing to the replica
+2. Deploy RockLake in the secondary region pointing to the replica
 3. Remove `--read-only` to promote to writer (see [Multi-Region](../deployment/multi-region.md))
 
 ### Scenario: Need to Undo Schema Migration
@@ -334,12 +334,12 @@ rocklake destroy --catalog s3://bucket/test-restore/ --confirm
 Alert if backups are not being created:
 
 ```yaml
-- alert: RocklakeBackupStale
+- alert: RockLakeBackupStale
   expr: time() - rocklake_last_backup_timestamp_seconds > 172800  # 48 hours
   labels:
     severity: warning
   annotations:
-    summary: "No Rocklake backup in 48 hours"
+    summary: "No RockLake backup in 48 hours"
 ```
 
 ## Restoring in Place vs. to New Location

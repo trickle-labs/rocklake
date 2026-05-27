@@ -1,8 +1,8 @@
 # Metrics Reference
 
-This page documents all Prometheus metrics exposed by Rocklake's metrics endpoint. When enabled (via `ROCKLAKE_METRICS_BIND`), Rocklake serves metrics in Prometheus exposition format at the `/metrics` path. These metrics provide comprehensive observability into catalog operations, storage performance, caching behavior, and system health.
+This page documents all Prometheus metrics exposed by RockLake's metrics endpoint. When enabled (via `ROCKLAKE_METRICS_BIND`), RockLake serves metrics in Prometheus exposition format at the `/metrics` path. These metrics provide comprehensive observability into catalog operations, storage performance, caching behavior, and system health.
 
-Monitoring is essential for production deployments. These metrics tell you whether Rocklake is healthy, whether performance is within expectations, whether storage costs are growing, and whether capacity planning assumptions hold. Each metric includes its type (counter, gauge, histogram), labels, description, and guidance on what values are normal and what values indicate problems.
+Monitoring is essential for production deployments. These metrics tell you whether RockLake is healthy, whether performance is within expectations, whether storage costs are growing, and whether capacity planning assumptions hold. Each metric includes its type (counter, gauge, histogram), labels, description, and guidance on what values are normal and what values indicate problems.
 
 ## Metric Types
 
@@ -35,7 +35,7 @@ scrape_configs:
 
 ## Operation Metrics
 
-These metrics track catalog operations — the core business logic of Rocklake.
+These metrics track catalog operations — the core business logic of RockLake.
 
 ### rocklake_operations_total
 
@@ -400,25 +400,25 @@ All metrics follow Prometheus naming best practices:
 groups:
   - name: rocklake
     rules:
-      - alert: RocklakeHighLatency
+      - alert: RockLakeHighLatency
         expr: histogram_quantile(0.99, rate(rocklake_operation_duration_seconds_bucket[5m])) > 1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Rocklake P99 latency exceeds 1 second"
+          summary: "RockLake P99 latency exceeds 1 second"
           description: "Operation latency has been above 1s for 5 minutes. Check storage performance."
 
-      - alert: RocklakeStorageThrottled
+      - alert: RockLakeStorageThrottled
         expr: rate(rocklake_object_store_throttles_total[5m]) > 0
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Object storage is throttling Rocklake requests"
+          summary: "Object storage is throttling RockLake requests"
           description: "Sustained 429/503 responses from storage. Consider S3 Express or request limit increase."
 
-      - alert: RocklakeCacheMissRate
+      - alert: RockLakeCacheMissRate
         expr: |
           rate(rocklake_cache_misses_total[5m]) /
           (rate(rocklake_cache_hits_total[5m]) + rate(rocklake_cache_misses_total[5m])) > 0.3
@@ -426,22 +426,22 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Rocklake cache miss rate above 30%"
+          summary: "RockLake cache miss rate above 30%"
           description: "Working set may exceed cache size. Consider increasing ROCKLAKE_CACHE_SIZE_MB."
 
-      - alert: RocklakeSessionsNearLimit
+      - alert: RockLakeSessionsNearLimit
         expr: rocklake_active_sessions / rocklake_max_sessions > 0.8
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Rocklake approaching session limit"
+          summary: "RockLake approaching session limit"
           description: "Active sessions are above 80% of maximum. New connections may be rejected soon."
 ```
 
 ## Grafana Dashboard Configuration
 
-A recommended Grafana dashboard for Rocklake should include these panels:
+A recommended Grafana dashboard for RockLake should include these panels:
 
 ### Overview Row
 

@@ -1,12 +1,12 @@
 # Kubernetes Deployment
 
-Kubernetes is the recommended deployment platform for production Rocklake instances that need automated restarts, health monitoring, and integration with cloud IAM. Because Rocklake stores all state in object storage, it runs as a stateless Deployment — no PersistentVolumes, no StatefulSets, no operator required. This makes it one of the simplest database-adjacent services to deploy on Kubernetes.
+Kubernetes is the recommended deployment platform for production RockLake instances that need automated restarts, health monitoring, and integration with cloud IAM. Because RockLake stores all state in object storage, it runs as a stateless Deployment — no PersistentVolumes, no StatefulSets, no operator required. This makes it one of the simplest database-adjacent services to deploy on Kubernetes.
 
-This page covers complete deployment manifests, scaling patterns, IAM integration for all three major clouds, health probing strategies, and operational practices for running Rocklake reliably in a cluster.
+This page covers complete deployment manifests, scaling patterns, IAM integration for all three major clouds, health probing strategies, and operational practices for running RockLake reliably in a cluster.
 
 ## Why Deployment, Not StatefulSet
 
-Traditional databases on Kubernetes need StatefulSets for stable network identifiers and persistent storage. Rocklake needs neither:
+Traditional databases on Kubernetes need StatefulSets for stable network identifiers and persistent storage. RockLake needs neither:
 
 - **No persistent storage.** All data lives in object storage. The pod can be killed and rescheduled on any node without data loss.
 - **No stable identity.** The writer acquires its epoch on startup; it does not need to be "pod-0" or have a fixed hostname.
@@ -447,7 +447,7 @@ spec:
 
 ## Network Policy
 
-Restrict which pods can connect to Rocklake:
+Restrict which pods can connect to RockLake:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -527,7 +527,7 @@ spec:
 
 ## Rolling Updates
 
-Because Rocklake is stateless, rolling updates are straightforward:
+Because RockLake is stateless, rolling updates are straightforward:
 
 ```bash
 # Update image tag
@@ -539,7 +539,7 @@ kubectl set image deployment/rocklake-writer \
 kubectl rollout status deployment/rocklake-writer -n rocklake
 ```
 
-For the writer deployment (`strategy: Recreate`), Kubernetes terminates the old pod before starting the new one. This ensures no split-brain scenario — only one writer exists at any time. The brief downtime (typically 2–5 seconds) is acceptable because Rocklake starts fast and clients retry automatically.
+For the writer deployment (`strategy: Recreate`), Kubernetes terminates the old pod before starting the new one. This ensures no split-brain scenario — only one writer exists at any time. The brief downtime (typically 2–5 seconds) is acceptable because RockLake starts fast and clients retry automatically.
 
 ## Monitoring with Prometheus
 
@@ -584,7 +584,7 @@ If you accidentally run two writer deployments against the same storage, the sec
 
 ### Memory Sizing
 
-Rocklake's memory usage is predictable:
+RockLake's memory usage is predictable:
 
 | Component | Memory | Notes |
 |-----------|--------|-------|
@@ -599,7 +599,7 @@ For a deployment with 50 max sessions and a 20 MB block cache: request 128 Mi, l
 
 ### CPU Sizing
 
-Rocklake's writer path is single-threaded (all writes serialize through the writer). The reader path can use multiple threads for concurrent sessions. For most deployments:
+RockLake's writer path is single-threaded (all writes serialize through the writer). The reader path can use multiple threads for concurrent sessions. For most deployments:
 
 - **1 writer pod:** 100m request, 500m limit (burst for write batches)
 - **Reader pods:** 100m request, 250m limit each (read-only workload is lighter)
@@ -635,7 +635,7 @@ This scales out when the average session count per pod exceeds 20, ensuring each
 
 ## Network Policies
 
-Lock down Rocklake's network access for defense in depth:
+Lock down RockLake's network access for defense in depth:
 
 ```yaml
 apiVersion: networking.k8s.io/v1

@@ -1,13 +1,13 @@
 # Deploying on AWS S3
 
-Amazon S3 is the most widely used object-store backend for Rocklake in production. It provides eleven-nines durability, tight IAM integration, multiple performance tiers (Standard, S3 Express One Zone), and the richest ecosystem of tooling for monitoring, lifecycle management, and replication. This guide covers everything you need to deploy Rocklake against S3 in production: bucket configuration, IAM policy design, environment variable setup, performance tier selection, deployment patterns, cost optimization, and troubleshooting.
+Amazon S3 is the most widely used object-store backend for RockLake in production. It provides eleven-nines durability, tight IAM integration, multiple performance tiers (Standard, S3 Express One Zone), and the richest ecosystem of tooling for monitoring, lifecycle management, and replication. This guide covers everything you need to deploy RockLake against S3 in production: bucket configuration, IAM policy design, environment variable setup, performance tier selection, deployment patterns, cost optimization, and troubleshooting.
 
 ## Prerequisites
 
 Before starting, you need:
 
 - An AWS account with permission to create S3 buckets and IAM roles/policies
-- The Rocklake binary (see [Binary Deployment](binary.md) or [Docker](docker.md))
+- The RockLake binary (see [Binary Deployment](binary.md) or [Docker](docker.md))
 - AWS credentials with sufficient permissions for the initial setup
 - The AWS CLI installed for bucket creation steps (or equivalent access through the AWS Console)
 
@@ -15,7 +15,7 @@ Before starting, you need:
 
 ### Creating the Bucket
 
-Rocklake requires a dedicated prefix within an S3 bucket for catalog storage. You can share a bucket with your Parquet data files (using separate prefixes) or use a dedicated bucket for the catalog. Both approaches work; the tradeoffs are discussed in [Credential Isolation](credential-isolation.md).
+RockLake requires a dedicated prefix within an S3 bucket for catalog storage. You can share a bucket with your Parquet data files (using separate prefixes) or use a dedicated bucket for the catalog. Both approaches work; the tradeoffs are discussed in [Credential Isolation](credential-isolation.md).
 
 Create a bucket in your preferred region:
 
@@ -83,15 +83,15 @@ aws s3api put-bucket-encryption \
 
 ### Object Lifecycle Policies
 
-By default, Rocklake's immutability guarantee means old SST files are never deleted. To manage storage costs, you can configure S3 lifecycle rules that delete objects past a certain age. Be careful: this should only apply to catalog objects that Rocklake has already explicitly GC'd and no longer references. Deleting objects that SlateDB still references will corrupt the catalog.
+By default, RockLake's immutability guarantee means old SST files are never deleted. To manage storage costs, you can configure S3 lifecycle rules that delete objects past a certain age. Be careful: this should only apply to catalog objects that RockLake has already explicitly GC'd and no longer references. Deleting objects that SlateDB still references will corrupt the catalog.
 
 The safe approach is to first run `rocklake gc` to advance the retention horizon and compact old data, then use lifecycle rules to clean up orphaned objects. See [Garbage Collection and Retention](../operations/garbage-collection.md) for the correct sequence.
 
 ## IAM Configuration
 
-### Minimal Permissions for Rocklake
+### Minimal Permissions for RockLake
 
-Rocklake needs the following S3 permissions on the catalog prefix:
+RockLake needs the following S3 permissions on the catalog prefix:
 
 | Action | Purpose |
 |--------|---------|
@@ -108,7 +108,7 @@ Create an IAM policy:
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "RocklakeCatalogAccess",
+      "Sid": "RockLakeCatalogAccess",
       "Effect": "Allow",
       "Action": [
         "s3:GetObject",
@@ -119,7 +119,7 @@ Create an IAM policy:
       "Resource": "arn:aws:s3:::my-lakehouse/catalog/*"
     },
     {
-      "Sid": "RocklakeListBucket",
+      "Sid": "RockLakeListBucket",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
       "Resource": "arn:aws:s3:::my-lakehouse",
@@ -137,7 +137,7 @@ Save this as `rocklake-catalog-policy.json` and create it:
 
 ```bash
 aws iam create-policy \
-  --policy-name RocklakeCatalogAccess \
+  --policy-name RockLakeCatalogAccess \
   --policy-document file://rocklake-catalog-policy.json
 ```
 
@@ -150,7 +150,7 @@ For EC2:
 ```bash
 # Create the role
 aws iam create-role \
-  --role-name RocklakeRole \
+  --role-name RockLakeRole \
   --assume-role-policy-document '{
     "Version": "2012-10-17",
     "Statement": [{
@@ -162,14 +162,14 @@ aws iam create-role \
 
 # Attach the policy
 aws iam attach-role-policy \
-  --role-name RocklakeRole \
-  --policy-arn arn:aws:iam::123456789012:policy/RocklakeCatalogAccess
+  --role-name RockLakeRole \
+  --policy-arn arn:aws:iam::123456789012:policy/RockLakeCatalogAccess
 
 # Create an instance profile
-aws iam create-instance-profile --instance-profile-name RocklakeProfile
+aws iam create-instance-profile --instance-profile-name RockLakeProfile
 aws iam add-role-to-instance-profile \
-  --instance-profile-name RocklakeProfile \
-  --role-name RocklakeRole
+  --instance-profile-name RockLakeProfile \
+  --role-name RockLakeRole
 ```
 
 For EKS (Kubernetes), use IRSA (IAM Roles for Service Accounts):
@@ -178,14 +178,14 @@ For EKS (Kubernetes), use IRSA (IAM Roles for Service Accounts):
 # Annotate the Kubernetes service account
 kubectl annotate serviceaccount rocklake \
   -n rocklake-namespace \
-  eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/RocklakeRole
+  eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/RockLakeRole
 ```
 
 ### Separate Credentials for Catalog and Data
 
-A critical security practice is to use separate IAM identities for the catalog plane (Rocklake) and the data plane (DuckDB writing Parquet files). This limits the blast radius if either component is compromised. See [Credential Isolation](credential-isolation.md) for the complete guide; the short version is:
+A critical security practice is to use separate IAM identities for the catalog plane (RockLake) and the data plane (DuckDB writing Parquet files). This limits the blast radius if either component is compromised. See [Credential Isolation](credential-isolation.md) for the complete guide; the short version is:
 
-- Rocklake's IAM identity: `s3:*` on `catalog/*` prefix only
+- RockLake's IAM identity: `s3:*` on `catalog/*` prefix only
 - DuckDB writer's IAM identity: `s3:PutObject` on `data/*` prefix only
 - DuckDB reader's IAM identity: `s3:GetObject` on `data/*` prefix only
 
@@ -203,15 +203,15 @@ With an assumed role:
 
 ```bash
 export AWS_REGION=us-east-1
-export AWS_ROLE_ARN=arn:aws:iam::123456789012:role/RocklakeRole
+export AWS_ROLE_ARN=arn:aws:iam::123456789012:role/RockLakeRole
 export AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token
 ```
 
-When running on EC2 with an instance profile, no environment variables are needed — Rocklake uses the Instance Metadata Service (IMDS) automatically.
+When running on EC2 with an instance profile, no environment variables are needed — RockLake uses the Instance Metadata Service (IMDS) automatically.
 
-## Starting Rocklake
+## Starting RockLake
 
-Point Rocklake at your S3 catalog prefix:
+Point RockLake at your S3 catalog prefix:
 
 ```bash
 rocklake serve \
@@ -222,7 +222,7 @@ rocklake serve \
 Expected startup output:
 
 ```
-INFO  Rocklake v0.8.0 starting
+INFO  RockLake v0.8.0 starting
 INFO  Storage backend: aws-s3
 INFO  Catalog path: s3://my-lakehouse/catalog/
 INFO  Opening SlateDB...
@@ -237,7 +237,7 @@ If you see `ERROR Failed to open catalog: credential error`, your AWS credential
 
 ## Connecting DuckDB
 
-Once Rocklake is running, connect DuckDB using the `ducklake` extension:
+Once RockLake is running, connect DuckDB using the `ducklake` extension:
 
 ```sql
 -- Install the extension (one time)
@@ -266,7 +266,7 @@ INSERT INTO lake.analytics.events VALUES
 
 ## S3 Express One Zone
 
-S3 Express One Zone is a high-performance storage class that provides 10× lower latency than S3 Standard at modestly higher cost. For Rocklake, this translates to 3–10 ms catalog operations instead of 20–50 ms, which matters for:
+S3 Express One Zone is a high-performance storage class that provides 10× lower latency than S3 Standard at modestly higher cost. For RockLake, this translates to 3–10 ms catalog operations instead of 20–50 ms, which matters for:
 
 - Applications where query startup latency is perceptible to end users
 - High-frequency metadata operations (many short transactions per second)
@@ -285,7 +285,7 @@ aws s3api create-bucket \
   }'
 ```
 
-Point Rocklake at the directory bucket:
+Point RockLake at the directory bucket:
 
 ```bash
 rocklake serve \
@@ -298,7 +298,7 @@ rocklake serve \
 
 ## Path-Style vs. Virtual-Hosted-Style Addressing
 
-By default, Rocklake uses virtual-hosted-style addressing: `https://my-bucket.s3.amazonaws.com/key`. This is AWS's preferred style and works for all modern deployments. Path-style addressing (`https://s3.amazonaws.com/my-bucket/key`) is deprecated by AWS but may be required for:
+By default, RockLake uses virtual-hosted-style addressing: `https://my-bucket.s3.amazonaws.com/key`. This is AWS's preferred style and works for all modern deployments. Path-style addressing (`https://s3.amazonaws.com/my-bucket/key`) is deprecated by AWS but may be required for:
 
 - S3-compatible services that don't support virtual-hosted-style (MinIO in some configurations)
 - Testing against local S3 emulators
@@ -347,17 +347,17 @@ aws s3api put-bucket-replication \
   }'
 ```
 
-Rocklake always reads and writes from the primary bucket. The replica is used only for disaster recovery: if the primary region becomes unavailable, you can reconfigure Rocklake to point at the replica bucket and resume operations. Note that any writes that occurred between the last replication and the failure will be lost — CRR is asynchronous.
+RockLake always reads and writes from the primary bucket. The replica is used only for disaster recovery: if the primary region becomes unavailable, you can reconfigure RockLake to point at the replica bucket and resume operations. Note that any writes that occurred between the last replication and the failure will be lost — CRR is asynchronous.
 
 ## Cost Optimization
 
-S3 costs for a typical Rocklake catalog are modest but worth understanding:
+S3 costs for a typical RockLake catalog are modest but worth understanding:
 
 **Storage costs.** A catalog tracking 100,000 Parquet files might occupy 500 MB of SST storage. At $0.023/GB/month (S3 Standard), this is about $0.01/month. Even after years of operation with full history retained, catalog storage costs are typically negligible.
 
 **Request costs.** S3 Standard charges $0.0004 per 1,000 PUT requests and $0.0004 per 1,000 GET requests. A moderately active deployment making 1,000 catalog requests per hour generates about $0.29/month in request charges. For high-throughput deployments, these costs become more significant.
 
-**Data transfer costs.** Data transfer between Rocklake and S3 within the same region is free. Cross-region traffic is charged at standard AWS data transfer rates. Deploy Rocklake in the same region as your bucket.
+**Data transfer costs.** Data transfer between RockLake and S3 within the same region is free. Cross-region traffic is charged at standard AWS data transfer rates. Deploy RockLake in the same region as your bucket.
 
 To minimize request costs at scale:
 - Use SlateDB's block cache aggressively (increase `--block-cache-size`)
@@ -372,7 +372,7 @@ To minimize request costs at scale:
 aws s3 ls s3://my-lakehouse/catalog/ --recursive | head -20
 ```
 
-You should see SlateDB SST files (`.sst` extension) and WAL segments (`.wal`). If the listing is empty on first startup, the catalog will be initialized when Rocklake first opens it.
+You should see SlateDB SST files (`.sst` extension) and WAL segments (`.wal`). If the listing is empty on first startup, the catalog will be initialized when RockLake first opens it.
 
 **Common errors and fixes:**
 
@@ -382,14 +382,14 @@ You should see SlateDB SST files (`.sst` extension) and WAL segments (`.wal`). I
 | `AccessDenied` on PUT | Missing `s3:PutObject` permission | Add `s3:PutObject` to the IAM policy |
 | `AccessDenied` on LIST | Missing `s3:ListBucket` permission | Add `s3:ListBucket` with the correct prefix condition |
 | `NoSuchBucket` | Bucket does not exist or wrong region | Verify bucket name and `AWS_REGION` setting |
-| `SlowDown` (503) | S3 request throttling | Reduce concurrent Rocklake connections or distribute load |
+| `SlowDown` (503) | S3 request throttling | Reduce concurrent RockLake connections or distribute load |
 
 **S3 request metrics.** Enable S3 server access logging or use AWS CloudWatch metrics to monitor request rates, error rates, and latency. Metrics to watch: `NumberOfObjects` (catalog size growth), `TotalRequestLatency` (S3-side latency), `4xxErrors` (configuration or permission issues).
 
 ## Further Reading
 
 - **[Credential Isolation](credential-isolation.md)** — Separate IAM identities for catalog and data plane access
-- **[Docker Deployment](docker.md)** — Running Rocklake in containers on EC2 or ECS
-- **[Kubernetes Deployment](kubernetes.md)** — Running Rocklake on EKS with IRSA
+- **[Docker Deployment](docker.md)** — Running RockLake in containers on EC2 or ECS
+- **[Kubernetes Deployment](kubernetes.md)** — Running RockLake on EKS with IRSA
 - **[Object Store Durability](../concepts/object-store-durability.md)** — The conceptual basis for why object storage provides strong durability
 - **[Performance: Latency Model](../performance/latency-model.md)** — Expected latency numbers for S3 Standard vs. S3 Express

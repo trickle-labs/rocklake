@@ -76,7 +76,7 @@ The counter value is read from the `CDC_RECORD_COUNT_MISMATCHES` global atomic i
 
 ## Object Store Error Handling
 
-If the object store returns any error (including `NotFound` for a missing data file path), `extract_rows_from_parquet()` returns `TableChangesError::Storage(message)` with SQLSTATE `58030` (external object store error). This propagates through `execute_table_changes()` in the PG-Wire executor as a `RocklakeError::SqlState { code: "58030", .. }`.
+If the object store returns any error (including `NotFound` for a missing data file path), `extract_rows_from_parquet()` returns `TableChangesError::Storage(message)` with SQLSTATE `58030` (external object store error). This propagates through `execute_table_changes()` in the PG-Wire executor as a `RockLakeError::SqlState { code: "58030", .. }`.
 
 The caller receives a proper PostgreSQL error response with `SQLSTATE 58030` rather than a panic or opaque internal error.
 

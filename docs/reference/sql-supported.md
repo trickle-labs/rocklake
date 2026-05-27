@@ -1,8 +1,8 @@
 # Supported SQL Reference
 
-This page provides an exhaustive, authoritative list of every SQL statement pattern that Rocklake's bounded SQL classifier recognizes and handles. These are the exact patterns emitted by DuckDB's `ducklake` extension when it communicates with a catalog backend over the PostgreSQL wire protocol.
+This page provides an exhaustive, authoritative list of every SQL statement pattern that RockLake's bounded SQL classifier recognizes and handles. These are the exact patterns emitted by DuckDB's `ducklake` extension when it communicates with a catalog backend over the PostgreSQL wire protocol.
 
-Rocklake does not implement a general-purpose SQL parser. It implements pattern matching against a known, finite set of SQL statements. If a statement does not match any pattern in this list, Rocklake returns SQLSTATE 42601 (syntax_error). This is by design — Rocklake implements the DuckLake protocol, not a general SQL engine.
+RockLake does not implement a general-purpose SQL parser. It implements pattern matching against a known, finite set of SQL statements. If a statement does not match any pattern in this list, RockLake returns SQLSTATE 42601 (syntax_error). This is by design — RockLake implements the DuckLake protocol, not a general SQL engine.
 
 The SQL examples shown below are the canonical forms. DuckDB may vary whitespace, quoting, and parameter ordering between versions. The classifier handles these variations through flexible pattern matching rather than exact string comparison.
 
@@ -10,7 +10,7 @@ The SQL examples shown below are the canonical forms. DuckDB may vary whitespace
 
 ### Initialize Catalog
 
-Creates the initial catalog metadata. Sent once when DuckDB first attaches to a Rocklake instance.
+Creates the initial catalog metadata. Sent once when DuckDB first attaches to a RockLake instance.
 
 ```sql
 -- Create the catalog entry
@@ -442,7 +442,7 @@ SET DateStyle TO 'ISO'
 SET search_path TO 'main'
 SET timezone TO 'UTC'
 
--- Version query (returns Rocklake version info)
+-- Version query (returns RockLake version info)
 SELECT version()
 
 -- Protocol queries (return compatible responses)
@@ -463,12 +463,12 @@ Any SQL statement that does not match the patterns above is rejected with SQLSTA
 ```
 ERROR:  syntax_error
 DETAIL: Statement not recognized by bounded SQL classifier
-HINT:   Rocklake only accepts DuckLake protocol statements
+HINT:   RockLake only accepts DuckLake protocol statements
 ```
 
 Common statements that are NOT supported:
 
-- `SELECT * FROM table` (Rocklake is not a query engine)
+- `SELECT * FROM table` (RockLake is not a query engine)
 - `CREATE INDEX` (index metadata is registered, but arbitrary CREATE INDEX syntax varies)
 - `ALTER TABLE ... ADD CONSTRAINT` (constraints are not tracked)
 - `GRANT` / `REVOKE` (no authorization model)
@@ -479,5 +479,5 @@ Common statements that are NOT supported:
 - **[Design Decisions: Bounded SQL](../design-decisions/bounded-sql.md)** — Why SQL support is limited
 - **[Error Codes](error-codes.md)** — SQLSTATE codes for rejected statements
 - **[Integration: DuckDB Compatibility](../integration/duckdb-compatibility.md)** — What DuckDB operations work
-- Rocklake's classifier handles these variations through pattern matching rather than exact string comparison
+- RockLake's classifier handles these variations through pattern matching rather than exact string comparison
 - Statements not matching any known pattern are rejected with SQLSTATE 42601 (Syntax Error)

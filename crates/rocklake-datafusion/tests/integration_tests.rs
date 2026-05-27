@@ -4,7 +4,7 @@ use datafusion::catalog::CatalogProvider;
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_core::mvcc::SnapshotId;
-use rocklake_datafusion::RocklakeCatalogProvider;
+use rocklake_datafusion::RockLakeCatalogProvider;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
@@ -31,7 +31,7 @@ async fn datafusion_provider_schema_names() {
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
     // Create provider at snapshot 1
-    let provider = RocklakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
 
     let names = provider.schema_names();
     assert_eq!(names.len(), 2);
@@ -53,7 +53,7 @@ async fn datafusion_provider_table_names() {
         .unwrap();
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
-    let provider = RocklakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
     let schema_provider = provider.schema("main").unwrap();
     let table_names = schema_provider.table_names();
     assert_eq!(table_names.len(), 2);
@@ -83,7 +83,7 @@ async fn datafusion_provider_table_schema() {
         .unwrap();
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
-    let provider = RocklakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
     let schema_provider = provider.schema("main").unwrap();
     let table = schema_provider.table("users").await.unwrap().unwrap();
 
@@ -109,7 +109,7 @@ async fn datafusion_provider_nonexistent_table() {
     writer.create_schema("main").await.unwrap();
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
-    let provider = RocklakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
     let schema_provider = provider.schema("main").unwrap();
     let table = schema_provider.table("nonexistent").await.unwrap();
     assert!(table.is_none());
@@ -128,7 +128,7 @@ async fn datafusion_provider_table_exist() {
         .unwrap();
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
-    let provider = RocklakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
     let schema_provider = provider.schema("main").unwrap();
     assert!(schema_provider.table_exist("orders"));
     assert!(!schema_provider.table_exist("nonexistent"));
@@ -216,7 +216,7 @@ async fn datafusion_scan_reads_parquet_data() {
     let obj_store2 =
         Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&root).unwrap());
     let provider = Arc::new(
-        RocklakeCatalogProvider::open(
+        RockLakeCatalogProvider::open(
             obj_store2,
             ObjectPath::from("catalog"),
             Some(SnapshotId::new(1)),
@@ -273,7 +273,7 @@ async fn from_catalog_store_resolves_data_root() {
 
     // Wrap in Arc<RwLock<_>> and build a provider via from_catalog_store.
     let shared = Arc::new(RwLock::new(store));
-    let provider = RocklakeCatalogProvider::from_catalog_store(shared, None)
+    let provider = RockLakeCatalogProvider::from_catalog_store(shared, None)
         .await
         .unwrap();
 

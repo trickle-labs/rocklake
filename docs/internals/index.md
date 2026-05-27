@@ -1,8 +1,8 @@
 # Internals
 
-Welcome to the engine room. This section documents Rocklake's internal implementation details — the mechanisms, data structures, and algorithms that make the catalog work. These pages are for contributors who need to modify the code, advanced operators who need to debug unusual behavior, and the technically curious who want to understand exactly how the system achieves its guarantees.
+Welcome to the engine room. This section documents RockLake's internal implementation details — the mechanisms, data structures, and algorithms that make the catalog work. These pages are for contributors who need to modify the code, advanced operators who need to debug unusual behavior, and the technically curious who want to understand exactly how the system achieves its guarantees.
 
-You do not need to read this section to use Rocklake effectively. The concepts, architecture, and operations sections cover everything needed for productive use. But if you have ever wondered "how does MVCC actually work at the key-value level?" or "what happens to crash safety when the process dies mid-write?" — this section provides precise, implementation-level answers.
+You do not need to read this section to use RockLake effectively. The concepts, architecture, and operations sections cover everything needed for productive use. But if you have ever wondered "how does MVCC actually work at the key-value level?" or "what happens to crash safety when the process dies mid-write?" — this section provides precise, implementation-level answers.
 
 The internals are documented honestly: where the implementation is elegant, we explain why. Where it involves trade-offs or complexity, we explain what drove those choices. The goal is to make the codebase accessible to new contributors — to reduce the time between "I want to contribute" and "I understand enough to make changes."
 

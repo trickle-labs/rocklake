@@ -1,6 +1,6 @@
 # Integration & End-to-End Testing Plan
 
-> **Scope.** Complete testing strategy for Rocklake covering all integration and E2E layers from unit-level in-process tests through full multi-node deployments against real object stores. Companion to the overall architecture in [plans/blueprint.md](blueprint.md) and the IVM implementation plan in [plans/incremental-view-maintenance-implementation.md](incremental-view-maintenance-implementation.md).
+> **Scope.** Complete testing strategy for RockLake covering all integration and E2E layers from unit-level in-process tests through full multi-node deployments against real object stores. Companion to the overall architecture in [plans/blueprint.md](blueprint.md) and the IVM implementation plan in [plans/incremental-view-maintenance-implementation.md](incremental-view-maintenance-implementation.md).
 >
 > **Status.** Planning. Implement tier-by-tier alongside milestone delivery.
 >

@@ -1,4 +1,4 @@
-//! Rocklake Core: foundational types, key/value encoding, and SlateDB integration.
+//! RockLake Core: foundational types, key/value encoding, and SlateDB integration.
 
 #![deny(missing_docs)]
 

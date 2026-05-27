@@ -1,12 +1,12 @@
 # Testing
 
-Rocklake has a multi-layered testing strategy that ensures correctness from individual functions up to full protocol interactions. The test suite is not an afterthought — it is a first-class artifact of the project, maintained with the same care as production code. Every feature has tests. Every bug fix has a regression test. Every encoding decision is verified with property-based tests. And the wire protocol is validated against real DuckDB output captured in a corpus of test fixtures.
+RockLake has a multi-layered testing strategy that ensures correctness from individual functions up to full protocol interactions. The test suite is not an afterthought — it is a first-class artifact of the project, maintained with the same care as production code. Every feature has tests. Every bug fix has a regression test. Every encoding decision is verified with property-based tests. And the wire protocol is validated against real DuckDB output captured in a corpus of test fixtures.
 
 This page describes the testing philosophy, the different types of tests in the project, how to run them, how to write effective new tests, and how to decide what kind of test your change needs.
 
 ## Testing Philosophy
 
-Four principles guide Rocklake's testing strategy:
+Four principles guide RockLake's testing strategy:
 
 ### 1. Every Bug Fix Requires a Regression Test
 
@@ -26,10 +26,10 @@ These tests find edge cases that humans miss — boundary values, overflow condi
 
 ### 3. Wire Corpus for Protocol Compatibility
 
-DuckDB's ducklake extension sends specific SQL patterns over the PostgreSQL wire protocol. Rocklake must recognize and handle these patterns exactly. The wire corpus captures real DuckDB output (actual SQL strings sent by actual DuckDB versions) and uses them as test fixtures:
+DuckDB's ducklake extension sends specific SQL patterns over the PostgreSQL wire protocol. RockLake must recognize and handle these patterns exactly. The wire corpus captures real DuckDB output (actual SQL strings sent by actual DuckDB versions) and uses them as test fixtures:
 
 - When a new DuckDB version changes its SQL patterns, the corpus shows what changed
-- When Rocklake adds support for a new statement, the corpus verifies it matches real DuckDB behavior
+- When RockLake adds support for a new statement, the corpus verifies it matches real DuckDB behavior
 - When a protocol bug is reported, the exact bytes or SQL can be added to the corpus
 
 The corpus is versioned by DuckDB version, so compatibility across versions is explicitly tracked.
@@ -163,7 +163,7 @@ When to write an integration test:
 
 ### Wire Corpus Tests
 
-Located in `tests/golden/`. These verify that Rocklake's SQL classifier recognizes real SQL patterns sent by actual DuckDB versions:
+Located in `tests/golden/`. These verify that RockLake's SQL classifier recognizes real SQL patterns sent by actual DuckDB versions:
 
 ```rust
 #[test]

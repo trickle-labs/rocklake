@@ -1,6 +1,6 @@
 # CDC Output (Change Data Capture)
 
-Rocklake v0.10 adds CDC export: every committed snapshot is a natural change
+RockLake v0.10 adds CDC export: every committed snapshot is a natural change
 stream.  The diff between snapshots `S_n` and `S_{n+1}` is the set of catalog
 facts with `begin_snapshot = S_{n+1}` (newly added) or `end_snapshot = S_{n+1}`
 (retired).
@@ -8,7 +8,7 @@ facts with `begin_snapshot = S_{n+1}` (newly added) or `end_snapshot = S_{n+1}`
 ## Architecture
 
 ```
-Rocklake catalog
+RockLake catalog
      │ commit snapshot
      ▼
 CatalogReader::snapshot_diff(from, to)
@@ -199,7 +199,7 @@ WHERE table = 'ducklake_data_file'
 ```
 Kafka "orders" topic
   → pg-tide-relay
-  → RocklakeSink (commit_batch with exactly-once offset)
+  → RockLakeSink (commit_batch with exactly-once offset)
   → DuckLake snapshot committed
   → CdcTailer polls
   → Publishes to Kafka "cdc.orders" topic
@@ -209,7 +209,7 @@ Kafka "orders" topic
 ### S3-Polling for Lambda Triggers
 
 ```
-Rocklake commits snapshot
+RockLake commits snapshot
   → CdcTailer writes snapshot-N.jsonl to S3
   → S3 event notification triggers Lambda
   → Lambda reads diff and fans out to DynamoDB / SQS

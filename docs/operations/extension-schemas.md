@@ -1,6 +1,6 @@
 # Extension Schema Registration
 
-Rocklake uses an extension schema allowlist to control which PostgreSQL schemas can perform extension DDL and DML operations (e.g., creating extension tables and inserting extension rows). Any operation targeting an unregistered schema is rejected with SQLSTATE **42501** (permission denied).
+RockLake uses an extension schema allowlist to control which PostgreSQL schemas can perform extension DDL and DML operations (e.g., creating extension tables and inserting extension rows). Any operation targeting an unregistered schema is rejected with SQLSTATE **42501** (permission denied).
 
 ## Default Schema
 
@@ -29,7 +29,7 @@ The CLI flag takes precedence over the environment variable.
 
 ## Error Behavior
 
-If a client attempts DDL or DML against an unregistered schema, Rocklake returns:
+If a client attempts DDL or DML against an unregistered schema, RockLake returns:
 
 ```
 ERROR:  permission denied for schema <schema_name> (SQLSTATE 42501)

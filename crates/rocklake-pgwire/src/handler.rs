@@ -43,21 +43,21 @@ use crate::notify::NotifyManager;
 use crate::server::AuthConfig;
 use crate::session::{BootstrapSchemaRow, SessionState};
 
-/// Rocklake COPY handler: parses binary COPY FROM STDIN data for ducklake_*
+/// RockLake COPY handler: parses binary COPY FROM STDIN data for ducklake_*
 /// tables and stores the bootstrap rows in the session for later commit.
 #[derive(Clone)]
-pub struct RocklakeCopyHandler {
+pub struct RockLakeCopyHandler {
     session: Arc<Mutex<SessionState>>,
 }
 
-impl RocklakeCopyHandler {
+impl RockLakeCopyHandler {
     pub fn new(session: Arc<Mutex<SessionState>>) -> Self {
         Self { session }
     }
 }
 
 #[async_trait]
-impl CopyHandler for RocklakeCopyHandler {
+impl CopyHandler for RockLakeCopyHandler {
     async fn on_copy_data<C>(
         &self,
         _client: &mut C,
@@ -153,11 +153,11 @@ where
     Ok(())
 }
 
-/// The main Rocklake query handler.
-pub struct RocklakeHandler {
+/// The main RockLake query handler.
+pub struct RockLakeHandler {
     pub catalog: Arc<Mutex<CatalogStore>>,
     pub session: Arc<Mutex<SessionState>>,
-    pub parser: Arc<RocklakeQueryParser>,
+    pub parser: Arc<RockLakeQueryParser>,
     pub auth: Arc<AuthConfig>,
     /// Shared LISTEN/NOTIFY manager for this server instance.
     pub notify_manager: Arc<NotifyManager>,
@@ -165,12 +165,12 @@ pub struct RocklakeHandler {
     pub extension_schemas: Arc<Vec<String>>,
 }
 
-impl RocklakeHandler {
+impl RockLakeHandler {
     pub fn new(catalog: Arc<Mutex<CatalogStore>>) -> Self {
         Self {
             catalog,
             session: Arc::new(Mutex::new(SessionState::new())),
-            parser: Arc::new(RocklakeQueryParser),
+            parser: Arc::new(RockLakeQueryParser),
             auth: Arc::new(AuthConfig::default()),
             notify_manager: Arc::new(NotifyManager::new()),
             extension_schemas: Arc::new(vec!["pgtrickle".to_string()]),
@@ -181,7 +181,7 @@ impl RocklakeHandler {
         Self {
             catalog,
             session: Arc::new(Mutex::new(SessionState::new())),
-            parser: Arc::new(RocklakeQueryParser),
+            parser: Arc::new(RockLakeQueryParser),
             auth,
             notify_manager: Arc::new(NotifyManager::new()),
             extension_schemas: Arc::new(vec!["pgtrickle".to_string()]),
@@ -197,7 +197,7 @@ impl RocklakeHandler {
         Self {
             catalog,
             session: Arc::new(Mutex::new(SessionState::new())),
-            parser: Arc::new(RocklakeQueryParser),
+            parser: Arc::new(RockLakeQueryParser),
             auth,
             notify_manager,
             extension_schemas,
@@ -533,12 +533,12 @@ fn ct_bytes_eq(a: &[u8], b: &[u8]) -> bool {
 ///
 /// When `tls_required` is true and the client connects without TLS, the
 /// connection is rejected immediately with a fatal error.
-pub struct RocklakeStartupHandler {
+pub struct RockLakeStartupHandler {
     auth: Arc<AuthConfig>,
     tls_required: bool,
 }
 
-impl RocklakeStartupHandler {
+impl RockLakeStartupHandler {
     pub fn new(auth: Arc<AuthConfig>) -> Self {
         Self {
             auth,
@@ -552,7 +552,7 @@ impl RocklakeStartupHandler {
 }
 
 #[async_trait]
-impl pgwire::api::auth::StartupHandler for RocklakeStartupHandler {
+impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
     async fn on_startup<C>(
         &self,
         client: &mut C,
@@ -640,7 +640,7 @@ impl pgwire::api::auth::StartupHandler for RocklakeStartupHandler {
 }
 
 #[async_trait]
-impl SimpleQueryHandler for RocklakeHandler {
+impl SimpleQueryHandler for RockLakeHandler {
     async fn do_query<'a, 'b: 'a, C>(
         &'b self,
         _client: &mut C,
@@ -677,10 +677,10 @@ impl SimpleQueryHandler for RocklakeHandler {
 
 /// Query parser that stores SQL strings.
 #[derive(Debug, Clone)]
-pub struct RocklakeQueryParser;
+pub struct RockLakeQueryParser;
 
 #[async_trait]
-impl QueryParser for RocklakeQueryParser {
+impl QueryParser for RockLakeQueryParser {
     type Statement = String;
 
     async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
@@ -689,9 +689,9 @@ impl QueryParser for RocklakeQueryParser {
 }
 
 #[async_trait]
-impl ExtendedQueryHandler for RocklakeHandler {
+impl ExtendedQueryHandler for RockLakeHandler {
     type Statement = String;
-    type QueryParser = RocklakeQueryParser;
+    type QueryParser = RockLakeQueryParser;
 
     fn query_parser(&self) -> Arc<Self::QueryParser> {
         self.parser.clone()
@@ -833,33 +833,33 @@ impl ExtendedQueryHandler for RocklakeHandler {
     }
 }
 
-/// Server handlers collection for Rocklake.
-pub struct RocklakeServerHandlers {
-    pub handler: Arc<RocklakeHandler>,
-    pub startup: Arc<RocklakeStartupHandler>,
-    pub copy_handler: Arc<RocklakeCopyHandler>,
+/// Server handlers collection for RockLake.
+pub struct RockLakeServerHandlers {
+    pub handler: Arc<RockLakeHandler>,
+    pub startup: Arc<RockLakeStartupHandler>,
+    pub copy_handler: Arc<RockLakeCopyHandler>,
     pub error_handler: Arc<NoopErrorHandler>,
 }
 
-impl RocklakeServerHandlers {
+impl RockLakeServerHandlers {
     pub fn new(catalog: Arc<Mutex<CatalogStore>>) -> Self {
         let auth = Arc::new(AuthConfig::default());
-        let handler = Arc::new(RocklakeHandler::new(catalog));
-        let copy_handler = Arc::new(RocklakeCopyHandler::new(handler.session.clone()));
+        let handler = Arc::new(RockLakeHandler::new(catalog));
+        let copy_handler = Arc::new(RockLakeCopyHandler::new(handler.session.clone()));
         Self {
             handler,
-            startup: Arc::new(RocklakeStartupHandler::new(auth)),
+            startup: Arc::new(RockLakeStartupHandler::new(auth)),
             copy_handler,
             error_handler: Arc::new(NoopErrorHandler),
         }
     }
 
     pub fn new_with_auth(catalog: Arc<Mutex<CatalogStore>>, auth: Arc<AuthConfig>) -> Self {
-        let handler = Arc::new(RocklakeHandler::new_with_auth(catalog, auth.clone()));
-        let copy_handler = Arc::new(RocklakeCopyHandler::new(handler.session.clone()));
+        let handler = Arc::new(RockLakeHandler::new_with_auth(catalog, auth.clone()));
+        let copy_handler = Arc::new(RockLakeCopyHandler::new(handler.session.clone()));
         Self {
             handler,
-            startup: Arc::new(RocklakeStartupHandler::new(auth)),
+            startup: Arc::new(RockLakeStartupHandler::new(auth)),
             copy_handler,
             error_handler: Arc::new(NoopErrorHandler),
         }
@@ -872,16 +872,16 @@ impl RocklakeServerHandlers {
         notify_manager: Arc<NotifyManager>,
         extension_schemas: Arc<Vec<String>>,
     ) -> Self {
-        let handler = Arc::new(RocklakeHandler::new_with_config(
+        let handler = Arc::new(RockLakeHandler::new_with_config(
             catalog,
             auth.clone(),
             notify_manager,
             extension_schemas,
         ));
-        let copy_handler = Arc::new(RocklakeCopyHandler::new(handler.session.clone()));
+        let copy_handler = Arc::new(RockLakeCopyHandler::new(handler.session.clone()));
         Self {
             handler,
-            startup: Arc::new(RocklakeStartupHandler::new_with_tls_required(
+            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required(
                 auth,
                 tls_required,
             )),
@@ -891,11 +891,11 @@ impl RocklakeServerHandlers {
     }
 }
 
-impl PgWireServerHandlers for RocklakeServerHandlers {
-    type StartupHandler = RocklakeStartupHandler;
-    type SimpleQueryHandler = RocklakeHandler;
-    type ExtendedQueryHandler = RocklakeHandler;
-    type CopyHandler = RocklakeCopyHandler;
+impl PgWireServerHandlers for RockLakeServerHandlers {
+    type StartupHandler = RockLakeStartupHandler;
+    type SimpleQueryHandler = RockLakeHandler;
+    type ExtendedQueryHandler = RockLakeHandler;
+    type CopyHandler = RockLakeCopyHandler;
     type ErrorHandler = NoopErrorHandler;
 
     fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {

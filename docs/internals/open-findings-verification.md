@@ -20,13 +20,13 @@ rowid values remains in the writer.
 
 ## High-9 — `SqlState` Code Ignored
 
-**Finding**: `RocklakeError::SqlState { code, message }` variants may not
+**Finding**: `RockLakeError::SqlState { code, message }` variants may not
 forward the `code` field to the PG-Wire error response, defaulting all
 application-level errors to generic `42000`.
 
 **Verification**: Audited `crates/rocklake-pgwire/src/error.rs`.
-The `From<RocklakeError> for ErrorInfo` implementation maps
-`RocklakeError::SqlState { code, message }` to `ErrorInfo::new(SqlState::from_code(code), message)`, correctly forwarding the code.
+The `From<RockLakeError> for ErrorInfo` implementation maps
+`RockLakeError::SqlState { code, message }` to `ErrorInfo::new(SqlState::from_code(code), message)`, correctly forwarding the code.
 Other error variants map to appropriate `SqlState` codes (e.g. `22023`
 for `SnapshotOutOfRetention`, `42P01` for `TableNotFound`).
 
@@ -63,7 +63,7 @@ catalog rows from the raw key layout, independent of the in-memory
 
 ## N-02 — DataFusion Auto-Resolve `data_root`
 
-**Finding**: `RocklakeCatalogProvider` always returns `EmptyExec` when no
+**Finding**: `RockLakeCatalogProvider` always returns `EmptyExec` when no
 explicit `data_root` is provided, even when the catalog metadata contains
 a `data_path` key.
 

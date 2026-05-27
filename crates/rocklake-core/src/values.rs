@@ -1,11 +1,11 @@
-//! Value encoding and decoding for the Rocklake catalog.
+//! Value encoding and decoding for the RockLake catalog.
 //!
 //! Every value is prefixed with: `encoding_version: u8 | magic: b"SDKV" | payload`
 //! Old readers encountering an unknown encoding_version return an explicit error.
 
 use prost::Message;
 
-/// Magic bytes that identify a Rocklake catalog value.
+/// Magic bytes that identify a RockLake catalog value.
 pub const VALUE_MAGIC: &[u8; 4] = b"SDKV";
 
 /// Current encoding version.
@@ -44,7 +44,7 @@ pub enum ValueError {
 /// Maximum encoded value size (64 MiB) for inlined rows.
 pub const MAX_INLINED_VALUE_SIZE: usize = 64 * 1024 * 1024;
 
-/// Encode a protobuf message into a Rocklake value envelope.
+/// Encode a protobuf message into a RockLake value envelope.
 pub fn encode_value<M: Message>(msg: &M) -> Vec<u8> {
     let payload = msg.encode_to_vec();
     let mut buf = Vec::with_capacity(1 + 4 + payload.len());
@@ -54,7 +54,7 @@ pub fn encode_value<M: Message>(msg: &M) -> Vec<u8> {
     buf
 }
 
-/// Decode the raw payload bytes from a Rocklake value envelope.
+/// Decode the raw payload bytes from a RockLake value envelope.
 /// Returns the payload slice (after magic+version).
 pub fn decode_value_envelope(data: &[u8]) -> Result<&[u8], ValueError> {
     if data.len() < 5 {
@@ -76,7 +76,7 @@ pub fn decode_value_envelope(data: &[u8]) -> Result<&[u8], ValueError> {
     Ok(&data[5..])
 }
 
-/// Decode a protobuf message from a Rocklake value envelope.
+/// Decode a protobuf message from a RockLake value envelope.
 pub fn decode_value<M: Message + Default>(data: &[u8]) -> Result<M, ValueError> {
     let payload = decode_value_envelope(data)?;
     M::decode(payload).map_err(|e| ValueError::DecodeError(e.to_string()))
@@ -148,7 +148,7 @@ pub fn decode_format_version(data: &[u8]) -> Result<u32, ValueError> {
     ))
 }
 
-/// Encode raw bytes inside the Rocklake value envelope.
+/// Encode raw bytes inside the RockLake value envelope.
 /// Used for JSON and other non-protobuf payloads (e.g. audit log entries).
 pub fn encode_raw_value(data: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(1 + 4 + data.len());
@@ -158,7 +158,7 @@ pub fn encode_raw_value(data: &[u8]) -> Vec<u8> {
     buf
 }
 
-/// Decode raw bytes from a Rocklake value envelope.
+/// Decode raw bytes from a RockLake value envelope.
 /// Returns the raw payload (after magic+version verification).
 pub fn decode_raw_value(data: &[u8]) -> Result<Vec<u8>, ValueError> {
     let payload = decode_value_envelope(data)?;

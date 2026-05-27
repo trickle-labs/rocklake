@@ -1,5 +1,5 @@
 //! Table tag bytes and key-shape metadata for all 28 DuckLake v1.0 tables
-//! plus Rocklake system namespaces.
+//! plus RockLake system namespaces.
 //!
 //! This module is the **single source of truth** for tag allocation.
 //! Every tag byte is allocated up front; unknown tags produce an explicit error.
@@ -106,7 +106,7 @@ pub const TAG_EXTENSION_SCHEMA: u8 = 0x23;
 /// Enables O(log N) range scans in list_data_files() instead of O(N) full scans.
 pub const TAG_DATA_FILE_BY_SNAPSHOT: u8 = 0x21;
 
-// ─── Rocklake Internal Tags ───────────────────────────────────────────────
+// ─── RockLake Internal Tags ───────────────────────────────────────────────
 
 /// Secondary index: maps `table_id` → `schema_id` for O(1) `describe_table` lookups.
 /// Key: `0xFC | table_id(u64 BE)`. Value: `schema_id(u64 BE)` encoded as a counter.
@@ -114,9 +114,9 @@ pub const TAG_TABLE_BY_ID: u8 = 0xFC;
 
 /// Dynamic inlined rows (subtype 0x01 = insert, 0x02 = delete marker).
 pub const TAG_INLINED_ROWS: u8 = 0xFD;
-/// Rocklake counters (next_snapshot_id, next_catalog_id, etc.).
+/// RockLake counters (next_snapshot_id, next_catalog_id, etc.).
 pub const TAG_COUNTERS: u8 = 0xFE;
-/// Rocklake system keys (writer epoch, endpoint, retain-from, catalog-format-version).
+/// RockLake system keys (writer epoch, endpoint, retain-from, catalog-format-version).
 pub const TAG_SYSTEM: u8 = 0xFF;
 
 // ─── Inlined Row Subtypes ──────────────────────────────────────────────────
@@ -381,7 +381,7 @@ pub static ALL_TAGS: &[TagDescriptor] = &[
         unique_guard: UniqueGuard::NotNeeded,
         status: TagStatus::Live,
     },
-    // ─── Rocklake Internal ───
+    // ─── RockLake Internal ───
     TagDescriptor {
         tag: TAG_INLINED_ROWS,
         name: "dynamic_inlined_rows",
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn all_ducklake_tags_allocated() {
-        // 28 DuckLake tables (0x01..=0x1C) + 4 Rocklake internal tags (0xFC–0xFF)
+        // 28 DuckLake tables (0x01..=0x1C) + 4 RockLake internal tags (0xFC–0xFF)
         // 0x1D–0x20 were removed in v0.22 (formerly IVM catalog tables)
         assert_eq!(ALL_TAGS.len(), 32);
     }

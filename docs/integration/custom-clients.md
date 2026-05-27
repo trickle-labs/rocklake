@@ -1,12 +1,12 @@
 # Custom Clients
 
-Because Rocklake speaks the PostgreSQL wire protocol, any PostgreSQL-compatible client library can connect to it. This opens the door to building custom tooling, monitoring dashboards, migration scripts, administrative interfaces, and CI/CD integrations in any language with a PostgreSQL driver — which is effectively every programming language in existence.
+Because RockLake speaks the PostgreSQL wire protocol, any PostgreSQL-compatible client library can connect to it. This opens the door to building custom tooling, monitoring dashboards, migration scripts, administrative interfaces, and CI/CD integrations in any language with a PostgreSQL driver — which is effectively every programming language in existence.
 
-This page covers the protocol details, language-specific examples for Python, Go, Node.js, Java, Ruby, and Rust, the important limitations of what SQL Rocklake actually accepts, and practical patterns for building production-quality custom clients.
+This page covers the protocol details, language-specific examples for Python, Go, Node.js, Java, Ruby, and Rust, the important limitations of what SQL RockLake actually accepts, and practical patterns for building production-quality custom clients.
 
 ## Connection Details
 
-Rocklake accepts standard PostgreSQL protocol connections:
+RockLake accepts standard PostgreSQL protocol connections:
 
 | Property | Value |
 |----------|-------|
@@ -202,7 +202,7 @@ main().catch(console.error);
 ```java
 import java.sql.*;
 
-public class RocklakeClient {
+public class RockLakeClient {
     public static void main(String[] args) throws SQLException {
         String url = "jdbc:postgresql://localhost:5432/rocklake";
         
@@ -291,7 +291,7 @@ async fn main() -> Result<(), Error> {
 
 ### Bounded SQL Only
 
-Custom clients can send only the specific SQL statements that Rocklake's bounded SQL dispatcher recognizes. These are the catalog metadata queries that DuckDB's `ducklake` extension emits. Arbitrary SQL will be rejected:
+Custom clients can send only the specific SQL statements that RockLake's bounded SQL dispatcher recognizes. These are the catalog metadata queries that DuckDB's `ducklake` extension emits. Arbitrary SQL will be rejected:
 
 ```python
 # This works (recognized pattern):
@@ -306,11 +306,11 @@ cur.execute("SELECT * FROM my_custom_table")
 
 ### No Data Access
 
-Rocklake only manages catalog metadata. You cannot query actual data through the PG-wire connection. Data files (Parquet) must be accessed directly from object storage using appropriate libraries (PyArrow, DuckDB, DataFusion, etc.).
+RockLake only manages catalog metadata. You cannot query actual data through the PG-wire connection. Data files (Parquet) must be accessed directly from object storage using appropriate libraries (PyArrow, DuckDB, DataFusion, etc.).
 
 ### No Prepared Statement Caching
 
-Rocklake does not maintain server-side prepared statements across requests. Each query is parsed independently. Client-side connection pools that rely on prepared statement caching should disable this feature.
+RockLake does not maintain server-side prepared statements across requests. Each query is parsed independently. Client-side connection pools that rely on prepared statement caching should disable this feature.
 
 ### Transaction Semantics
 
@@ -458,7 +458,7 @@ defer conn.Release()
 
 ## Error Handling
 
-Rocklake returns standard SQLSTATE error codes:
+RockLake returns standard SQLSTATE error codes:
 
 | SQLSTATE | Meaning | Action |
 |----------|---------|--------|
@@ -474,7 +474,7 @@ try:
     cur.execute(sql)
 except psycopg2.errors.SyntaxError:
     # SQL not recognized by bounded dispatcher
-    print("This SQL pattern is not supported by Rocklake")
+    print("This SQL pattern is not supported by RockLake")
 except psycopg2.errors.AdminShutdown:
     # Writer fenced
     reconnect()
@@ -568,5 +568,5 @@ def execute_with_logging(cur, sql, params=None):
 
 - **[DuckDB Compatibility](duckdb-compatibility.md)** — What SQL patterns are recognized
 - **[Architecture: PG Wire Protocol](../architecture/pg-wire-protocol.md)** — Protocol implementation details
-- **[pg-tide-relay](pg-tide-relay.md)** — Adding routing/auth in front of Rocklake
+- **[pg-tide-relay](pg-tide-relay.md)** — Adding routing/auth in front of RockLake
 - **[Deployment: TLS](../deployment/tls.md)** — Securing connections

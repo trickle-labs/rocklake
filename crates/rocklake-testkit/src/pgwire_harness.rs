@@ -1,6 +1,6 @@
 //! PgWireHarness: spins up a PG-Wire server for client compatibility tests.
 //!
-//! Launches the Rocklake PG-Wire server on a random available port with an
+//! Launches the RockLake PG-Wire server on a random available port with an
 //! in-memory catalog, providing a connection string that test code can use
 //! with any PostgreSQL client library.
 //!

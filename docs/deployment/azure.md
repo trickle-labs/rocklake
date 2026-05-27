@@ -1,17 +1,17 @@
 # Deploying on Azure Blob Storage
 
-Azure Blob Storage is an excellent backend for Rocklake deployments on Microsoft Azure. It provides sixteen-nines durability (with RA-GRS), native integration with Azure Active Directory, Managed Identity for zero-credential deployments on Azure compute, and competitive pricing for both storage and requests. This guide walks through setting up a Storage Account, configuring Azure RBAC permissions, authenticating Rocklake using Managed Identity or service principal credentials, and deploying on Azure Kubernetes Service (AKS), Azure Container Instances (ACI), and Azure Container Apps.
+Azure Blob Storage is an excellent backend for RockLake deployments on Microsoft Azure. It provides sixteen-nines durability (with RA-GRS), native integration with Azure Active Directory, Managed Identity for zero-credential deployments on Azure compute, and competitive pricing for both storage and requests. This guide walks through setting up a Storage Account, configuring Azure RBAC permissions, authenticating RockLake using Managed Identity or service principal credentials, and deploying on Azure Kubernetes Service (AKS), Azure Container Instances (ACI), and Azure Container Apps.
 
 ## Prerequisites
 
 - An Azure subscription
 - Azure CLI installed and authenticated (`az login`)
-- Rocklake binary or Docker image
+- RockLake binary or Docker image
 - Permissions to create Storage Accounts, resource groups, and Managed Identities (typically `Owner` or `Contributor` plus `User Access Administrator` on the subscription or resource group)
 
 ## Creating the Storage Account
 
-Azure Blob Storage organizes storage into **Storage Accounts** and within them **containers** (equivalent to S3 buckets). Rocklake uses a container within a storage account as its catalog prefix.
+Azure Blob Storage organizes storage into **Storage Accounts** and within them **containers** (equivalent to S3 buckets). RockLake uses a container within a storage account as its catalog prefix.
 
 ```bash
 # Create a resource group
@@ -60,12 +60,12 @@ Azure uses Role-Based Access Control (RBAC) for storage authorization. The relev
 | Role | Permissions | Use case |
 |------|------------|---------|
 | `Storage Blob Data Owner` | Full CRUD + ACLs | Not recommended — too broad |
-| `Storage Blob Data Contributor` | Read, write, delete blobs | Rocklake catalog access |
+| `Storage Blob Data Contributor` | Read, write, delete blobs | RockLake catalog access |
 | `Storage Blob Data Reader` | Read blobs only | DuckDB reader access |
 
-### Managed Identity for Rocklake
+### Managed Identity for RockLake
 
-Create a User-Assigned Managed Identity for Rocklake:
+Create a User-Assigned Managed Identity for RockLake:
 
 ```bash
 # Create the managed identity
@@ -129,13 +129,13 @@ echo "Tenant ID: $TENANT_ID"
 
 ## Authentication Methods
 
-Azure supports multiple authentication mechanisms, and the right choice depends on where Rocklake runs.
+Azure supports multiple authentication mechanisms, and the right choice depends on where RockLake runs.
 
 ### Managed Identity (Recommended for Azure Compute)
 
 Managed Identity is the zero-credential approach for workloads running on Azure Virtual Machines, AKS, ACI, or Container Apps. No secrets to rotate, no credentials to leak.
 
-Set the environment variable to tell Rocklake to use Managed Identity:
+Set the environment variable to tell RockLake to use Managed Identity:
 
 ```bash
 # For System-Assigned Managed Identity:
@@ -182,9 +182,9 @@ az storage account keys list \
   --query "[0].value" --output tsv
 ```
 
-## Starting Rocklake
+## Starting RockLake
 
-With credentials configured, start Rocklake pointing at your Azure Blob Storage container:
+With credentials configured, start RockLake pointing at your Azure Blob Storage container:
 
 ```bash
 rocklake serve \
@@ -195,7 +195,7 @@ rocklake serve \
 Expected startup output:
 
 ```
-INFO  Rocklake v0.8.0 starting
+INFO  RockLake v0.8.0 starting
 INFO  Storage backend: azure-blob
 INFO  Catalog path: az://mylakehouse/catalog/
 INFO  Opening SlateDB...
@@ -317,7 +317,7 @@ az containerapp create \
   --max-replicas 1
 ```
 
-The `--min-replicas 1` setting is important for the same reason as Cloud Run's minimum instances: Rocklake holds a writer lock and must not scale to zero.
+The `--min-replicas 1` setting is important for the same reason as Cloud Run's minimum instances: RockLake holds a writer lock and must not scale to zero.
 
 ## Connecting DuckDB
 
@@ -343,7 +343,7 @@ Azure Blob Storage offers performance comparable to AWS S3 Standard:
 | GET (SST block) | 10–50 ms | 50–120 ms | Hot tier for active catalogs |
 | LIST | 30–80 ms | 30–80 ms | Same across tiers |
 
-Use the **Hot access tier** for Rocklake catalogs. The Cool and Archive tiers impose retrieval latency and minimum storage duration charges that make them unsuitable for active catalog storage.
+Use the **Hot access tier** for RockLake catalogs. The Cool and Archive tiers impose retrieval latency and minimum storage duration charges that make them unsuitable for active catalog storage.
 
 Enable the **ZRS redundancy tier** (`Standard_ZRS`) for zone-fault tolerance with catalog data. This provides twelve nines durability (99.9999999999%) — adequate for nearly all production requirements.
 

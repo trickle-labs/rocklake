@@ -1,8 +1,8 @@
-//! Streaming ingest: RocklakeSink and exactly-once delivery semantics.
+//! Streaming ingest: RockLakeSink and exactly-once delivery semantics.
 //!
 //! # Overview
 //!
-//! `RocklakeSink` is the DuckLake-native streaming ingest endpoint.  It
+//! `RockLakeSink` is the DuckLake-native streaming ingest endpoint.  It
 //! accepts record batches from any ordered source (Kafka, NATS, webhook, etc.)
 //! and commits them — together with a consumer offset — in **one atomic
 //! SlateDB transaction**.
@@ -46,7 +46,7 @@ pub struct IngestRecord {
     pub value: serde_json::Value,
 }
 
-/// Result of a `RocklakeSink::ingest_batch` call.
+/// Result of a `RockLakeSink::ingest_batch` call.
 #[derive(Debug, Clone)]
 pub struct IngestResult {
     /// The snapshot committed for this batch.
@@ -65,18 +65,18 @@ pub struct IngestResult {
 /// # Construction
 ///
 /// ```
-/// use rocklake_catalog::RocklakeSink;
-/// let sink = RocklakeSink::new("pg_tide.orders-to-lake.offset").unwrap();
+/// use rocklake_catalog::RockLakeSink;
+/// let sink = RockLakeSink::new("pg_tide.orders-to-lake.offset").unwrap();
 /// assert_eq!(sink.offset_key, "pg_tide.orders-to-lake.offset");
 /// ```
-pub struct RocklakeSink {
+pub struct RockLakeSink {
     /// Consumer group application metadata key for offset tracking.
     /// Must follow the `{app}.{instance}.{key}` naming convention.
     pub offset_key: String,
 }
 
-impl RocklakeSink {
-    /// Create a new `RocklakeSink`.
+impl RockLakeSink {
+    /// Create a new `RockLakeSink`.
     ///
     /// # Arguments
     /// * `offset_key` — application metadata key for consumer offset, e.g.
@@ -199,7 +199,7 @@ impl RocklakeSink {
 /// Returns `(throughput_rps, p95_commit_ms)` — used by the performance test.
 pub async fn measure_ingest_throughput(
     store: &mut CatalogStore,
-    sink: &RocklakeSink,
+    sink: &RockLakeSink,
     table_id: u64,
     total_records: usize,
     batch_size: usize,

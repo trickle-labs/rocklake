@@ -3,7 +3,7 @@
 //! Accumulates INSERT/UPDATE statements into a PendingCatalogTxn between
 //! BEGIN and COMMIT. ROLLBACK or disconnect drops the pending batch.
 
-use crate::error::RocklakeError;
+use crate::error::RockLakeError;
 use crate::notify::ConnectionSubscriptions;
 
 /// Maximum pending transaction batch size (64 MiB).
@@ -164,10 +164,10 @@ impl PendingCatalogTxn {
     }
 
     /// Add an operation to the pending transaction.
-    pub fn push(&mut self, op: BufferedOp) -> Result<(), RocklakeError> {
+    pub fn push(&mut self, op: BufferedOp) -> Result<(), RockLakeError> {
         let op_size = std::mem::size_of_val(&op) + 128; // rough estimate
         if self.estimated_size + op_size > MAX_BATCH_SIZE {
-            return Err(RocklakeError::BatchTooLarge);
+            return Err(RockLakeError::BatchTooLarge);
         }
         self.estimated_size += op_size;
         self.ops.push(op);

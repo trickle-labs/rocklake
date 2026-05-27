@@ -1,14 +1,14 @@
 # DuckDB Integration
 
-DuckDB is the primary client for Rocklake. The integration uses DuckDB's `ducklake` extension, which connects to Rocklake over the PostgreSQL wire protocol to manage lakehouse catalog metadata while executing analytical queries locally against Parquet data files in object storage. From DuckDB's perspective, Rocklake is indistinguishable from a PostgreSQL-backed DuckLake catalog — the same SQL works, the same operations are supported, and the same transactional guarantees apply.
+DuckDB is the primary client for RockLake. The integration uses DuckDB's `ducklake` extension, which connects to RockLake over the PostgreSQL wire protocol to manage lakehouse catalog metadata while executing analytical queries locally against Parquet data files in object storage. From DuckDB's perspective, RockLake is indistinguishable from a PostgreSQL-backed DuckLake catalog — the same SQL works, the same operations are supported, and the same transactional guarantees apply.
 
 This page covers the complete DuckDB integration: installation, connection configuration, the full lifecycle of catalog operations, performance characteristics, multi-instance topologies, and operational best practices.
 
 ## Prerequisites
 
 - **DuckDB v1.2.0 or later** (the `ducklake` extension was introduced in this version)
-- **A running Rocklake instance** (see [Deployment](../deployment/index.md))
-- **Network connectivity** between DuckDB and Rocklake (typically localhost or same-VPC)
+- **A running RockLake instance** (see [Deployment](../deployment/index.md))
+- **Network connectivity** between DuckDB and RockLake (typically localhost or same-VPC)
 - **Object storage credentials** configured for DuckDB (for reading/writing Parquet files)
 
 ## Installation
@@ -23,12 +23,12 @@ LOAD ducklake;
 
 The extension is part of DuckDB's official extension repository and installs automatically from the DuckDB extension hub.
 
-## Connecting to Rocklake
+## Connecting to RockLake
 
 ### Basic Connection
 
 ```sql
--- Attach a Rocklake catalog (local sidecar)
+-- Attach a RockLake catalog (local sidecar)
 ATTACH 'ducklake:host=localhost;port=5432' AS my_lake;
 
 -- Use the catalog as the default
@@ -56,16 +56,16 @@ ATTACH 'ducklake:host=rocklake.prod.internal;port=5432;sslmode=verify-full;sslro
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `host` | `localhost` | Rocklake server hostname or IP address |
-| `port` | `5432` | Rocklake server port |
+| `host` | `localhost` | RockLake server hostname or IP address |
+| `port` | `5432` | RockLake server port |
 | `password` | (none) | Authentication token (if configured on server) |
 | `sslmode` | `prefer` | TLS mode: `disable`, `prefer`, `require`, `verify-ca`, `verify-full` |
 | `connect_timeout` | `10` | Connection timeout in seconds |
-| `application_name` | `duckdb` | Identifies this client in Rocklake's logs |
+| `application_name` | `duckdb` | Identifies this client in RockLake's logs |
 
 ### Multiple Catalogs
 
-You can attach multiple Rocklake catalogs simultaneously:
+You can attach multiple RockLake catalogs simultaneously:
 
 ```sql
 -- Attach production and staging catalogs
@@ -89,16 +89,16 @@ When you execute DDL or DML through DuckDB against a DuckLake-attached catalog, 
 sequenceDiagram
     participant DuckDB
     participant DuckLake Extension
-    participant Rocklake
+    participant RockLake
     participant Object Storage
     
     DuckDB->>DuckLake Extension: Plan query
-    DuckLake Extension->>Rocklake: List schemas (PG wire)
-    Rocklake-->>DuckLake Extension: Schema list
-    DuckLake Extension->>Rocklake: Get table metadata
-    Rocklake-->>DuckLake Extension: Table definition + columns
-    DuckLake Extension->>Rocklake: List data files
-    Rocklake-->>DuckLake Extension: File paths + statistics
+    DuckLake Extension->>RockLake: List schemas (PG wire)
+    RockLake-->>DuckLake Extension: Schema list
+    DuckLake Extension->>RockLake: Get table metadata
+    RockLake-->>DuckLake Extension: Table definition + columns
+    DuckLake Extension->>RockLake: List data files
+    RockLake-->>DuckLake Extension: File paths + statistics
     DuckLake Extension->>DuckDB: Execution plan with file list
     DuckDB->>Object Storage: Read Parquet files directly
     Object Storage-->>DuckDB: Data
@@ -111,19 +111,19 @@ sequenceDiagram
 sequenceDiagram
     participant DuckDB
     participant DuckLake Extension
-    participant Rocklake
+    participant RockLake
     participant Object Storage
     
     DuckDB->>Object Storage: Write Parquet file
     Object Storage-->>DuckDB: File written (path, size, stats)
     DuckDB->>DuckLake Extension: Register file in catalog
-    DuckLake Extension->>Rocklake: BEGIN + INSERT file metadata
-    Rocklake-->>DuckLake Extension: OK
-    DuckLake Extension->>Rocklake: COMMIT
-    Rocklake-->>DuckLake Extension: Snapshot ID
+    DuckLake Extension->>RockLake: BEGIN + INSERT file metadata
+    RockLake-->>DuckLake Extension: OK
+    DuckLake Extension->>RockLake: COMMIT
+    RockLake-->>DuckLake Extension: Snapshot ID
 ```
 
-**Key insight:** Rocklake never sees your actual data. It only manages metadata — which tables exist, what columns they have, where the data files are stored, and what statistics describe them. DuckDB reads and writes data files directly in object storage.
+**Key insight:** RockLake never sees your actual data. It only manages metadata — which tables exist, what columns they have, where the data files are stored, and what statistics describe them. DuckDB reads and writes data files directly in object storage.
 
 ## Supported Operations
 
@@ -218,7 +218,7 @@ COMMIT;
 
 ### Catalog Overhead Per Query
 
-Each DuckDB query that touches a Rocklake-backed table involves multiple catalog round-trips:
+Each DuckDB query that touches a RockLake-backed table involves multiple catalog round-trips:
 
 | Operation | Round-trips | Typical Latency |
 |-----------|-------------|-----------------|
@@ -242,7 +242,7 @@ For analytical queries scanning gigabytes of Parquet data (seconds to minutes of
 
 ### Data Path Performance
 
-Data operations (reading/writing Parquet files) bypass Rocklake entirely. Performance is determined by:
+Data operations (reading/writing Parquet files) bypass RockLake entirely. Performance is determined by:
 
 - DuckDB's query engine (parallelism, vectorized execution)
 - Object storage throughput (S3 bandwidth: ~100 MB/s per connection, parallelizable)
@@ -252,15 +252,15 @@ Data operations (reading/writing Parquet files) bypass Rocklake entirely. Perfor
 
 ### Read Scaling
 
-Multiple DuckDB instances can connect to the same Rocklake catalog simultaneously for read operations. Each instance:
+Multiple DuckDB instances can connect to the same RockLake catalog simultaneously for read operations. Each instance:
 
 - Gets a consistent snapshot view of the catalog
-- Reads data files directly from object storage (no bottleneck through Rocklake)
+- Reads data files directly from object storage (no bottleneck through RockLake)
 - Scales horizontally without catalog coordination
 
 ```
 DuckDB Instance 1 ──┐
-DuckDB Instance 2 ──┼──→ Rocklake ──→ SlateDB (S3)
+DuckDB Instance 2 ──┼──→ RockLake ──→ SlateDB (S3)
 DuckDB Instance 3 ──┘
      │
      └──→ Read Parquet directly from S3 (parallel)
@@ -274,11 +274,11 @@ In practice, most architectures designate a single "writer" DuckDB instance (typ
 
 ### Connection Pooling
 
-For deployments with many DuckDB instances, Rocklake handles connections efficiently:
+For deployments with many DuckDB instances, RockLake handles connections efficiently:
 
 - Each connection is lightweight (a few KB of state)
 - Connections are stateless between queries
-- No connection limit in Rocklake (limited only by OS file descriptors)
+- No connection limit in RockLake (limited only by OS file descriptors)
 
 ## Object Storage Configuration
 
@@ -304,7 +304,7 @@ SELECT * FROM lake.analytics.events;
 
 | Error | SQLSTATE | Cause | Solution |
 |-------|----------|-------|----------|
-| Connection refused | 08001 | Rocklake not running | Start the server |
+| Connection refused | 08001 | RockLake not running | Start the server |
 | WriterFenced | 57P04 | Another instance claimed the catalog | Reconnect (new instance handles requests) |
 | SnapshotNotFound | 22023 | Requested snapshot has been GC'd | Use a more recent snapshot |
 | TransactionConflict | 40001 | Concurrent write conflict | Retry the transaction |
@@ -324,7 +324,7 @@ SELECT * FROM lake.analytics.events;
 
 ### ETL Pipeline: Ingest Daily Parquet Export
 
-A common pattern is a nightly job that deposits Parquet files into an S3 prefix and registers them with Rocklake so analysts can immediately query them:
+A common pattern is a nightly job that deposits Parquet files into an S3 prefix and registers them with RockLake so analysts can immediately query them:
 
 ```sql
 LOAD ducklake;
@@ -340,7 +340,7 @@ CREATE TABLE IF NOT EXISTS analytics.daily_events (
     region VARCHAR
 );
 
--- Register yesterday's export (DuckDB writes Parquet to S3, then registers metadata with Rocklake)
+-- Register yesterday's export (DuckDB writes Parquet to S3, then registers metadata with RockLake)
 INSERT INTO analytics.daily_events
 SELECT * FROM read_parquet('s3://data-lake/exports/events_2024_03_15.parquet');
 
@@ -348,7 +348,7 @@ SELECT * FROM read_parquet('s3://data-lake/exports/events_2024_03_15.parquet');
 SELECT count(*) FROM analytics.daily_events WHERE event_date = '2024-03-15';
 ```
 
-After the `INSERT`, the new Parquet file is immediately visible to all other DuckDB instances connected to the same Rocklake catalog. The analyst's session that was already running sees the new data without reconnecting — snapshot isolation ensures they see a consistent point in time, and advancing to the latest snapshot is as simple as re-running the query.
+After the `INSERT`, the new Parquet file is immediately visible to all other DuckDB instances connected to the same RockLake catalog. The analyst's session that was already running sees the new data without reconnecting — snapshot isolation ensures they see a consistent point in time, and advancing to the latest snapshot is as simple as re-running the query.
 
 ### Schema Evolution: Adding a Column
 
@@ -421,17 +421,17 @@ GROUP BY region;
 
 ## Operational Best Practices
 
-### Keep DuckDB and Rocklake Versions Aligned
+### Keep DuckDB and RockLake Versions Aligned
 
-The DuckLake wire protocol evolves with DuckDB releases. The `ducklake` extension in DuckDB v1.3 may emit SQL patterns that Rocklake's bounded dispatcher does not recognize if built against the v1.2 protocol. Always test version upgrades in staging before production.
+The DuckLake wire protocol evolves with DuckDB releases. The `ducklake` extension in DuckDB v1.3 may emit SQL patterns that RockLake's bounded dispatcher does not recognize if built against the v1.2 protocol. Always test version upgrades in staging before production.
 
 ### Minimize ATTACH/DETACH Overhead
 
-Each `ATTACH` call opens a new connection to Rocklake and reads the catalog manifest. For interactive sessions or dashboards with per-query connections, reuse a long-lived DuckDB connection with a cached `ATTACH` rather than attaching and detaching on every query.
+Each `ATTACH` call opens a new connection to RockLake and reads the catalog manifest. For interactive sessions or dashboards with per-query connections, reuse a long-lived DuckDB connection with a cached `ATTACH` rather than attaching and detaching on every query.
 
 ### Partition Large Tables
 
-Very large tables with millions of Parquet files create long `file listing` catalog queries. Partition data files by date or region so that queries with date/region filters only need to list files in the relevant partitions. Rocklake's file listing is scoped to the queried partition.
+Very large tables with millions of Parquet files create long `file listing` catalog queries. Partition data files by date or region so that queries with date/region filters only need to list files in the relevant partitions. RockLake's file listing is scoped to the queried partition.
 
 ### Monitor Catalog Size
 
@@ -451,7 +451,7 @@ A healthy catalog for most workloads stays under 100 MB of SST files with regula
 ### "Cannot attach: connection refused"
 
 ```bash
-# Is Rocklake running?
+# Is RockLake running?
 ps aux | grep rocklake
 
 # Is it listening on the expected port?
@@ -460,7 +460,7 @@ nc -zv localhost 5432
 
 ### "Slow queries after ATTACH"
 
-This typically means high network latency between DuckDB and Rocklake. Verify they are in the same region/AZ:
+This typically means high network latency between DuckDB and RockLake. Verify they are in the same region/AZ:
 
 ```bash
 # Measure latency

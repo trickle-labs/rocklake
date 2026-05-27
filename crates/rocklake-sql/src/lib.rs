@@ -1,4 +1,4 @@
-//! Rocklake SQL: bounded SQL dispatcher for DuckLake wire protocol translation.
+//! RockLake SQL: bounded SQL dispatcher for DuckLake wire protocol translation.
 //!
 //! This crate implements exactly the SQL statement shapes observed in the Phase 0
 //! wire corpus. Pattern matching is done on `sqlparser-rs` AST nodes — never on

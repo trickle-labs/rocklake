@@ -1,12 +1,12 @@
 # Health Checks
 
-Health checks verify that a Rocklake instance is operational and capable of serving requests. They are the foundation of automated availability — without health checks, your orchestrator cannot detect failures, your load balancer cannot route around unhealthy instances, and your monitoring cannot alert on degradation. A proper health check strategy distinguishes between "the process is running" (liveness), "the process can serve traffic" (readiness), and "the system is fully healthy" (deep check).
+Health checks verify that a RockLake instance is operational and capable of serving requests. They are the foundation of automated availability — without health checks, your orchestrator cannot detect failures, your load balancer cannot route around unhealthy instances, and your monitoring cannot alert on degradation. A proper health check strategy distinguishes between "the process is running" (liveness), "the process can serve traffic" (readiness), and "the system is fully healthy" (deep check).
 
 This page covers the three tiers of health checking, integration with every major orchestration platform, diagnostic endpoints, and patterns for using health checks effectively without creating false positives.
 
 ## Health Check Tiers
 
-Rocklake supports three levels of health verification, each with different cost and confidence:
+RockLake supports three levels of health verification, each with different cost and confidence:
 
 | Tier | What It Checks | Latency | When to Use |
 |------|---------------|---------|-------------|
@@ -16,7 +16,7 @@ Rocklake supports three levels of health verification, each with different cost 
 
 ### Tier 1: Liveness (TCP Check)
 
-The simplest health check: can a TCP connection be established to Rocklake's port?
+The simplest health check: can a TCP connection be established to RockLake's port?
 
 ```bash
 # Using nc (netcat)
@@ -48,7 +48,7 @@ It does NOT prove:
 
 ### Tier 2: Readiness (Protocol Check)
 
-A readiness check verifies that Rocklake can complete a full PG-wire handshake and execute a trivial query:
+A readiness check verifies that RockLake can complete a full PG-wire handshake and execute a trivial query:
 
 ```bash
 # Using psql (full protocol roundtrip)
@@ -95,7 +95,7 @@ A successful deep check proves:
 
 ## Custom Health Endpoint
 
-Rocklake exposes a dedicated HTTP health endpoint on the metrics port:
+RockLake exposes a dedicated HTTP health endpoint on the metrics port:
 
 ```bash
 # Enable health endpoint
@@ -178,7 +178,7 @@ containers:
 
 ### Why Three Probes?
 
-- **Startup probe:** Gives Rocklake time to read the manifest on first boot. Without this, the liveness probe might kill the pod before it finishes starting.
+- **Startup probe:** Gives RockLake time to read the manifest on first boot. Without this, the liveness probe might kill the pod before it finishes starting.
 - **Liveness probe:** Detects deadlocks and zombie processes. Triggers restart.
 - **Readiness probe:** Detects temporary issues (storage blip, connection exhaustion). Removes from load balancer without killing.
 
@@ -258,7 +258,7 @@ Type=notify
 WatchdogSec=30
 ```
 
-Rocklake sends `WATCHDOG=1` notifications to systemd at regular intervals. If the notification stops (process deadlocked, event loop blocked), systemd kills and restarts the process after `WatchdogSec` seconds.
+RockLake sends `WATCHDOG=1` notifications to systemd at regular intervals. If the notification stops (process deadlocked, event loop blocked), systemd kills and restarts the process after `WatchdogSec` seconds.
 
 ## Health Check Patterns
 
@@ -336,12 +336,12 @@ Liveness probes should be **very permissive** (restart only on clear death). Rea
 Track health check outcomes as metrics:
 
 ```yaml
-- alert: RocklakeHealthCheckFlapping
+- alert: RockLakeHealthCheckFlapping
   expr: changes(kube_pod_container_status_restarts_total{container="rocklake"}[1h]) > 3
   labels:
     severity: warning
   annotations:
-    summary: "Rocklake pod restarting frequently — health check may be too aggressive"
+    summary: "RockLake pod restarting frequently — health check may be too aggressive"
 ```
 
 ## Health Check Anti-Patterns
@@ -362,7 +362,7 @@ A liveness probe should only check whether the process itself is healthy. If you
 
 ### Anti-Pattern: Synchronous Checks in Hot Path
 
-If your health check runs a SQL query against Rocklake, ensure it has its own dedicated connection rather than competing with production traffic. A health check that times out because the connection pool is exhausted creates misleading "unhealthy" signals when the system is actually just busy.
+If your health check runs a SQL query against RockLake, ensure it has its own dedicated connection rather than competing with production traffic. A health check that times out because the connection pool is exhausted creates misleading "unhealthy" signals when the system is actually just busy.
 
 ## Incident Response Using Health Checks
 
@@ -402,7 +402,7 @@ docker inspect rocklake --format '{{json .State}}' | jq '.Health.Log[-5:]'
 
 ## Custom Health Endpoints
 
-For teams that need health information beyond what standard probes provide, Rocklake's metrics endpoint exposes a structured health summary:
+For teams that need health information beyond what standard probes provide, RockLake's metrics endpoint exposes a structured health summary:
 
 ```bash
 curl -s http://localhost:9090/health | jq

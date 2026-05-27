@@ -111,14 +111,14 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Rocklake ${{ steps.version.outputs.version }}
+          name: RockLake ${{ steps.version.outputs.version }}
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           files: |
             artifacts/rocklake-*
           generate_release_notes: true
           body: |
-            ## Rocklake ${{ steps.version.outputs.version }}
+            ## RockLake ${{ steps.version.outputs.version }}
 
             ### Installation
 

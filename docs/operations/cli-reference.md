@@ -1,6 +1,6 @@
 # CLI Reference
 
-Rocklake is operated entirely through its command-line interface. The binary accepts a top-level command followed by any sub-commands and options. This page documents every command, sub-command, flag, and environment variable, along with examples showing typical usage.
+RockLake is operated entirely through its command-line interface. The binary accepts a top-level command followed by any sub-commands and options. This page documents every command, sub-command, flag, and environment variable, along with examples showing typical usage.
 
 The guiding principle of the CLI design is that destructive or irreversible operations always require an explicit `apply` sub-command (or `--apply` flag) after a `plan` phase that shows what would happen. You can never accidentally delete or irrevocably modify catalog data with a single command — there is always a preview step.
 
@@ -28,7 +28,7 @@ The `--catalog` option accepts the following path formats:
 
 ### `serve` — Start the PG-Wire Sidecar
 
-Starts Rocklake as a PostgreSQL wire protocol server. DuckDB clients connect to this server using the `ducklake` extension's `ATTACH` syntax. This is the primary command for all production deployments.
+Starts RockLake as a PostgreSQL wire protocol server. DuckDB clients connect to this server using the `ducklake` extension's `ATTACH` syntax. This is the primary command for all production deployments.
 
 ```bash
 rocklake serve --catalog <path> [options]
@@ -94,7 +94,7 @@ When `serve` starts, it:
 5. Starts the TCP listener
 6. Logs "Ready to accept connections"
 
-If the catalog is new (no SST files exist at the path), Rocklake initializes it with the current format version and counters at zero. If the catalog exists, Rocklake reads the existing state and resumes from where it left off.
+If the catalog is new (no SST files exist at the path), RockLake initializes it with the current format version and counters at zero. If the catalog exists, RockLake reads the existing state and resumes from where it left off.
 
 ---
 
@@ -314,7 +314,7 @@ rocklake export --catalog s3://my-bucket/catalog/ | gzip > catalog.ndjson.gz
 
 ### `import` — Import Catalog from NDJSON
 
-Imports a catalog from an NDJSON export file. Used for migration between backends (e.g., PostgreSQL to Rocklake), disaster recovery, or seeding a new catalog from an export.
+Imports a catalog from an NDJSON export file. Used for migration between backends (e.g., PostgreSQL to RockLake), disaster recovery, or seeding a new catalog from an export.
 
 ```bash
 rocklake import --catalog <path> --input <file>
@@ -347,7 +347,7 @@ rocklake import \
 
 ### `pg-migrate` — Convert NDJSON to PostgreSQL INSERTs
 
-Converts an NDJSON catalog export to SQL `INSERT` statements that can be executed against a PostgreSQL database. This is the migration path from Rocklake to a PostgreSQL-backed DuckLake catalog.
+Converts an NDJSON catalog export to SQL `INSERT` statements that can be executed against a PostgreSQL database. This is the migration path from RockLake to a PostgreSQL-backed DuckLake catalog.
 
 ```bash
 rocklake pg-migrate --input <ndjson-file> --output <sql-file>

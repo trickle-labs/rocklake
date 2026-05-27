@@ -1,12 +1,12 @@
 # TLS Configuration
 
-Rocklake supports TLS encryption for all client connections, protecting catalog metadata in transit between DuckDB and the Rocklake server. TLS is essential for any deployment where the network between client and server is not fully trusted — which in practice means every deployment except localhost development. Even within a VPC, defense in depth argues for encrypting the wire.
+RockLake supports TLS encryption for all client connections, protecting catalog metadata in transit between DuckDB and the RockLake server. TLS is essential for any deployment where the network between client and server is not fully trusted — which in practice means every deployment except localhost development. Even within a VPC, defense in depth argues for encrypting the wire.
 
 This page covers enabling TLS, certificate management strategies, mutual TLS for zero-trust environments, TLS termination at load balancers, certificate rotation, and integration with DuckDB clients.
 
-## Why TLS Matters for Rocklake
+## Why TLS Matters for RockLake
 
-The PostgreSQL wire protocol that Rocklake implements transmits data in plaintext by default. Without TLS, an attacker with network access can:
+The PostgreSQL wire protocol that RockLake implements transmits data in plaintext by default. Without TLS, an attacker with network access can:
 
 - Read catalog metadata (table names, schemas, column types) — information leakage
 - Capture authentication credentials (username/password) — credential theft
@@ -39,10 +39,10 @@ rocklake serve --catalog s3://bucket/catalog/ --bind 0.0.0.0:5432
 
 ### TLS Behavior
 
-When TLS is configured, Rocklake implements the PostgreSQL SSL negotiation:
+When TLS is configured, RockLake implements the PostgreSQL SSL negotiation:
 
 1. Client sends `SSLRequest` message
-2. Rocklake responds with `S` (SSL supported)
+2. RockLake responds with `S` (SSL supported)
 3. TLS handshake occurs
 4. All subsequent protocol messages are encrypted
 
@@ -56,11 +56,11 @@ With `--tls-required`, clients that attempt plaintext connections receive an err
 
 ### Supported TLS Versions
 
-Rocklake supports TLS 1.2 and TLS 1.3. TLS 1.0 and 1.1 are disabled (they have known vulnerabilities). The server uses `rustls` (a modern, memory-safe TLS library) rather than OpenSSL.
+RockLake supports TLS 1.2 and TLS 1.3. TLS 1.0 and 1.1 are disabled (they have known vulnerabilities). The server uses `rustls` (a modern, memory-safe TLS library) rather than OpenSSL.
 
 ### Cipher Suites
 
-Rocklake uses rustls defaults, which prioritize:
+RockLake uses rustls defaults, which prioritize:
 
 - TLS 1.3: `TLS_AES_256_GCM_SHA384`, `TLS_AES_128_GCM_SHA256`, `TLS_CHACHA20_POLY1305_SHA256`
 - TLS 1.2: `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`, `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`
@@ -100,7 +100,7 @@ DuckDB must trust this certificate. For development, you can set `sslmode=requir
 
 ### Let's Encrypt (Production — Public Endpoints)
 
-For internet-facing Rocklake instances with a public DNS name:
+For internet-facing RockLake instances with a public DNS name:
 
 ```bash
 # Using certbot standalone mode
@@ -117,7 +117,7 @@ Configure automatic renewal:
 0 3 * * * certbot renew --quiet --deploy-hook "systemctl reload rocklake"
 ```
 
-Rocklake watches the certificate file for changes and reloads automatically without restarting (zero-downtime renewal).
+RockLake watches the certificate file for changes and reloads automatically without restarting (zero-downtime renewal).
 
 ### Private CA (Enterprise / Internal)
 
@@ -146,7 +146,7 @@ openssl x509 -req -in server.csr \
 For managed certificate lifecycle:
 
 **AWS Certificate Manager (ACM):**
-ACM certificates cannot be exported for direct use. Instead, terminate TLS at an NLB/ALB with the ACM certificate, and run Rocklake in plaintext behind it. See [TLS Termination at Load Balancer](#tls-termination-at-load-balancer).
+ACM certificates cannot be exported for direct use. Instead, terminate TLS at an NLB/ALB with the ACM certificate, and run RockLake in plaintext behind it. See [TLS Termination at Load Balancer](#tls-termination-at-load-balancer).
 
 **HashiCorp Vault PKI:**
 ```bash
@@ -240,17 +240,17 @@ ATTACH 'ducklake:host=rocklake.example.com;port=5432;sslmode=verify-full;sslcert
 
 ## TLS Termination at Load Balancer
 
-For deployments behind a load balancer or reverse proxy, it is common to terminate TLS at the load balancer and run plaintext between the LB and Rocklake:
+For deployments behind a load balancer or reverse proxy, it is common to terminate TLS at the load balancer and run plaintext between the LB and RockLake:
 
 ```
-DuckDB ──(TLS)──→ Load Balancer ──(plaintext)──→ Rocklake
+DuckDB ──(TLS)──→ Load Balancer ──(plaintext)──→ RockLake
 ```
 
 This is acceptable when:
 
-- The LB-to-Rocklake network is trusted (same host, same pod, service mesh)
+- The LB-to-RockLake network is trusted (same host, same pod, service mesh)
 - The load balancer handles certificate management and renewal
-- You want to offload cryptographic work from Rocklake
+- You want to offload cryptographic work from RockLake
 
 ### AWS NLB with TLS Termination
 
@@ -273,21 +273,21 @@ spec:
 
 ### End-to-End TLS (Preferred for Compliance)
 
-For environments requiring end-to-end encryption, run TLS both at the LB and within Rocklake:
+For environments requiring end-to-end encryption, run TLS both at the LB and within RockLake:
 
 ```
-DuckDB ──(TLS)──→ Load Balancer ──(TLS)──→ Rocklake
+DuckDB ──(TLS)──→ Load Balancer ──(TLS)──→ RockLake
 ```
 
-The LB performs TLS pass-through (Layer 4 forwarding) and Rocklake handles the TLS handshake directly.
+The LB performs TLS pass-through (Layer 4 forwarding) and RockLake handles the TLS handshake directly.
 
 ## Certificate Rotation
 
 ### Zero-Downtime Rotation
 
-Rocklake monitors certificate files for changes. When the certificate or key file is modified:
+RockLake monitors certificate files for changes. When the certificate or key file is modified:
 
-1. Rocklake detects the file change (via filesystem notification)
+1. RockLake detects the file change (via filesystem notification)
 2. New connections use the new certificate
 3. Existing connections continue with the old certificate until they disconnect
 4. No restart required
@@ -298,11 +298,11 @@ Rocklake monitors certificate files for changes. When the certificate or key fil
 # 1. Obtain new certificate
 certbot renew
 
-# 2. Copy to Rocklake's certificate directory
+# 2. Copy to RockLake's certificate directory
 cp /etc/letsencrypt/live/catalog.example.com/fullchain.pem /etc/rocklake/tls/server.crt
 cp /etc/letsencrypt/live/catalog.example.com/privkey.pem /etc/rocklake/tls/server.key
 
-# 3. Rocklake picks up the change automatically (no restart needed)
+# 3. RockLake picks up the change automatically (no restart needed)
 ```
 
 ### Kubernetes Secret Rotation
@@ -312,7 +312,7 @@ With cert-manager, certificate rotation is fully automatic:
 1. cert-manager renews the certificate before expiry
 2. Kubernetes updates the Secret
 3. The kubelet updates the mounted file in the pod
-4. Rocklake detects the file change and loads the new certificate
+4. RockLake detects the file change and loads the new certificate
 
 ## DuckDB Client Configuration
 
@@ -369,11 +369,11 @@ echo | openssl s_client -connect rocklake.example.com:5432 -starttls postgres 2>
 
 ## Authentication Strategies
 
-TLS encrypts the channel; authentication determines who can use it. Rocklake supports three authentication models, which can be combined.
+TLS encrypts the channel; authentication determines who can use it. RockLake supports three authentication models, which can be combined.
 
 ### Password Authentication
 
-The simplest model: DuckDB provides a password when connecting, and Rocklake verifies it. Enable by setting `--auth-user` and `--auth-password` (or `ROCKLAKE_AUTH_PASSWORD`):
+The simplest model: DuckDB provides a password when connecting, and RockLake verifies it. Enable by setting `--auth-user` and `--auth-password` (or `ROCKLAKE_AUTH_PASSWORD`):
 
 ```bash
 rocklake serve \
@@ -431,14 +431,14 @@ This satisfies strict compliance requirements (PCI-DSS, HIPAA) that mandate mult
 
 ### No Authentication (Development Only)
 
-In local development, running Rocklake without any authentication is fine:
+In local development, running RockLake without any authentication is fine:
 
 ```bash
 # Local development: no TLS, no auth
 rocklake serve --catalog ./dev-catalog --bind 127.0.0.1:5432
 ```
 
-Never expose an unauthenticated Rocklake instance on a non-loopback address. Even within a private network, the absence of authentication means any host on that network can modify your catalog.
+Never expose an unauthenticated RockLake instance on a non-loopback address. Even within a private network, the absence of authentication means any host on that network can modify your catalog.
 
 ## TLS in Containerized Environments
 
@@ -513,6 +513,6 @@ Use this checklist before going to production:
 - [ ] `--tls-required` enabled if you want to reject plaintext connections entirely
 - [ ] Certificate expiry monitoring in place (alert at 30 days, critical at 7 days)
 - [ ] Certificate rotation tested in staging before production rollout
-- [ ] For mTLS: client CA certificate distributed to all Rocklake instances
+- [ ] For mTLS: client CA certificate distributed to all RockLake instances
 - [ ] For mTLS: each automated client has a unique CN/SAN for audit purposes
 - [ ] Authentication password set via environment variable, not command-line flag

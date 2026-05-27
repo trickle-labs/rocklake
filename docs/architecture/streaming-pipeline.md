@@ -1,15 +1,15 @@
 # Streaming Pipeline Architecture
 
-This document describes the end-to-end streaming pipeline when Rocklake v0.10
+This document describes the end-to-end streaming pipeline when RockLake v0.10
 (streaming ingest + CDC output) is deployed.
 
 ## Overview
 
 ```
                       ┌─────────────────────────────────────────┐
-                      │           Rocklake Node                │
+                      │           RockLake Node                │
                       │                                         │
-Kafka / NATS ─────────►  RocklakeSink  ─── commit_batch() ──►│
+Kafka / NATS ─────────►  RockLakeSink  ─── commit_batch() ──►│
                       │        │                                │
                       │        ▼                                │
                       │  DuckLake Snapshot ◄── atomic tx ──────│
@@ -30,7 +30,7 @@ Kafka / NATS ─────────►  RocklakeSink  ─── commit_batc
 
 ## Component Responsibilities
 
-### RocklakeSink (v0.10)
+### RockLakeSink (v0.10)
 
 Accepts record batches from Kafka/NATS and commits them atomically:
 1. Write Parquet files to S3 (outside the catalog)
@@ -103,7 +103,7 @@ url = "https://my-service/cdc-hook"
 timeout_ms = 5000
 ```
 
-### RocklakeSink
+### RockLakeSink
 
 ```toml
 [streaming]

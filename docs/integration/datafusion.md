@@ -1,8 +1,8 @@
 # DataFusion Integration
 
-Rocklake provides a native integration with Apache DataFusion through the `rocklake-datafusion` crate. This allows Rust applications using DataFusion as their query engine to access DuckLake catalogs directly — without DuckDB, without the PG-wire protocol, and without any network overhead. The catalog is accessed in-process through DataFusion's trait system, making it a natural fit for building custom analytics applications, data platforms, and streaming systems in Rust.
+RockLake provides a native integration with Apache DataFusion through the `rocklake-datafusion` crate. This allows Rust applications using DataFusion as their query engine to access DuckLake catalogs directly — without DuckDB, without the PG-wire protocol, and without any network overhead. The catalog is accessed in-process through DataFusion's trait system, making it a natural fit for building custom analytics applications, data platforms, and streaming systems in Rust.
 
-DataFusion is a fast, extensible query engine written in Rust. It is used as the foundation for numerous data systems including Apache Arrow DataFusion itself, InfluxDB IOx, Ballista, and many custom analytics platforms. By implementing DataFusion's catalog traits, Rocklake becomes a first-class citizen in this ecosystem.
+DataFusion is a fast, extensible query engine written in Rust. It is used as the foundation for numerous data systems including Apache Arrow DataFusion itself, InfluxDB IOx, Ballista, and many custom analytics platforms. By implementing DataFusion's catalog traits, RockLake becomes a first-class citizen in this ecosystem.
 
 ## Architecture
 
@@ -10,12 +10,12 @@ The integration implements three core DataFusion traits that form the catalog hi
 
 ```mermaid
 graph TD
-    DF[DataFusion SessionContext] --> CP[CatalogProvider<br/>RocklakeCatalog]
-    CP --> SP1[SchemaProvider<br/>RocklakeSchema: analytics]
-    CP --> SP2[SchemaProvider<br/>RocklakeSchema: staging]
-    SP1 --> TP1[TableProvider<br/>RocklakeTable: events]
-    SP1 --> TP2[TableProvider<br/>RocklakeTable: users]
-    SP2 --> TP3[TableProvider<br/>RocklakeTable: raw_events]
+    DF[DataFusion SessionContext] --> CP[CatalogProvider<br/>RockLakeCatalog]
+    CP --> SP1[SchemaProvider<br/>RockLakeSchema: analytics]
+    CP --> SP2[SchemaProvider<br/>RockLakeSchema: staging]
+    SP1 --> TP1[TableProvider<br/>RockLakeTable: events]
+    SP1 --> TP2[TableProvider<br/>RockLakeTable: users]
+    SP2 --> TP3[TableProvider<br/>RockLakeTable: raw_events]
     
     TP1 --> Files[Data Files in Object Storage]
     TP2 --> Files
@@ -24,20 +24,20 @@ graph TD
 
 ### Trait Implementations
 
-| DataFusion Trait | Rocklake Implementation | Responsibility |
+| DataFusion Trait | RockLake Implementation | Responsibility |
 |-----------------|-------------------------|----------------|
-| `CatalogProvider` | `RocklakeCatalog` | Lists schemas, provides schema access |
-| `SchemaProvider` | `RocklakeSchema` | Lists tables within a schema, provides table access |
-| `TableProvider` | `RocklakeTable` | Provides schema (columns), statistics, creates scan plans |
+| `CatalogProvider` | `RockLakeCatalog` | Lists schemas, provides schema access |
+| `SchemaProvider` | `RockLakeSchema` | Lists tables within a schema, provides table access |
+| `TableProvider` | `RockLakeTable` | Provides schema (columns), statistics, creates scan plans |
 
-When DataFusion plans a query against a Rocklake-backed table, it calls the `TableProvider` to get the Arrow schema, table statistics, and the list of Parquet data files. Then DataFusion's built-in Parquet reader handles the actual data reading — Rocklake is only responsible for telling DataFusion where to look.
+When DataFusion plans a query against a RockLake-backed table, it calls the `TableProvider` to get the Arrow schema, table statistics, and the list of Parquet data files. Then DataFusion's built-in Parquet reader handles the actual data reading — RockLake is only responsible for telling DataFusion where to look.
 
 ## Usage
 
 ### Basic Example
 
 ```rust
-use rocklake_datafusion::RocklakeCatalog;
+use rocklake_datafusion::RockLakeCatalog;
 use datafusion::prelude::*;
 use std::sync::Arc;
 
@@ -46,8 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a DataFusion session
     let ctx = SessionContext::new();
 
-    // Open a Rocklake catalog from object storage
-    let catalog = RocklakeCatalog::open("s3://my-bucket/lakehouse/catalog/").await?;
+    // Open a RockLake catalog from object storage
+    let catalog = RockLakeCatalog::open("s3://my-bucket/lakehouse/catalog/").await?;
 
     // Register it with DataFusion under the name "lake"
     ctx.register_catalog("lake", Arc::new(catalog));
@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### With Custom Object Storage Configuration
 
 ```rust
-use rocklake_datafusion::{RocklakeCatalog, CatalogConfig};
+use rocklake_datafusion::{RockLakeCatalog, CatalogConfig};
 use object_store::aws::AmazonS3Builder;
 
 #[tokio::main]
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .aws_endpoint("https://s3.us-east-1.amazonaws.com")
         .build();
 
-    let catalog = RocklakeCatalog::open_with_config(config).await?;
+    let catalog = RockLakeCatalog::open_with_config(config).await?;
     
     let ctx = SessionContext::new();
     ctx.register_catalog("lake", Arc::new(catalog));
@@ -100,10 +100,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Reading at a Specific Snapshot
 
 ```rust
-use rocklake_datafusion::RocklakeCatalog;
+use rocklake_datafusion::RockLakeCatalog;
 
 // Open catalog at a specific point in time
-let catalog = RocklakeCatalog::open_at_snapshot("s3://bucket/catalog/", 1000).await?;
+let catalog = RockLakeCatalog::open_at_snapshot("s3://bucket/catalog/", 1000).await?;
 ctx.register_catalog("lake_snapshot", Arc::new(catalog));
 
 // All queries through this catalog see the state at snapshot 1000
@@ -114,8 +114,8 @@ let df = ctx.sql("SELECT count(*) FROM lake_snapshot.analytics.events").await?;
 
 ```rust
 // Register multiple catalogs for cross-catalog queries
-let prod = RocklakeCatalog::open("s3://prod-bucket/catalog/").await?;
-let staging = RocklakeCatalog::open("s3://staging-bucket/catalog/").await?;
+let prod = RockLakeCatalog::open("s3://prod-bucket/catalog/").await?;
+let staging = RockLakeCatalog::open("s3://staging-bucket/catalog/").await?;
 
 ctx.register_catalog("prod", Arc::new(prod));
 ctx.register_catalog("staging", Arc::new(staging));
@@ -132,23 +132,23 @@ let df = ctx.sql("
 
 When your application already holds a `CatalogStore` (for example, in an
 embedded server that uses both the PG-Wire interface and DataFusion), use
-`RocklakeCatalogProvider::from_catalog_store()` to avoid opening a second
+`RockLakeCatalogProvider::from_catalog_store()` to avoid opening a second
 connection to the same catalog:
 
 ```rust
 use rocklake_catalog::store::CatalogStore;
-use rocklake_datafusion::RocklakeCatalogProvider;
+use rocklake_datafusion::RockLakeCatalogProvider;
 use datafusion::prelude::*;
 use std::sync::Arc;
 
 // Assume `store` is an Arc<Mutex<CatalogStore>> already open.
-let provider = RocklakeCatalogProvider::from_catalog_store(store.clone()).await?;
+let provider = RockLakeCatalogProvider::from_catalog_store(store.clone()).await?;
 
 let ctx = SessionContext::new();
 ctx.register_catalog("lake", Arc::new(provider));
 ```
 
-**Key difference from `RocklakeCatalog::open()`**: `from_catalog_store()`
+**Key difference from `RockLakeCatalog::open()`**: `from_catalog_store()`
 reads the `data_path` key from the catalog metadata automatically, so you do
 not need to supply `data_root` explicitly. The bridge uses a single persistent
 background thread (started at construction time) to run async catalog calls from
@@ -163,7 +163,7 @@ Build analytics backends in Rust that access DuckLake catalogs without depending
 ```rust
 // Example: REST API that queries a DuckLake catalog
 async fn query_handler(req: QueryRequest) -> Result<QueryResponse, Error> {
-    let ctx = get_session_context(); // Pre-configured with Rocklake catalog
+    let ctx = get_session_context(); // Pre-configured with RockLake catalog
     let df = ctx.sql(&req.sql).await?;
     let batches = df.collect().await?;
     Ok(QueryResponse::from_arrow(batches))
@@ -172,12 +172,12 @@ async fn query_handler(req: QueryRequest) -> Result<QueryResponse, Error> {
 
 ### Custom Query Engines
 
-If you are building a specialized query engine on top of DataFusion (streaming analytics, time-series processing, ML feature stores), Rocklake provides the table metadata layer:
+If you are building a specialized query engine on top of DataFusion (streaming analytics, time-series processing, ML feature stores), RockLake provides the table metadata layer:
 
 ```rust
-// Streaming analytics that reads catalog metadata from Rocklake
+// Streaming analytics that reads catalog metadata from RockLake
 // and processes new Parquet files as they arrive
-async fn process_new_files(catalog: &RocklakeCatalog) {
+async fn process_new_files(catalog: &RockLakeCatalog) {
     let table = catalog.get_table("analytics", "events").await?;
     let new_files = table.files_since_snapshot(last_processed_snapshot).await?;
     for file in new_files {
@@ -191,10 +191,10 @@ async fn process_new_files(catalog: &RocklakeCatalog) {
 Use DataFusion to validate catalog consistency by querying the same catalog from both DuckDB and DataFusion and comparing results:
 
 ```rust
-// Integration test: verify Rocklake returns same results through both paths
+// Integration test: verify RockLake returns same results through both paths
 #[tokio::test]
 async fn test_catalog_consistency() {
-    let catalog = RocklakeCatalog::open("./test-catalog/").await.unwrap();
+    let catalog = RockLakeCatalog::open("./test-catalog/").await.unwrap();
     let ctx = SessionContext::new();
     ctx.register_catalog("lake", Arc::new(catalog));
     
@@ -215,7 +215,7 @@ For applications that need analytics capabilities without external dependencies:
 fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let catalog = RocklakeCatalog::open("./data/catalog/").await.unwrap();
+        let catalog = RockLakeCatalog::open("./data/catalog/").await.unwrap();
         let ctx = SessionContext::new();
         ctx.register_catalog("local", Arc::new(catalog));
         
@@ -271,7 +271,7 @@ The `rocklake-datafusion` crate tracks DataFusion's major versions:
 | 0.7.x | 44.x | 2021 |
 | 0.6.x | 43.x | 2021 |
 
-DataFusion's trait interfaces change between major versions (the project is pre-1.0 and evolving rapidly). Each Rocklake release is pinned to a specific DataFusion major version.
+DataFusion's trait interfaces change between major versions (the project is pre-1.0 and evolving rapidly). Each RockLake release is pinned to a specific DataFusion major version.
 
 ### Transitive Dependencies
 
@@ -331,7 +331,7 @@ The most common use case for the DataFusion integration is building applications
 ```rust
 // Example: REST API that queries the lakehouse
 async fn handle_query(query: String) -> Result<Vec<RecordBatch>> {
-    let catalog = RocklakeCatalog::open("s3://bucket/catalog/").await?;
+    let catalog = RockLakeCatalog::open("s3://bucket/catalog/").await?;
     let ctx = SessionContext::new();
     ctx.register_catalog("lake", Arc::new(catalog));
     
@@ -349,7 +349,7 @@ Orchestration frameworks can use DataFusion to inspect and validate catalog stat
 
 ```rust
 // Validate that a table has expected columns before loading data
-let catalog = RocklakeCatalog::open(&storage_url).await?;
+let catalog = RockLakeCatalog::open(&storage_url).await?;
 let ctx = SessionContext::new();
 ctx.register_catalog("lake", Arc::new(catalog));
 
@@ -369,7 +369,7 @@ Teams building specialized query engines (streaming processors, ML feature store
 
 ```rust
 // Use the catalog for metadata but execute differently
-let catalog = RocklakeCatalog::open(&storage_url).await?;
+let catalog = RockLakeCatalog::open(&storage_url).await?;
 let ctx = SessionContext::new();
 ctx.register_catalog("lake", Arc::new(catalog));
 
@@ -392,18 +392,18 @@ for file in files {
 | Latency | Lowest (no network) | Network round-trip per query |
 | Language | Rust only | Any language with PG driver |
 | Concurrency | Single process | Multiple clients |
-| Write support | Full (direct SlateDB access) | Full (via Rocklake server) |
+| Write support | Full (direct SlateDB access) | Full (via RockLake server) |
 | Deployment | Library dependency | Separate server process |
 | Memory | Shared address space | Isolated processes |
 | Fault isolation | Crash affects host application | Server crash independent |
 
-Choose DataFusion integration when you are building a Rust application and want the lowest possible latency. Choose PG-Wire when you need language flexibility, client isolation, or already have a Rocklake server running.
+Choose DataFusion integration when you are building a Rust application and want the lowest possible latency. Choose PG-Wire when you need language flexibility, client isolation, or already have a RockLake server running.
 
 ## Limitations
 
-- **Rust-only:** The DataFusion integration is available only from Rust code. Other languages must use the PG-wire protocol (via the Rocklake server) or the C FFI layer.
-- **Single-writer:** Like all Rocklake access paths, the DataFusion integration is subject to the single-writer constraint. Only one process can write to a catalog at a time.
-- **No connection pooling:** Since the integration is in-process, there is no concept of connection pooling. Each `RocklakeCatalog` instance maintains its own SlateDB reader/writer.
+- **Rust-only:** The DataFusion integration is available only from Rust code. Other languages must use the PG-wire protocol (via the RockLake server) or the C FFI layer.
+- **Single-writer:** Like all RockLake access paths, the DataFusion integration is subject to the single-writer constraint. Only one process can write to a catalog at a time.
+- **No connection pooling:** Since the integration is in-process, there is no concept of connection pooling. Each `RockLakeCatalog` instance maintains its own SlateDB reader/writer.
 - **DataFusion version coupling:** The integration is compiled against a specific DataFusion version. Upgrading DataFusion may require a matching `rocklake-datafusion` release.
 
 ## Further Reading

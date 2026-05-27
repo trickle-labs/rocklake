@@ -1,12 +1,12 @@
-# Rocklake Documentation Plan
+# RockLake Documentation Plan
 
 ## Overview
 
-This plan defines the complete documentation site for Rocklake, built with MkDocs
+This plan defines the complete documentation site for RockLake, built with MkDocs
 Material, deployed via GitHub Actions to GitHub Pages, and covering every aspect of the
 project from first principles through production operations. The goal is not a reference
 dump or a marketing brochure — it is a body of writing that genuinely helps people
-understand, deploy, operate, and contribute to Rocklake. That means explaining the
+understand, deploy, operate, and contribute to RockLake. That means explaining the
 reasoning behind decisions, acknowledging trade-offs honestly, providing examples that
 work, and treating the reader as an intelligent engineer who deserves full information.
 
@@ -21,11 +21,11 @@ and genuinely wants the reader to understand it too.
 
 The documentation serves four distinct audiences simultaneously, and each needs to be
 served without alienating the others. The curious newcomer who has heard about DuckLake
-and wants to know what Rocklake adds needs a gentle on-ramp that does not assume prior
+and wants to know what RockLake adds needs a gentle on-ramp that does not assume prior
 knowledge of LSM trees or wire protocols. The evaluating architect deciding whether
-Rocklake fits their stack needs honest answers about latency characteristics, failure
+RockLake fits their stack needs honest answers about latency characteristics, failure
 modes, and operational complexity — including the cases where a managed PostgreSQL
-would be a better choice. The production operator who has already deployed Rocklake
+would be a better choice. The production operator who has already deployed RockLake
 needs a reliable reference for CLI flags, troubleshooting symptoms, and upgrade paths.
 The contributor who wants to fix a bug or add a feature needs to understand the codebase
 well enough to navigate it confidently. Each audience has a clear entry point and a
@@ -40,7 +40,7 @@ those paths obvious without hiding content from audiences who want more depth.
 
 MkDocs Material is the right choice for this project because it combines a clean,
 professional reading experience with a rich feature set that supports exactly the kinds
-of content Rocklake needs: fenced code blocks with syntax highlighting for Rust, SQL,
+of content RockLake needs: fenced code blocks with syntax highlighting for Rust, SQL,
 TOML, bash, and YAML; Mermaid diagram rendering for architecture visuals and sequence
 diagrams; tabbed content blocks for multi-cloud deployment guides; admonition boxes for
 warnings, tips, and "why this matters" asides; and instant search that works well on
@@ -51,7 +51,7 @@ the architecture section or on their phone checking a CLI command in the field.
 MkDocs itself is a static-site generator with a straightforward build model: Markdown
 source files go in, a self-contained HTML site comes out. There is no database, no
 server-side rendering, and no runtime dependencies beyond a static file host — which
-aligns naturally with Rocklake's own philosophy of eliminating infrastructure. The
+aligns naturally with RockLake's own philosophy of eliminating infrastructure. The
 build is reproducible, fast (seconds for a full rebuild), and requires only Python and
 a handful of pip packages. GitHub Pages handles the hosting at zero cost.
 
@@ -195,7 +195,7 @@ docs/
 │   ├── latency-model.md              # Expected latency by operation and backend
 │   ├── benchmarks.md                 # Published benchmark results
 │   ├── tuning.md                     # SlateDB tuning knobs and their effects
-│   ├── when-to-use.md                # Workload fit: when Rocklake is the right choice
+│   ├── when-to-use.md                # Workload fit: when RockLake is the right choice
 │   └── vs-alternatives.md            # Honest comparison with alternatives
 ├── internals/
 │   ├── index.md                      # Internals overview
@@ -243,7 +243,7 @@ docs/
 
 The landing page is the most important page on the site because it is the first thing
 most people see and the thing that determines whether they read further. It must
-communicate what Rocklake is, why it matters, and who it is for — in roughly that
+communicate what RockLake is, why it matters, and who it is for — in roughly that
 order — without burying the reader in technical detail before they are oriented. The
 opening sentence or two should be a direct, concrete pitch: "Your entire DuckLake
 catalog lives in the same S3 bucket as your Parquet data. No database server required."
@@ -255,11 +255,11 @@ Minutes" button links directly to the local quickstart.
 Below the fold, the landing page should show a simplified architecture diagram (a
 Mermaid block rendering an ASCII-art style box diagram of DuckDB → sidecar → SlateDB →
 S3) to give visual learners an immediate mental model. A three-column comparison table
-contrasting Rocklake with PostgreSQL-backed and SQLite-backed DuckLake across the
+contrasting RockLake with PostgreSQL-backed and SQLite-backed DuckLake across the
 dimensions that evaluators actually care about — infrastructure required, time-travel
 cost, horizontal read scale, object-store backends, operational complexity — communicates
-at a glance where Rocklake fits. The table must include the cases where the alternatives
-win, not just the cases where Rocklake wins. Evaluators who see a one-sided comparison
+at a glance where RockLake fits. The table must include the cases where the alternatives
+win, not just the cases where RockLake wins. Evaluators who see a one-sided comparison
 table immediately distrust the rest of the documentation.
 
 The landing page closes with navigation cards for each major section: Getting Started,
@@ -270,7 +270,7 @@ will notice the difference.
 
 ### 2. Getting Started
 
-#### What is Rocklake? (`getting-started/what-is-rocklake.md`)
+#### What is RockLake? (`getting-started/what-is-rocklake.md`)
 
 This page is a narrative explanation pitched at an engineer who knows SQL and has heard
 of data lakes but may not know what a catalog is, why it matters, or what DuckLake and
@@ -280,7 +280,7 @@ need a catalog — a database that tracks which files belong to which tables, wh
 schema is, and what the data looked like at any point in time. Every existing lakehouse
 solution delegates this catalog to an external database (PostgreSQL, Hive Metastore,
 AWS Glue, Nessie), which means you are running and paying for a database server even
-though your actual data is already in a bucket. Rocklake's premise is that the catalog
+though your actual data is already in a bucket. RockLake's premise is that the catalog
 itself can live in the same bucket, as key-value entries managed by SlateDB — an
 LSM-tree embedded storage engine that runs entirely on top of object storage.
 
@@ -291,11 +291,11 @@ than Iceberg or Delta Lake because the catalog is just a database, not a forest 
 and Avro manifest files. It explains SlateDB briefly: an embedded key-value store written
 in Rust that durably stores all state in object storage, provides atomic multi-key
 writes and transactional isolation, and enforces a single-writer constraint for
-correctness. Rocklake is the layer that maps DuckLake's 28-table relational catalog
+correctness. RockLake is the layer that maps DuckLake's 28-table relational catalog
 onto SlateDB's key-value model, exposing the result over the PostgreSQL wire protocol
 so DuckDB can connect without any client-side changes.
 
-The page should close by explaining the two things Rocklake adds beyond DuckLake's
+The page should close by explaining the two things RockLake adds beyond DuckLake's
 catalog model: a binding commitment that committed catalog facts are never physically
 deleted by normal operation (giving you infinite time travel and horizontal read scale
 by construction), and a path toward a general fact store where any schema can be hosted
@@ -333,7 +333,7 @@ guide for each provider when readers need deeper configuration.
 #### Your First Lakehouse (`getting-started/first-lakehouse.md`)
 
 This is the golden-path tutorial — the end-to-end story that a new user should walk
-through to understand what Rocklake actually does. Unlike the quickstart, which moves
+through to understand what RockLake actually does. Unlike the quickstart, which moves
 as fast as possible, this tutorial moves at a deliberate pace and explains what is
 happening at each step. It creates a realistic scenario: a small analytics warehouse
 for tracking product events. The tutorial creates a schema, creates a table with a
@@ -356,7 +356,7 @@ defers. They are written as flowing technical essays — several paragraphs per 
 concrete examples woven in rather than appended as afterthoughts, and an honest
 treatment of trade-offs that does not pretend every design choice was costless. Readers
 who skip the Concepts section and go straight to Deployment will be able to operate
-Rocklake, but they will not understand why certain things work the way they do, why
+RockLake, but they will not understand why certain things work the way they do, why
 certain configurations matter, or why certain errors mean what they mean.
 
 #### Lakehouse Primer (`concepts/lakehouse-primer.md`)
@@ -371,29 +371,29 @@ serious database engineering. The page briefly surveys the landscape: Apache Ice
 Delta Lake encode their catalogs as files scattered through the data lake (flexible but
 slow and operationally complex); Hive Metastore and AWS Glue use dedicated database
 services (reliable but requiring infrastructure); DuckLake takes the simpler approach
-of delegating to an ordinary SQL database with a well-defined schema. Rocklake then
+of delegating to an ordinary SQL database with a well-defined schema. RockLake then
 asks: if DuckLake needs a SQL database, can that database itself be a file in the bucket?
 This page sets up that question; the rest of the Concepts section answers it.
 
 #### DuckLake Format (`concepts/ducklake.md`)
 
-DuckLake is the format Rocklake implements, and this page explains it in full from
-Rocklake's perspective. It covers the 28 catalog tables (their names, what they store,
+DuckLake is the format RockLake implements, and this page explains it in full from
+RockLake's perspective. It covers the 28 catalog tables (their names, what they store,
 and how they relate to each other), the MVCC model based on `begin_snapshot` and
 `end_snapshot` columns, how the `ducklake` DuckDB extension interacts with the catalog
 over the PostgreSQL wire protocol, and what the spec says about which operations must
-be atomic. The page is frank about what Rocklake implements versus what it delegates:
-Rocklake owns the catalog plane (the 28 tables in SlateDB), and DuckDB owns the data
+be atomic. The page is frank about what RockLake implements versus what it delegates:
+RockLake owns the catalog plane (the 28 tables in SlateDB), and DuckDB owns the data
 plane (writing and reading Parquet files directly). The separation of concerns is a
-design strength that the page should explain clearly — it means Rocklake never needs
+design strength that the page should explain clearly — it means RockLake never needs
 to understand Parquet, and DuckDB never needs to understand SlateDB.
 
 The page also explains the bounded query set: DuckLake's spec defines a finite set of
 SQL operations against the catalog tables — point SELECTs, range SELECTs filtered by
 snapshot ID, INSERTs, and targeted UPDATEs to set `end_snapshot`. This set is small
-and well-understood, which is why Rocklake can implement it with a bounded SQL
+and well-understood, which is why RockLake can implement it with a bounded SQL
 dispatcher rather than a general SQL engine. Any reader who wonders "can I run arbitrary
-SQL against Rocklake?" needs to find the answer here, with a clear explanation of why
+SQL against RockLake?" needs to find the answer here, with a clear explanation of why
 the answer is "no, by design, for good reasons" rather than "not yet."
 
 #### SlateDB Storage Engine (`concepts/slatedb.md`)
@@ -411,17 +411,17 @@ enforcement and writer fencing to prevent concurrent corruption.
 
 The page should also be honest about what SlateDB does not provide: there is no built-in
 SQL, no multi-writer support (one writer per database instance), no multi-region
-replication, and no built-in encryption (Rocklake uses SlateDB's block transformer
-API for that). These constraints shaped Rocklake's design in concrete ways — the
-single-writer model is why Rocklake serializes all writes through a single actor; the
-absence of SQL is why Rocklake implements its own key layout and value encoding. A
-reader who understands SlateDB's constraints will understand Rocklake's design
+replication, and no built-in encryption (RockLake uses SlateDB's block transformer
+API for that). These constraints shaped RockLake's design in concrete ways — the
+single-writer model is why RockLake serializes all writes through a single actor; the
+absence of SQL is why RockLake implements its own key layout and value encoding. A
+reader who understands SlateDB's constraints will understand RockLake's design
 choices without needing them restated in every section.
 
 #### Catalog Immutability (`concepts/catalog-immutability.md`)
 
 This is one of the most important pages in the documentation because catalog-data
-immutability is the most distinctive architectural decision in Rocklake. The page
+immutability is the most distinctive architectural decision in RockLake. The page
 should explain the commitment clearly: every catalog fact committed at a given
 `dl_snapshot_id` is readable at that snapshot ID forever, and can only be physically
 removed via the explicit, audited `rocklake excise` command. Normal GC only advances
@@ -515,7 +515,7 @@ primary's write throughput is bounded by how fast replicas can keep up.
 The single-writer constraint is one of SlateDB's core guarantees, and this page
 explains what happens when it is violated: a second process tries to write to the same
 catalog, SlateDB's fencing mechanism detects the conflict, and the stale writer
-receives an error. Rocklake maps this to `SQLSTATE 57P04` (connection failure,
+receives an error. RockLake maps this to `SQLSTATE 57P04` (connection failure,
 reconnect), which DuckDB interprets correctly. The page should walk through the takeover
 protocol step by step: the new writer opens the catalog, calls `flush()` to establish
 a durable reader-visible baseline, publishes its endpoint under the `0xFF` system key,
@@ -533,7 +533,7 @@ times and plan their pod restart policies and client retry configurations accord
 
 This page is forward-looking and should be written honestly as such: it describes a
 direction the project is committed to exploring, not a feature that already exists. The
-core idea is that the storage substrate Rocklake uses for DuckLake — append-only keys
+core idea is that the storage substrate RockLake uses for DuckLake — append-only keys
 scoped by a monotonically increasing version identifier, Protobuf values with a versioned
 header, counter allocation under a dedicated namespace, `retain-from` advancement, and
 audited excision — is not specific to DuckLake. It is a generic fact log over object
@@ -552,7 +552,7 @@ naming conventions — feel like deliberate architecture rather than arbitrary d
 
 ### 4. Architecture
 
-The Architecture section is for engineers who want to understand how Rocklake works
+The Architecture section is for engineers who want to understand how RockLake works
 at the code level — where the logic lives, what the data looks like on the wire and in
 storage, and how the pieces fit together. These pages assume familiarity with the
 Concepts section and go deeper into implementation detail, with concrete examples of
@@ -562,10 +562,10 @@ byte sequences, AST patterns, and Rust API calls.
 
 This is the master architecture page — a flowing narrative that describes the full
 system from DuckDB's perspective through to object storage. It starts with the
-two-plane separation: Rocklake owns the catalog plane (schema definitions, snapshot
+two-plane separation: RockLake owns the catalog plane (schema definitions, snapshot
 IDs, data-file registrations) while DuckDB owns the data plane (reading and writing
 Parquet files). The two planes connect only via `data_path` values in catalog rows —
-Rocklake records where files live but never reads or writes them.
+RockLake records where files live but never reads or writes them.
 
 The page should include two Mermaid sequence diagrams: one for the read path (DuckDB
 sends a `SELECT` over the PostgreSQL wire; `rocklake-pgwire` receives it; `rocklake-
@@ -661,7 +661,7 @@ property (no accidental partial execution of unsupported queries).
 
 #### PG-Wire Protocol (`architecture/pgwire-protocol.md`)
 
-The PostgreSQL wire protocol is the interface between DuckDB and Rocklake, and this
+The PostgreSQL wire protocol is the interface between DuckDB and RockLake, and this
 page explains the implementation in full. It covers the startup sequence (SSL handshake,
 startup message, authentication, `BackendKeyData`, `ReadyForQuery`), the simple query
 protocol (a single `Query` message followed by `RowDescription`, zero or more
@@ -676,12 +676,12 @@ The type OID table is reproduced here in full, covering every OID observed in th
 wire corpus: `bool` (16), `int8` (20), `int4` (23), `int2` (21), `float4` (700),
 `float8` (701), `text` (25), `varchar` (1043), `timestamp` (1114), `timestamptz` (1184),
 `uuid` (2950), `json` (114), `jsonb` (3802). For each type, the page explains how
-Rocklake encodes values in text format and what the binary format code handling looks
+RockLake encodes values in text format and what the binary format code handling looks
 like (binary format codes not observed in the corpus return `SQLSTATE 0A000`).
 
 #### Transaction Model (`architecture/transaction-model.md`)
 
-Rocklake's transaction model bridges two transaction systems: the PostgreSQL `BEGIN` /
+RockLake's transaction model bridges two transaction systems: the PostgreSQL `BEGIN` /
 `COMMIT` / `ROLLBACK` protocol that DuckDB expects and the SlateDB `DbTransaction` that
 provides catalog atomicity. The bridge is the `PendingCatalogTxn` struct in the session
 state, which accumulates `INSERT` and `UPDATE` statements between `BEGIN` and `COMMIT`.
@@ -702,7 +702,7 @@ might not see the new rows.
 #### Counter Allocation (`architecture/counter-allocation.md`)
 
 DuckLake requires monotonically increasing IDs for snapshots, catalog objects, files,
-and per-table columns. Rocklake implements these as SlateDB-backed counters under the
+and per-table columns. RockLake implements these as SlateDB-backed counters under the
 `0xFE` namespace. The critical invariant is that the counter increment and the row that
 consumes the allocated ID must commit in the same `DbTransaction` — if they are separate
 writes and a crash occurs between them, the ID may be permanently lost or the row may
@@ -758,7 +758,7 @@ reader opened before the writer's `flush()` completed.
 #### Docker (`deployment/docker.md`)
 
 The Docker guide provides a complete `docker-compose.yml` that stands up three services:
-MinIO (the object store), a Rocklake sidecar connected to MinIO, and a one-shot DuckDB
+MinIO (the object store), a RockLake sidecar connected to MinIO, and a one-shot DuckDB
 container that runs a connection test and exits. A reader can bring up the entire stack
 with a single `docker compose up`, watch the health checks pass, and then connect from
 their host DuckDB with the given `ATTACH` command. The guide explains the networking:
@@ -777,7 +777,7 @@ explains the S3 bucket configuration (versioning not required, lifecycle rules t
 up SlateDB's WAL segments after compaction, server-side encryption options), the
 `AWS_REGION` and optional `AWS_ENDPOINT_URL` environment variables, and the
 `rocklake serve` command with the `s3://` catalog URI. It should include a note on
-S3 request costs: a busy Rocklake deployment will make many `GetObject` and `PutObject`
+S3 request costs: a busy RockLake deployment will make many `GetObject` and `PutObject`
 requests, and operators with high-throughput workloads should understand the billing
 implications before using S3 Standard as a production catalog backend.
 
@@ -790,7 +790,7 @@ in depth in the Performance section, with a forward link.
 
 #### Credential Isolation (`deployment/credential-isolation.md`)
 
-Credential isolation is one of Rocklake's architectural security properties and
+Credential isolation is one of RockLake's architectural security properties and
 deserves its own page rather than a footnote in the S3 guide. The principle is that
 the sidecar should hold credentials scoped only to the `catalogs/` prefix — it should
 not be able to read or write Parquet files under `data/`. DuckDB, conversely, should
@@ -806,7 +806,7 @@ catalog entries.
 
 #### Kubernetes (`deployment/kubernetes.md`)
 
-The Kubernetes deployment guide covers the sidecar pattern in detail: a Rocklake
+The Kubernetes deployment guide covers the sidecar pattern in detail: a RockLake
 container in the same pod as DuckDB, connected via `localhost`, with an object store as
 the catalog backend. It provides a complete pod spec with resource requests and limits,
 health check endpoints (`/health` for liveness, `/ready` for readiness, `/metrics` for
@@ -821,7 +821,7 @@ ensure all committed transactions are visible to the next writer.
 
 ### 6. Operations
 
-The Operations section is written for people who have already deployed Rocklake and
+The Operations section is written for people who have already deployed RockLake and
 need to keep it running. It assumes the reader has a working deployment and focuses on
 day-2 concerns: what knobs to turn, what metrics to watch, how to recover from common
 failure modes, and how to safely perform maintenance operations like GC, excision,
@@ -852,7 +852,7 @@ throttle retries (`rocklake_object_store_throttle_retries_total`) are normal in 
 quantities but indicate sustained overload if the rate is more than a few per minute.
 
 The page includes a sample Prometheus alerting rule for writer staleness and a sample
-Grafana dashboard JSON. It also explains the SlateDB metrics that Rocklake re-exports:
+Grafana dashboard JSON. It also explains the SlateDB metrics that RockLake re-exports:
 compaction backlog, WAL segment count, and SST file count are all relevant to
 understanding the storage health of the catalog. An operator who understands these
 metrics can diagnose most problems — slow reads, high write latency, growing storage
@@ -898,7 +898,7 @@ you can always see what was deleted and when, even after the actual data is gone
 
 #### Upgrading (`operations/upgrading.md`)
 
-Upgrades require more discussion than a simple "run the new binary" because Rocklake
+Upgrades require more discussion than a simple "run the new binary" because RockLake
 uses a `catalog-format-version` stored under `0xFF` to gate binary compatibility. An
 older binary encountering a higher `catalog-format-version` refuses to open the catalog
 with `SQLSTATE 0A000`. This is a safety mechanism: it prevents a downgraded binary from
@@ -929,17 +929,17 @@ data-files` reports.
 #### DuckDB (`integration/duckdb.md`)
 
 DuckDB is the primary client, and this page is the full reference for using DuckDB with
-Rocklake. It covers the `ATTACH` syntax with all options, the `USE` command, how to
+RockLake. It covers the `ATTACH` syntax with all options, the `USE` command, how to
 reference tables and schemas, how time-travel queries work at the SQL level, what
-DuckDB does and does not support through Rocklake (all DuckLake tutorial operations
-work; complex catalog queries that Rocklake's bounded dispatcher does not support
+DuckDB does and does not support through RockLake (all DuckLake tutorial operations
+work; complex catalog queries that RockLake's bounded dispatcher does not support
 return `SQLSTATE 0A000`), and the version compatibility matrix. It includes examples
 of common operations: creating schemas and tables, inserting data, querying, altering
 tables, running time-travel queries, dropping tables, and viewing catalog metadata. The
 page should also explain the session configuration: `timezone`, `DateStyle`, and
 `client_encoding` are accepted by the sidecar; any other `SET` statements are silently
 ignored, which is intentional — DuckDB sends many session-variable settings during
-startup that Rocklake does not need to honor.
+startup that RockLake does not need to honor.
 
 #### DuckDB Compatibility (`integration/duckdb-compatibility.md`)
 
@@ -947,7 +947,7 @@ This page maintains the version compatibility matrix and explains the process fo
 validating new DuckDB versions. The wire corpus is central to compatibility: for each
 supported DuckDB version, a corpus fixture under `tests/fixtures/wire-corpus/
 duckdb-{version}.jsonl` contains every SQL statement DuckDB emits against a real
-DuckLake catalog, and the replay harness verifies that Rocklake produces
+DuckLake catalog, and the replay harness verifies that RockLake produces
 bit-for-bit identical responses. When a new DuckDB version is released, the process is:
 (1) capture a new corpus by running the full DuckLake tutorial against a PostgreSQL-
 backed DuckLake; (2) classify each new statement shape against the bounded dispatcher
@@ -988,7 +988,7 @@ requires running an FDB cluster — not serverless), TiKV (distributed KV with A
 transactions, but again requires a cluster). SlateDB's unique position is that all
 durable state lives in the object store — no server, no persistent disk beyond the
 cache, no cluster to operate. Its LSM design, writer fencing, and atomic transaction
-API provide exactly the guarantees Rocklake needs without any infrastructure beyond
+API provide exactly the guarantees RockLake needs without any infrastructure beyond
 a bucket. The page is honest about the costs: single-writer is a real constraint;
 SlateDB is younger and has less battle-testing than PostgreSQL; object-store latency
 (tens of milliseconds per round trip) is higher than local-disk latency.
@@ -1011,24 +1011,24 @@ overhead. The `retain-from` mechanism and bounded-retention configuration exist
 precisely to address this, but they require active operator decisions; the default is
 growth. The excision command exists for compliance cases but is designed to be rare,
 not routine. Operators who are accustomed to PostgreSQL's autovacuum or SQLite's
-automatic storage reclamation will find the Rocklake model more explicit and less
+automatic storage reclamation will find the RockLake model more explicit and less
 automatic — which is intentional (automatic deletion of committed facts would violate
 the immutability contract) but does require a different operational mindset.
 
-#### What Rocklake Is Not (`design-decisions/what-rocklake-is-not.md`)
+#### What RockLake Is Not (`design-decisions/what-rocklake-is-not.md`)
 
-This page is explicitly a list of anti-patterns and wrong use cases — not what Rocklake
+This page is explicitly a list of anti-patterns and wrong use cases — not what RockLake
 wants to avoid being, but what it genuinely is not and what a user should not expect
-of it. Rocklake is not a general SQL engine: the bounded dispatcher supports only the
+of it. RockLake is not a general SQL engine: the bounded dispatcher supports only the
 DuckLake catalog query set, and running arbitrary analytical SQL through the sidecar is
-not supported. Rocklake is not a multi-writer database in v1: one catalog, one writer,
+not supported. RockLake is not a multi-writer database in v1: one catalog, one writer,
 period; the v0.7 partitioning pattern (one SlateDB database per dataset) is the
-workaround for workloads that need multiple concurrent writers. Rocklake is not a
-data-plane proxy: DuckDB reads and writes Parquet files directly; Rocklake only manages
-the catalog metadata. Rocklake is not a replacement for PostgreSQL-backed DuckLake in
+workaround for workloads that need multiple concurrent writers. RockLake is not a
+data-plane proxy: DuckDB reads and writes Parquet files directly; RockLake only manages
+the catalog metadata. RockLake is not a replacement for PostgreSQL-backed DuckLake in
 all scenarios: if you have low-latency analyst queries on a high-traffic catalog and
 already run PostgreSQL, the managed PostgreSQL path is likely simpler and faster. The
-page ends with a clear "choose Rocklake when" and "choose PostgreSQL when" framework
+page ends with a clear "choose RockLake when" and "choose PostgreSQL when" framework
 that helps readers make the right decision for their use case.
 
 ### 9. Performance
@@ -1049,7 +1049,7 @@ the `benchmarks/phase-2-baseline.json` data and updated with each benchmark run.
 
 The page is honest about the latency gap with PostgreSQL: a PostgreSQL `SELECT` against
 a local-disk-backed catalog on the same LAN as the DuckDB client is roughly 1–5 ms.
-Rocklake's S3-backed catalog is roughly 10–50× slower for individual operations. For
+RockLake's S3-backed catalog is roughly 10–50× slower for individual operations. For
 DuckLake's typical usage pattern — catalog reads happen once per query to fetch the file
 list, then DuckDB reads from S3 directly — this latency is often acceptable, but for
 workloads that issue hundreds of short catalog lookups per second, the gap is real and
@@ -1058,15 +1058,15 @@ operators need to understand it.
 #### vs. Alternatives (`performance/vs-alternatives.md`)
 
 The comparison page presents a direct, honest, multi-dimensional comparison between
-Rocklake, PostgreSQL-backed DuckLake, and SQLite-backed DuckLake across the dimensions
+RockLake, PostgreSQL-backed DuckLake, and SQLite-backed DuckLake across the dimensions
 that an evaluating engineer cares about: catalog read latency (cold and warm), catalog
 write latency (single snapshot creation), infrastructure required to operate, horizontal
 read scalability, time-travel cost, object-store backend flexibility, operational
 complexity for backup and restore, and correctness guarantees under concurrent writes
-and process failures. Rocklake wins on infrastructure simplicity, horizontal read
+and process failures. RockLake wins on infrastructure simplicity, horizontal read
 scale, and object-store-native durability. It loses on catalog operation latency (object-
 store round trips are expensive relative to local-disk or in-memory database operations).
-The table is presented without spin: where Rocklake is slower, the page says so, and
+The table is presented without spin: where RockLake is slower, the page says so, and
 gives the quantitative gap. An evaluator who reads this page should be able to make a
 well-informed decision without needing to do their own benchmarking first.
 
@@ -1075,7 +1075,7 @@ well-informed decision without needing to do their own benchmarking first.
 #### Crash Safety (`internals/crash-safety.md`)
 
 Crash safety is the most critical correctness property for a storage system, and this
-page documents every crash injection point in Rocklake's test suite along with the
+page documents every crash injection point in RockLake's test suite along with the
 guarantee that holds at each point. The key points are: a crash after the S3 `PutObject`
 for a new Parquet file but before the catalog `DbTransaction::commit` leaves the file
 as an orphan (not referenced by any snapshot) and the catalog unchanged — the orphaned-
@@ -1093,14 +1093,14 @@ suite is structured the way it is.
 
 #### Wire Corpus (`internals/wire-corpus.md`)
 
-The wire corpus is the source of truth for what Rocklake's bounded dispatcher must
+The wire corpus is the source of truth for what RockLake's bounded dispatcher must
 support, and this page explains how it was captured, what it contains, and how it is
 used in testing. The corpus is a sequence of JSONL records, each containing the raw
 PostgreSQL wire bytes of a request and the expected response, captured by running DuckDB
 against a real PostgreSQL-backed DuckLake while a packet capture tool recorded the
 conversation. The page explains the capture methodology (the exact DuckDB version, the
 DuckLake extension version, and the DuckLake tutorial steps that were run), the fixture
-file format, and the replay harness that plays back the corpus against Rocklake and
+file format, and the replay harness that plays back the corpus against RockLake and
 diffs the responses. It also explains what "bit-for-bit identical" means in practice:
 row ordering in responses must match, but server-generated timestamps and session-level
 UUIDs are masked before comparison.
@@ -1109,7 +1109,7 @@ UUIDs are masked before comparison.
 
 #### Testing (`contributing/testing.md`)
 
-The test pyramid for Rocklake has five layers: property tests (using `proptest` to
+The test pyramid for RockLake has five layers: property tests (using `proptest` to
 verify key encoding invariants, round-trip correctness, and ID monotonicity across
 simulated crashes), unit tests (per-function correctness in isolation, using
 `tokio::test` for async code), golden tests (bit-for-bit output comparison against the
@@ -1133,7 +1133,7 @@ SlateDB-level read views (never confused with `dl_snapshot_id`), `pending_txn` o
 snapshot concepts appear together in several code paths and confusing them leads to bugs
 that are hard to diagnose. The page explains the module organisation conventions (what
 belongs in `rocklake-core` versus `rocklake-catalog`, what a public API in each
-should look like), the error-handling patterns (all errors bubble as typed `RocklakeError`
+should look like), the error-handling patterns (all errors bubble as typed `RockLakeError`
 variants and are converted to SQLSTATE codes at the pgwire boundary), and the
 documentation expectations for public API items.
 
@@ -1157,7 +1157,7 @@ an operator trying to understand what a `verify catalog` inconsistency means.
 
 #### Supported SQL (`reference/sql-supported.md`)
 
-Every SQL statement shape that Rocklake's bounded dispatcher accepts, organised by
+Every SQL statement shape that RockLake's bounded dispatcher accepts, organised by
 category, with a representative SQL example, the Rust dispatch function it maps to,
 and the parameter types. This is the authoritative compatibility reference for client
 developers: if a shape is listed here, it will work; if it is not listed, it will
@@ -1200,7 +1200,7 @@ The most common failure mode in technical documentation is thinness — pages th
 bullet points where paragraphs belong, that name things without explaining them, that
 describe API parameters without showing what happens when you use them, that answer
 "what" without ever touching "why" or "when" or "what goes wrong if you don't." This
-documentation explicitly rejects that pattern. **Every page in the Rocklake
+documentation explicitly rejects that pattern. **Every page in the RockLake
 documentation must be lengthy, interesting, informative, useful, engaging, and
 written in longer paragraphs throughout.**
 
@@ -1265,7 +1265,7 @@ cover a third of an idea.
 
 **Be honest about trade-offs.** This is the most important stylistic principle.
 Every design decision has costs; every deployment model has limitations; every
-performance claim has caveats. When Rocklake is slower than PostgreSQL for a
+performance claim has caveats. When RockLake is slower than PostgreSQL for a
 particular workload, the documentation says so and quantifies the gap. When the
 single-writer model is a real bottleneck, the documentation says so and explains the
 workaround. Readers who encounter an honest limitation in the documentation before they
@@ -1315,7 +1315,7 @@ linked from other pages and from error messages.
 ## MkDocs Configuration (`mkdocs.yml`)
 
 ```yaml
-site_name: Rocklake Documentation
+site_name: RockLake Documentation
 site_url: https://trickle-labs.github.io/rocklake/
 site_description: >-
   A DuckLake catalog on SlateDB — your entire lakehouse in a single S3 bucket,
@@ -1435,7 +1435,7 @@ nav:
   - Home: index.md
   - Getting Started:
     - getting-started/index.md
-    - What is Rocklake?: getting-started/what-is-rocklake.md
+    - What is RockLake?: getting-started/what-is-rocklake.md
     - Quickstart (Local): getting-started/quickstart.md
     - Quickstart (Cloud): getting-started/quickstart-cloud.md
     - Your First Lakehouse: getting-started/first-lakehouse.md
@@ -1504,13 +1504,13 @@ nav:
     - Immutability Trade-offs: design-decisions/immutability-tradeoffs.md
     - Single-Writer Model: design-decisions/single-writer.md
     - Key Design Rationale: design-decisions/key-design-rationale.md
-    - What Rocklake Is Not: design-decisions/what-rocklake-is-not.md
+    - What RockLake Is Not: design-decisions/what-rocklake-is-not.md
   - Performance:
     - performance/index.md
     - Latency Model: performance/latency-model.md
     - Benchmarks: performance/benchmarks.md
     - Tuning: performance/tuning.md
-    - When to Use Rocklake: performance/when-to-use.md
+    - When to Use RockLake: performance/when-to-use.md
     - vs. Alternatives: performance/vs-alternatives.md
   - Internals:
     - internals/index.md
@@ -1638,7 +1638,7 @@ navigation links do not 404 during the content-writing phases that follow.
 The pages in this phase are the highest-traffic pages on the site and must be
 polished before anything else is written. The landing page is written first because it
 forces the author to articulate the core value proposition clearly; that articulation
-should inform the tone and framing of everything else. The "What is Rocklake?" page
+should inform the tone and framing of everything else. The "What is RockLake?" page
 is written second because it is the conceptual foundation that all other getting-started
 content builds on. The local quickstart is written third and verified by actually running
 the commands on a clean machine — if any command produces unexpected output or requires
@@ -1682,7 +1682,7 @@ matrix is accurate. The Design Decisions pages require the most care of any sect
 because they must present both sides of each choice honestly. The order of writing is
 driven by what content is most likely to be read first: Why SlateDB → Strategy B First
 → Bounded SQL → Protobuf Encoding → Immutability Trade-offs → Single-Writer → Key
-Design Rationale → What Rocklake Is Not. Each page should be reviewed by the person
+Design Rationale → What RockLake Is Not. Each page should be reviewed by the person
 who made the original design decision to verify that the reasoning is represented
 accurately.
 
@@ -1692,7 +1692,7 @@ Performance pages require real benchmark data from `benchmarks/phase-2-baseline.
 and subsequent runs. The Latency Model is written first to establish the theoretical
 framework; the Benchmarks page then presents the measured data against that framework;
 the Tuning page explains how to improve on the baseline numbers; the When to Use
-Rocklake page synthesises both into a decision framework; and the vs. Alternatives
+RockLake page synthesises both into a decision framework; and the vs. Alternatives
 page applies all of it to a direct comparison. Internals pages are written in order
 of complexity: Tag Allocation → MVCC Filter → Inlined Data → Schema Version → Type-
 Aware Stats → SQLSTATE Mapping → Wire Corpus → Crash Safety. Reference pages are
@@ -1787,7 +1787,7 @@ work, where the most examples exist.
 
 **Search coverage.** The top 20 terms a new user would search for must return relevant
 results. The list of terms should be assembled before the polish phase by asking
-multiple people "what would you search for on the Rocklake documentation site?" and
+multiple people "what would you search for on the RockLake documentation site?" and
 combining the answers. Acceptable search result: the most relevant page is in the top
 three results for the term.
 
@@ -1838,7 +1838,7 @@ The DuckDB compatibility matrix is updated within two weeks of a new DuckDB rele
 the corpus capture process runs, the replay tests pass, and the matrix entry is added.
 If the replay tests fail, an incompatibility entry is added with a description of the
 issue and an expected resolution timeline. An up-to-date compatibility matrix is one of
-the first things a new user checks before adopting Rocklake, and an outdated matrix
+the first things a new user checks before adopting RockLake, and an outdated matrix
 (or one that silently says nothing about recent versions) is a significant barrier to
 adoption.
 
@@ -1855,7 +1855,7 @@ operators are not following outdated guidance.
 ## MkDocs Configuration (`mkdocs.yml`)
 
 ```yaml
-site_name: Rocklake Documentation
+site_name: RockLake Documentation
 site_url: https://trickle-labs.github.io/rocklake/
 site_description: >-
   A DuckLake catalog on SlateDB — your entire lakehouse in a single S3 bucket,
@@ -1975,7 +1975,7 @@ nav:
   - Home: index.md
   - Getting Started:
     - getting-started/index.md
-    - What is Rocklake?: getting-started/what-is-rocklake.md
+    - What is RockLake?: getting-started/what-is-rocklake.md
     - Quickstart (Local): getting-started/quickstart.md
     - Quickstart (Cloud): getting-started/quickstart-cloud.md
     - Your First Lakehouse: getting-started/first-lakehouse.md
@@ -2044,13 +2044,13 @@ nav:
     - Immutability Trade-offs: design-decisions/immutability-tradeoffs.md
     - Single-Writer Model: design-decisions/single-writer.md
     - Key Design Rationale: design-decisions/key-design-rationale.md
-    - What Rocklake Is Not: design-decisions/what-rocklake-is-not.md
+    - What RockLake Is Not: design-decisions/what-rocklake-is-not.md
   - Performance:
     - performance/index.md
     - Latency Model: performance/latency-model.md
     - Benchmarks: performance/benchmarks.md
     - Tuning: performance/tuning.md
-    - When to Use Rocklake: performance/when-to-use.md
+    - When to Use RockLake: performance/when-to-use.md
     - vs. Alternatives: performance/vs-alternatives.md
   - Internals:
     - internals/index.md

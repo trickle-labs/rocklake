@@ -11,7 +11,7 @@ pub enum DataPathMode {
     RelativeToDataPrefix,
 }
 
-/// Encapsulates all path components for a Rocklake catalog.
+/// Encapsulates all path components for a RockLake catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogPath {
     /// Root of the object store (e.g., `s3://bucket/`).

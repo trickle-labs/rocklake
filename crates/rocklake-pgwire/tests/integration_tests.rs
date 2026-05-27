@@ -1,4 +1,4 @@
-//! Integration tests for the Rocklake PG-Wire sidecar.
+//! Integration tests for the RockLake PG-Wire sidecar.
 //!
 //! Tests the complete flow: SQL classification → execution → catalog store operations.
 
@@ -705,56 +705,56 @@ async fn test_pgwire_client_connection() {
 
 #[tokio::test]
 async fn test_error_sqlstate_mapping() {
-    use rocklake_pgwire::RocklakeError;
+    use rocklake_pgwire::RockLakeError;
 
-    assert_eq!(RocklakeError::WriterFenced.sqlstate(), "57P04");
-    assert_eq!(RocklakeError::WriterFenced.severity(), "FATAL");
-    assert_eq!(RocklakeError::CatalogNotInitialized.sqlstate(), "3D000");
-    assert_eq!(RocklakeError::CatalogNotInitialized.severity(), "FATAL");
+    assert_eq!(RockLakeError::WriterFenced.sqlstate(), "57P04");
+    assert_eq!(RockLakeError::WriterFenced.severity(), "FATAL");
+    assert_eq!(RockLakeError::CatalogNotInitialized.sqlstate(), "3D000");
+    assert_eq!(RockLakeError::CatalogNotInitialized.severity(), "FATAL");
     assert_eq!(
-        RocklakeError::Unsupported("test".to_string()).sqlstate(),
+        RockLakeError::Unsupported("test".to_string()).sqlstate(),
         "0A000"
     );
     assert_eq!(
-        RocklakeError::Unsupported("test".to_string()).severity(),
+        RockLakeError::Unsupported("test".to_string()).severity(),
         "ERROR"
     );
-    assert_eq!(RocklakeError::BatchTooLarge.sqlstate(), "54001");
+    assert_eq!(RockLakeError::BatchTooLarge.sqlstate(), "54001");
     assert_eq!(
-        RocklakeError::Duplicate("key".to_string()).sqlstate(),
+        RockLakeError::Duplicate("key".to_string()).sqlstate(),
         "23505"
     );
     assert_eq!(
-        RocklakeError::NotFound("row".to_string()).sqlstate(),
+        RockLakeError::NotFound("row".to_string()).sqlstate(),
         "02000"
     );
-    assert_eq!(RocklakeError::CounterConflict.sqlstate(), "40001");
+    assert_eq!(RockLakeError::CounterConflict.sqlstate(), "40001");
     assert_eq!(
-        RocklakeError::PermissionDenied("access".to_string()).sqlstate(),
+        RockLakeError::PermissionDenied("access".to_string()).sqlstate(),
         "42501"
     );
     assert_eq!(
-        RocklakeError::ObjectStore("timeout".to_string()).sqlstate(),
+        RockLakeError::ObjectStore("timeout".to_string()).sqlstate(),
         "08006"
     );
-    assert_eq!(RocklakeError::ReadOnlyReplica.sqlstate(), "25006");
+    assert_eq!(RockLakeError::ReadOnlyReplica.sqlstate(), "25006");
     assert_eq!(
-        RocklakeError::Corruption("bad data".to_string()).sqlstate(),
+        RockLakeError::Corruption("bad data".to_string()).sqlstate(),
         "XX001"
     );
     assert_eq!(
-        RocklakeError::ValueDecode("parse err".to_string()).sqlstate(),
+        RockLakeError::ValueDecode("parse err".to_string()).sqlstate(),
         "22P02"
     );
-    assert_eq!(RocklakeError::SnapshotOutOfRetention.sqlstate(), "22023");
+    assert_eq!(RockLakeError::SnapshotOutOfRetention.sqlstate(), "22023");
     assert_eq!(
-        RocklakeError::Internal("bug".to_string()).sqlstate(),
+        RockLakeError::Internal("bug".to_string()).sqlstate(),
         "XX000"
     );
 
     // v0.19: SqlState variant returns stored code, not hardcoded "55000"
     assert_eq!(
-        RocklakeError::SqlState {
+        RockLakeError::SqlState {
             code: "42P01".to_string(),
             message: "table not found".to_string()
         }
@@ -762,7 +762,7 @@ async fn test_error_sqlstate_mapping() {
         "42P01"
     );
     assert_eq!(
-        RocklakeError::SqlState {
+        RockLakeError::SqlState {
             code: "23505".to_string(),
             message: "duplicate".to_string()
         }
@@ -770,7 +770,7 @@ async fn test_error_sqlstate_mapping() {
         "23505"
     );
     assert_eq!(
-        RocklakeError::SqlState {
+        RockLakeError::SqlState {
             code: "55000".to_string(),
             message: "object not in prerequisite state".to_string()
         }
@@ -1165,8 +1165,8 @@ async fn test_azure_object_store_config() {
 
 #[test]
 fn test_iam_permission_denied_sqlstate() {
-    use rocklake_pgwire::RocklakeError;
-    let err = RocklakeError::PermissionDenied("s3:PutObject on catalogs/ denied".to_string());
+    use rocklake_pgwire::RockLakeError;
+    let err = RockLakeError::PermissionDenied("s3:PutObject on catalogs/ denied".to_string());
     assert_eq!(err.sqlstate(), "42501");
     assert_eq!(err.severity(), "ERROR");
 }

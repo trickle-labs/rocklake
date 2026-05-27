@@ -13,7 +13,7 @@ use rocklake_catalog::writer::stats::FileColumnStatsInput;
 use rocklake_catalog::{CatalogStore, CommitResult};
 use rocklake_core::rows::{ColumnRow, InlinedDataTablesRow, InlinedInsertRow};
 
-use crate::error::RocklakeError;
+use crate::error::RockLakeError;
 use crate::notify::NotifyManager;
 use crate::session::BufferedOp;
 
@@ -77,7 +77,7 @@ pub(super) async fn execute_commit(
     ops: Vec<BufferedOp>,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
     notify_manager: &Arc<NotifyManager>,
-) -> Result<(), RocklakeError> {
+) -> Result<(), RockLakeError> {
     if ops.is_empty() {
         return Ok(());
     }
@@ -109,7 +109,7 @@ pub(super) async fn execute_commit(
                 writer
                     .create_schema(&schema_name)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertTable {
                 schema_id,
@@ -120,7 +120,7 @@ pub(super) async fn execute_commit(
                 writer
                     .create_table(schema_id, &table_name, data_path.as_deref())
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertColumn {
                 table_id,
@@ -149,7 +149,7 @@ pub(super) async fn execute_commit(
                         parent_column,
                     )
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertDataFile {
                 table_id,
@@ -162,7 +162,7 @@ pub(super) async fn execute_commit(
                 writer
                     .register_data_file(table_id, &path, &file_format, row_count, file_size_bytes)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertDeleteFile {
                 data_file_id,
@@ -174,7 +174,7 @@ pub(super) async fn execute_commit(
                 writer
                     .register_delete_file(data_file_id, &path, delete_count, file_size_bytes)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertSnapshot { author, message } => {
                 needs_snapshot = true;
@@ -192,7 +192,7 @@ pub(super) async fn execute_commit(
                 writer
                     .add_snapshot_changes(change_type, change_info, schema_id, table_id)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::UpdateEndSnapshot {
                 table_name,
@@ -208,12 +208,12 @@ pub(super) async fn execute_commit(
                         let schema_id = writer
                             .find_table_schema_id(entity_id)
                             .await
-                            .map_err(RocklakeError::from)?
+                            .map_err(RockLakeError::from)?
                             .unwrap_or(0);
                         writer
                             .drop_table(schema_id, entity_id, begin_snapshot)
                             .await
-                            .map_err(RocklakeError::from)?;
+                            .map_err(RockLakeError::from)?;
                     }
                     "ducklake_column" => {
                         // Resolve table_id by scanning for the live column row
@@ -221,12 +221,12 @@ pub(super) async fn execute_commit(
                         let table_id = writer
                             .find_column_table_id(entity_id)
                             .await
-                            .map_err(RocklakeError::from)?
+                            .map_err(RockLakeError::from)?
                             .unwrap_or(entity_id);
                         writer
                             .drop_column(table_id, entity_id, begin_snapshot)
                             .await
-                            .map_err(RocklakeError::from)?;
+                            .map_err(RockLakeError::from)?;
                     }
                     _ => {
                         // Other end_snapshot updates accepted
@@ -242,7 +242,7 @@ pub(super) async fn execute_commit(
                 writer
                     .apply_table_stats_delta(table_id, row_count_delta)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::SetTableStats {
                 table_id,
@@ -254,7 +254,7 @@ pub(super) async fn execute_commit(
                 writer
                     .set_table_stats(table_id, record_count, file_size_bytes, next_row_id)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertFileColumnStats {
                 table_id,
@@ -281,7 +281,7 @@ pub(super) async fn execute_commit(
                         extra_stats: None,
                     })
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertTableColumnStats {
                 table_id,
@@ -303,7 +303,7 @@ pub(super) async fn execute_commit(
                         extra_stats.as_deref(),
                     )
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertMetadata {
                 key,
@@ -321,7 +321,7 @@ pub(super) async fn execute_commit(
                 let resolved_scope_id = scope_id.unwrap_or(0);
                 writer
                     .set_metadata(resolved_scope, resolved_scope_id, &key, &value)
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertInlinedDataTables {
                 table_id,
@@ -332,7 +332,7 @@ pub(super) async fn execute_commit(
                 writer
                     .register_inlined_data_table(table_id, &table_name, schema_version)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertSchemaVersions {
                 begin_snapshot,
@@ -343,7 +343,7 @@ pub(super) async fn execute_commit(
                 writer
                     .register_schema_version(begin_snapshot, schema_version, table_id)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertInlinedRow { table_name, rows } => {
                 needs_snapshot = true;
@@ -367,7 +367,7 @@ pub(super) async fn execute_commit(
                                     effective_row_id,
                                 )
                                 .await
-                                .map_err(RocklakeError::from)?
+                                .map_err(RockLakeError::from)?
                             {
                                 effective_row_id = effective_row_id.saturating_add(1);
                             }
@@ -375,7 +375,7 @@ pub(super) async fn execute_commit(
                         reserved_inlined_rows.insert((table_id, schema_version, effective_row_id));
                         let payload =
                             serde_json::to_vec(&values.iter().skip(3).cloned().collect::<Vec<_>>())
-                                .map_err(|err| RocklakeError::Internal(err.to_string()))?;
+                                .map_err(|err| RockLakeError::Internal(err.to_string()))?;
                         writer
                             .register_inlined_insert(
                                 table_id,
@@ -384,7 +384,7 @@ pub(super) async fn execute_commit(
                                 payload,
                             )
                             .await
-                            .map_err(RocklakeError::from)?;
+                            .map_err(RockLakeError::from)?;
                     }
                 }
             }
@@ -402,12 +402,12 @@ pub(super) async fn execute_commit(
                         writer
                             .mark_inlined_insert_deleted(table_id, schema_version, row_id)
                             .await
-                            .map_err(RocklakeError::from)?;
+                            .map_err(RockLakeError::from)?;
                     }
                     writer
                         .adjust_table_record_count(table_id, -deleted_count)
                         .await
-                        .map_err(RocklakeError::from)?;
+                        .map_err(RockLakeError::from)?;
                 }
             }
             BufferedOp::InsertView {
@@ -429,7 +429,7 @@ pub(super) async fn execute_commit(
                         column_aliases.as_deref(),
                     )
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertMacro {
                 schema_id,
@@ -441,7 +441,7 @@ pub(super) async fn execute_commit(
                 writer
                     .create_macro(schema_id, &macro_name, &macro_type)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertMacroImpl {
                 macro_id,
@@ -458,7 +458,7 @@ pub(super) async fn execute_commit(
                         impl_type.as_deref(),
                     )
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertMacroParams {
                 macro_id,
@@ -481,7 +481,7 @@ pub(super) async fn execute_commit(
                         default_value_type.as_deref(),
                     )
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertTableStats {
                 table_id,
@@ -492,7 +492,7 @@ pub(super) async fn execute_commit(
                 writer
                     .update_table_stats(table_id, record_count, next_row_id, file_size_bytes)
                     .await
-                    .map_err(RocklakeError::from)?;
+                    .map_err(RockLakeError::from)?;
             }
         }
     }
@@ -500,7 +500,7 @@ pub(super) async fn execute_commit(
         let cr = writer
             .create_snapshot(snapshot_author.as_deref(), snapshot_message.as_deref())
             .await
-            .map_err(RocklakeError::from)?;
+            .map_err(RockLakeError::from)?;
         commit_result = Some(cr);
     }
     // Synchronise the store's in-memory counters from the committed snapshot
@@ -1367,16 +1367,16 @@ pub(super) async fn execute_table_changes<'a>(
     start_snapshot: u64,
     end_snapshot: u64,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     let store_lock = store.lock().await;
 
     // Check GC boundary
     let retain_from = rocklake_catalog::gc::read_retain_from(store_lock.db())
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
 
     if start_snapshot < retain_from && retain_from > 0 {
-        return Err(RocklakeError::SqlState {
+        return Err(RockLakeError::SqlState {
             code: "55000".to_string(),
             message: format!(
                 "snapshot {} has been garbage collected (retain_from={})",
@@ -1388,7 +1388,7 @@ pub(super) async fn execute_table_changes<'a>(
     // Compute diff using SnapshotDiff
     let from_reader = store_lock
         .read_at(rocklake_core::mvcc::SnapshotId::new(start_snapshot))
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
 
     let diff = from_reader
         .snapshot_diff(
@@ -1396,7 +1396,7 @@ pub(super) async fn execute_table_changes<'a>(
             rocklake_core::mvcc::SnapshotId::new(end_snapshot),
         )
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
 
     // v0.27.1: Extract rows from Parquet data files using the catalog's object store.
     // The object store root is shared between catalog metadata and data files
@@ -1415,7 +1415,7 @@ pub(super) async fn execute_table_changes<'a>(
             rocklake_sql::DEFAULT_CDC_BATCH_SIZE,
         )
         .await
-        .map_err(|e| RocklakeError::SqlState {
+        .map_err(|e| RockLakeError::SqlState {
             code: e.sqlstate().to_string(),
             message: e.to_string(),
         })?;
@@ -1434,7 +1434,7 @@ pub(super) async fn execute_table_changes<'a>(
             rocklake_sql::DEFAULT_CDC_BATCH_SIZE,
         )
         .await
-        .map_err(|e| RocklakeError::SqlState {
+        .map_err(|e| RockLakeError::SqlState {
             code: e.sqlstate().to_string(),
             message: e.to_string(),
         })?;
@@ -1450,7 +1450,7 @@ pub(super) async fn execute_table_changes<'a>(
         &added_rows,
         &removed_rows,
     )
-    .map_err(|e| RocklakeError::SqlState {
+    .map_err(|e| RockLakeError::SqlState {
         code: e.sqlstate().to_string(),
         message: e.to_string(),
     })?;
@@ -1512,14 +1512,14 @@ pub(super) async fn execute_next_rowid_range<'a>(
     table_ref: &str,
     count: u64,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<Vec<Response<'a>>, RocklakeError> {
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     let store_lock = store.lock().await;
     let table_id = hash_table_ref(table_ref);
 
     let db = store_lock.db();
     let (start, end) = rocklake_catalog::next_rowid_range(db, table_id, count)
         .await
-        .map_err(RocklakeError::from)?;
+        .map_err(RockLakeError::from)?;
 
     let schema = Arc::new(vec![
         FieldInfo::new(

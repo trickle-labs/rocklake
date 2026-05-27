@@ -1,4 +1,4 @@
-//! TCP server and configuration for the Rocklake PG-Wire sidecar.
+//! TCP server and configuration for the RockLake PG-Wire sidecar.
 //!
 //! Supports optional TLS (--tls-cert, --tls-key) and password authentication.
 
@@ -11,7 +11,7 @@ use tracing::{error, info, warn};
 
 use rocklake_catalog::CatalogStore;
 
-use crate::handler::RocklakeServerHandlers;
+use crate::handler::RockLakeServerHandlers;
 use crate::notify::NotifyManager;
 
 /// TLS configuration.
@@ -136,7 +136,7 @@ fn build_tls_acceptor(tls_config: &TlsConfig) -> std::io::Result<Arc<tokio_rustl
     ))))
 }
 
-/// Run the Rocklake PG-Wire server.
+/// Run the RockLake PG-Wire server.
 pub async fn run_server(
     config: ServerConfig,
     catalog: Arc<Mutex<CatalogStore>>,
@@ -162,9 +162,9 @@ pub async fn run_server(
 
     let listener = TcpListener::bind(config.bind_addr).await?;
     if tls_acceptor.is_some() {
-        info!("Rocklake serving on {} (TLS enabled)", config.bind_addr);
+        info!("RockLake serving on {} (TLS enabled)", config.bind_addr);
     } else {
-        info!("Rocklake serving on {}", config.bind_addr);
+        info!("RockLake serving on {}", config.bind_addr);
     }
 
     let session_semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_sessions));
@@ -190,7 +190,7 @@ pub async fn run_server(
 
             info!("New connection from {addr}");
             let handlers =
-                RocklakeServerHandlers::new_with_config(catalog, auth, tls_required, nm, es);
+                RockLakeServerHandlers::new_with_config(catalog, auth, tls_required, nm, es);
 
             if let Err(e) = pgwire::tokio::process_socket(socket, tls, handlers).await {
                 error!("Connection error from {addr}: {e}");
@@ -225,7 +225,7 @@ pub async fn run_server_with_shutdown(
     }
 
     let listener = TcpListener::bind(config.bind_addr).await?;
-    info!("Rocklake serving on {}", config.bind_addr);
+    info!("RockLake serving on {}", config.bind_addr);
 
     let session_semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_sessions));
     let auth_config = Arc::new(config.auth);
@@ -258,7 +258,7 @@ pub async fn run_server_with_shutdown(
 
                     info!("New connection from {addr}");
                     let handlers =
-                        RocklakeServerHandlers::new_with_config(catalog, auth, tls_required, nm, es);
+                        RockLakeServerHandlers::new_with_config(catalog, auth, tls_required, nm, es);
 
                     if let Err(e) = pgwire::tokio::process_socket(socket, tls, handlers).await {
                         error!("Connection error from {addr}: {e}");

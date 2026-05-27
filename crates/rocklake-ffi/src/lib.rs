@@ -1,4 +1,4 @@
-//! Rocklake FFI: C/C++ foreign function interface for embedding Rocklake in DuckDB.
+//! RockLake FFI: C/C++ foreign function interface for embedding RockLake in DuckDB.
 //!
 //! This crate provides a stable C ABI over `rocklake-catalog` operations.
 //! All async operations are bridged via a blocking Tokio runtime.
@@ -34,7 +34,7 @@ pub extern "C" fn rocklake_abi_version() -> u32 {
 
 /// Opaque error type returned from FFI functions.
 #[repr(C)]
-pub struct RocklakeError {
+pub struct RockLakeError {
     pub code: i32,
     pub message: *mut c_char,
 }
@@ -42,7 +42,7 @@ pub struct RocklakeError {
 /// Error codes matching DuckDB's expected return values.
 #[repr(i32)]
 #[derive(Clone, Copy)]
-pub enum RocklakeErrorCode {
+pub enum RockLakeErrorCode {
     Ok = 0,
     Internal = 1,
     NotFound = 2,
@@ -55,17 +55,17 @@ pub enum RocklakeErrorCode {
     InvalidHandle = 8,
 }
 
-impl RocklakeError {
+impl RockLakeError {
     fn ok() -> Self {
         Self {
-            code: RocklakeErrorCode::Ok as i32,
+            code: RockLakeErrorCode::Ok as i32,
             message: ptr::null_mut(),
         }
     }
 
     fn invalid_handle() -> Self {
         Self {
-            code: RocklakeErrorCode::InvalidHandle as i32,
+            code: RockLakeErrorCode::InvalidHandle as i32,
             message: CString::new("invalid or null catalog handle")
                 .unwrap_or_default()
                 .into_raw(),
@@ -75,13 +75,13 @@ impl RocklakeError {
     fn from_catalog_error(e: rocklake_catalog::CatalogError) -> Self {
         use rocklake_catalog::CatalogError;
         let code = match &e {
-            CatalogError::NotFound(_) => RocklakeErrorCode::NotFound,
-            CatalogError::WriterEpochMismatch => RocklakeErrorCode::WriterFenced,
-            CatalogError::FormatVersionMismatch { .. } => RocklakeErrorCode::FormatMismatch,
-            CatalogError::ValueTooLarge { .. } => RocklakeErrorCode::ValueTooLarge,
-            CatalogError::TransactionConflict(_) => RocklakeErrorCode::TransactionConflict,
-            CatalogError::NotInitialized => RocklakeErrorCode::NotInitialized,
-            _ => RocklakeErrorCode::Internal,
+            CatalogError::NotFound(_) => RockLakeErrorCode::NotFound,
+            CatalogError::WriterEpochMismatch => RockLakeErrorCode::WriterFenced,
+            CatalogError::FormatVersionMismatch { .. } => RockLakeErrorCode::FormatMismatch,
+            CatalogError::ValueTooLarge { .. } => RockLakeErrorCode::ValueTooLarge,
+            CatalogError::TransactionConflict(_) => RockLakeErrorCode::TransactionConflict,
+            CatalogError::NotInitialized => RockLakeErrorCode::NotInitialized,
+            _ => RockLakeErrorCode::Internal,
         };
         let msg = CString::new(e.to_string()).unwrap_or_default();
         Self {
@@ -93,7 +93,7 @@ impl RocklakeError {
 
 /// Free an error's message string.
 #[no_mangle]
-pub extern "C" fn rocklake_error_free(err: *mut RocklakeError) {
+pub extern "C" fn rocklake_error_free(err: *mut RockLakeError) {
     if err.is_null() {
         return;
     }
@@ -111,18 +111,18 @@ pub extern "C" fn rocklake_error_free(err: *mut RocklakeError) {
 
 /// Get the error code.
 #[no_mangle]
-pub extern "C" fn rocklake_error_code(err: *const RocklakeError) -> i32 {
+pub extern "C" fn rocklake_error_code(err: *const RockLakeError) -> i32 {
     if err.is_null() {
         return 0;
     }
     // SAFETY: `err` is non-null (checked above) and points to a valid
-    // `RocklakeError`. We only read the `code` field.
+    // `RockLakeError`. We only read the `code` field.
     unsafe { (*err).code }
 }
 
 /// Get the error message (borrows — do not free separately).
 #[no_mangle]
-pub extern "C" fn rocklake_error_message(err: *const RocklakeError) -> *const c_char {
+pub extern "C" fn rocklake_error_message(err: *const RockLakeError) -> *const c_char {
     if err.is_null() {
         return ptr::null();
     }
@@ -134,12 +134,12 @@ pub extern "C" fn rocklake_error_message(err: *const RocklakeError) -> *const c_
 
 // ─── Opaque Handles ────────────────────────────────────────────────────────
 
-/// Magic value stored in every live `RocklakeCatalog` to detect invalid
+/// Magic value stored in every live `RockLakeCatalog` to detect invalid
 /// or double-closed handles. Bytes: 'D','U','C','K'.
 const CATALOG_MAGIC: u32 = 0x4455_434B;
 
 /// Opaque handle for a CatalogStore.
-pub struct RocklakeCatalog {
+pub struct RockLakeCatalog {
     magic: u32,
     store: CatalogStore,
     runtime: Arc<tokio::runtime::Runtime>,
@@ -155,7 +155,7 @@ pub struct RocklakeCatalog {
 /// # Safety (caller contract)
 ///
 /// The C caller must ensure that:
-/// 1. `ptr` is either null or points to a live `RocklakeCatalog` allocation
+/// 1. `ptr` is either null or points to a live `RockLakeCatalog` allocation
 ///    created by `rocklake_open()` and not yet freed.
 /// 2. No other thread is concurrently calling `rocklake_close()` or any other
 ///    FFI function with the same `ptr` during the execution of `f`.
@@ -164,8 +164,8 @@ pub struct RocklakeCatalog {
 /// a best-effort defence against use-after-close but is not a substitute for
 /// proper ownership discipline in the C caller.
 fn with_catalog<T>(
-    ptr: *mut RocklakeCatalog,
-    f: impl FnOnce(&mut RocklakeCatalog) -> T,
+    ptr: *mut RockLakeCatalog,
+    f: impl FnOnce(&mut RockLakeCatalog) -> T,
 ) -> Option<T> {
     if ptr.is_null() {
         return None;
@@ -183,21 +183,21 @@ fn with_catalog<T>(
 
 /// Opaque handle for a snapshot query result.
 #[repr(C)]
-pub struct RocklakeSnapshot {
+pub struct RockLakeSnapshot {
     pub snapshot_id: u64,
     pub schema_version: u64,
 }
 
 /// Opaque handle for a file list result.
 #[repr(C)]
-pub struct RocklakeFileList {
-    pub files: *mut RocklakeDataFile,
+pub struct RockLakeFileList {
+    pub files: *mut RockLakeDataFile,
     pub count: u64,
 }
 
 /// A single data file in a file list.
 #[repr(C)]
-pub struct RocklakeDataFile {
+pub struct RockLakeDataFile {
     pub data_file_id: u64,
     pub table_id: u64,
     pub path: *mut c_char,
@@ -209,21 +209,21 @@ pub struct RocklakeDataFile {
 
 /// Schema entry.
 #[repr(C)]
-pub struct RocklakeSchema {
+pub struct RockLakeSchema {
     pub schema_id: u64,
     pub schema_name: *mut c_char,
 }
 
 /// Schema list.
 #[repr(C)]
-pub struct RocklakeSchemaList {
-    pub schemas: *mut RocklakeSchema,
+pub struct RockLakeSchemaList {
+    pub schemas: *mut RockLakeSchema,
     pub count: u64,
 }
 
 /// Table entry.
 #[repr(C)]
-pub struct RocklakeTable {
+pub struct RockLakeTable {
     pub table_id: u64,
     pub schema_id: u64,
     pub table_name: *mut c_char,
@@ -231,14 +231,14 @@ pub struct RocklakeTable {
 
 /// Table list.
 #[repr(C)]
-pub struct RocklakeTableList {
-    pub tables: *mut RocklakeTable,
+pub struct RockLakeTableList {
+    pub tables: *mut RockLakeTable,
     pub count: u64,
 }
 
 /// Column entry.
 #[repr(C)]
-pub struct RocklakeColumn {
+pub struct RockLakeColumn {
     pub column_id: u64,
     pub table_id: u64,
     pub column_name: *mut c_char,
@@ -249,8 +249,8 @@ pub struct RocklakeColumn {
 
 /// Column list.
 #[repr(C)]
-pub struct RocklakeColumnList {
-    pub columns: *mut RocklakeColumn,
+pub struct RockLakeColumnList {
+    pub columns: *mut RockLakeColumn,
     pub count: u64,
 }
 
@@ -261,13 +261,13 @@ pub struct RocklakeColumnList {
 #[no_mangle]
 pub extern "C" fn rocklake_open(
     uri: *const c_char,
-    err: *mut RocklakeError,
-) -> *mut RocklakeCatalog {
+    err: *mut RockLakeError,
+) -> *mut RockLakeCatalog {
     if uri.is_null() {
         write_error(
             err,
-            RocklakeError {
-                code: RocklakeErrorCode::InvalidHandle as i32,
+            RockLakeError {
+                code: RockLakeErrorCode::InvalidHandle as i32,
                 message: CString::new("uri must not be null")
                     .unwrap_or_default()
                     .into_raw(),
@@ -281,7 +281,7 @@ pub extern "C" fn rocklake_open(
         Err(_) => {
             write_error(
                 err,
-                RocklakeError::from_catalog_error(rocklake_catalog::CatalogError::NotInitialized),
+                RockLakeError::from_catalog_error(rocklake_catalog::CatalogError::NotInitialized),
             );
             return ptr::null_mut();
         }
@@ -292,8 +292,8 @@ pub extern "C" fn rocklake_open(
         Err(e) => {
             write_error(
                 err,
-                RocklakeError {
-                    code: RocklakeErrorCode::Internal as i32,
+                RockLakeError {
+                    code: RockLakeErrorCode::Internal as i32,
                     message: CString::new(format!("failed to create runtime: {e}"))
                         .unwrap_or_default()
                         .into_raw(),
@@ -320,15 +320,15 @@ pub extern "C" fn rocklake_open(
 
     match result {
         Ok(store) => {
-            write_error(err, RocklakeError::ok());
-            Box::into_raw(Box::new(RocklakeCatalog {
+            write_error(err, RockLakeError::ok());
+            Box::into_raw(Box::new(RockLakeCatalog {
                 magic: CATALOG_MAGIC,
                 store,
                 runtime,
             }))
         }
         Err(e) => {
-            write_error(err, RocklakeError::from_catalog_error(e));
+            write_error(err, RockLakeError::from_catalog_error(e));
             ptr::null_mut()
         }
     }
@@ -336,7 +336,7 @@ pub extern "C" fn rocklake_open(
 
 /// Close and free a catalog handle. Safe to call with null or already-closed handles.
 #[no_mangle]
-pub extern "C" fn rocklake_close(catalog: *mut RocklakeCatalog) {
+pub extern "C" fn rocklake_close(catalog: *mut RockLakeCatalog) {
     if catalog.is_null() {
         return;
     }
@@ -363,9 +363,9 @@ pub extern "C" fn rocklake_close(catalog: *mut RocklakeCatalog) {
 /// Get the current (latest) snapshot.
 #[no_mangle]
 pub extern "C" fn rocklake_get_current_snapshot(
-    catalog: *mut RocklakeCatalog,
-    err: *mut RocklakeError,
-) -> RocklakeSnapshot {
+    catalog: *mut RockLakeCatalog,
+    err: *mut RockLakeError,
+) -> RockLakeSnapshot {
     let inner = with_catalog(catalog, |cat| {
         let reader = cat.store.read_latest();
         // SAFETY: `block_on` drives the future to completion synchronously.
@@ -374,29 +374,29 @@ pub extern "C" fn rocklake_get_current_snapshot(
     });
     match inner {
         None => {
-            write_error(err, RocklakeError::invalid_handle());
-            RocklakeSnapshot {
+            write_error(err, RockLakeError::invalid_handle());
+            RockLakeSnapshot {
                 snapshot_id: 0,
                 schema_version: 0,
             }
         }
         Some(Ok(Some(snap))) => {
-            write_error(err, RocklakeError::ok());
-            RocklakeSnapshot {
+            write_error(err, RockLakeError::ok());
+            RockLakeSnapshot {
                 snapshot_id: snap.snapshot_id,
                 schema_version: snap.schema_version,
             }
         }
         Some(Ok(None)) => {
-            write_error(err, RocklakeError::ok());
-            RocklakeSnapshot {
+            write_error(err, RockLakeError::ok());
+            RockLakeSnapshot {
                 snapshot_id: 0,
                 schema_version: 0,
             }
         }
         Some(Err(e)) => {
-            write_error(err, RocklakeError::from_catalog_error(e));
-            RocklakeSnapshot {
+            write_error(err, RockLakeError::from_catalog_error(e));
+            RockLakeSnapshot {
                 snapshot_id: 0,
                 schema_version: 0,
             }
@@ -407,10 +407,10 @@ pub extern "C" fn rocklake_get_current_snapshot(
 /// List schemas at a given snapshot.
 #[no_mangle]
 pub extern "C" fn rocklake_list_schemas(
-    catalog: *mut RocklakeCatalog,
+    catalog: *mut RockLakeCatalog,
     snapshot_id: u64,
-    err: *mut RocklakeError,
-) -> RocklakeSchemaList {
+    err: *mut RockLakeError,
+) -> RockLakeSchemaList {
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
@@ -421,25 +421,25 @@ pub extern "C" fn rocklake_list_schemas(
     );
     match inner {
         None => {
-            write_error(err, RocklakeError::invalid_handle());
-            RocklakeSchemaList {
+            write_error(err, RockLakeError::invalid_handle());
+            RockLakeSchemaList {
                 schemas: ptr::null_mut(),
                 count: 0,
             }
         }
         Some(Err(e)) => {
-            write_error(err, RocklakeError::from_catalog_error(e));
-            RocklakeSchemaList {
+            write_error(err, RockLakeError::from_catalog_error(e));
+            RockLakeSchemaList {
                 schemas: ptr::null_mut(),
                 count: 0,
             }
         }
         Some(Ok(schemas)) => {
-            write_error(err, RocklakeError::ok());
+            write_error(err, RockLakeError::ok());
             let count = schemas.len() as u64;
-            let mut out: Vec<RocklakeSchema> = schemas
+            let mut out: Vec<RockLakeSchema> = schemas
                 .into_iter()
-                .map(|s| RocklakeSchema {
+                .map(|s| RockLakeSchema {
                     schema_id: s.schema_id,
                     schema_name: CString::new(s.schema_name).unwrap_or_default().into_raw(),
                 })
@@ -447,7 +447,7 @@ pub extern "C" fn rocklake_list_schemas(
             out.shrink_to_fit(); // Ensure capacity == len for safe Vec::from_raw_parts in free.
             let out_ptr = out.as_mut_ptr();
             std::mem::forget(out);
-            RocklakeSchemaList {
+            RockLakeSchemaList {
                 schemas: out_ptr,
                 count,
             }
@@ -458,11 +458,11 @@ pub extern "C" fn rocklake_list_schemas(
 /// List tables in a schema at a given snapshot.
 #[no_mangle]
 pub extern "C" fn rocklake_list_tables(
-    catalog: *mut RocklakeCatalog,
+    catalog: *mut RockLakeCatalog,
     schema_id: u64,
     snapshot_id: u64,
-    err: *mut RocklakeError,
-) -> RocklakeTableList {
+    err: *mut RockLakeError,
+) -> RockLakeTableList {
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
@@ -473,25 +473,25 @@ pub extern "C" fn rocklake_list_tables(
     );
     match inner {
         None => {
-            write_error(err, RocklakeError::invalid_handle());
-            RocklakeTableList {
+            write_error(err, RockLakeError::invalid_handle());
+            RockLakeTableList {
                 tables: ptr::null_mut(),
                 count: 0,
             }
         }
         Some(Err(e)) => {
-            write_error(err, RocklakeError::from_catalog_error(e));
-            RocklakeTableList {
+            write_error(err, RockLakeError::from_catalog_error(e));
+            RockLakeTableList {
                 tables: ptr::null_mut(),
                 count: 0,
             }
         }
         Some(Ok(tables)) => {
-            write_error(err, RocklakeError::ok());
+            write_error(err, RockLakeError::ok());
             let count = tables.len() as u64;
-            let mut out: Vec<RocklakeTable> = tables
+            let mut out: Vec<RockLakeTable> = tables
                 .into_iter()
-                .map(|t| RocklakeTable {
+                .map(|t| RockLakeTable {
                     table_id: t.table_id,
                     schema_id: t.schema_id,
                     table_name: CString::new(t.table_name).unwrap_or_default().into_raw(),
@@ -500,7 +500,7 @@ pub extern "C" fn rocklake_list_tables(
             out.shrink_to_fit();
             let out_ptr = out.as_mut_ptr();
             std::mem::forget(out);
-            RocklakeTableList {
+            RockLakeTableList {
                 tables: out_ptr,
                 count,
             }
@@ -511,11 +511,11 @@ pub extern "C" fn rocklake_list_tables(
 /// Describe a table (get columns) at a given snapshot.
 #[no_mangle]
 pub extern "C" fn rocklake_describe_table(
-    catalog: *mut RocklakeCatalog,
+    catalog: *mut RockLakeCatalog,
     table_id: u64,
     snapshot_id: u64,
-    err: *mut RocklakeError,
-) -> RocklakeColumnList {
+    err: *mut RockLakeError,
+) -> RockLakeColumnList {
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
@@ -526,25 +526,25 @@ pub extern "C" fn rocklake_describe_table(
     );
     match inner {
         None => {
-            write_error(err, RocklakeError::invalid_handle());
-            RocklakeColumnList {
+            write_error(err, RockLakeError::invalid_handle());
+            RockLakeColumnList {
                 columns: ptr::null_mut(),
                 count: 0,
             }
         }
         Some(Err(e)) => {
-            write_error(err, RocklakeError::from_catalog_error(e));
-            RocklakeColumnList {
+            write_error(err, RockLakeError::from_catalog_error(e));
+            RockLakeColumnList {
                 columns: ptr::null_mut(),
                 count: 0,
             }
         }
         Some(Ok(Some((_table, columns)))) => {
-            write_error(err, RocklakeError::ok());
+            write_error(err, RockLakeError::ok());
             let count = columns.len() as u64;
-            let mut out: Vec<RocklakeColumn> = columns
+            let mut out: Vec<RockLakeColumn> = columns
                 .into_iter()
-                .map(|c| RocklakeColumn {
+                .map(|c| RockLakeColumn {
                     column_id: c.column_id,
                     table_id: c.table_id,
                     column_name: CString::new(c.column_name).unwrap_or_default().into_raw(),
@@ -556,7 +556,7 @@ pub extern "C" fn rocklake_describe_table(
             out.shrink_to_fit();
             let out_ptr = out.as_mut_ptr();
             std::mem::forget(out);
-            RocklakeColumnList {
+            RockLakeColumnList {
                 columns: out_ptr,
                 count,
             }
@@ -564,11 +564,11 @@ pub extern "C" fn rocklake_describe_table(
         Some(Ok(None)) => {
             write_error(
                 err,
-                RocklakeError::from_catalog_error(rocklake_catalog::CatalogError::NotFound(
+                RockLakeError::from_catalog_error(rocklake_catalog::CatalogError::NotFound(
                     format!("table {table_id}"),
                 )),
             );
-            RocklakeColumnList {
+            RockLakeColumnList {
                 columns: ptr::null_mut(),
                 count: 0,
             }
@@ -579,11 +579,11 @@ pub extern "C" fn rocklake_describe_table(
 /// List data files for a table at a given snapshot.
 #[no_mangle]
 pub extern "C" fn rocklake_list_data_files(
-    catalog: *mut RocklakeCatalog,
+    catalog: *mut RockLakeCatalog,
     table_id: u64,
     snapshot_id: u64,
-    err: *mut RocklakeError,
-) -> RocklakeFileList {
+    err: *mut RockLakeError,
+) -> RockLakeFileList {
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
@@ -594,25 +594,25 @@ pub extern "C" fn rocklake_list_data_files(
     );
     match inner {
         None => {
-            write_error(err, RocklakeError::invalid_handle());
-            RocklakeFileList {
+            write_error(err, RockLakeError::invalid_handle());
+            RockLakeFileList {
                 files: ptr::null_mut(),
                 count: 0,
             }
         }
         Some(Err(e)) => {
-            write_error(err, RocklakeError::from_catalog_error(e));
-            RocklakeFileList {
+            write_error(err, RockLakeError::from_catalog_error(e));
+            RockLakeFileList {
                 files: ptr::null_mut(),
                 count: 0,
             }
         }
         Some(Ok(files)) => {
-            write_error(err, RocklakeError::ok());
+            write_error(err, RockLakeError::ok());
             let count = files.len() as u64;
-            let mut out: Vec<RocklakeDataFile> = files
+            let mut out: Vec<RockLakeDataFile> = files
                 .into_iter()
-                .map(|f| RocklakeDataFile {
+                .map(|f| RockLakeDataFile {
                     data_file_id: f.data_file_id,
                     table_id: f.table_id,
                     path: CString::new(f.path).unwrap_or_default().into_raw(),
@@ -625,7 +625,7 @@ pub extern "C" fn rocklake_list_data_files(
             out.shrink_to_fit();
             let out_ptr = out.as_mut_ptr();
             std::mem::forget(out);
-            RocklakeFileList {
+            RockLakeFileList {
                 files: out_ptr,
                 count,
             }
@@ -637,7 +637,7 @@ pub extern "C" fn rocklake_list_data_files(
 
 /// Free a schema list.
 #[no_mangle]
-pub extern "C" fn rocklake_schema_list_free(list: *mut RocklakeSchemaList) {
+pub extern "C" fn rocklake_schema_list_free(list: *mut RockLakeSchemaList) {
     if list.is_null() {
         return;
     }
@@ -662,7 +662,7 @@ pub extern "C" fn rocklake_schema_list_free(list: *mut RocklakeSchemaList) {
 
 /// Free a table list.
 #[no_mangle]
-pub extern "C" fn rocklake_table_list_free(list: *mut RocklakeTableList) {
+pub extern "C" fn rocklake_table_list_free(list: *mut RockLakeTableList) {
     if list.is_null() {
         return;
     }
@@ -684,7 +684,7 @@ pub extern "C" fn rocklake_table_list_free(list: *mut RocklakeTableList) {
 
 /// Free a column list.
 #[no_mangle]
-pub extern "C" fn rocklake_column_list_free(list: *mut RocklakeColumnList) {
+pub extern "C" fn rocklake_column_list_free(list: *mut RockLakeColumnList) {
     if list.is_null() {
         return;
     }
@@ -709,7 +709,7 @@ pub extern "C" fn rocklake_column_list_free(list: *mut RocklakeColumnList) {
 
 /// Free a file list.
 #[no_mangle]
-pub extern "C" fn rocklake_file_list_free(list: *mut RocklakeFileList) {
+pub extern "C" fn rocklake_file_list_free(list: *mut RockLakeFileList) {
     if list.is_null() {
         return;
     }
@@ -734,10 +734,10 @@ pub extern "C" fn rocklake_file_list_free(list: *mut RocklakeFileList) {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-fn write_error(err: *mut RocklakeError, error: RocklakeError) {
+fn write_error(err: *mut RockLakeError, error: RockLakeError) {
     if !err.is_null() {
         // SAFETY: `err` is non-null (checked above). The caller provides a
-        // valid, aligned `RocklakeError` stack variable. We overwrite it once.
+        // valid, aligned `RockLakeError` stack variable. We overwrite it once.
         unsafe {
             *err = error;
         }
@@ -760,7 +760,7 @@ mod tests {
     fn open_close_roundtrip() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = CString::new(dir.path().to_str().unwrap()).unwrap();
-        let mut err = RocklakeError::ok();
+        let mut err = RockLakeError::ok();
 
         let catalog = rocklake_open(path.as_ptr(), &mut err);
         assert!(!catalog.is_null(), "open failed: code={}", err.code);
@@ -778,7 +778,7 @@ mod tests {
     fn list_schemas_empty() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = CString::new(dir.path().to_str().unwrap()).unwrap();
-        let mut err = RocklakeError::ok();
+        let mut err = RockLakeError::ok();
 
         let catalog = rocklake_open(path.as_ptr(), &mut err);
         assert!(!catalog.is_null());
@@ -795,7 +795,7 @@ mod tests {
         // This would segfault if we don't handle null properly,
         // but we can test with a non-existent path
         let path = CString::new("/nonexistent/path/that/doesnt/exist/at/all").unwrap();
-        let mut err = RocklakeError::ok();
+        let mut err = RockLakeError::ok();
 
         let catalog = rocklake_open(path.as_ptr(), &mut err);
         // May or may not fail depending on OS behavior with local filesystem
@@ -809,12 +809,12 @@ mod tests {
 
     #[test]
     fn null_uri_returns_invalid_handle_error() {
-        let mut err = RocklakeError::ok();
+        let mut err = RockLakeError::ok();
         let catalog = rocklake_open(ptr::null(), &mut err);
         assert!(catalog.is_null(), "expected null on null URI");
         assert_eq!(
             err.code,
-            RocklakeErrorCode::InvalidHandle as i32,
+            RockLakeErrorCode::InvalidHandle as i32,
             "expected InvalidHandle error code"
         );
         rocklake_error_free(&mut err);
@@ -822,11 +822,11 @@ mod tests {
 
     #[test]
     fn null_catalog_returns_invalid_handle_error() {
-        let mut err = RocklakeError::ok();
+        let mut err = RockLakeError::ok();
         let snap = rocklake_get_current_snapshot(ptr::null_mut(), &mut err);
         assert_eq!(
             err.code,
-            RocklakeErrorCode::InvalidHandle as i32,
+            RockLakeErrorCode::InvalidHandle as i32,
             "expected InvalidHandle on null handle"
         );
         assert_eq!(snap.snapshot_id, 0);
@@ -837,7 +837,7 @@ mod tests {
     fn double_close_is_safe() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = CString::new(dir.path().to_str().unwrap()).unwrap();
-        let mut err = RocklakeError::ok();
+        let mut err = RockLakeError::ok();
 
         let catalog = rocklake_open(path.as_ptr(), &mut err);
         assert!(!catalog.is_null(), "open failed: code={}", err.code);
@@ -852,7 +852,7 @@ mod tests {
     fn handle_after_close_returns_invalid_handle() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = CString::new(dir.path().to_str().unwrap()).unwrap();
-        let mut err = RocklakeError::ok();
+        let mut err = RockLakeError::ok();
 
         let catalog = rocklake_open(path.as_ptr(), &mut err);
         assert!(!catalog.is_null(), "open failed: code={}", err.code);
@@ -862,13 +862,13 @@ mod tests {
 
         // All operations on the now-closed handle must return InvalidHandle.
         let snap = rocklake_get_current_snapshot(catalog, &mut err);
-        assert_eq!(err.code, RocklakeErrorCode::InvalidHandle as i32);
+        assert_eq!(err.code, RockLakeErrorCode::InvalidHandle as i32);
         assert_eq!(snap.snapshot_id, 0);
         rocklake_error_free(&mut err);
 
-        err = RocklakeError::ok();
+        err = RockLakeError::ok();
         let schemas = rocklake_list_schemas(catalog, 1, &mut err);
-        assert_eq!(err.code, RocklakeErrorCode::InvalidHandle as i32);
+        assert_eq!(err.code, RockLakeErrorCode::InvalidHandle as i32);
         assert_eq!(schemas.count, 0);
         rocklake_error_free(&mut err);
     }
@@ -920,7 +920,7 @@ mod tests {
     fn concurrent_close_use_guard() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = CString::new(dir.path().to_str().unwrap()).unwrap();
-        let mut err = RocklakeError::ok();
+        let mut err = RockLakeError::ok();
 
         let catalog = rocklake_open(path.as_ptr(), &mut err);
         assert!(!catalog.is_null(), "open failed: code={}", err.code);
@@ -932,7 +932,7 @@ mod tests {
         let snap = rocklake_get_current_snapshot(catalog, &mut err);
         assert_eq!(
             err.code,
-            RocklakeErrorCode::InvalidHandle as i32,
+            RockLakeErrorCode::InvalidHandle as i32,
             "expected InvalidHandle after concurrent close"
         );
         assert_eq!(snap.snapshot_id, 0);

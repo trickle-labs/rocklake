@@ -1,4 +1,4 @@
-# cargo-deny configuration for Rocklake
+# cargo-deny configuration for RockLake
 # https://embarkstudios.github.io/cargo-deny/
 
 [graph]

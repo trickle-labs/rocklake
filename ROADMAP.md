@@ -1,4 +1,4 @@
-# Rocklake Roadmap
+# RockLake Roadmap
 
 A lakehouse catalog backed by SlateDB — catalog and data in the same S3 bucket, zero infrastructure.
 
@@ -6,7 +6,7 @@ A lakehouse catalog backed by SlateDB — catalog and data in the same S3 bucket
 
 ## Vision
 
-Rocklake makes a DuckLake lakehouse fully serverless: both the Parquet data
+RockLake makes a DuckLake lakehouse fully serverless: both the Parquet data
 files and the DuckLake catalog live in the same object-storage bucket, with no
 external database server required. The catalog is stored in SlateDB — an
 embedded, LSM-based key-value store built entirely on top of object storage —
@@ -133,8 +133,8 @@ Produce `docs/phase-0/slatedb-api-validation.md` with working Rust code for each
 | Durable commit options | `commit_with_options` / `await_durable` survives a crash | Document as required; abort if SlateDB does not expose it |
 | `flush()` reader visibility | Write → `flush()` → fresh `DbReader` sees the key on LocalFS and MinIO | Replace with verified memtable flush or serve read-your-writes from the writer process |
 | Visibility-barrier latency | Measure p50/p95/p99 on LocalFS and MinIO; record for later Phase 4 latency budgets | — |
-| Writer fencing | Force two writers; capture the exact error kind returned; confirm it is distinguishable | Maintain Rocklake-own epoch check; map stale epochs to `SQLSTATE 57P04` |
-| `WriteBatch` logical size | Determine whether SlateDB imposes its own limit | Enforce Rocklake's own 64 MiB limit unconditionally |
+| Writer fencing | Force two writers; capture the exact error kind returned; confirm it is distinguishable | Maintain RockLake-own epoch check; map stale epochs to `SQLSTATE 57P04` |
+| `WriteBatch` logical size | Determine whether SlateDB imposes its own limit | Enforce RockLake's own 64 MiB limit unconditionally |
 | Prefix-scan latest-value semantics | Verify `scan_prefix` returns fully-merged latest values, not stale LSM entries | Add a decode/dedup layer before applying MVCC filters |
 
 ### DuckDB Wire Corpus Capture
@@ -215,7 +215,7 @@ Stand up the full DuckLake tutorial against SQLite-backed DuckLake and capture a
 
 ### Catalog Key Layout (`rocklake-core`)
 
-Implement the full binary key layout for all 28 DuckLake v1.0 tables plus Rocklake system namespaces. Every tag byte must be allocated up front, even for tables deferred to later phases, so that unknown tables return an explicit error rather than silent data loss.
+Implement the full binary key layout for all 28 DuckLake v1.0 tables plus RockLake system namespaces. Every tag byte must be allocated up front, even for tables deferred to later phases, so that unknown tables return an explicit error rather than silent data loss.
 
 ```
 01  ducklake_metadata          scope | scope_id | metadata_key
@@ -247,8 +247,8 @@ Implement the full binary key layout for all 28 DuckLake v1.0 tables plus Rockla
 1B  ducklake_column_tag        table_id | column_id | tag_key | begin_snapshot
 1C  ducklake_schema_versions   table_id | begin_snapshot
 FD  dynamic inlined rows       subtype | table_id | (schema_version | data_file_id) | row_id
-FE  Rocklake counters         counter_id
-FF  Rocklake system keys      writer epoch / endpoint / retain-from / catalog-format-version
+FE  RockLake counters         counter_id
+FF  RockLake system keys      writer epoch / endpoint / retain-from / catalog-format-version
 ```
 
 The `0xFE` counter keys and `0xFF` system keys are managed with simple
@@ -391,7 +391,7 @@ excision.
 
 ## v0.3 — PG-Wire Sidecar (Alpha)
 
-> Connect the standard DuckDB `ducklake` extension to Rocklake through a PostgreSQL-wire sidecar.
+> Connect the standard DuckDB `ducklake` extension to RockLake through a PostgreSQL-wire sidecar.
 
 This is the Strategy B production implementation. The sidecar speaks the PostgreSQL wire protocol and translates DuckLake catalog SQL into `CatalogStore` operations, storing all state in SlateDB.
 
@@ -473,7 +473,7 @@ For binary format codes not observed in the corpus, return `SQLSTATE 0A000` befo
 
 #### SQLSTATE Mapping
 
-All errors flow through a single `to_pg_error(err: RocklakeError) -> PgErrorResponse` function:
+All errors flow through a single `to_pg_error(err: RockLakeError) -> PgErrorResponse` function:
 
 | Condition | SQLSTATE | Severity |
 |-----------|----------|----------|
@@ -510,7 +510,7 @@ Integration test: kill writer mid-commit; start new writer; open `DbReader` imme
 
 ### End-to-End Test Suite
 
-- Golden test: replay Phase 0 DuckLake tutorial corpus against Rocklake sidecar; diff output byte-for-byte against the SQLite-backed reference
+- Golden test: replay Phase 0 DuckLake tutorial corpus against RockLake sidecar; diff output byte-for-byte against the SQLite-backed reference
 - Wire-corpus replay tests for every captured DuckDB version
 - Schema-version matrix tests
 - Time-travel tests: `SELECT * FROM t AT (SNAPSHOT N)` returns correct rows at every historical snapshot
@@ -550,7 +550,7 @@ Operators who want bounded time-travel visibility pass `--retention-days N` (e.g
 
 ## v0.4 — Production Hardening
 
-> Make Rocklake safe and operable in production.
+> Make RockLake safe and operable in production.
 
 ### Visibility GC and Excision
 
@@ -665,7 +665,7 @@ Repair conservatism rules:
 
 ## v0.5 — Native Extension (Beta)
 
-> Embed Rocklake directly into DuckDB with no SQL emulation layer — Strategy C.
+> Embed RockLake directly into DuckDB with no SQL emulation layer — Strategy C.
 
 This is the cleanest and fastest integration path: a DuckDB extension that implements DuckLake's catalog interface in C++ by calling a Rust FFI layer backed by SlateDB. No PostgreSQL sidecar, no SQL parsing, no network hop.
 
@@ -704,7 +704,7 @@ Record Phase 0 finding on whether DuckDB ≥1.5 has an async catalog extension A
 
 ### C++ Extension Backend
 
-- Implement the DuckDB extension in C++ against the Rocklake C ABI
+- Implement the DuckDB extension in C++ against the RockLake C ABI
 - `ATTACH 'ducklake:slatedb:s3://bucket/catalogs/warehouse-a' AS lake;`
 - Reuse all Phase 0.3 test suites plus Phase 0.3 golden fixtures to validate equivalence with Strategy B
 
@@ -826,7 +826,7 @@ Add a secondary index only when profiling shows MVCC filter overhead exceeds 10�
 
 **LSM tombstone management.** The `UPDATE SET end_snapshot` pattern generates a new SST entry per retired version that masks the old value until compaction merges them. This is normal LSM behavior and does not violate catalog-data immutability — the catalog row still exists with `end_snapshot` set. Tune compaction to merge dead LSM entries earlier for high-ingest workloads. Physical deletion of catalog *keys* happens only through `rocklake excise`, not through compaction tuning.
 
-**Initial benchmark suite.** Compare Rocklake against the phase-2 baseline and SQLite-backed DuckLake:
+**Initial benchmark suite.** Compare RockLake against the phase-2 baseline and SQLite-backed DuckLake:
 - `list_data_files` at 10⁴, 10⁵ files
 - `create_snapshot` at 1, 10, 100 file additions
 - Cold-start read latency from a fresh process
@@ -834,19 +834,19 @@ Add a secondary index only when profiling shows MVCC filter overhead exceeds 10�
 
 ### Multi-Writer via Catalog Partitioning
 
-SlateDB is single-writer per database, and DuckLake is single-writer per catalog. However, Rocklake can offer a pattern of "one SlateDB catalog per dataset" with a thin global registry, exploiting SlateDB's cheap database creation:
+SlateDB is single-writer per database, and DuckLake is single-writer per catalog. However, RockLake can offer a pattern of "one SlateDB catalog per dataset" with a thin global registry, exploiting SlateDB's cheap database creation:
 
 - Global registry catalog: maps logical dataset names to their catalog paths
 - Each dataset gets its own isolated SlateDB-backed catalog
 - Writers shard across datasets with no cross-dataset contention
-- The global registry itself is a Rocklake catalog, providing a queryable inventory
+- The global registry itself is a RockLake catalog, providing a queryable inventory
 
 ### DataFusion Integration
 
 Expose `rocklake-catalog` to DataFusion's [`datafusion-ducklake`](https://github.com/datafusion-contrib/datafusion-ducklake) via Rust trait implementation:
 - Both are Rust crates, so integration avoids FFI entirely
 - Implement DataFusion's `CatalogProvider` trait backed by `CatalogStore`
-- Enables DataFusion users to run SQL against a Rocklake-backed lakehouse without DuckDB
+- Enables DataFusion users to run SQL against a RockLake-backed lakehouse without DuckDB
 
 ### Deliverables
 
@@ -860,11 +860,11 @@ Expose `rocklake-catalog` to DataFusion's [`datafusion-ducklake`](https://github
 
 ## v0.8 — Documentation
 
-> Publish a complete documentation site that explains every aspect of Rocklake — architecture, design decisions, trade-offs, deployment, operations, and integration — to the same standard as the engineering.
+> Publish a complete documentation site that explains every aspect of RockLake — architecture, design decisions, trade-offs, deployment, operations, and integration — to the same standard as the engineering.
 
 The full specification for this release is in [plans/documentation-1.md](plans/documentation-1.md). That document contains the complete `mkdocs.yml` configuration, the GitHub Actions workflow, rich per-page content plans for all 80 pages, the writing style guide, and the quality gates. This section is the binding roadmap summary: scope, rationale, and deliverables.
 
-A project that handles production data — data that operators have stored in S3, annotated with schemas, and exposed to DuckDB for business queries — owes its users documentation that is accurate, complete, and honest. Operators who encounter a limitation undocumented will stop trusting the documentation. Engineers evaluating Rocklake for adoption will look first at the Design Decisions section to understand what trade-offs were made and why; if that section is thin or evasive, the evaluation ends. Contributors who want to improve the codebase need an accurate map of the architecture before they can make safe changes. v0.8 provides all of this. It is not a stretch goal or a nice-to-have: without documentation, the software is incomplete.
+A project that handles production data — data that operators have stored in S3, annotated with schemas, and exposed to DuckDB for business queries — owes its users documentation that is accurate, complete, and honest. Operators who encounter a limitation undocumented will stop trusting the documentation. Engineers evaluating RockLake for adoption will look first at the Design Decisions section to understand what trade-offs were made and why; if that section is thin or evasive, the evaluation ends. Contributors who want to improve the codebase need an accurate map of the architecture before they can make safe changes. v0.8 provides all of this. It is not a stretch goal or a nice-to-have: without documentation, the software is incomplete.
 
 ### Technology Stack
 
@@ -908,9 +908,9 @@ Every section must meet a defined content bar before the release is considered c
 
 **Deployment** pages are self-contained: a reader following any single cloud-provider page should need nothing outside that page to stand up a working deployment. Each page includes IAM permission templates, a working `rocklake serve` invocation, a DuckDB `ATTACH` snippet, and a verification query. Tabbed sections present the AWS, GCS, and Azure variants side-by-side so operators can compare object-storage provider requirements without jumping between pages. MinIO is documented as a first-class local/on-prem deployment path alongside the major cloud providers.
 
-**Design Decisions** is the most important section in the site. Each of the eight pages addresses a major architectural choice — why SlateDB over PostgreSQL or SQLite; why Strategy B (pg-wire sidecar) precedes Strategy C (native extension); why bounded SQL over a general query engine; why Protobuf for value encoding; the full cost-benefit analysis of catalog immutability; the single-writer model and its practical workarounds; the rationale behind the key layout for all 28 catalog tables; and an explicit "What Rocklake Is Not" page that articulates the workloads and use cases for which Rocklake is the wrong choice. These pages require the most care because they must present both sides honestly: what was chosen, what was rejected, and the real reasons — not a post-hoc rationalization of decisions that were made for simpler reasons. Readers who disagree with a design decision should be able to look at this section, understand the full reasoning, and form an informed opinion. That requires honesty about costs, not just advocacy for the choice made.
+**Design Decisions** is the most important section in the site. Each of the eight pages addresses a major architectural choice — why SlateDB over PostgreSQL or SQLite; why Strategy B (pg-wire sidecar) precedes Strategy C (native extension); why bounded SQL over a general query engine; why Protobuf for value encoding; the full cost-benefit analysis of catalog immutability; the single-writer model and its practical workarounds; the rationale behind the key layout for all 28 catalog tables; and an explicit "What RockLake Is Not" page that articulates the workloads and use cases for which RockLake is the wrong choice. These pages require the most care because they must present both sides honestly: what was chosen, what was rejected, and the real reasons — not a post-hoc rationalization of decisions that were made for simpler reasons. Readers who disagree with a design decision should be able to look at this section, understand the full reasoning, and form an informed opinion. That requires honesty about costs, not just advocacy for the choice made.
 
-**Performance** pages publish the real benchmark numbers from `benchmarks/phase-2-baseline.json` and subsequent runs, with methodology clearly documented. The "vs. Alternatives" page provides a direct, honest comparison table against PostgreSQL-backed and SQLite-backed DuckLake, including the conditions under which Rocklake is slower (cold-start read latency from S3 is higher than PostgreSQL in the same region) and the conditions under which it is faster or equivalent (write throughput under high fan-out ingest; zero-config deployment cost).
+**Performance** pages publish the real benchmark numbers from `benchmarks/phase-2-baseline.json` and subsequent runs, with methodology clearly documented. The "vs. Alternatives" page provides a direct, honest comparison table against PostgreSQL-backed and SQLite-backed DuckLake, including the conditions under which RockLake is slower (cold-start read latency from S3 is higher than PostgreSQL in the same region) and the conditions under which it is faster or equivalent (write throughput under high fan-out ingest; zero-config deployment cost).
 
 **Reference** pages are scannable lookup tables: all 28 catalog tables documented in tabular form with column types and semantics; every supported SQL shape with parameter types and return types; every SQLSTATE code with its triggering condition and recommended resolution; every exported Prometheus metric with its labels and type; all environment variables and configuration file keys.
 
@@ -980,7 +980,7 @@ The PR template includes a checkbox — "Documentation updated (if behavior chan
 
 ## v0.9 — Production Readiness
 
-> Kubernetes deployment architecture, writer routing and failover, credential separation, pre-benchmark performance tuning, cost analysis tooling, catalog migration subcommand, and wire-corpus validation — everything needed to run Rocklake confidently in production before the v1.0 GA benchmark sign-off.
+> Kubernetes deployment architecture, writer routing and failover, credential separation, pre-benchmark performance tuning, cost analysis tooling, catalog migration subcommand, and wire-corpus validation — everything needed to run RockLake confidently in production before the v1.0 GA benchmark sign-off.
 
 ### Pre-Benchmark Performance Tuning
 
@@ -998,7 +998,7 @@ Before the formal TPC-H benchmarks in v1.0, apply targeted optimizations based o
 
 ### Deployment Architecture and Kubernetes Operations
 
-The Rocklake process is almost entirely stateless: all correctness-critical state lives in object storage, and the process can be killed and recreated at any time without data loss or manual recovery.
+The RockLake process is almost entirely stateless: all correctness-critical state lives in object storage, and the process can be killed and recreated at any time without data loss or manual recovery.
 
 | State | Location | Lost on crash? |
 |-------|----------|----------------|
@@ -1092,7 +1092,7 @@ The writer pod labels itself `rocklake-role=writer`. A dedicated K8s `Service` u
 
 **Option D — Protocol-aware proxy**
 
-A stateless Rocklake proxy `Deployment` (multiple replicas, behind a standard K8s Service) sits in front of all writer and reader pods. For each incoming SQL statement it uses `sqlparser-rs` to classify the statement as read or write in under 1 ms, then routes reads round-robin to reader pods and writes to the current writer (located via Option A, B, or C). Because the proxy is stateless it scales freely, adds no single point of failure, and adds no more than 2 ms overhead per request. Use this when clients cannot handle `SQLSTATE 25006` retry logic — for example, when integrating a third-party DuckLake client that does not use libpq.
+A stateless RockLake proxy `Deployment` (multiple replicas, behind a standard K8s Service) sits in front of all writer and reader pods. For each incoming SQL statement it uses `sqlparser-rs` to classify the statement as read or write in under 1 ms, then routes reads round-robin to reader pods and writes to the current writer (located via Option A, B, or C). Because the proxy is stateless it scales freely, adds no single point of failure, and adds no more than 2 ms overhead per request. Use this when clients cannot handle `SQLSTATE 25006` retry logic — for example, when integrating a third-party DuckLake client that does not use libpq.
 
 **Recommended layering.** Start with Option A (free, works immediately). Add Option B as part of the core catalog implementation — it is already specified in the `0xFF` key layout and adds no new dependencies. Introduce Option D only when a specific client cannot tolerate `25006` retries.
 
@@ -1281,9 +1281,9 @@ Writer fencing prevents concurrent writers but does not guard against stale in-m
 
 ### Real PG-Wire Authentication (F-16 / F-03)
 
-`RocklakeHandler` stores `AuthConfig` but unconditionally uses `NoopStartupHandler`. Any client can connect regardless of configured credentials.
+`RockLakeHandler` stores `AuthConfig` but unconditionally uses `NoopStartupHandler`. Any client can connect regardless of configured credentials.
 
-- [x] Implement a `RocklakeStartupHandler` that enforces cleartext password authentication when `AuthConfig.is_enabled()` is true
+- [x] Implement a `RockLakeStartupHandler` that enforces cleartext password authentication when `AuthConfig.is_enabled()` is true
 - [x] Use constant-time comparison for password verification to prevent timing-based credential inference
 - [x] Deny connections that do not supply the configured username; return `SQLSTATE 28P01`
 - [x] Add end-to-end tests: correct credentials → `AuthenticationOk`; wrong password → `ErrorResponse 28P01`; missing credentials when auth required → `ErrorResponse 28P01`
@@ -1314,7 +1314,7 @@ Docs advertise `--auth-user` / `ROCKLAKE_AUTH_USER`, `--auth-password` / `ROCKLA
 Every FFI entrypoint dereferences caller-supplied pointers without null or ownership validation. Invalid C input can cause undefined behaviour.
 
 - [x] Add null checks to every `#[no_mangle] pub extern "C"` function before any dereference
-- [x] Add an opaque magic/version field to `RocklakeCatalog` and validate it on every read/write operation
+- [x] Add an opaque magic/version field to `RockLakeCatalog` and validate it on every read/write operation
 - [x] Return structured error codes rather than undefined behaviour for double-close and invalid handles
 - [x] Document the ownership contract for every returned pointer in `include/rocklake.h`
 - [x] Add CI sanitizer job (`-Zsanitizer=address,leak`) for the FFI crate
@@ -1569,7 +1569,7 @@ Establish the policies that enable confident production upgrades and long-term c
 
 **Deprecation policy.** Six-month notice period before removing any CLI flag, metric name, SQLSTATE code, or public Rust API. Deprecation warnings are emitted in the binary and documented in `CHANGELOG.md` with the target removal version.
 
-**Semantic versioning policy.** `catalog-format-version` bumps require a major version bump of the Rocklake binary. `encoding_version` bumps within the same `catalog-format-version` require a minor version bump. Patch versions are backward-compatible on both dimensions.
+**Semantic versioning policy.** `catalog-format-version` bumps require a major version bump of the RockLake binary. `encoding_version` bumps within the same `catalog-format-version` require a minor version bump. Patch versions are backward-compatible on both dimensions.
 
 **Release verification checklist.** Documented in `CONTRIBUTING.md`: run full benchmark suite (v1.0 requirement, placeholder here); run TPC-H SF10 golden test; check `mkdocs build --strict`; verify `rocklake migrate --dry-run` succeeds on a v0.x catalog; tag and push. No release may be tagged without all checklist items signed off.
 
@@ -1703,7 +1703,7 @@ Convert roadmap Done status from self-reported to criteria-driven:
 
 > **Prerequisites:** Requires v0.17 merged to `main` (the IVM GA gate).
 
-> Standardize Rocklake's DuckLake catalog SQL surface to match the interface contract that pg-trickle (and any other DuckLake-compatible IVM system) expects. Rocklake has no runtime or build dependency on pg-trickle code — instead, it implements a standard contract: `table_changes()` for O(Δ) CDC, stable `rowid` for update tracking, snapshot leases for GC coordination, `NOTIFY` for event-driven refresh, extension schemas for application metadata, and opaque frontier encoding for mixed-source systems. pg-trickle serves as the primary validator of this contract. See [plans/pg-trickle-ducklake-support.md](plans/pg-trickle-ducklake-support.md) for the full gap analysis and interface specification.
+> Standardize RockLake's DuckLake catalog SQL surface to match the interface contract that pg-trickle (and any other DuckLake-compatible IVM system) expects. RockLake has no runtime or build dependency on pg-trickle code — instead, it implements a standard contract: `table_changes()` for O(Δ) CDC, stable `rowid` for update tracking, snapshot leases for GC coordination, `NOTIFY` for event-driven refresh, extension schemas for application metadata, and opaque frontier encoding for mixed-source systems. pg-trickle serves as the primary validator of this contract. See [plans/pg-trickle-ducklake-support.md](plans/pg-trickle-ducklake-support.md) for the full gap analysis and interface specification.
 
 ### Gap 1 — `table_changes()` SQL Function
 
@@ -1719,7 +1719,7 @@ Without this, pg-trickle falls back to O(N) polling (`EXCEPT ALL` full diff) ins
 
 **Implementation:**
 
-> **Note: This is a new scan operator, not trivial wiring.** `reader.rs::SnapshotDiff` provides *file-level* metadata (which Parquet files were added/removed between two snapshots), but `table_changes()` must return *row-level* change records. The operator must: (1) resolve added/removed file lists from SnapshotDiff, (2) read the affected Parquet files from object store, (3) emit rows with change_type annotations. For UPDATE detection (producing preimage/postimage pairs), the operator must correlate removed+added files by `rowid` (Gap 2). This is the first Rocklake operator that reads data files — all other reads go through DuckDB.
+> **Note: This is a new scan operator, not trivial wiring.** `reader.rs::SnapshotDiff` provides *file-level* metadata (which Parquet files were added/removed between two snapshots), but `table_changes()` must return *row-level* change records. The operator must: (1) resolve added/removed file lists from SnapshotDiff, (2) read the affected Parquet files from object store, (3) emit rows with change_type annotations. For UPDATE detection (producing preimage/postimage pairs), the operator must correlate removed+added files by `rowid` (Gap 2). This is the first RockLake operator that reads data files — all other reads go through DuckDB.
 
 - Implement `TableChangesOperator` in `crates/rocklake-sql/src/` as a new table-function scan node.
 - Input: `SnapshotDiff` file lists (already available from catalog).
@@ -1731,17 +1731,17 @@ Without this, pg-trickle falls back to O(N) polling (`EXCEPT ALL` full diff) ins
 
 **Acceptance criteria:**
 - [x] `table_changes()` callable from DuckDB `ATTACH 'ducklake:postgresql://rocklake-sidecar/…'`
-- [x] pg-trickle `cdc_mode` reports `DUCKLAKE_CHANGE_FEED` when source is Rocklake-backed DuckLake
+- [x] pg-trickle `cdc_mode` reports `DUCKLAKE_CHANGE_FEED` when source is RockLake-backed DuckLake
 - [x] Property test: apply change records from `table_changes(start, end)` to `start` state → produces `end` state (multiset equality)
 - [x] GC error path: `table_changes()` with a `start_snapshot` that has been GC’d returns `SQLSTATE 55000`; the error is distinguishable from all other errors by SQLSTATE alone (pg-trickle uses this to trigger a graceful full-refresh fallback)
 
 ### Gap 2 — Stable `rowid` on DuckLake Tables
 
-Every Rocklake-managed DuckLake table must expose a stable `rowid` column that survives UPDATE, file compaction, and Parquet file re-registration. pg-trickle's EC-01 phantom-row fix (see `plans/pg-trickle.md` §4) matches insert/delete pairs by `rowid`; without it, delete deltas are silently dropped and stale rows accumulate in pg-trickle's stream tables.
+Every RockLake-managed DuckLake table must expose a stable `rowid` column that survives UPDATE, file compaction, and Parquet file re-registration. pg-trickle's EC-01 phantom-row fix (see `plans/pg-trickle.md` §4) matches insert/delete pairs by `rowid`; without it, delete deltas are silently dropped and stale rows accumulate in pg-trickle's stream tables.
 
 **Implementation:**
 
-> **Design constraint: catalog never reads data files.** Rocklake's architecture separates the catalog (metadata) plane from the data (Parquet) plane. Therefore Rocklake cannot assign rowids by scanning Parquet. Instead, **the writer client (DuckDB / pg-trickle) assigns rowids at INSERT time** using a monotone counter obtained from the catalog API. Rocklake provides the counter; the client stamps each row.
+> **Design constraint: catalog never reads data files.** RockLake's architecture separates the catalog (metadata) plane from the data (Parquet) plane. Therefore RockLake cannot assign rowids by scanning Parquet. Instead, **the writer client (DuckDB / pg-trickle) assigns rowids at INSERT time** using a monotone counter obtained from the catalog API. RockLake provides the counter; the client stamps each row.
 
 - The per-table monotone counter at key `0xFE | 0x10 | table_id` is exposed via a new SQL function: `SELECT rocklake.next_rowid_range('schema.table', count := 1000)` → returns `(start_rowid, end_rowid)` range.
 - The writer client calls `next_rowid_range` before writing Parquet, stamps each row with a rowid from the allocated range, and includes `__sd_rowid` as a column in the Parquet file.
@@ -1783,12 +1783,12 @@ pg-trickle's event-driven scheduler wakes up immediately when a `NOTIFY pgt_sour
 
 **Acceptance criteria:**
 - [x] `LISTEN`/`NOTIFY`/`UNLISTEN` round-trip via PG-wire
-- [x] pg-trickle `scheduler` uses event-driven mode (not polling) when connected to Rocklake
+- [x] pg-trickle `scheduler` uses event-driven mode (not polling) when connected to RockLake
 - [x] Latency test: snapshot advance → pg-trickle refresh start ≤ 50 ms end-to-end
 
 ### Gap 5 — Extension Schema Tables (`pgtrickle.*`)
 
-pg-trickle issues `CREATE TABLE IF NOT EXISTS pgtrickle.pgt_ducklake_provenance (…)` and `INSERT INTO pgtrickle.pgt_ducklake_provenance (…)` against the catalog database at install time. Rocklake's bounded SQL dispatcher currently returns `SQLSTATE 0A000` for user-schema DDL/DML.
+pg-trickle issues `CREATE TABLE IF NOT EXISTS pgtrickle.pgt_ducklake_provenance (…)` and `INSERT INTO pgtrickle.pgt_ducklake_provenance (…)` against the catalog database at install time. RockLake's bounded SQL dispatcher currently returns `SQLSTATE 0A000` for user-schema DDL/DML.
 
 **Implementation decision: first-class catalog objects (tag `0x23`).** The SQLite-sidecar alternative was rejected because it creates a second durability domain (sidecar can desync from catalog on crash), complicates backup/restore, and is not queryable via the standard PG-wire path without a second code path. First-class objects are more work upfront but architecturally sound.
 
@@ -1799,13 +1799,13 @@ pg-trickle issues `CREATE TABLE IF NOT EXISTS pgtrickle.pgt_ducklake_provenance 
 - [x] Extension table schema is fixed at creation; `ALTER TABLE` on extension tables returns `0A000` (pg-trickle doesn't need it)
 
 **Acceptance criteria:**
-- [x] pg-trickle installs without errors against Rocklake
+- [x] pg-trickle installs without errors against RockLake
 - [x] `INSERT INTO pgtrickle.pgt_ducklake_provenance` succeeds
 - [x] `SELECT * FROM pgtrickle.pgt_ducklake_provenance` returns inserted rows
 
 ### Gap 6 — Encryption Key Pass-Through
 
-When DuckLake per-file Parquet encryption is enabled, `INSERT INTO ducklake_data_file` includes an `encryption_key` column. Audit and validate that Rocklake stores and returns this column without mangling it.
+When DuckLake per-file Parquet encryption is enabled, `INSERT INTO ducklake_data_file` includes an `encryption_key` column. Audit and validate that RockLake stores and returns this column without mangling it.
 
 **Acceptance criteria:**
 - [x] `encryption_key` column present in `ducklake_data_file` schema
@@ -1814,15 +1814,15 @@ When DuckLake per-file Parquet encryption is enabled, `INSERT INTO ducklake_data
 
 ### Gap 7 — Mixed Frontier (DuckLake Snapshot + WAL LSN)
 
-For stream tables that read from both Rocklake-backed DuckLake tables and PostgreSQL heap tables, the frontier must be a vector clock over heterogeneous source types.
+For stream tables that read from both RockLake-backed DuckLake tables and PostgreSQL heap tables, the frontier must be a vector clock over heterogeneous source types.
 
-> **Clarification: Rocklake stores frontier values opaquely.** Rocklake does not interpret WAL LSNs — it has no PostgreSQL replication knowledge. pg-trickle passes its own frontier JSON blob (containing WAL LSNs for PG sources and snapshot IDs for DuckLake sources) through the extension schema tables (Gap 5). Rocklake's role is: (1) store the blob durably, (2) return it on read, (3) use the DuckLake snapshot component to coordinate its own GC (Gap 3). The `WalLsn` variant in the frontier type is opaque bytes that Rocklake persists but never parses.
+> **Clarification: RockLake stores frontier values opaquely.** RockLake does not interpret WAL LSNs — it has no PostgreSQL replication knowledge. pg-trickle passes its own frontier JSON blob (containing WAL LSNs for PG sources and snapshot IDs for DuckLake sources) through the extension schema tables (Gap 5). RockLake's role is: (1) store the blob durably, (2) return it on read, (3) use the DuckLake snapshot component to coordinate its own GC (Gap 3). The `WalLsn` variant in the frontier type is opaque bytes that RockLake persists but never parses.
 
 **Implementation:**
 - Extend frontier type in `state_store.rs`: `BTreeMap<SourceId, SourceFrontier>` where `SourceFrontier` is `{SequenceNumber(u64) | DuckLakeSnapshot(i64) | Opaque(Vec<u8>)}`.
 - `plan.rs` resolves DuckLake sources to `DuckLakeSnapshot`; all others stored as `Opaque`.
 - Serialize frontier as JSON for observability; opaque values serialized as base64.
-- pg-trickle is responsible for interpreting its own opaque frontier values; Rocklake guarantees durability and atomic read/write only.
+- pg-trickle is responsible for interpreting its own opaque frontier values; RockLake guarantees durability and atomic read/write only.
 
 **Acceptance criteria:**
 - [x] View definition mixing DuckLake source + opaque PG frontier stores and retrieves correctly
@@ -1831,13 +1831,13 @@ For stream tables that read from both Rocklake-backed DuckLake tables and Postgr
 
 ### pg-trickle Compatibility Test Suite
 
-A dedicated test crate (or test module in `rocklake-testkit`) that validates the full pg-trickle × Rocklake integration:
+A dedicated test crate (or test module in `rocklake-testkit`) that validates the full pg-trickle × RockLake integration:
 
-**Tier A — Catalog Write Compatibility:** replay pg-trickle's internal DuckLake catalog SQL corpus against Rocklake PG-wire; assert no `0A000` errors and correct final state.
+**Tier A — Catalog Write Compatibility:** replay pg-trickle's internal DuckLake catalog SQL corpus against RockLake PG-wire; assert no `0A000` errors and correct final state.
 
 **Tier B — `table_changes()` Property Tests:** property-based test applying change records to reconstruct any target snapshot; multiset equality assertion.
 
-**Tier C — End-to-End Pipeline (Docker):** actual pg-trickle container → PostgreSQL sources → Rocklake sink → DuckDB query verification.
+**Tier C — End-to-End Pipeline (Docker):** actual pg-trickle container → PostgreSQL sources → RockLake sink → DuckDB query verification.
 
 **Tier D — Snapshot Hold Under GC:** GC blocked by lease; advances after release; TTL expiry.
 
@@ -1845,10 +1845,10 @@ A dedicated test crate (or test module in `rocklake-testkit`) that validates the
 
 All of the following must be green before v0.18 is tagged:
 
-- [x] pg-trickle connects to Rocklake PG-wire sidecar with zero configuration changes vs. a standard PostgreSQL catalog
-- [x] `CdcMode::DUCKLAKE_CHANGE_FEED` activates automatically when source table is Rocklake-backed DuckLake
+- [x] pg-trickle connects to RockLake PG-wire sidecar with zero configuration changes vs. a standard PostgreSQL catalog
+- [x] `CdcMode::DUCKLAKE_CHANGE_FEED` activates automatically when source table is RockLake-backed DuckLake
 - [x] `table_changes()` passes the Tier-B property test suite
-- [x] pg-trickle sink (`sink => 'ducklake'`) writes Parquet and commits DuckLake snapshots through Rocklake
+- [x] pg-trickle sink (`sink => 'ducklake'`) writes Parquet and commits DuckLake snapshots through RockLake
 - [x] Provenance table (`pgtrickle.pgt_ducklake_provenance`) readable from pg-trickle
 - [x] Snapshot lease prevents GC from breaking pg-trickle's frontier
 - [x] `LISTEN`/`NOTIFY` round-trip enables event-driven scheduling
@@ -1932,7 +1932,7 @@ The v0.18 implementation of `table_changes()` emits one synthetic row per added 
 - Add property tests near `u64::MAX` for rowid allocation and near `u64::MAX / 1000` for lease TTL
 - Reject `count == 0` as an invalid rowid range request
 
-### SQLSTATE Routing Bug in `RocklakeError::SqlState`
+### SQLSTATE Routing Bug in `RockLakeError::SqlState`
 
 `sqlstate()` returns the hardcoded string `"55000"` for the `SqlState { code, message }` variant regardless of the stored `code`. The first non-55000 use of this variant reports the wrong SQLSTATE to clients:
 
@@ -1960,11 +1960,11 @@ The v0.18 implementation of `table_changes()` emits one synthetic row per added 
 
 ## v0.20 — FFI Safety, Live Notifications & Operational Wire-Up
 
-> Resolve the FFI unsoundness, wire LISTEN/NOTIFY end-to-end, make extension schema registration configurable, fix extension JSON serialization, fix collision-prone hashed keys, and add TLS/auth safeguards. This release completes the operational surface started in v0.18 and makes the Rocklake FFI extension safe for distribution.
+> Resolve the FFI unsoundness, wire LISTEN/NOTIFY end-to-end, make extension schema registration configurable, fix extension JSON serialization, fix collision-prone hashed keys, and add TLS/auth safeguards. This release completes the operational surface started in v0.18 and makes the RockLake FFI extension safe for distribution.
 
 ### FFI Handle Safety Overhaul
 
-`validate_catalog()` returns `Option<&'static mut RocklakeCatalog>` even though the referenced allocation lives only until `rocklake_close()`. `rocklake_close()` reads, zeroes, and drops through raw pointers with no synchronization for concurrent close/use:
+`validate_catalog()` returns `Option<&'static mut RockLakeCatalog>` even though the referenced allocation lives only until `rocklake_close()`. `rocklake_close()` reads, zeroes, and drops through raw pointers with no synchronization for concurrent close/use:
 
 - Remove the `&'static mut` return and redesign validation to provide short-lived, scoped access only (closure-based or with explicit lifetime bounds)
 - Introduce an internal `SAFETY:` documentation block above every unsafe block in `lib.rs` stating the pointer validity condition, lifetime assumption, and aliasing constraint
@@ -1994,7 +1994,7 @@ The v0.18 implementation of `table_changes()` emits one synthetic row per added 
 
 - Add a `--extension-schemas <schema,...>` CLI flag and `ROCKLAKE_EXTENSION_SCHEMAS` environment variable; default is `pgtrickle` to maintain backward compatibility
 - Thread the allowed-extension list into server state and pass it to `is_registered_extension()` before routing any extension DDL or DML
-- Return `RocklakeError::PermissionDenied` (SQLSTATE 42501) for unregistered extension schemas
+- Return `RockLakeError::PermissionDenied` (SQLSTATE 42501) for unregistered extension schemas
 - Remove the unconditional hardcoded case in `resolve_extension_id()` in favour of the configurable list
 - Document the flag in `--help` and in `docs/operations/extension-schemas.md`
 
@@ -2114,7 +2114,7 @@ Deletions for `StringAgg` and `ArrayAgg` aggregates loop over negative weight, c
 
 ## v0.22 — IVM Removal
 
-> Remove all Incremental View Maintenance code from Rocklake. IVM is an architectural mismatch: it bolted a streaming aggregation engine onto a catalog store that was designed never to be in the data path. The `list_inlined_inserts` source reads all rows on every tick (O(total rows), not O(delta)), making it equivalent to or worse than full DuckDB re-execution. The wasmtime dependency alone adds ~30 s to clean builds. This release strips the feature entirely so the codebase reflects what Rocklake actually is: a serverless DuckLake catalog backed by SlateDB.
+> Remove all Incremental View Maintenance code from RockLake. IVM is an architectural mismatch: it bolted a streaming aggregation engine onto a catalog store that was designed never to be in the data path. The `list_inlined_inserts` source reads all rows on every tick (O(total rows), not O(delta)), making it equivalent to or worse than full DuckDB re-execution. The wasmtime dependency alone adds ~30 s to clean builds. This release strips the feature entirely so the codebase reflects what RockLake actually is: a serverless DuckLake catalog backed by SlateDB.
 >
 > See [plans/incremental-view-maintenance-implementation-removal.md](plans/incremental-view-maintenance-implementation-removal.md) for the full per-file inventory and rationale.
 
@@ -2190,7 +2190,7 @@ Delete `crates/rocklake-ivm/` in its entirety: 36 source files, 13 integration t
 ### Phase 6 — rocklake-pgwire Cleanup
 
 - [x] Remove `rocklake-ivm = { path = "../rocklake-ivm" }` from `Cargo.toml`
-- [x] Remove the IVM match arm in `executor.rs` routing IVM `StatementKind` variants to `RocklakeError::Unsupported` (arms will cease to exist after Phase 5 anyway)
+- [x] Remove the IVM match arm in `executor.rs` routing IVM `StatementKind` variants to `RockLakeError::Unsupported` (arms will cease to exist after Phase 5 anyway)
 - [x] Remove `use rocklake_ivm::rate_limit::{...}` from `tests/security_tests.rs`
 - [x] Remove IVM workflow comment from `tests/compat_tests.rs`
 
@@ -2393,7 +2393,7 @@ Spec: DROP TABLE must set `end_snapshot` on all of: `ducklake_table`, `ducklake_
 
 ### Full 28-Table SQL Facade
 
-The DuckLake spec defines a SQL catalog database with 28 tables. Rocklake stores facts as key/value rows; the facade is the PgWire/virtual-table projection layer. Today many tables return empty result sets or expose Rocklake-internal column names. This phase closes that gap entirely.
+The DuckLake spec defines a SQL catalog database with 28 tables. RockLake stores facts as key/value rows; the facade is the PgWire/virtual-table projection layer. Today many tables return empty result sets or expose RockLake-internal column names. This phase closes that gap entirely.
 
 - [x] Audit every `StatementKind` in `rocklake-pgwire/src/executor/mod.rs` that currently returns an empty result set (`SelectSnapshot`, `SelectTableStats`, `SelectMetadata`, `SelectViews`, `SelectMacros`, `SelectDeleteFiles`); replace each with a real reader call and a spec-shaped response builder.
 - [x] Implement spec-shaped response builders for all 28 tables. Each builder must expose columns in spec column order with spec column names. Use a per-table response builder struct pattern consistent with existing code.
@@ -2577,17 +2577,17 @@ Spec: `table_id`, `sort_order`, `expression`, `dialect`, `sort_direction`, `null
 
 ## v0.27 — DuckLake v1.0 External Compatibility Validation
 
-> Validate Rocklake against a real DuckDB DuckLake extension client. Run the full spec query corpus, implement a migration path from existing DuckLake deployments, and close all remaining P2 fidelity gaps. Exit criteria: Rocklake can credibly claim DuckLake v1.0 catalog compatibility.
+> Validate RockLake against a real DuckDB DuckLake extension client. Run the full spec query corpus, implement a migration path from existing DuckLake deployments, and close all remaining P2 fidelity gaps. Exit criteria: RockLake can credibly claim DuckLake v1.0 catalog compatibility.
 
 ### Real DuckDB DuckLake Extension End-to-End Tests
 
 This is the primary acceptance gate for all DuckLake compatibility work across v0.24–v0.27.
 
-- [ ] Stand up a Rocklake PgWire sidecar against an in-process MinIO instance (using `MinioHarness` from `rocklake-testkit`).
+- [ ] Stand up a RockLake PgWire sidecar against an in-process MinIO instance (using `MinioHarness` from `rocklake-testkit`).
 - [ ] Connect a real DuckDB process using the `ducklake` extension via the PostgreSQL attachment string `ducklake:postgres://127.0.0.1:5555/...`.
 - [ ] Run the full DuckLake tutorial end-to-end: `ATTACH`, `CREATE SCHEMA`, `CREATE TABLE`, multi-row `INSERT`, `SELECT`, `DELETE`, `UPDATE`, `DROP TABLE`, `DROP SCHEMA`, `DETACH`.
 - [ ] Verify time-travel reads: `SELECT ... FROM table AT (VERSION => N)` returns rows visible at snapshot N and excludes rows added after N.
-- [ ] Verify file pruning: single typed-column predicate at 10⁴ files; confirm Rocklake does not scan files that the zone-map or exact-stats pruning eliminates.
+- [ ] Verify file pruning: single typed-column predicate at 10⁴ files; confirm RockLake does not scan files that the zone-map or exact-stats pruning eliminates.
 - [ ] Verify conflict resolution: two concurrent writer connections; one must succeed and the other must receive a retryable conflict error; the winner's data is visible and the loser's is absent.
 - [ ] Capture any `column-not-found`, `type mismatch`, or behavior divergence as blocking test failures.
 - [ ] Add this test suite as Tier 4 in the CI test matrix (MinIO, runs on every merge to `main`).
@@ -2595,13 +2595,13 @@ This is the primary acceptance gate for all DuckLake compatibility work across v
 ### Read Conformance Suite Against `specification/queries.md`
 
 - [x] Extract every SQL example from `specification/queries.md` into parameterized golden tests.
-- [x] For each query, set up the required catalog state (snapshot, schema, table, columns, data files), run the query through the Rocklake PgWire facade, and assert column names, column types, and row values against a golden fixture.
+- [x] For each query, set up the required catalog state (snapshot, schema, table, columns, data files), run the query through the RockLake PgWire facade, and assert column names, column types, and row values against a golden fixture.
 - [x] Run this suite on every PR as part of the conformance harness from v0.24.
 - [ ] Document any queries that remain unsupported with an explicit `SQLSTATE 0A000` response and a tracking note; no query may silently return wrong results.
 
 ### Import / Export and Migration Path
 
-- [x] Implement `rocklake migrate-from-ducklake --source <conn-string> --catalog <s3-path>`: reads an existing PostgreSQL- or SQLite-backed DuckLake catalog (current snapshot only), replays its metadata into a fresh Rocklake catalog, and emits a verification report comparing row counts and column presence per table.
+- [x] Implement `rocklake migrate-from-ducklake --source <conn-string> --catalog <s3-path>`: reads an existing PostgreSQL- or SQLite-backed DuckLake catalog (current snapshot only), replays its metadata into a fresh RockLake catalog, and emits a verification report comparing row counts and column presence per table.
 - [x] Implement `rocklake export-catalog --catalog <s3-path> --out <file.json>`: serializes the current snapshot of all 28 catalog tables to a JSON-lines file usable as an interop dump or for debugging.
 - [x] Document the migration procedure in `docs/operations/migration-from-ducklake.md`; cover cutover, rollback, and known incompatibilities.
 - [ ] End-to-end test `migrate-from-ducklake` against a SQLite-backed DuckLake fixture at SF1 scale.
@@ -2625,11 +2625,11 @@ These gaps do not block narrow happy-path interop but are required for full cata
 
 ### Definition of Done for DuckLake v1.0 Compatibility
 
-Rocklake claims DuckLake v1.0 catalog compatibility when all of the following are true. These become hard blockers for the v1.0 GA tag:
+RockLake claims DuckLake v1.0 catalog compatibility when all of the following are true. These become hard blockers for the v1.0 GA tag:
 
 - [x] All 28 spec tables are visible through SQL with exact column names and compatible types.
 - [x] Every spec field is either persisted internally or losslessly synthesized in the SQL facade.
-- [x] DuckLake query examples from `specification/queries.md` pass against Rocklake.
+- [x] DuckLake query examples from `specification/queries.md` pass against RockLake.
 - [x] Create/insert/delete/update/drop operations produce rows matching spec semantics.
 - [x] Time travel uses `begin_snapshot` and `end_snapshot` consistently across all spec tables that carry MVCC windows.
 - [x] Snapshot rows include `next_catalog_id` and `next_file_id`.
@@ -2709,7 +2709,7 @@ Rocklake claims DuckLake v1.0 catalog compatibility when all of the following ar
 - [x] Resolve `data_root` automatically from catalog metadata when not explicitly provided.
   - Read `ducklake_metadata` key `data_path` (schema-level or catalog-level) during `CatalogProvider` initialisation.
   - Fall back to `None` → `EmptyExec` only when no data path is configured anywhere and emit a `tracing::warn!` to make the root cause explicit.
-- [x] Add a constructor `RocklakeCatalogProvider::from_catalog_store(store, db_config)` that reads the data root automatically.
+- [x] Add a constructor `RockLakeCatalogProvider::from_catalog_store(store, db_config)` that reads the data root automatically.
 - [x] Update `docs/integration/datafusion.md` to document automatic vs explicit data-root configuration.
 - [x] Add an integration test that creates a table entirely through PG-Wire DDL and then queries it via DataFusion without any explicit `data_root` override.
 
@@ -2745,7 +2745,7 @@ Rocklake claims DuckLake v1.0 catalog compatibility when all of the following ar
 ### Verify Open Assessment-2 Partial Findings
 
 - [x] **High-7 (rowid `checked_add`)**: audit all arithmetic on `rowid` in `crates/rocklake-catalog/src/writer/` for overflow safety; replace any unchecked `+` with `checked_add().ok_or(CatalogError::RowIdOverflow)?`.
-- [x] **High-9 (`SqlState` code ignored)**: audit all `RocklakeError::SqlState { code, message }` construction sites in the executor; ensure the `code` field is forwarded to the PG-Wire error response rather than replaced by a generic `42000`.
+- [x] **High-9 (`SqlState` code ignored)**: audit all `RockLakeError::SqlState { code, message }` construction sites in the executor; ensure the `code` field is forwarded to the PG-Wire error response rather than replaced by a generic `42000`.
 - [x] **F-07 (checkpoint restore snapshot-ID reuse)**: audit `rocklake restore-checkpoint` path; confirm snapshot IDs are always allocated via the in-memory counter (loaded from `COUNTER_SNAPSHOT`) and never re-issued from a restored snapshot's own IDs.
 - [x] **F-10 (`rebuild_catalog`)**: locate `rebuild_catalog()` or confirm it was removed; if removed, update `docs/operations/repair.md`; if present, test it.
 - [x] Document the outcome of each verification in a new `docs/internals/open-findings-verification.md`.
@@ -2881,14 +2881,14 @@ Rocklake claims DuckLake v1.0 catalog compatibility when all of the following ar
 
 ### Context
 
-When DuckDB 1.5.x executes `ATTACH 'ducklake:postgres:host=... dbname=...' AS lake`, two code paths send SQL to Rocklake:
+When DuckDB 1.5.x executes `ATTACH 'ducklake:postgres:host=... dbname=...' AS lake`, two code paths send SQL to RockLake:
 
 1. **Postgres scanner** (`duckdb/duckdb-postgres`) — sends version probes, catalog scans, and connection resets before any DuckLake logic runs.
 2. **DuckLake extension** (`duckdb/ducklake`) — sends queries against `ducklake_*` metadata tables once the catalog scan completes.
 
 The v0.27 series only fixed Phase 1 items 1.1 (version/RDS check) and 1.2 (SELECT 1). The remaining Phase 1 queries block the attach sequence.
 
-See `plans/ducklake-queries.md` for the full audit with exact SQL, expected columns, and Rocklake status for each query.
+See `plans/ducklake-queries.md` for the full audit with exact SQL, expected columns, and RockLake status for each query.
 
 ### Step 1 — `DISCARD ALL` (High, connection pool)
 
@@ -2937,7 +2937,7 @@ DuckDB expects five result sets (one per SELECT) in sequence before the final `R
 - [x] Add `PgCatalogScan` variant to `StatementKind`.
 - [x] Detect the batch: a `Begin` statement whose `sql` string contains the `pg_namespace` / `pg_class` / `pg_enum` characteristic queries.
 - [x] Build a multi-result response in the executor:
-  - **pg_namespace result** (`oid INT8, nspname TEXT`): one row per schema Rocklake exposes (at minimum `(1, 'public')` and `(2, 'main')`).
+  - **pg_namespace result** (`oid INT8, nspname TEXT`): one row per schema RockLake exposes (at minimum `(1, 'public')` and `(2, 'main')`).
   - **pg_class UNION result** (`namespace_id INT8, relname TEXT, relpages INT8, attname TEXT, type_name TEXT, type_modifier INT8, ndim INT8, attnum INT8, notnull BOOL, constraint_id INT8, constraint_type TEXT, constraint_key TEXT`): rows for every ducklake table with its column definitions. Constraints: empty.
   - **pg_enum result** (`oid INT8, enumtypid INT8, typname TEXT, enumlabel TEXT`): zero rows.
   - **pg_type composites result** (`oid INT8, id INT8, type TEXT, attname TEXT, typname TEXT`): zero rows.
@@ -2948,9 +2948,9 @@ DuckDB expects five result sets (one per SELECT) in sequence before the final `R
 
 ### Step 6 — Wire Corpus for DuckDB 1.5.x
 
-- [x] Record a new `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` by running DuckDB 1.5.x against Rocklake once all the above handlers are in place.
+- [x] Record a new `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` by running DuckDB 1.5.x against RockLake once all the above handlers are in place.
 - [x] The fixture must capture the full ATTACH sequence: connection, version check, `DISCARD ALL`, `to_regclass`, `information_schema.tables`, multi-statement catalog scan, and at least one DuckLake metadata query.
-- [x] Add a corpus replay test that validates every message in the fixture against the running Rocklake server.
+- [x] Add a corpus replay test that validates every message in the fixture against the running RockLake server.
 - [x] Update `docs/compatibility.md` and `tests/fixtures/compatibility-matrix.toml` (from v0.40.0 scope) to record DuckDB 1.5.x as the primary supported version.
 - [x] Remove DuckDB versions older than 1.5.2 from the supported matrix.
 
@@ -2970,13 +2970,13 @@ DuckDB expects five result sets (one per SELECT) in sequence before the final `R
 
 ## v0.27.5 — DuckLake v1.0 Spec Gap Closure
 
-> Close all P0 and P1 gaps from `plans/ducklake-1.0-spec-gaps.md`. These gaps block DuckLake v1.0 interoperability: missing SQL catalog facades, incorrect snapshot/delete-file schema, incomplete DROP TABLE cascade, and the absence of inlined data execution. Rocklake's internal catalog storage is robust; the work here is projecting exact DuckLake spec tables and semantics through PgWire and implementing the execution paths that v0.2–v0.27 stubbed as no-ops.
+> Close all P0 and P1 gaps from `plans/ducklake-1.0-spec-gaps.md`. These gaps block DuckLake v1.0 interoperability: missing SQL catalog facades, incorrect snapshot/delete-file schema, incomplete DROP TABLE cascade, and the absence of inlined data execution. RockLake's internal catalog storage is robust; the work here is projecting exact DuckLake spec tables and semantics through PgWire and implementing the execution paths that v0.2–v0.27 stubbed as no-ops.
 
 ### P0 (Critical) — Interoperability Blockers
 
 #### 1. Exact DuckLake SQL Catalog Facade for All 28 Tables
 
-Rocklake stores protobuf rows in SlateDB; PgWire currently returns custom response schemas for many tables. This must be inverted: return exact DuckLake spec columns, types, and order for all 28 tables.
+RockLake stores protobuf rows in SlateDB; PgWire currently returns custom response schemas for many tables. This must be inverted: return exact DuckLake spec columns, types, and order for all 28 tables.
 
 **Affected tables with current status:**
 
@@ -3188,7 +3188,7 @@ The internal `TableStatsRow` retains a `file_count` field that no longer maps to
 **Tasks:**
 
 - [x] Rename internal `file_count` in `TableStatsRow` or wrap it in a clearly internal struct so the public DuckLake `next_row_id` and `file_size_bytes` fields are unambiguous.
-- [x] Update `InsertTableStats` parsing in `crates/rocklake-pgwire/src/executor/mod.rs` so the third literal is treated as `next_row_id` or explicitly ignored if Rocklake computes `next_row_id` independently.
+- [x] Update `InsertTableStats` parsing in `crates/rocklake-pgwire/src/executor/mod.rs` so the third literal is treated as `next_row_id` or explicitly ignored if RockLake computes `next_row_id` independently.
 - [x] Add migration/facade handling for persisted catalogs that stored the old `file_count` semantics.
 - [x] Add a regression test confirming that all four DuckLake v1.0 `ducklake_table_stats` column positions round-trip correctly.
 
@@ -3284,7 +3284,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 #### Opt-In Lifecycle Integration Test
 
 - [x] Create an integration test in `crates/rocklake-pgwire/tests/v0276_lifecycle_tests.rs` (gated on `duckdb_available()` + `ducklake_available()`, skips gracefully without `#[ignore]`) that:
-  - Starts a live Rocklake PgWire server against a temp catalog directory.
+  - Starts a live RockLake PgWire server against a temp catalog directory.
   - Connects a real DuckDB client with `LOAD ducklake; ATTACH 'ducklake:postgres:...' AS my_lake`.
   - Runs the full workload: `CREATE SCHEMA`, `CREATE TABLE`, `INSERT`, raw read, ordered read, filtered read.
   - Asserts result sets match expected rows.
@@ -3368,7 +3368,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [x] Implement decimal/numeric comparison using bigdecimal or string-based ordering.
 - [x] Implement boolean comparison (`false < true`).
 - [x] Implement UUID string comparison (lexicographic is correct for RFC-4122 UUIDs).
-- [x] Add DuckDB validation tests that verify DuckDB prunes correctly on each new type after Rocklake stores the stats.
+- [x] Add DuckDB validation tests that verify DuckDB prunes correctly on each new type after RockLake stores the stats.
 
 ### Definition of Done
 
@@ -3416,8 +3416,8 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 #### Imported DuckLake Catalog Support
 
-- [x] Document the procedure for attaching an existing DuckLake catalog (created by DuckDB natively) to Rocklake.
-- [x] Add a smoke test that reads an externally created DuckLake catalog's metadata tables through Rocklake PgWire.
+- [x] Document the procedure for attaching an existing DuckLake catalog (created by DuckDB natively) to RockLake.
+- [x] Add a smoke test that reads an externally created DuckLake catalog's metadata tables through RockLake PgWire.
 
 ### Definition of Done
 
@@ -3433,7 +3433,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 ## v0.27.10 — DuckLake Compatibility CI
 
-> Prevent regressions as DuckDB and DuckLake evolve by building a durable compatibility corpus and automating it in CI. This is the final milestone before Rocklake can claim broad DuckLake v1.0 compatibility. Corresponds to Phase 6 of the implementation roadmap in `plans/ducklake-1.0-spec-gaps-3.md`.
+> Prevent regressions as DuckDB and DuckLake evolve by building a durable compatibility corpus and automating it in CI. This is the final milestone before RockLake can claim broad DuckLake v1.0 compatibility. Corresponds to Phase 6 of the implementation roadmap in `plans/ducklake-1.0-spec-gaps-3.md`.
 
 ### Tasks
 
@@ -3443,7 +3443,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Capture the multi-statement schema discovery transaction (`StatementKind::PgCatalogScan`) in the compatibility corpus.
 - [ ] Store normalized SQL statements under `tests/fixtures/ducklake-corpus/` tagged by DuckDB version and DuckLake version.
 - [ ] Add a classification test that runs every statement in the corpus through `classify_statement` and fails on any `StatementKind::Unsupported`.
-- [ ] Add a response-shape test that executes every corpus SELECT against a running Rocklake instance and validates field names and count.
+- [ ] Add a response-shape test that executes every corpus SELECT against a running RockLake instance and validates field names and count.
 
 #### Pinned CI Jobs
 
@@ -3455,7 +3455,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 #### Acceptance Gates
 
 - [ ] Create a `docs/compatibility.md` section that states the DuckLake v1.0 compatibility claim and links to CI evidence.
-- [ ] Define the acceptance criteria for "DuckDB v1.5.3 and Rocklake work perfectly together under DuckLake 1.0" (from `plans/ducklake-1.0-spec-gaps-3.md`):
+- [ ] Define the acceptance criteria for "DuckDB v1.5.3 and RockLake work perfectly together under DuckLake 1.0" (from `plans/ducklake-1.0-spec-gaps-3.md`):
   - DuckDB can attach fresh; create/drop schemas and tables without custom flags.
   - Inlined and file-backed tables both work.
   - INSERT, DELETE, UPDATE, ALTER, DROP, view, macro, tag, partition, and sort metadata work.
@@ -3480,7 +3480,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 ## v0.27.11 — Wire & SQL Resiliency Hardening
 
-> Harden Rocklake's query classifier, PgWire connection stability, and integration test suite to insulate the sidecar from changes in client query patterns, dialect shifts, and connection initialization queries. Incorporates the five actionable mitigations outlined in `plans/wire-and-sql-resiliency-report-1.md` and addresses the critical test sandboxing recommendations from the test suite assessment in `/Users/grove/obsidian-vault/grove/rocklake/test_suite_assessment.md`.
+> Harden RockLake's query classifier, PgWire connection stability, and integration test suite to insulate the sidecar from changes in client query patterns, dialect shifts, and connection initialization queries. Incorporates the five actionable mitigations outlined in `plans/wire-and-sql-resiliency-report-1.md` and addresses the critical test sandboxing recommendations from the test suite assessment in `/Users/grove/obsidian-vault/grove/rocklake/test_suite_assessment.md`.
 
 ### Tasks
 
@@ -3509,7 +3509,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 - [ ] Harden the `execute_sql` handler to intercept all unsupported/unhandled queries and return a standardized PostgreSQL error:
   - **SQLSTATE**: `0A000` (Feature Not Supported)
   - **Severity**: `ERROR`
-  - **Message**: "Statement is not supported by Rocklake's catalog facade."
+  - **Message**: "Statement is not supported by RockLake's catalog facade."
 - [ ] Assert that under fuzzing the server remains non-blocking (never drops the connection abruptly, panics, or hangs).
 
 #### Mitigation 5: Hardened Testing with Sandbox Timeouts (Test Suite Assessment Integration)
@@ -3575,7 +3575,7 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 ## v0.27.13 — Real Multi-Client & Multi-Driver Interoperability Certification
 
-> Certify that Rocklake's PG-Wire catalog facade is fully compliant with standard Postgres database clients, ORM drivers, and analytical applications under the strict DuckLake 1.0 (Catalog Version 7) and DuckDB v1.5.3 constraints.
+> Certify that RockLake's PG-Wire catalog facade is fully compliant with standard Postgres database clients, ORM drivers, and analytical applications under the strict DuckLake 1.0 (Catalog Version 7) and DuckDB v1.5.3 constraints.
 
 ### Tasks
 
@@ -3662,7 +3662,7 @@ The v0.5 roadmap described Strategy C as Done, but the C++ extension in `extensi
 
 If the public extension API supports catalog registration:
 
-- [ ] Implement `RocklakeCatalog : duckdb::Catalog` in `extension/src/` delegating all virtual methods to `RocklakeCatalogWrapper` (which already wraps the C FFI calls).
+- [ ] Implement `RockLakeCatalog : duckdb::Catalog` in `extension/src/` delegating all virtual methods to `RockLakeCatalogWrapper` (which already wraps the C FFI calls).
 - [ ] Register the attach handler for the `slatedb:` scheme in `rocklake_extension_init()` using DuckDB's `StorageExtension` or equivalent API.
 - [ ] Implement the minimum required virtual methods for a read-only attach: `ScanEntry`, `GetEntry` (schemas, tables, columns), `GetTableIOFunction` (Parquet scan via existing data path).
 - [ ] Implement write-path virtual methods for `CreateEntry` (table, schema, data file registration) delegating to `rocklake_ffi` write functions.
@@ -3681,7 +3681,7 @@ If the public extension API does not yet support catalog registration:
 
 ### Step 4 — End-to-End Tests
 
-- [ ] Add `tests/native_extension_e2e.rs` (or a shell-based golden test): `LOAD rocklake; ATTACH 'ducklake:slatedb:///tmp/test-catalog' AS lake; CREATE SCHEMA lake.s; CREATE TABLE lake.s.t (id INTEGER); INSERT INTO lake.s.t VALUES (1); SELECT * FROM lake.s.t` — asserts row count and value without starting a Rocklake sidecar process.
+- [ ] Add `tests/native_extension_e2e.rs` (or a shell-based golden test): `LOAD rocklake; ATTACH 'ducklake:slatedb:///tmp/test-catalog' AS lake; CREATE SCHEMA lake.s; CREATE TABLE lake.s.t (id INTEGER); INSERT INTO lake.s.t VALUES (1); SELECT * FROM lake.s.t` — asserts row count and value without starting a RockLake sidecar process.
 - [ ] Add a parity test: run the same DuckLake tutorial operations against both the PG-wire sidecar (Strategy B) and the native extension (Strategy C) against the same catalog path; assert identical query results.
 - [ ] Wire the Strategy C tests into CI under a separate job `native-extension` that builds the `.duckdb_extension` artifact and runs the end-to-end tests.
 
@@ -3720,7 +3720,7 @@ The workflow named `DuckDB Compatibility Matrix` is not a full compatibility mat
 
 - [ ] **DuckDB / DuckLake:** CI checks that `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` exists, then runs the same package tests for every matrix entry. It does not pass the selected client fixture into the replay test, does not run a real DuckDB process, does not attach the real `ducklake` extension, and does not prove DuckDB 1.5.x patch streams.
 - [ ] **Wire corpus replay:** The current corpus tests mostly validate fixture presence, JSON shape, or SQL classifier acceptance. They do not replay each selected corpus end-to-end through PG-wire, assert response messages, or compare final catalog state with golden DuckLake-backed output.
-- [ ] **PostgreSQL clients:** The compatibility workflow runs `cargo test --package rocklake-pgwire -- --include-ignored psql_compat`, but no listed test currently contains `psql_compat`; this can pass while running zero client compatibility tests. The workflow also starts PostgreSQL containers even though the compatibility target should be a Rocklake server exercised by real clients. DBeaver, pgcli, and Metabase have no automated coverage.
+- [ ] **PostgreSQL clients:** The compatibility workflow runs `cargo test --package rocklake-pgwire -- --include-ignored psql_compat`, but no listed test currently contains `psql_compat`; this can pass while running zero client compatibility tests. The workflow also starts PostgreSQL containers even though the compatibility target should be a RockLake server exercised by real clients. DBeaver, pgcli, and Metabase have no automated coverage.
 - [ ] **Spark / Trino / Presto:** Spark 3.5 and Trino 432 have small synthetic corpus fixtures and classifier checks only. There is no real Spark connector, Trino connector, or Presto job, and the documented Trino 400-431 / Presto disposition is not actively verified.
 - [ ] **DataFusion:** DataFusion 45 is pinned and has local integration tests, including Parquet scan coverage, but those tests are not wired into the compatibility matrix and there is no docs-to-test evidence mapping for the supported DataFusion row or the unsupported `< 45` row.
 - [ ] **Object storage:** Local filesystem is covered indirectly by many tests. GCS and Azure checks only validate builder construction, not real read/write/list/commit behavior. AWS S3 and MinIO are documented as supported but are not exercised by this compatibility workflow as real backends.
@@ -3740,23 +3740,23 @@ The workflow named `DuckDB Compatibility Matrix` is not a full compatibility mat
 ### DuckDB / DuckLake Certification
 
 - [ ] Replace the current fixture-exists workflow with versioned real-client jobs for every supported DuckDB/DuckLake combination in the manifest.
-- [ ] For each supported DuckDB version, start Rocklake as a real PG-wire sidecar, install/load the DuckDB `ducklake` extension, attach via `ducklake:postgres://...`, and run the v0.27 end-to-end lifecycle on LocalFS and MinIO.
+- [ ] For each supported DuckDB version, start RockLake as a real PG-wire sidecar, install/load the DuckDB `ducklake` extension, attach via `ducklake:postgres://...`, and run the v0.27 end-to-end lifecycle on LocalFS and MinIO.
 - [ ] Replay the selected wire corpus named by the matrix entry, not a generic test filter. Assert protocol responses, SQLSTATEs, and final catalog rows against golden fixtures.
 - [ ] Capture and validate new DuckDB patch/minor corpora before a version is added to the supported matrix. Weekly scheduled jobs detect new DuckDB releases and open a tracking issue when a corpus is missing.
 - [ ] Keep `docs/integration/duckdb-compatibility.md` synchronized with the same manifest; remove or downgrade any DuckDB version claim that is not certified.
 
 ### SQL Client Certification
 
-- [ ] Add real `psql` CLI smoke tests for PostgreSQL client versions 16, 17, and 18 against Rocklake, including startup, simple query, extended/prepared query, transaction, auth failure, and TLS-required modes.
+- [ ] Add real `psql` CLI smoke tests for PostgreSQL client versions 16, 17, and 18 against RockLake, including startup, simple query, extended/prepared query, transaction, auth failure, and TLS-required modes.
 - [ ] Rename or add tests so the CI filter cannot silently run zero tests; fail the workflow when the selected test count is zero.
-- [ ] Add pgcli 4.x smoke coverage against Rocklake for connection setup, catalog SELECT, transaction, TLS-required connection, and auth failure.
+- [ ] Add pgcli 4.x smoke coverage against RockLake for connection setup, catalog SELECT, transaction, TLS-required connection, and auth failure.
 - [ ] Add DBeaver 24.x coverage using its bundled PostgreSQL JDBC driver or a headless DBeaver-compatible JDBC smoke harness. Record the driver version in the manifest.
-- [ ] Add Metabase 0.49+ coverage with a containerized Metabase instance or API-driven smoke harness that registers Rocklake as a PostgreSQL database and runs a catalog query.
+- [ ] Add Metabase 0.49+ coverage with a containerized Metabase instance or API-driven smoke harness that registers RockLake as a PostgreSQL database and runs a catalog query.
 
 ### Spark, Trino, Presto, and DataFusion
 
-- [ ] Run a real Spark 3.5 job against Rocklake through the documented pg-wire path. Cover schema discovery, table discovery, Parquet file listing, snapshot visibility, and a write path if the connector supports it.
-- [ ] Run a real Trino 432+ job against Rocklake through the documented pg-wire path. Cover catalog discovery, table discovery, predicate pushdown/file pruning expectations, and snapshot visibility.
+- [ ] Run a real Spark 3.5 job against RockLake through the documented pg-wire path. Cover schema discovery, table discovery, Parquet file listing, snapshot visibility, and a write path if the connector supports it.
+- [ ] Run a real Trino 432+ job against RockLake through the documented pg-wire path. Cover catalog discovery, table discovery, predicate pushdown/file pruning expectations, and snapshot visibility.
 - [ ] Decide the Trino 400-431 and Presto compatibility status in the manifest. If either remains `untested` or `unsupported`, `docs/compatibility.md` must say so plainly; if either becomes supported, add a real engine smoke job first.
 - [ ] Promote `cargo test -p rocklake-datafusion` into the compatibility workflow for DataFusion 45 and include the Parquet scan test as the supported-row evidence.
 - [ ] Add a version-policy check proving DataFusion `< 45` is outside the supported range, or remove the row from the public matrix.
@@ -3817,7 +3817,7 @@ Harnesses are added to `rocklake-testkit` and exposed as conditional features (`
 
 ### Full Benchmark Suite
 
-TPC-H @ SF10 comparison across all three catalog backends — Rocklake, DuckLake-on-PostgreSQL (RDS same AZ), and DuckLake-on-SQLite — for each operation family:
+TPC-H @ SF10 comparison across all three catalog backends — RockLake, DuckLake-on-PostgreSQL (RDS same AZ), and DuckLake-on-SQLite — for each operation family:
 
 - `get_current_snapshot()` — 1 point read; cold-process and warm-cache
 - `list_data_files(table)` — at 10⁴, 10⁵, and 10⁶ files; MVCC filter ratio measured separately
@@ -3837,7 +3837,7 @@ Run all benchmarks on: LocalFS, MinIO (same host), S3 Standard (same region), S3
 
 Measurable acceptance criteria that must all be green before v1.0 is tagged:
 
-1. Full DuckLake tutorial runs end-to-end from the standard DuckDB `ducklake` extension through the Rocklake PG-wire sidecar, with catalog in S3 and no PostgreSQL or SQLite database required.
+1. Full DuckLake tutorial runs end-to-end from the standard DuckDB `ducklake` extension through the RockLake PG-wire sidecar, with catalog in S3 and no PostgreSQL or SQLite database required.
 2. Concurrent reads from a second DuckDB process see consistent, snapshot-isolated catalog views.
 3. `kill -9` on the writer mid-commit leaves the catalog readable and consistent; the next writer fences and takes over within the SLOs verified in v0.9.
 4. Benchmarks published: p50/p95/p99 catalog latency vs. PostgreSQL-backed DuckLake on RDS and SQLite-backed DuckLake; cost crossover point documented.
@@ -3845,8 +3845,8 @@ Measurable acceptance criteria that must all be green before v1.0 is tagged:
 6. All 28 DuckLake v1.0 catalog tables implemented, tag-allocated, fixture-covered, and explicitly status-tracked in `tags.rs`.
 7. Phase 0 validation gates pass on LocalFS, MinIO, S3 Standard, and S3 Express; results documented.
 8. `mkdocs build --strict` green; documentation site live with no stub pages.
-9. **Real-world validation gate.** At least 30 days of dogfood deployment on a realistic workload (see Cross-Cutting Concerns: Real-World Validation Policy). Friction log reviewed and all blocking findings resolved. One external-to-the-team developer has successfully deployed Rocklake using only published docs.
-10. **Migration path from existing DuckLake deployments.** A documented and tested migration tool (`rocklake migrate-from-ducklake --source postgres://... --catalog s3://...`) reads an existing PostgreSQL- or SQLite-backed DuckLake catalog, replays its current snapshot into a fresh Rocklake catalog (data files are not copied — they remain at their original object-store paths and are referenced by the new catalog), and emits a verification report. `docs/operations/migration-from-ducklake.md` covers cutover, rollback, and known-incompatibility surfaces. End-to-end tested against both PostgreSQL- and SQLite-backed source catalogs at SF1 scale.
+9. **Real-world validation gate.** At least 30 days of dogfood deployment on a realistic workload (see Cross-Cutting Concerns: Real-World Validation Policy). Friction log reviewed and all blocking findings resolved. One external-to-the-team developer has successfully deployed RockLake using only published docs.
+10. **Migration path from existing DuckLake deployments.** A documented and tested migration tool (`rocklake migrate-from-ducklake --source postgres://... --catalog s3://...`) reads an existing PostgreSQL- or SQLite-backed DuckLake catalog, replays its current snapshot into a fresh RockLake catalog (data files are not copied — they remain at their original object-store paths and are referenced by the new catalog), and emits a verification report. `docs/operations/migration-from-ducklake.md` covers cutover, rollback, and known-incompatibility surfaces. End-to-end tested against both PostgreSQL- and SQLite-backed source catalogs at SF1 scale.
 13. **World-class testing foundation.** All 10 test tiers from [plans/e2e-integration-tests.md](plans/e2e-integration-tests.md) are fully implemented and green:
     - **Tiers 1–3** (unit/property, catalog, PG-Wire): green on every PR — standard GitHub Actions runner
     - **Tiers 4–5** (MinIO object store, client compat): green on every merge to `main` — large runner (8-vCPU), Testcontainers MinIO
@@ -3869,17 +3869,17 @@ Measurable acceptance criteria that must all be green before v1.0 is tagged:
 
 ## v0.23 — Streaming Ingest
 
-> v0.23 completes the streaming ingest workstream: `RocklakeSink`, exactly-once delivery, and CDC output. These features were developed in parallel with the v0.18–v0.22 series and are released as part of the v0.23 tag.
+> v0.23 completes the streaming ingest workstream: `RockLakeSink`, exactly-once delivery, and CDC output. These features were developed in parallel with the v0.18–v0.22 series and are released as part of the v0.23 tag.
 
 > Kafka/NATS streaming pipelines, exactly-once delivery semantics, and pg-tide-relay integration for zero-infrastructure ingest paths from transactional sources to S3-backed data lakes.
 
 ### Streaming Ingest via pg-tide-relay
 
-[pg-tide](https://github.com/trickle-labs/pg-tide) v0.34.0 registers DuckLake (and `RocklakeSink`) as a valid reverse pipeline sink. This enables:
+[pg-tide](https://github.com/trickle-labs/pg-tide) v0.34.0 registers DuckLake (and `RockLakeSink`) as a valid reverse pipeline sink. This enables:
 
-- **Kafka → Rocklake** and **NATS → Rocklake** patterns with no persistent database other than the SlateDB-backed catalog
+- **Kafka → RockLake** and **NATS → RockLake** patterns with no persistent database other than the SlateDB-backed catalog
 - Any external source (Kafka, NATS, Redis, SQS, webhook) writes directly to a DuckLake catalog without routing through a PostgreSQL inbox
-- `RocklakeSink` connects directly to the PG-wire sidecar, giving a zero-infrastructure path from a transactional source to a queryable data lake in S3
+- `RockLakeSink` connects directly to the PG-wire sidecar, giving a zero-infrastructure path from a transactional source to a queryable data lake in S3
 
 The pg-tide-relay SQL corpus is bounded by the patterns validated in v0.6 and v1.0. The key additional patterns beyond the base DuckDB corpus:
 
@@ -3900,9 +3900,9 @@ Multiple applications coexist by using distinct prefixes. Application metadata r
 
 ### Deliverables
 
-- [x] `RocklakeSink` implementation in pg-tide registers without errors
-- [x] End-to-end Kafka → Rocklake → DuckDB query test passes with ≥100k records
-- [x] NATS → Rocklake → DuckDB query test passes with ≥100k records
+- [x] `RockLakeSink` implementation in pg-tide registers without errors
+- [x] End-to-end Kafka → RockLake → DuckDB query test passes with ≥100k records
+- [x] NATS → RockLake → DuckDB query test passes with ≥100k records
 - [x] Application metadata key namespace enforced: `{app}.{instance}.{key}` pattern validated in tests
 - [x] Exactly-once delivery: process death between Parquet write and metadata commit is survivable; offset is not advanced on retry
 - [x] Consumer offset tracking test: offset advances monotonically across 10 consecutive ingest batches
@@ -3911,7 +3911,7 @@ Multiple applications coexist by using distinct prefixes. Application metadata r
 
 ### CDC Output (Change Data Capture Export)
 
-The complement to ingest: when a DuckLake snapshot is committed, the *diff* between the previous and current snapshot is a natural change stream. This turns Rocklake from a streaming sink into a streaming source.
+The complement to ingest: when a DuckLake snapshot is committed, the *diff* between the previous and current snapshot is a natural change stream. This turns RockLake from a streaming sink into a streaming source.
 
 **Snapshot diff as a first-class primitive.** The diff between snapshots `S_n` and `S_{n+1}` is already computed implicitly: it's the set of catalog facts with `begin_snapshot = S_{n+1}` (new) or `end_snapshot = S_{n+1}` (retired). Expose this as a typed API and as a streaming output.
 
@@ -3929,7 +3929,7 @@ The complement to ingest: when a DuckLake snapshot is committed, the *diff* betw
 
 ### Deliverables (updated)
 
-- [x] `RocklakeSink` implementation in pg-tide registers without errors
+- [x] `RockLakeSink` implementation in pg-tide registers without errors
 - [x] CDC output: `snapshot_diff()` API, S3 CDC writer, and `rocklake-cdc` sidecar (Kafka + webhook)
 - [x] End-to-end streaming pipeline test: ingest → CDC → downstream consumer
 - [x] Documentation: `docs/integration/streaming-ingest.md` and `docs/integration/cdc-output.md`
@@ -4001,7 +4001,7 @@ The Lambda function uses the read-only `DbReader` API and requires only the cata
 
 ## v2.x — General Fact Store
 
-> Expose the immutable append-only substrate beyond DuckLake. Rocklake's storage engine is schema-agnostic by design; this release line opens it up to non-DuckLake workloads.
+> Expose the immutable append-only substrate beyond DuckLake. RockLake's storage engine is schema-agnostic by design; this release line opens it up to non-DuckLake workloads.
 
 The architectural principle in [plans/blueprint.md §1.4](plans/blueprint.md)
 treats the storage engine as a generic fact log over object storage. DuckLake
@@ -4112,9 +4112,9 @@ When a new DuckLake spec version is published:
 
 Synthetic benchmarks (TPC-H, TPC-DS) catch performance regressions and correctness bugs, but they do not catch usability gaps, cost surprises, or workflow friction. Before v1.0 GA:
 
-1. **Internal dogfood.** Run a real Rocklake deployment against pg-tide's own analytics pipeline (if available) or a synthetic-but-realistic workload (e.g. GitHub event stream, NYC taxi stream) for ≥ 30 days.
+1. **Internal dogfood.** Run a real RockLake deployment against pg-tide's own analytics pipeline (if available) or a synthetic-but-realistic workload (e.g. GitHub event stream, NYC taxi stream) for ≥ 30 days.
 2. **Document surprises.** Any unexpected behaviour, cost spike, or operational friction discovered during dogfooding becomes a documented finding and must be resolved or explicitly accepted before GA.
-3. **User-experience review.** At least one developer unfamiliar with Rocklake internals must successfully set up and query a catalog using only the published documentation. Their friction log becomes a documentation and UX backlog item.
+3. **User-experience review.** At least one developer unfamiliar with RockLake internals must successfully set up and query a catalog using only the published documentation. Their friction log becomes a documentation and UX backlog item.
 
 ### SlateDB Dependency Strategy
 
@@ -4126,7 +4126,7 @@ SlateDB is the storage foundation. Unlike DBSP (an IVM-track dependency), SlateD
 
 2. **Version pinning with `=` constraint.** Same as DBSP: every SlateDB upgrade is an explicit decision. Pin to a specific release; never float.
 
-3. **SlateDB API contract surface.** The Rocklake-relevant API is small:
+3. **SlateDB API contract surface.** The RockLake-relevant API is small:
    - `Db::open()`, `Db::close()`
    - `Db::get()`, `Db::put()`, `Db::delete()`, `Db::scan()`
    - `WriteBatch` (atomic multi-key writes)
@@ -4139,7 +4139,7 @@ SlateDB is the storage foundation. Unlike DBSP (an IVM-track dependency), SlateD
 
 4. **Contingency: vendored fork.** If SlateDB introduces incompatible changes or is abandoned:
    - Fork at last known-good version
-   - Maintain `trickle-labs/slatedb` fork with only the features Rocklake uses
+   - Maintain `trickle-labs/slatedb` fork with only the features RockLake uses
    - Object-store agnosticism (via `object_store` crate) means the fork remains portable
 
 5. **Contingency: alternative embedded KV.** If forking becomes untenable:
@@ -4148,7 +4148,7 @@ SlateDB is the storage foundation. Unlike DBSP (an IVM-track dependency), SlateD
    - The `CatalogStore` abstraction layer means migration is confined to one module
 
 6. **Relationship maintenance.** SlateDB is maintained by a team with whom we can collaborate:
-   - File issues for any behavior that affects Rocklake
+   - File issues for any behavior that affects RockLake
    - Contribute fixes upstream when possible
    - Monitor the SlateDB changelog and test against each release before adopting
 
@@ -4177,13 +4177,13 @@ Some acceptance criteria cannot run in normal CI: 24 h soaks, 1 TB inputs, and T
 
 ---
 
-## What Rocklake Is Not
+## What RockLake Is Not
 
 - A general-purpose SQL engine *in v1* (the substrate is designed to make this possible later — see v2.x)
 - A multi-writer database in v1 (one writer per catalog; SlateDB fencing handles takeover; the v0.7 partitioning pattern is the recommended workaround; v2.x evaluates append-disjoint multi-writer)
-- A data-plane proxy (DuckDB writes Parquet directly; Rocklake writes only the catalog)
+- A data-plane proxy (DuckDB writes Parquet directly; RockLake writes only the catalog)
 - A system where user-visible catalog history can be silently deleted (physical deletion only via the explicit, audited `rocklake excise` command)
 - A replacement for PostgreSQL-backed DuckLake in low-latency, high-concurrency analyst workloads
 - A drop-in for any workload without first reading the performance analysis in `docs/performance.md`
 
-**Choose Rocklake when:** you are serverless or spot-based and cannot afford a persistent database server; you want a lakehouse with zero external infrastructure; you need cheap point-in-time catalog snapshots; your workload is write-heavy rather than read-heavy; or you are already in the SlateDB ecosystem.
+**Choose RockLake when:** you are serverless or spot-based and cannot afford a persistent database server; you want a lakehouse with zero external infrastructure; you need cheap point-in-time catalog snapshots; your workload is write-heavy rather than read-heavy; or you are already in the SlateDB ecosystem.
