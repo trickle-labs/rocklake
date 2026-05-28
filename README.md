@@ -167,9 +167,22 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | v0.27.x | DuckLake v1.0 conformance, SQL facade, stats, external compatibility | Done |
 | v0.28–v0.35 | Writer fencing, recovery, protocol hardening, DataFusion, security, embedded client library | Done |
 | **v0.35.0** | Embedded catalog client library — universal C ABI, `rocklake-client`, Python/Go/Node.js bindings | **Current** |
-| v0.36.0 | Native DuckDB extension — `ATTACH 'ducklake:slatedb:s3://...'` without PG-wire sidecar | Planning |
-| v0.40.0 | Full ecosystem compatibility certification — DuckDB, Spark, Trino, all object stores | Planning |
-| v1.0 | GA — TPC-H benchmarks, S3 Express, real-world validation | Planning |
+| v0.36–v0.38 | Foundation: SQL client testing, engine integration, release certification | Planning |
+| v0.39–v0.45 | Production hardening: observability, migration tooling, fault injection, benchmarks, scale, JVM bindings, GA readiness | Planning |
+| v0.50.0 | Native DuckDB extension (blocked on upstream DuckDB extension catalog API) | Exploration |
+| v1.0 | General Availability — TPC-H benchmarks, S3 Express validation, dogfood deployment complete | Planning |
+
+**Detailed sequence for v0.36–v0.45:**
+- **v0.36**: SQL clients (psql, DBeaver, Metabase) + object-store backends (GCS, Azure)
+- **v0.39**: Observability (Prometheus, OTLP tracing, `rocklake diagnose`, orphan sweep)
+- **v0.37**: Engine integration (Spark 3.5, Trino 432+) + DataFusion matrix
+- **v0.41**: Migration tooling (`rocklake migrate-from-ducklake`) + DuckLake v1.1 forward-compat gate
+- **v0.40**: Fault injection (Tier 6) + security testing (Tier 8: IAM, SQL injection, TLS, auth timing, excision audit)
+- **v0.42**: Performance benchmarks (TPC-H catalog suite) + S3 Express optimization + cost analysis
+- **v0.43**: Scale testing (Tier 7: 24h soak, TPC-H SF10) + checkpoint-pinned Lambda reader API + CDN cache contract
+- **v0.44**: JVM bindings (JNI/Kotlin) + Spark/Flink examples + Maven artifact
+- **v0.38**: Release certification (compatibility manifest validator, MSRV reconciliation, Windows/macOS platform support)
+- **v0.45**: GA readiness gate (30-day dogfood, external dev test, docs completeness, release automation)
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.
 
