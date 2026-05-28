@@ -405,12 +405,66 @@ pub fn catalog_table_names() -> &'static [&'static str] {
         "ducklake_schema_changes",
         "ducklake_encrypted_secret",
         "ducklake_encryption_key",
+        // --- RockLake extension tables (not in the DuckLake v1.0 spec) ---
         "ducklake_file_partition_value",
         "ducklake_file_variant_stats",
         "ducklake_column_mapping",
         "ducklake_name_mapping",
     ]
 }
+
+/// The 28 canonical DuckLake v1.0 spec tables (Catalog Version 7).
+///
+/// These are the tables defined by the DuckLake specification.  Queries against
+/// any of these tables are expected to work with any compliant DuckLake
+/// implementation.
+pub const DUCKLAKE_SPEC_TABLES: &[&str] = &[
+    "ducklake_snapshot",
+    "ducklake_snapshot_changes",
+    "ducklake_schema",
+    "ducklake_table",
+    "ducklake_column",
+    "ducklake_data_file",
+    "ducklake_delete_file",
+    "ducklake_table_stats",
+    "ducklake_table_column_stats",
+    "ducklake_file_column_stats",
+    "ducklake_metadata",
+    "ducklake_view",
+    "ducklake_macro",
+    "ducklake_macro_impl",
+    "ducklake_macro_parameters",
+    "ducklake_tag",
+    "ducklake_column_tag",
+    "ducklake_partition_info",
+    "ducklake_partition_column",
+    "ducklake_partition_value",
+    "ducklake_sort_info",
+    "ducklake_sort_expression",
+    "ducklake_files_scheduled_for_deletion",
+    "ducklake_inlined_data_tables",
+    "ducklake_schema_version",
+    "ducklake_schema_changes",
+    "ducklake_encrypted_secret",
+    "ducklake_encryption_key",
+];
+
+/// The 4 RockLake extension tables registered in addition to the 28 DuckLake
+/// spec tables.  These tables are RockLake-specific and are not part of the
+/// DuckLake v1.0 specification.
+///
+/// | Table | Purpose |
+/// |---|---|
+/// | `ducklake_file_partition_value` | Per-file partition value index |
+/// | `ducklake_file_variant_stats`   | Semi-structured column statistics |
+/// | `ducklake_column_mapping`       | Column ID rename mapping |
+/// | `ducklake_name_mapping`         | Legacy name compatibility mapping |
+pub const ROCKLAKE_EXTENSION_TABLES: &[&str] = &[
+    "ducklake_file_partition_value",
+    "ducklake_file_variant_stats",
+    "ducklake_column_mapping",
+    "ducklake_name_mapping",
+];
 
 #[cfg(test)]
 mod tests {
@@ -423,9 +477,47 @@ mod tests {
             .expect("VirtualCatalogContext::new must not fail");
         let ctx = vc.session_context();
 
-        // Verify all 32 tables are discoverable via DataFusion's catalog.
+        // Registry must have exactly 28 spec tables + 4 RockLake extension tables = 32.
+        assert_eq!(
+            DUCKLAKE_SPEC_TABLES.len(),
+            28,
+            "must have exactly 28 DuckLake spec tables"
+        );
+        assert_eq!(
+            ROCKLAKE_EXTENSION_TABLES.len(),
+            4,
+            "must have exactly 4 RockLake extension tables"
+        );
         let names = catalog_table_names();
-        assert_eq!(names.len(), 32, "must have exactly 32 catalog tables");
+        assert_eq!(
+            names.len(),
+            32,
+            "total catalog tables must be 28 spec + 4 extension = 32"
+        );
+
+        // All spec tables are in the registry.
+        for name in DUCKLAKE_SPEC_TABLES {
+            assert!(
+                names.contains(name),
+                "spec table '{name}' must be in catalog_table_names()"
+            );
+        }
+        // All extension tables are in the registry.
+        for name in ROCKLAKE_EXTENSION_TABLES {
+            assert!(
+                names.contains(name),
+                "extension table '{name}' must be in catalog_table_names()"
+            );
+        }
+        // No overlap between spec and extension tables.
+        for name in ROCKLAKE_EXTENSION_TABLES {
+            assert!(
+                !DUCKLAKE_SPEC_TABLES.contains(name),
+                "extension table '{name}' must not appear in DUCKLAKE_SPEC_TABLES"
+            );
+        }
+
+        // All 32 tables are discoverable and queryable via DataFusion.
         for name in names {
             let result = ctx.sql(&format!("SELECT * FROM {name}")).await;
             assert!(

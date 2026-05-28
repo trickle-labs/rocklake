@@ -41,7 +41,7 @@ fn setup_catalog() -> (TempDir, CatalogStore) {
 
 fn bench_schema_names(c: &mut Criterion) {
     let (_dir, store) = setup_catalog();
-    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1))).unwrap();
 
     c.bench_function("async_bridge_schema_names", |b| {
         b.iter(|| {
@@ -53,7 +53,7 @@ fn bench_schema_names(c: &mut Criterion) {
 
 fn bench_table_names(c: &mut Criterion) {
     let (_dir, store) = setup_catalog();
-    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1))).unwrap();
 
     c.bench_function("async_bridge_table_names", |b| {
         b.iter(|| {

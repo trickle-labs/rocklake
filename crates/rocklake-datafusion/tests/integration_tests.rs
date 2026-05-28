@@ -31,7 +31,7 @@ async fn datafusion_provider_schema_names() {
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
     // Create provider at snapshot 1
-    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1))).unwrap();
 
     let names = provider.schema_names();
     assert_eq!(names.len(), 2);
@@ -53,7 +53,7 @@ async fn datafusion_provider_table_names() {
         .unwrap();
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
-    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1))).unwrap();
     let schema_provider = provider.schema("main").unwrap();
     let table_names = schema_provider.table_names();
     assert_eq!(table_names.len(), 2);
@@ -83,7 +83,7 @@ async fn datafusion_provider_table_schema() {
         .unwrap();
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
-    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1))).unwrap();
     let schema_provider = provider.schema("main").unwrap();
     let table = schema_provider.table("users").await.unwrap().unwrap();
 
@@ -109,7 +109,7 @@ async fn datafusion_provider_nonexistent_table() {
     writer.create_schema("main").await.unwrap();
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
-    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1))).unwrap();
     let schema_provider = provider.schema("main").unwrap();
     let table = schema_provider.table("nonexistent").await.unwrap();
     assert!(table.is_none());
@@ -128,7 +128,7 @@ async fn datafusion_provider_table_exist() {
         .unwrap();
     let _ = writer.create_snapshot(None, None).await.unwrap();
 
-    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1)));
+    let provider = RockLakeCatalogProvider::new(store, Some(SnapshotId::new(1))).unwrap();
     let schema_provider = provider.schema("main").unwrap();
     assert!(schema_provider.table_exist("orders"));
     assert!(!schema_provider.table_exist("nonexistent"));
@@ -207,6 +207,11 @@ async fn datafusion_scan_reads_parquet_data() {
             parquet_path.metadata().unwrap().len(),
         )
         .await
+        .unwrap();
+    // Set data_path so open() can resolve it from metadata (no Display parsing).
+    use rocklake_core::keys::MetadataScope;
+    writer
+        .set_metadata(MetadataScope::Global, 0, "data_path", &root)
         .unwrap();
     let _cr = writer.create_snapshot(None, None).await.unwrap();
     catalog_store.commit_writer(_cr);
