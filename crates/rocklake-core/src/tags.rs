@@ -87,6 +87,14 @@ pub const TAG_TAG: u8 = 0x1A;
 pub const TAG_COLUMN_TAG: u8 = 0x1B;
 pub const TAG_SCHEMA_VERSIONS: u8 = 0x1C;
 
+/// v0.32.0: Encrypted secrets (e.g. remote access keys for encrypted files).
+/// Key: `0x24 | secret_id(u64 BE)`
+pub const TAG_ENCRYPTED_SECRET: u8 = 0x24;
+
+/// v0.32.0: Per-catalog encryption key metadata.
+/// Key: `0x25 | catalog_id(u64 BE) | begin_snapshot(u64 BE)`
+pub const TAG_ENCRYPTION_KEY: u8 = 0x25;
+
 // 0x1D–0x20: removed (formerly IVM — v0.22)
 
 /// v0.18: Snapshot lease. MutableSingleton per consumer_id.

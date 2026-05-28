@@ -42,46 +42,90 @@ You need additional backup when:
 
 ## NDJSON Export (Full Logical Backup)
 
-NDJSON (Newline-Delimited JSON) export creates a complete, portable snapshot of the catalog in a human-readable format:
+NDJSON (Newline-Delimited JSON) export creates a complete, portable snapshot of the catalog in a human-readable format. The subcommand is `export-catalog`:
 
 ```bash
-rocklake export --catalog s3://bucket/catalog/ --output catalog-backup.ndjson
+rocklake export-catalog --catalog s3://bucket/catalog/ --out catalog-backup.ndjson
 ```
 
 ### What Gets Exported
 
-The export includes ALL live rows at the current snapshot:
+`export-catalog` exports all live rows at the active snapshot across **32 catalog tables** — the 28 tables defined in the DuckLake specification plus 4 RockLake extensions:
 
-- Schema definitions (databases, schemas)
-- Table metadata (names, types, storage locations)
-- Column definitions (names, types, constraints)
-- Data file registrations (paths, sizes, statistics)
-- Partition information
-- View definitions
-- Sequence states
-- Permission grants
+**DuckLake spec tables (28)**
+
+| Table | Description |
+|-------|-------------|
+| `ducklake_snapshot` | Snapshot history |
+| `ducklake_snapshot_changes` | Per-snapshot change log |
+| `ducklake_schema` | Schema (namespace) definitions |
+| `ducklake_table` | Table definitions |
+| `ducklake_column` | Column definitions |
+| `ducklake_data_file` | Registered data files (Parquet paths, sizes) |
+| `ducklake_delete_file` | Delete files for row-level deletes |
+| `ducklake_table_stats` | Aggregate table statistics |
+| `ducklake_table_column_stats` | Per-column statistics |
+| `ducklake_file_column_stats` | Per-file, per-column statistics |
+| `ducklake_file_variant_stats` | Variant (nested) column stats |
+| `ducklake_metadata` | Free-form catalog metadata key/value |
+| `ducklake_view` | View definitions |
+| `ducklake_macro` | Macro (UDF) headers |
+| `ducklake_macro_impl` | Macro implementation bodies |
+| `ducklake_macro_parameters` | Macro parameter definitions |
+| `ducklake_tag` | Object-level tags |
+| `ducklake_column_tag` | Column-level tags |
+| `ducklake_partition_info` | Partition spec headers |
+| `ducklake_partition_column` | Partition column bindings |
+| `ducklake_file_partition_value` | Per-file partition values |
+| `ducklake_sort_info` | Sort order headers |
+| `ducklake_sort_expression` | Sort expression bindings |
+| `ducklake_files_scheduled_for_deletion` | GC deletion queue |
+| `ducklake_inlined_data_tables` | Inlined (small) table data |
+| `ducklake_schema_version` | Schema evolution history |
+| `ducklake_encrypted_secret` | Secret references (secrets **redacted**) |
+| `ducklake_encryption_key` | Encryption key metadata (keys **redacted**) |
+
+**RockLake extension tables (4)**
+
+| Table | Description |
+|-------|-------------|
+| `ducklake_column_mapping` | Column ID remapping for schema evolution |
+| `ducklake_name_mapping` | Source name→column ID resolution |
+| `rocklake_snapshot_lease` | Writer fencing / lease records |
+| `rocklake_extension_schema` | Extension-defined catalog tables |
+
+> **Security note**: The `encrypted_secret` field in `ducklake_encrypted_secret` and the
+> `encryption_key` field in `ducklake_encryption_key` are replaced with the literal string
+> `<redacted>` in the export. Never store or transmit key material in plain text.
 
 ### Export Format
 
-Each line is a self-contained JSON object:
+Each line is a self-contained JSON object with a `table` and `row` field:
 
 ```json
-{"table":"ducklake_schemas","row":{"schema_id":1,"schema_name":"analytics","database_id":1,"created_snapshot_id":10}}
-{"table":"ducklake_tables","row":{"table_id":1,"table_name":"events","schema_id":1,"created_snapshot_id":15}}
-{"table":"ducklake_columns","row":{"column_id":1,"table_id":1,"column_name":"id","data_type":"BIGINT","ordinal_position":1}}
+{"table":"ducklake_schema","row":{"schema_id":1,"schema_name":"analytics","begin_snapshot":1}}
+{"table":"ducklake_table","row":{"table_id":1,"schema_id":1,"table_name":"events","begin_snapshot":2}}
+{"table":"ducklake_column","row":{"column_id":1,"table_id":1,"column_name":"id","column_type":"BIGINT","begin_snapshot":2}}
 ```
 
 ### Export at a Specific Snapshot
 
-Export the catalog as it appeared at a past point in time:
+Export the catalog as it appeared at a past snapshot:
 
 ```bash
 # Export at snapshot 500
-rocklake export --catalog s3://bucket/catalog/ --output backup-snap500.ndjson --at-snapshot 500
-
-# Export at a timestamp
-rocklake export --catalog s3://bucket/catalog/ --output backup-yesterday.ndjson --at-time "2024-12-15T00:00:00Z"
+rocklake export-catalog --catalog s3://bucket/catalog/ --out backup-snap500.ndjson --at-snapshot 500
 ```
+
+The following options are **planned** for a future release and are not yet implemented:
+
+| Option | Status | Description |
+|--------|--------|-------------|
+| `--at-time <timestamp>` | Planned | Export at a wall-clock time |
+| `--schema <name>` | Planned | Filter export to one schema |
+| `--table <name>` | Planned | Filter export to one table |
+| `--merge` | Planned | Merge export into existing catalog |
+| `--dry-run` | Planned | Validate without writing |
 
 ### Export Size and Performance
 
@@ -97,9 +141,9 @@ Typical export sizes:
 ### Automated Export Schedule
 
 ```bash
-# Daily backup to a dated file
-BACKUP_PATH="s3://backup-bucket/rocklake/$(date +%Y-%m-%d).ndjson"
-rocklake export --catalog s3://bucket/catalog/ --output "$BACKUP_PATH"
+# Daily backup to a dated file (local storage example)
+BACKUP_PATH="/backups/rocklake/$(date +%Y-%m-%d).ndjson"
+rocklake export-catalog --catalog s3://bucket/catalog/ --out "$BACKUP_PATH"
 ```
 
 Kubernetes CronJob:
@@ -117,38 +161,37 @@ spec:
         spec:
           containers:
             - name: backup
-              image: ghcr.io/rocklake/rocklake:0.8.0
+              image: ghcr.io/trickle-labs/rocklake:0.32.0
               command:
                 - "sh"
                 - "-c"
-                - "rocklake export --catalog s3://bucket/catalog/ --output s3://backup-bucket/rocklake/$(date +%Y-%m-%d).ndjson"
+                - |
+                  rocklake export-catalog \
+                    --catalog s3://bucket/catalog/ \
+                    --out /mnt/backup/rocklake-$(date +%Y-%m-%d).ndjson
           restartPolicy: OnFailure
 ```
 
 ## Restoring from NDJSON
 
-Import an NDJSON backup into a fresh (or existing) catalog:
+Import an NDJSON backup into a fresh catalog using the `import-catalog` subcommand:
 
 ```bash
 # Restore to a new catalog location
-rocklake import --catalog s3://bucket/new-catalog/ --input catalog-backup.ndjson
-
-# Restore to the same location (replaces current state)
-rocklake import --catalog s3://bucket/catalog/ --input catalog-backup.ndjson --overwrite
+rocklake import-catalog --catalog s3://bucket/new-catalog/ --in catalog-backup.ndjson
 ```
 
 ### What Happens During Import
 
-1. If `--overwrite`, the existing catalog state is archived (not deleted)
-2. A fresh SlateDB instance is initialized at the storage path
-3. Each NDJSON line is parsed and written as a key-value pair
-4. Counter values are reassigned (snapshot IDs will differ from the original)
-5. A new writer epoch is established
-6. The import completes as a single atomic commit
+1. A fresh SlateDB instance is initialized at the storage path
+2. Each NDJSON line is parsed and written as a binary key-value pair using the canonical key layout
+3. Counter values (snapshot IDs, table IDs) are derived from the imported data; the first new snapshot starts after the highest imported snapshot ID
+4. The import completes as a series of batched writes — it is **not** a single atomic commit for large catalogs
+5. After import, run a normal catalog open to verify integrity
 
 ### Important: Snapshot IDs Are Not Preserved
 
-Imported catalogs get new snapshot IDs. If external systems reference specific snapshot IDs from the original catalog, those references will be invalid after import. Table and column IDs ARE preserved (they are part of the data).
+Imported catalogs continue snapshot numbering from where the export left off. If external systems reference specific snapshot IDs from the original catalog, those references will be invalid after import. Table and column IDs **are** preserved — they are embedded in the data rows themselves.
 
 ## Checkpoints (Named Restore Points)
 

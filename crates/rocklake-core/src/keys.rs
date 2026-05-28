@@ -578,6 +578,23 @@ pub fn key_counter_rowid(table_id: u64) -> Vec<u8> {
     buf
 }
 
+/// Build a key for `ducklake_encrypted_secret`: `0x24 | secret_id(u64 BE)`.
+pub fn key_encrypted_secret(secret_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_ENCRYPTED_SECRET);
+    buf.extend_from_slice(&encode_u64(secret_id));
+    buf
+}
+
+/// Build a key for `ducklake_encryption_key`: `0x25 | catalog_id(u64 BE) | begin_snapshot(u64 BE)`.
+pub fn key_encryption_key(catalog_id: u64, begin_snapshot: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(17);
+    buf.push(TAG_ENCRYPTION_KEY);
+    buf.extend_from_slice(&encode_u64(catalog_id));
+    buf.extend_from_slice(&encode_u64(begin_snapshot));
+    buf
+}
+
 /// Build a scan prefix for all entries of a given table tag.
 pub fn prefix_for_tag(tag: u8) -> Vec<u8> {
     vec![tag]
