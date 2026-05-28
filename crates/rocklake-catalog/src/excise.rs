@@ -179,12 +179,17 @@ fn excise_audit_prefix() -> Vec<u8> {
     buf
 }
 
-fn excise_audit_key(timestamp_millis: u64) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(1 + SYSTEM_EXCISED_PREFIX.len() + 1 + 8);
+fn excise_audit_key_with_seq(timestamp_millis: u64, seq: u32) -> Vec<u8> {
+    // Composite key: `0xFF | "excised" | ':' | timestamp_millis(8) | ':' | seq(4)`
+    // The seq suffix ensures two excisions in the same millisecond are stored
+    // under distinct keys rather than overwriting each other.
+    let mut buf = Vec::with_capacity(1 + SYSTEM_EXCISED_PREFIX.len() + 1 + 8 + 1 + 4);
     buf.push(TAG_SYSTEM);
     buf.extend_from_slice(SYSTEM_EXCISED_PREFIX);
     buf.push(b':');
     buf.extend_from_slice(&timestamp_millis.to_be_bytes());
+    buf.push(b':');
+    buf.extend_from_slice(&seq.to_be_bytes());
     buf
 }
 
@@ -200,6 +205,17 @@ async fn record_audit_entry(
         .unwrap()
         .as_millis() as u64;
 
+    // CAS-increment the excision sequence counter so two excisions that happen
+    // within the same millisecond are stored under distinct keys instead of
+    // overwriting each other.
+    let seq_key = keys::key_counter(COUNTER_NEXT_EXCISION_SEQ);
+    let seq = match db.get(&seq_key).await? {
+        Some(data) => values::decode_counter(&data)? as u32,
+        None => 0u32,
+    };
+    db.put(&seq_key, &values::encode_counter((seq + 1) as u64))
+        .await?;
+
     let entry = ExciseAuditEntry {
         timestamp_millis,
         before_snapshot,
@@ -208,8 +224,10 @@ async fn record_audit_entry(
         operator: operator.to_string(),
     };
 
-    let key = excise_audit_key(timestamp_millis);
+    let key = excise_audit_key_with_seq(timestamp_millis, seq);
     db.put(&key, &values::encode_value(&entry)).await?;
+    // Return the timestamp for backward compatibility; the caller uses it as
+    // the ExciseResult::audit_entry_id field.
     Ok(timestamp_millis)
 }
 
@@ -515,4 +533,56 @@ async fn delete_old_snapshots(db: &Db, before_snapshot: u64) -> CatalogResult<(u
         }
     }
     Ok((deleted, failed))
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use object_store::local::LocalFileSystem;
+    use object_store::path::Path as ObjectPath;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    async fn open_test_db(dir: &std::path::Path) -> slatedb::Db {
+        let fs: Arc<dyn object_store::ObjectStore> =
+            Arc::new(LocalFileSystem::new_with_prefix(dir).unwrap());
+        slatedb::Db::open(ObjectPath::from("catalog"), fs)
+            .await
+            .unwrap()
+    }
+
+    /// Two audit entries recorded with the same mocked timestamp must be
+    /// stored under distinct keys (seq suffix prevents collision).
+    #[tokio::test]
+    async fn two_same_millisecond_excisions_have_distinct_keys() {
+        let dir = TempDir::new().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        // Use the same timestamp for both entries to simulate a millisecond collision.
+        let ts = 1_700_000_000_000u64; // arbitrary fixed millisecond
+
+        // Record two audit entries with identical timestamps.
+        let key1 = {
+            let seq_key = keys::key_counter(COUNTER_NEXT_EXCISION_SEQ);
+            let seq = 0u32; // first entry always gets seq=0
+            db.put(&seq_key, &values::encode_counter(1)).await.unwrap();
+            excise_audit_key_with_seq(ts, seq)
+        };
+        let key2 = {
+            let seq_key = keys::key_counter(COUNTER_NEXT_EXCISION_SEQ);
+            let seq = 1u32; // second entry gets seq=1
+            db.put(&seq_key, &values::encode_counter(2)).await.unwrap();
+            excise_audit_key_with_seq(ts, seq)
+        };
+
+        assert_ne!(
+            key1, key2,
+            "two excisions in the same millisecond must produce distinct keys"
+        );
+
+        db.close().await.unwrap();
+    }
 }

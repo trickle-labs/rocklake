@@ -55,7 +55,35 @@ jobs:
           pip3 install --quiet pgcli || pip install --quiet pgcli || true
 
       - name: Test
-        run: cargo test --all
+        run: |
+          # rocklake-catalog and rocklake-ffi tests spawn multiple Tokio runtimes;
+          # run them single-threaded to avoid SIGKILL from memory pressure.
+          cargo test --workspace --exclude rocklake-ffi --exclude rocklake-catalog
+          cargo test -p rocklake-catalog -- --test-threads=1
+          cargo test -p rocklake-ffi -- --test-threads=1
+
+  # v0.34.0: C ABI smoke test — compile and run ffi_smoke.c against the static lib.
+  c-abi-smoke:
+    name: C ABI Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build rocklake-ffi static library
+        run: cargo build -p rocklake-ffi
+
+      - name: Compile C smoke test
+        run: |
+          cc -I extension/include \
+             -o /tmp/ffi_smoke_test \
+             crates/rocklake-ffi/tests/ffi_smoke.c \
+             target/debug/librocklake_ffi.a \
+             -lpthread -ldl -lm
+
+      - name: Run C smoke test
+        run: /tmp/ffi_smoke_test /tmp/rl_smoke_ci
 
   # F-26: CLI smoke test — verify every documented flag is present in --help.
   smoke-test:

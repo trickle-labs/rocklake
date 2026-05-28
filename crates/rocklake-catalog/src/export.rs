@@ -5,8 +5,6 @@
 //! - `pg_migrate`: Convert NDJSON to PostgreSQL INSERT statements.
 //! - `rebuild`: Synthesize a fresh catalog from Parquet footers.
 
-#![allow(missing_docs)]
-
 use rocklake_core::keys;
 use rocklake_core::mvcc::{self, SnapshotId};
 use rocklake_core::rows::*;
@@ -28,20 +26,58 @@ pub struct ExportedRow {
 }
 
 /// Result of an export operation.
+///
+/// Returned by [`export_catalog`] after a successful NDJSON export.
+/// The counts are informational and do not affect catalog integrity.
 #[derive(Debug, Clone)]
 pub struct ExportResult {
+    /// Number of individual catalog rows written to the output stream.
     pub rows_exported: u64,
+    /// Number of distinct DuckLake table types exported (e.g.
+    /// `ducklake_schema`, `ducklake_table`, `ducklake_column`, …).
     pub tables_exported: u64,
 }
 
 /// Result of an import operation.
+///
+/// Returned by [`import_catalog`] after a successful NDJSON import.
+/// A partial import leaves the catalog in an inconsistent state; callers
+/// should treat any error from `import_catalog` as unrecoverable and
+/// discard the target database.
 #[derive(Debug, Clone)]
 pub struct ImportResult {
+    /// Number of individual catalog rows inserted into the target database.
     pub rows_imported: u64,
+    /// Number of distinct DuckLake table types imported.
     pub tables_imported: u64,
 }
 
 /// Export all live catalog rows at the given snapshot to NDJSON.
+///
+/// Each row is written as a JSON object on a single line (newline-delimited JSON).
+/// Rows are serialised in table-group order: `ducklake_snapshot`, `ducklake_schema`,
+/// `ducklake_table`, `ducklake_column`, `ducklake_data_file`, \u2026
+///
+/// # Atomicity
+///
+/// The export reads from the SlateDB key-value store using separate prefix scans.
+/// It is **not** a snapshot-isolated read at the storage level — if a concurrent
+/// writer commits between two table scans the export may contain rows from mixed
+/// snapshot generations. For a consistent export, pause writes before calling
+/// this function or take a catalog checkpoint first.
+///
+/// # Completeness
+///
+/// Only rows that are *visible* at `snapshot_id` (i.e. `begin_snapshot <=
+/// snapshot_id < end_snapshot`) are included. Retired rows and rows created after
+/// the snapshot are silently omitted. When `snapshot_id` is `None` the latest
+/// committed snapshot is used.
+///
+/// # Errors
+///
+/// Returns `CatalogError::SlateDb` on any database read failure or JSON
+/// serialisation error.  Partial output may have been written to `writer` before
+/// the error is returned; callers should discard incomplete output.
 pub async fn export_catalog<W: Write>(
     db: &Db,
     snapshot_id: Option<u64>,
