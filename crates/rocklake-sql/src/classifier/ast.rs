@@ -104,9 +104,17 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                 if table_name.contains('.') {
                     let parts: Vec<&str> = table_name.splitn(2, '.').collect();
                     if parts.len() == 2 {
+                        let schema = parts[0].trim_matches('"');
+                        let table = parts[1].trim_matches('"');
+                        // Reject mutations against the read-only virtual catalog (SQLSTATE 25006).
+                        if schema == "rocklake_catalog" {
+                            return StatementKind::VirtualCatalogMutation {
+                                table_name: table.to_string(),
+                            };
+                        }
                         return StatementKind::DeleteExtensionRows {
-                            schema_name: parts[0].trim_matches('"').to_string(),
-                            table_name: parts[1].trim_matches('"').to_string(),
+                            schema_name: schema.to_string(),
+                            table_name: table.to_string(),
                         };
                     }
                 }
@@ -401,6 +409,14 @@ fn strip_public_schema(s: &str) -> &str {
 pub(super) fn classify_insert(table_name: &ObjectName, columns: &[String]) -> StatementKind {
     let raw = table_name.to_string().to_lowercase();
     let name = strip_public_schema(&raw);
+    // Reject mutations against the read-only virtual catalog (SQLSTATE 25006).
+    if name.starts_with("rocklake_catalog.") {
+        let tbl = name
+            .strip_prefix("rocklake_catalog.")
+            .unwrap_or(name)
+            .to_string();
+        return StatementKind::VirtualCatalogMutation { table_name: tbl };
+    }
     match name {
         "ducklake_snapshot" => StatementKind::InsertSnapshot,
         "ducklake_snapshot_changes" => StatementKind::InsertSnapshotChanges,
@@ -445,6 +461,14 @@ pub(super) fn classify_update(table: &sqlparser::ast::TableWithJoins) -> Stateme
         .unwrap_or_default()
         .to_lowercase();
     let table_name = strip_public_schema(&raw);
+    // Reject mutations against the read-only virtual catalog (SQLSTATE 25006).
+    if table_name.starts_with("rocklake_catalog.") {
+        let tbl = table_name
+            .strip_prefix("rocklake_catalog.")
+            .unwrap_or(table_name)
+            .to_string();
+        return StatementKind::VirtualCatalogMutation { table_name: tbl };
+    }
     match table_name {
         "ducklake_table_stats" => StatementKind::UpdateTableStats,
         "ducklake_table" | "ducklake_column" | "ducklake_data_file" | "ducklake_view"

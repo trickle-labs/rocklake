@@ -22,6 +22,14 @@ pub enum KeyError {
     /// The key contains invalid UTF-8 in a string segment.
     #[error("invalid UTF-8 in key: {0}")]
     InvalidUtf8(String),
+    /// An identifier exceeds the maximum encoded length of `u16::MAX` bytes.
+    #[error("identifier too long: {actual} bytes exceeds the {max}-byte limit")]
+    IdentifierTooLong {
+        /// Actual byte length of the identifier.
+        actual: usize,
+        /// Maximum allowed byte length (`u16::MAX`).
+        max: usize,
+    },
 }
 
 /// Encode a u64 as 8 big-endian bytes.
@@ -82,6 +90,22 @@ pub fn decode_u32(bytes: &[u8]) -> Result<u32, KeyError> {
 #[inline]
 pub fn encode_u32(val: u32) -> [u8; 4] {
     val.to_be_bytes()
+}
+
+/// Validate that an identifier is short enough to be encoded as a `u16`-length-prefixed
+/// UTF-8 string in a catalog key.
+///
+/// Returns `Err(KeyError::IdentifierTooLong)` if `s.len() > u16::MAX`. Call this at
+/// key-builder entry points before encoding to prevent silent truncation.
+pub fn validate_identifier_len(s: &str) -> Result<(), KeyError> {
+    let max = u16::MAX as usize;
+    if s.len() > max {
+        return Err(KeyError::IdentifierTooLong {
+            actual: s.len(),
+            max,
+        });
+    }
+    Ok(())
 }
 
 /// Metadata scope enum values.
@@ -521,14 +545,17 @@ pub fn audit_prefix() -> Vec<u8> {
 /// v0.20: Changed from hash-based encoding to length-prefixed UTF-8 to eliminate
 /// collision risk and `DefaultHasher` version-instability. Distinct consumer IDs
 /// now always produce distinct keys.
-pub fn key_snapshot_lease(consumer_id: &str) -> Vec<u8> {
+///
+/// Returns `Err(KeyError::IdentifierTooLong)` if `consumer_id` exceeds `u16::MAX` bytes.
+pub fn key_snapshot_lease(consumer_id: &str) -> Result<Vec<u8>, KeyError> {
+    validate_identifier_len(consumer_id)?;
     let id_bytes = consumer_id.as_bytes();
-    let len = id_bytes.len().min(u16::MAX as usize) as u16;
+    let len = id_bytes.len() as u16;
     let mut buf = Vec::with_capacity(1 + 2 + len as usize);
     buf.push(TAG_SNAPSHOT_LEASE);
     buf.extend_from_slice(&len.to_be_bytes());
-    buf.extend_from_slice(&id_bytes[..len as usize]);
-    buf
+    buf.extend_from_slice(id_bytes);
+    Ok(buf)
 }
 
 /// Scan prefix for all snapshot leases: `0x22`.
@@ -541,30 +568,40 @@ pub fn prefix_snapshot_leases() -> Vec<u8> {
 /// Key for an extension schema row: `0x23 | extension_id(u8) | len(u16 BE) | table_name(utf-8) | row_id(u64 BE)`.
 ///
 /// v0.20: Changed from hash-based to length-prefixed UTF-8 to eliminate collisions.
-pub fn key_extension_schema(extension_id: u8, table_name: &str, row_id: u64) -> Vec<u8> {
+///
+/// Returns `Err(KeyError::IdentifierTooLong)` if `table_name` exceeds `u16::MAX` bytes.
+pub fn key_extension_schema(
+    extension_id: u8,
+    table_name: &str,
+    row_id: u64,
+) -> Result<Vec<u8>, KeyError> {
+    validate_identifier_len(table_name)?;
     let name_bytes = table_name.as_bytes();
-    let len = name_bytes.len().min(u16::MAX as usize) as u16;
+    let len = name_bytes.len() as u16;
     let mut buf = Vec::with_capacity(1 + 1 + 2 + len as usize + 8);
     buf.push(TAG_EXTENSION_SCHEMA);
     buf.push(extension_id);
     buf.extend_from_slice(&len.to_be_bytes());
-    buf.extend_from_slice(&name_bytes[..len as usize]);
+    buf.extend_from_slice(name_bytes);
     buf.extend_from_slice(&encode_u64(row_id));
-    buf
+    Ok(buf)
 }
 
 /// Scan prefix for all rows of a specific extension table: `0x23 | extension_id(u8) | len(u16 BE) | table_name(utf-8)`.
 ///
 /// v0.20: Changed from hash-based to length-prefixed UTF-8.
-pub fn prefix_extension_table(extension_id: u8, table_name: &str) -> Vec<u8> {
+///
+/// Returns `Err(KeyError::IdentifierTooLong)` if `table_name` exceeds `u16::MAX` bytes.
+pub fn prefix_extension_table(extension_id: u8, table_name: &str) -> Result<Vec<u8>, KeyError> {
+    validate_identifier_len(table_name)?;
     let name_bytes = table_name.as_bytes();
-    let len = name_bytes.len().min(u16::MAX as usize) as u16;
+    let len = name_bytes.len() as u16;
     let mut buf = Vec::with_capacity(1 + 1 + 2 + len as usize);
     buf.push(TAG_EXTENSION_SCHEMA);
     buf.push(extension_id);
     buf.extend_from_slice(&len.to_be_bytes());
-    buf.extend_from_slice(&name_bytes[..len as usize]);
-    buf
+    buf.extend_from_slice(name_bytes);
+    Ok(buf)
 }
 
 // ─── v0.18: Rowid Counter Key ──────────────────────────────────────────────
@@ -851,5 +888,60 @@ mod tests {
     #[test]
     fn extract_tag_empty() {
         assert!(extract_tag(&[]).is_err());
+    }
+
+    // ─── v0.33: Identifier length guard tests ─────────────────────────────
+
+    #[test]
+    fn identifier_exactly_u16_max_is_accepted() {
+        let s = "a".repeat(u16::MAX as usize);
+        assert!(
+            validate_identifier_len(&s).is_ok(),
+            "identifier of exactly u16::MAX bytes must be accepted"
+        );
+        assert!(key_snapshot_lease(&s).is_ok());
+        assert!(key_extension_schema(1, &s, 42).is_ok());
+        assert!(prefix_extension_table(1, &s).is_ok());
+    }
+
+    #[test]
+    fn identifier_u16_max_plus_one_is_rejected() {
+        let s = "a".repeat(u16::MAX as usize + 1);
+        assert!(
+            matches!(
+                validate_identifier_len(&s),
+                Err(KeyError::IdentifierTooLong { .. })
+            ),
+            "identifier of u16::MAX + 1 bytes must be rejected"
+        );
+        assert!(matches!(
+            key_snapshot_lease(&s),
+            Err(KeyError::IdentifierTooLong { .. })
+        ));
+        assert!(matches!(
+            key_extension_schema(1, &s, 42),
+            Err(KeyError::IdentifierTooLong { .. })
+        ));
+        assert!(matches!(
+            prefix_extension_table(1, &s),
+            Err(KeyError::IdentifierTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn very_long_identifier_is_rejected() {
+        let s = "x".repeat(u16::MAX as usize + 1000);
+        assert!(matches!(
+            key_snapshot_lease(&s),
+            Err(KeyError::IdentifierTooLong { .. })
+        ));
+        assert!(matches!(
+            key_extension_schema(0, &s, 0),
+            Err(KeyError::IdentifierTooLong { .. })
+        ));
+        assert!(matches!(
+            prefix_extension_table(0, &s),
+            Err(KeyError::IdentifierTooLong { .. })
+        ));
     }
 }

@@ -30,6 +30,20 @@ pub extern "C" fn rocklake_abi_version() -> u32 {
     ABI_VERSION
 }
 
+// ─── CString Safety ────────────────────────────────────────────────────────
+
+/// Convert a Rust `&str` to a `CString`, replacing embedded NUL bytes with a
+/// safe sentinel rather than panicking or returning an empty string.
+///
+/// `CString::new()` fails only when the input contains interior `\0` bytes.
+/// An empty fallback (`unwrap_or_default()`) silently drops the entire message,
+/// making errors invisible to C callers. This helper instead returns the literal
+/// `"<invalid-utf8>"` so callers always receive a non-empty diagnostic.
+fn to_c_string(s: &str) -> CString {
+    CString::new(s)
+        .unwrap_or_else(|_| CString::new("<invalid-utf8>").expect("fallback is NUL-free"))
+}
+
 // ─── Error Handling ────────────────────────────────────────────────────────
 
 /// Opaque error type returned from FFI functions.
@@ -66,9 +80,7 @@ impl RockLakeError {
     fn invalid_handle() -> Self {
         Self {
             code: RockLakeErrorCode::InvalidHandle as i32,
-            message: CString::new("invalid or null catalog handle")
-                .unwrap_or_default()
-                .into_raw(),
+            message: to_c_string("invalid or null catalog handle").into_raw(),
         }
     }
 
@@ -83,7 +95,7 @@ impl RockLakeError {
             CatalogError::NotInitialized => RockLakeErrorCode::NotInitialized,
             _ => RockLakeErrorCode::Internal,
         };
-        let msg = CString::new(e.to_string()).unwrap_or_default();
+        let msg = to_c_string(&e.to_string());
         Self {
             code: code as i32,
             message: msg.into_raw(),
@@ -268,9 +280,7 @@ pub extern "C" fn rocklake_open(
             err,
             RockLakeError {
                 code: RockLakeErrorCode::InvalidHandle as i32,
-                message: CString::new("uri must not be null")
-                    .unwrap_or_default()
-                    .into_raw(),
+                message: to_c_string("uri must not be null").into_raw(),
             },
         );
         return ptr::null_mut();
@@ -294,9 +304,7 @@ pub extern "C" fn rocklake_open(
                 err,
                 RockLakeError {
                     code: RockLakeErrorCode::Internal as i32,
-                    message: CString::new(format!("failed to create runtime: {e}"))
-                        .unwrap_or_default()
-                        .into_raw(),
+                    message: to_c_string(&format!("failed to create runtime: {e}")).into_raw(),
                 },
             );
             return ptr::null_mut();
@@ -441,7 +449,7 @@ pub extern "C" fn rocklake_list_schemas(
                 .into_iter()
                 .map(|s| RockLakeSchema {
                     schema_id: s.schema_id,
-                    schema_name: CString::new(s.schema_name).unwrap_or_default().into_raw(),
+                    schema_name: to_c_string(&s.schema_name).into_raw(),
                 })
                 .collect();
             out.shrink_to_fit(); // Ensure capacity == len for safe Vec::from_raw_parts in free.
@@ -494,7 +502,7 @@ pub extern "C" fn rocklake_list_tables(
                 .map(|t| RockLakeTable {
                     table_id: t.table_id,
                     schema_id: t.schema_id,
-                    table_name: CString::new(t.table_name).unwrap_or_default().into_raw(),
+                    table_name: to_c_string(&t.table_name).into_raw(),
                 })
                 .collect();
             out.shrink_to_fit();
@@ -547,8 +555,8 @@ pub extern "C" fn rocklake_describe_table(
                 .map(|c| RockLakeColumn {
                     column_id: c.column_id,
                     table_id: c.table_id,
-                    column_name: CString::new(c.column_name).unwrap_or_default().into_raw(),
-                    data_type: CString::new(c.data_type).unwrap_or_default().into_raw(),
+                    column_name: to_c_string(&c.column_name).into_raw(),
+                    data_type: to_c_string(&c.data_type).into_raw(),
                     column_index: c.column_index,
                     is_nullable: c.is_nullable,
                 })
@@ -615,8 +623,8 @@ pub extern "C" fn rocklake_list_data_files(
                 .map(|f| RockLakeDataFile {
                     data_file_id: f.data_file_id,
                     table_id: f.table_id,
-                    path: CString::new(f.path).unwrap_or_default().into_raw(),
-                    file_format: CString::new(f.file_format).unwrap_or_default().into_raw(),
+                    path: to_c_string(&f.path).into_raw(),
+                    file_format: to_c_string(&f.file_format).into_raw(),
                     row_count: f.record_count,
                     file_size_bytes: f.file_size_bytes,
                     snapshot_id: f.begin_snapshot.unwrap_or(0),
@@ -940,5 +948,29 @@ mod tests {
 
         // A second close (double-close) must also be a safe no-op.
         rocklake_close(catalog);
+    }
+
+    // ─── v0.33: to_c_string safety ────────────────────────────────────────
+
+    #[test]
+    fn to_c_string_normal_string_is_preserved() {
+        let s = "hello, world";
+        let c = to_c_string(s);
+        let back = c.to_str().unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn to_c_string_nul_byte_returns_sentinel_not_empty() {
+        // A string with an embedded NUL must produce the sentinel "<invalid-utf8>",
+        // not an empty string (which would silently drop the message).
+        let s_with_nul = "secret\0value";
+        let c = to_c_string(s_with_nul);
+        let back = c.to_str().unwrap();
+        assert_eq!(
+            back, "<invalid-utf8>",
+            "NUL-containing string must produce sentinel, not empty string; got: {back:?}"
+        );
+        assert!(!back.is_empty(), "fallback must not be empty");
     }
 }

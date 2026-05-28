@@ -35,7 +35,7 @@ pub async fn create_extension_table(
     table_name: &str,
 ) -> CatalogResult<bool> {
     // Check if any row exists for this table already (marker row with row_id=0).
-    let marker_key = keys::key_extension_schema(extension_id, table_name, 0);
+    let marker_key = keys::key_extension_schema(extension_id, table_name, 0)?;
     if db.get(&marker_key).await?.is_some() {
         return Ok(false); // Already exists
     }
@@ -62,7 +62,7 @@ pub async fn insert_extension_row(
     table_name: &str,
     data_json: &str,
 ) -> CatalogResult<u64> {
-    let counter_key = keys::key_extension_schema(extension_id, table_name, 0);
+    let counter_key = keys::key_extension_schema(extension_id, table_name, 0)?;
 
     loop {
         let tx = db
@@ -98,7 +98,7 @@ pub async fn insert_extension_row(
             row_id: next_id,
             data_json: data_json.to_string(),
         };
-        let key = keys::key_extension_schema(extension_id, table_name, next_id);
+        let key = keys::key_extension_schema(extension_id, table_name, next_id)?;
         tx.put(&key, row.encode_to_vec())
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
 
@@ -128,7 +128,7 @@ pub async fn select_extension_rows(
     extension_id: u8,
     table_name: &str,
 ) -> CatalogResult<Vec<ExtensionSchemaRow>> {
-    let prefix = keys::prefix_extension_table(extension_id, table_name);
+    let prefix = keys::prefix_extension_table(extension_id, table_name)?;
     let mut rows = Vec::new();
     let mut iter = db.scan_prefix(&prefix).await?;
 
@@ -154,7 +154,7 @@ pub async fn delete_extension_rows(
     extension_id: u8,
     table_name: &str,
 ) -> CatalogResult<u64> {
-    let prefix = keys::prefix_extension_table(extension_id, table_name);
+    let prefix = keys::prefix_extension_table(extension_id, table_name)?;
     let mut keys_to_delete = Vec::new();
     let mut iter = db.scan_prefix(&prefix).await?;
 

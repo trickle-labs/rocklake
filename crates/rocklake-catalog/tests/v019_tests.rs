@@ -504,7 +504,7 @@ async fn list_active_leases_corrupt_row_errors() {
     let db = store.db();
 
     // Write a corrupt value to a lease key
-    let key = rocklake_core::keys::key_snapshot_lease("corrupt-consumer");
+    let key = rocklake_core::keys::key_snapshot_lease("corrupt-consumer").unwrap();
     db.put(&key, &[0xFF, 0xFF, 0xFF]).await.unwrap(); // Invalid protobuf
 
     let result = rocklake_catalog::lease::list_active_leases(db).await;

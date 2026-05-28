@@ -58,7 +58,7 @@ async fn migrate_lease_keys(db: &Db) -> CatalogResult<()> {
             Ok(r) => r,
             Err(_) => continue, // Skip corrupt rows; repair handles those.
         };
-        let expected_key = keys::key_snapshot_lease(&row.consumer_id);
+        let expected_key = keys::key_snapshot_lease(&row.consumer_id)?;
         if kv.key.as_ref() != expected_key.as_slice() {
             to_migrate.push((kv.key.to_vec(), kv.value.to_vec()));
         }
@@ -67,7 +67,7 @@ async fn migrate_lease_keys(db: &Db) -> CatalogResult<()> {
     for (old_key, value) in to_migrate {
         // Decode again to get consumer_id for new key.
         if let Ok(row) = SnapshotLeaseRow::decode(value.as_ref()) {
-            let new_key = keys::key_snapshot_lease(&row.consumer_id);
+            let new_key = keys::key_snapshot_lease(&row.consumer_id)?;
             db.put(&new_key, &value).await?;
             db.delete(&old_key).await?;
         }
@@ -91,7 +91,7 @@ async fn migrate_extension_keys(db: &Db) -> CatalogResult<()> {
             Err(_) => continue,
         };
         let expected_key =
-            keys::key_extension_schema(row.extension_id as u8, &row.table_name, row.row_id);
+            keys::key_extension_schema(row.extension_id as u8, &row.table_name, row.row_id)?;
         if kv.key.as_ref() != expected_key.as_slice() {
             to_migrate.push((kv.key.to_vec(), kv.value.to_vec()));
         }
@@ -100,7 +100,7 @@ async fn migrate_extension_keys(db: &Db) -> CatalogResult<()> {
     for (old_key, value) in to_migrate {
         if let Ok(row) = ExtensionSchemaRow::decode(value.as_ref()) {
             let new_key =
-                keys::key_extension_schema(row.extension_id as u8, &row.table_name, row.row_id);
+                keys::key_extension_schema(row.extension_id as u8, &row.table_name, row.row_id)?;
             db.put(&new_key, &value).await?;
             db.delete(&old_key).await?;
         }
@@ -145,7 +145,7 @@ mod tests {
 
         // Write a new-format lease key directly.
         let consumer_id = "my-consumer";
-        let key = keys::key_snapshot_lease(consumer_id);
+        let key = keys::key_snapshot_lease(consumer_id).unwrap();
         let row = SnapshotLeaseRow {
             consumer_id: consumer_id.to_string(),
             min_snapshot_id: 42,
