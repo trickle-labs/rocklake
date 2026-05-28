@@ -4078,7 +4078,57 @@ Enforce protocol version acceptance/rejection:
 - [ ] `docs/compatibility.md` updated with tested versions for all clients and backends
 
 ---
+## v0.39.0 — Observability & Operational Tooling
 
+> Add production-grade visibility into RockLake's runtime behaviour: metrics, tracing, diagnostics, and automated orphan-file cleanup.
+
+### Prometheus Metrics Endpoint
+
+- [ ] Add a `--metrics-addr` flag to `rocklake serve` that starts an HTTP `/metrics` endpoint compatible with the Prometheus text exposition format.
+- [ ] Instrument catalog operation latency histograms: `rocklake_catalog_op_duration_seconds{op="create_snapshot"|"list_data_files"|"describe_table"|...}`.
+- [ ] Instrument PG-wire metrics: active sessions, query latency (`rocklake_pgwire_query_duration_seconds`), error rate by SQLSTATE.
+- [ ] Instrument SlateDB-level metrics where available: compaction lag, memtable size, SST count.
+- [ ] Instrument GC and excision operations: `rocklake_gc_retain_from_snapshot`, `rocklake_excision_bytes_deleted_total`.
+- [ ] Add a Grafana dashboard JSON template to `docs/operations/grafana-dashboard.json`.
+
+### OpenTelemetry Tracing
+
+- [ ] Instrument catalog write paths with OTLP spans: `create_snapshot`, `register_data_file`, `commit_transaction`.
+- [ ] Instrument PG-wire request lifecycle: startup, query parse, execute, response.
+- [ ] Add `--otlp-endpoint` flag; default: disabled. Document in `docs/operations/monitoring.md`.
+- [ ] Add trace propagation across the SlateDB write and compaction boundary where observable.
+- [ ] Integration test: start a Jaeger all-in-one container; verify spans appear for a DuckDB attach + insert round-trip.
+
+### `rocklake diagnose` CLI
+
+- [ ] Implement `rocklake diagnose --catalog <path>` that produces a structured health report covering:
+  - Catalog format version and writer epoch
+  - Current snapshot ID and `retain-from` floor
+  - Secondary index (`TAG_DATA_FILE_BY_SNAPSHOT`) consistency check: scan primary data-file keys and verify each has a matching secondary key
+  - Orphan Parquet file detection: list `{data_root}/` in object storage and report files not referenced by any live catalog snapshot
+  - Snapshot gap detection: missing snapshot IDs between `retain-from` and current
+- [ ] Output as human-readable text (default) and `--json` for machine consumption.
+- [ ] Add `rocklake diagnose` to CI as a post-integration-test gate; fail if any P0 findings are reported.
+- [ ] Document in `docs/operations/diagnostics.md`.
+
+### Orphan File Sweep
+
+- [ ] Implement `rocklake sweep-orphans --catalog <path> --grace-period-hours <N> [--apply]` that identifies Parquet files present in object storage but not referenced in any live catalog snapshot after the grace period.
+- [ ] Default grace period: 24 hours. Make configurable.
+- [ ] Dry-run mode (default): print orphan file list without deleting. `--apply` performs deletion.
+- [ ] Integrate orphan sweep into the GC workflow documentation as a recommended periodic operation.
+- [ ] Add integration test: write files, abort the catalog commit, run sweep after grace period, verify files are deleted.
+
+### Deliverables
+
+- [ ] `/metrics` endpoint on all CI integration tests; verified with `curl`
+- [ ] OTLP spans captured in Jaeger integration test
+- [ ] `rocklake diagnose` green on all test catalogs in CI
+- [ ] `rocklake sweep-orphans` integration test green
+- [ ] `docs/operations/monitoring.md` updated with metrics reference and OTLP instructions
+- [ ] `docs/operations/diagnostics.md` written
+
+---
 ## v0.37.0 — Engine Integration & Wire Protocol Hardening
 
 > Real Spark 3.5 and Trino 432+ jobs; DataFusion matrix integration; wire-corpus replay with golden assertions.
@@ -4128,7 +4178,216 @@ Harden edge cases discovered in corpus replay:
 - [ ] `engine-compat` CI job stable and reproducible
 
 ---
+## v0.41.0 — Migration Tooling & DuckLake Forward Compatibility
 
+> Ship a production-quality `rocklake migrate-from-ducklake` tool and establish a forward-compatibility gate for DuckLake v1.1+.
+
+### `rocklake migrate-from-ducklake`
+
+This tool was listed as a v1.0 GA requirement but has no implementation milestone. It reads an existing PostgreSQL- or SQLite-backed DuckLake catalog, replays its current snapshot into a fresh RockLake catalog, and emits a verification report. Data files are not copied — they remain at their original object-store paths.
+
+- [ ] Implement `rocklake migrate-from-ducklake --source postgres://... --catalog s3://... [--dry-run]` that:
+  1. Connects to the source catalog (PostgreSQL or SQLite) and reads all 28 DuckLake spec tables at the current snapshot using the correct MVCC predicate (`begin_snapshot <= N AND (end_snapshot IS NULL OR end_snapshot > N)`).
+  2. Opens a fresh RockLake catalog at the target path and replays each table via the standard write API.
+  3. Writes the secondary `TAG_DATA_FILE_BY_SNAPSHOT` index for every replayed data file (fixes the known import bug).
+  4. Emits a verification report: row counts per table, snapshot ID range, data file count, any skipped/rejected rows.
+- [ ] Add `--dry-run` mode that reports what would be migrated without writing anything.
+- [ ] End-to-end test: migrate a PostgreSQL-backed DuckLake at SF1 scale; verify `list_data_files()` returns the same results as the source; verify `rocklake diagnose` reports no secondary index gaps.
+- [ ] End-to-end test: same for SQLite source.
+- [ ] Document cutover procedure, rollback plan, and known-incompatibility surfaces in `docs/operations/migration-from-ducklake.md`.
+
+### Export/Import MVCC Correctness
+
+Fix the two known export/import bugs from the assessment:
+
+- [ ] `export-catalog`: apply full MVCC predicate (`begin_snapshot <= N AND (end_snapshot IS NULL OR end_snapshot > N)`) for all versioned tables — not just `begin_snapshot <= N`.
+- [ ] `import_catalog`: write both the canonical data-file key and the secondary `key_data_file_by_snapshot()` entry atomically.
+- [ ] Add regression tests: export at snapshot N, import into a fresh catalog, query `list_data_files()`, verify no retired files appear and no files are missing.
+
+### DuckLake v1.1 Forward-Compatibility Gate
+
+- [ ] Audit DuckLake 1.1 development (`V1_1_DEV_1`) for schema changes relative to v1.0.
+- [ ] Add a forward-compatibility gate: RockLake opens a v1.1 catalog in read-only mode with an explicit `SQLSTATE 0A000` message listing the unsupported version.
+- [ ] Add a `--accept-version V1_1_DEV_1` flag to opt into experimental v1.1 support once the spec stabilises.
+- [ ] Document the DuckLake version upgrade policy in `docs/operations/ducklake-version-upgrade.md`.
+- [ ] Add a CI job that pins a known DuckLake 1.1 pre-release binary and verifies the rejection gate fires correctly.
+
+### Deliverables
+
+- [ ] `rocklake migrate-from-ducklake` end-to-end tests green on PostgreSQL and SQLite sources at SF1
+- [ ] Export/import MVCC regression tests green
+- [ ] Secondary index repair on import verified by `rocklake diagnose`
+- [ ] DuckLake v1.1 rejection gate in CI
+- [ ] `docs/operations/migration-from-ducklake.md` and `docs/operations/ducklake-version-upgrade.md` written
+
+---
+## v0.40.0 — Fault Injection & Security Testing
+
+> Validate catalog correctness under failure and adversarial conditions: kill-9 recovery, S3 error injection, IAM credential isolation, and protocol-level security hardening.
+
+### Tier 6 — Fault Injection Suite
+
+The `fail` crate is already used; this milestone wires it comprehensively into pre-release CI.
+
+- [ ] Add `fail` injection points at every catalog write boundary: before SlateDB commit, after Parquet write but before `register_data_file`, between primary and secondary key writes in `register_data_file`.
+- [ ] Add kill-9 tests: start a writer, inject a failure mid-snapshot, restart, verify the next writer fences correctly and the catalog is consistent.
+- [ ] Add S3 error injection via toxiproxy: 503 responses, connection drops, partial reads. Verify RockLake returns correct errors (not silent empty results) and retries appropriately.
+- [ ] Add GC race test: run GC concurrently with active writes; verify `retain-from` never advances past live snapshots.
+- [ ] Add compaction race test: concurrent SlateDB compaction during catalog scan; verify prefix-scan latest-value semantics hold.
+- [ ] Measure kill-9 → writer-available SLO: target p99 < 10 seconds. Document in `docs/operations/failover.md`.
+- [ ] Wire all fault injection tests into a `fault-injection` CI job that runs on every pre-release tag.
+
+### Tier 8 — Security Testing
+
+- [ ] **IAM credential isolation**: using MinIO, configure `catalog-only` and `data-only` policies. Verify the PG-wire sidecar cannot read or write `data/` prefix; verify DuckDB data-plane access cannot read or write `catalogs/` prefix. Verify expected SQLSTATE `42501` is returned.
+- [ ] **SQL injection guards**: fuzz the PG-wire SQL classifier with adversarial inputs (NUL bytes, overlong strings, nested quotes, Unicode lookalikes). Verify the dispatcher returns `SQLSTATE 42601` or `42000`, never a wrong result or panic.
+- [ ] **TLS audit**: verify TLS 1.1-and-older rejected; TLS 1.2 and 1.3 accepted; `--require-tls` with plaintext client returns correct PG error code. Add as a separate CI job (`tls-security`).
+- [ ] **Auth timing**: verify password comparison is constant-time (using `subtle::ConstantTimeEq` or equivalent); add a regression test that confirms no fast-path exit on wrong-length passwords.
+- [ ] **Excision audit trail**: run `rocklake excise --apply`; verify the audit record is written under `0xFF | "excised"` prefix and is visible to `rocklake diagnose`.
+- [ ] Wire all security tests into a `security` CI job on pre-release tags.
+
+### Deliverables
+
+- [ ] `fault-injection` CI job green on pre-release
+- [ ] `security` CI job green on pre-release
+- [ ] Kill-9 → writer-available SLO measured and documented
+- [ ] IAM isolation verified on MinIO; expected errors documented
+- [ ] SQL injection fuzz results: zero panics, zero wrong results
+- [ ] `docs/operations/failover.md` and `docs/operations/security.md` updated
+
+---
+## v0.42.0 — Performance Benchmarks & Cost Analysis
+
+> Publish a definitive performance comparison between RockLake and DuckLake-on-PostgreSQL / DuckLake-on-SQLite; establish S3 Express as (or rule it out as) the recommended production tier; wire benchmark regression CI.
+
+### TPC-H Catalog Benchmark Suite
+
+- [ ] Implement a standalone benchmark binary under `benches/catalog_bench.rs` (using `criterion`) covering:
+  - `get_current_snapshot()` — cold-process and warm-cache
+  - `list_data_files(table)` at 10⁴, 10⁵, 10⁶ file counts
+  - `describe_table` at 50, 100, 500 columns
+  - `create_snapshot` at 1, 10, 100, 1 000 file additions
+  - `prune_files` with a single typed column predicate at 10⁵ files
+  - Concurrent reader throughput at 1, 4, 16 `DbReader` processes
+- [ ] Run all benchmarks on: LocalFS, MinIO (same host), S3 Standard (same region), S3 Express One Zone.
+- [ ] Compare against PostgreSQL-backed DuckLake on RDS (same AZ) and SQLite-backed DuckLake.
+- [ ] Publish p50/p95/p99/p99.9 for every combination in `benchmarks/v0.42-catalog-bench.json`.
+- [ ] Results must be reproducible within ±10% across three independent runs on the same hardware.
+
+### S3 Express Optimization
+
+- [ ] Profile `get_current_snapshot()` and `list_data_files()` on S3 Express; identify dominant API call costs.
+- [ ] Evaluate and implement SlateDB tuning for S3 Express: manifest pre-fetch, SST size tuning, batch-read coalescing.
+- [ ] **S3 Express acceptance gate**: if `get_current_snapshot()` on S3 Express is within 2× of PostgreSQL p99, declare S3 Express the recommended production tier; document in `docs/performance/s3-express-validation.md`.
+- [ ] If common operations exceed 3× PostgreSQL p99, document the gap and a v0.43+ optimization plan.
+
+### Cost-per-Operation Analysis
+
+- [ ] Instrument S3 API call counts per catalog operation using `object_store` request counting.
+- [ ] Publish cost-per-operation estimates (at $0.023/GB-month S3 Standard, $0.0045 per 1k PUT, $0.00035 per 1k GET) for the common operation families.
+- [ ] Add a `docs/performance/cost-analysis.md` page with cost crossover comparison vs. RDS PostgreSQL.
+
+### Benchmark Regression CI (Tiers 9 & 10)
+
+- [ ] Add a weekly scheduled CI job `benchmark-regression` that runs the catalog benchmark suite on a consistent EC2 instance type and compares results against a stored baseline (`benchmarks/baseline.json`).
+- [ ] Fail the job if any operation regresses > 10% vs. the baseline.
+- [ ] Add a `scripts/update_benchmark_baseline.py` script for intentional baseline updates with a required justification comment.
+
+### Deliverables
+
+- [ ] `benchmarks/v0.42-catalog-bench.json` published
+- [ ] S3 Express acceptance decision documented in `docs/performance/s3-express-validation.md`
+- [ ] Cost analysis in `docs/performance/cost-analysis.md`
+- [ ] Benchmark regression CI job stable and documented
+
+---
+## v0.43.0 — Scale Testing, Soak & Serverless Readers
+
+> Run at scale, validate long-running stability, and ship the checkpoint-pinned reader API for Lambda/serverless use cases.
+
+### Tier 7 — Scale & Soak Testing
+
+- [ ] Set up a dedicated EC2 `c6i.4xlarge` GitHub Actions runner configuration for scale tests (annotated as `self-hosted, scale-test`).
+- [ ] Implement a 24-hour soak test (`tests/soak/soak_24h.rs`): continuously write and read 100k-row snapshots; assert catalog consistency, secondary index integrity, and zero-panic at the end.
+- [ ] Run TPC-H SF10 catalog workload: 10M data files, 100 concurrent readers, 10 concurrent writers; measure p50/p95/p99 and verify linear reader scaling.
+- [ ] Add a `rocklake-testkit` `SoakHarness` that manages soak process lifecycle and captures metrics over the run.
+- [ ] Wire into CI as a pre-release manual-trigger job `scale-soak` with results stored as artifacts.
+
+### Checkpoint-Pinned Reader API
+
+- [ ] Implement `rocklake checkpoint pin --name <name> --snapshot-id <N>` which creates a named SlateDB checkpoint pinned at a specific `dl_snapshot_id`.
+- [ ] Implement `rocklake checkpoint unpin --name <name>`.
+- [ ] Implement `rocklake checkpoint list` showing all pinned checkpoints with their snapshot IDs and creation timestamps.
+- [ ] Checkpoint pins are stored as infrastructure keys under `0xFF | "checkpoint-pin" | name`; they survive process restart.
+- [ ] Add integration test: pin a checkpoint, write 100 more snapshots, open a read-only `rocklake-client` against the pinned checkpoint, verify it sees exactly the pinned snapshot and cannot write.
+
+### Lambda Reader Pattern
+
+- [ ] Add `crates/rocklake-client/examples/lambda_reader.rs`: an AWS Lambda handler stub (using `lambda_runtime` or similar) that opens a `DbReader` against a named checkpoint and returns `list_data_files()` as JSON. No `Db` writer handle opened.
+- [ ] Document IAM policy for Lambda catalog-prefix read-only access in `docs/integration/lambda-reader.md`.
+- [ ] Add integration test: spin up the Lambda pattern as a subprocess; verify it returns correct results and cannot write.
+- [ ] Document cold-start latency with S3 Express checkpoint caching in `/tmp`.
+
+### CDN Cache Contract
+
+- [ ] Document the cache contract: catalog-data keys are immutable by design; any HTTP GET for a catalog prefix key can be safely cached using the SlateDB checkpoint generation as the cache-control key.
+- [ ] Add `docs/integration/cdn-caching.md` with example CloudFront distribution configuration and Lambda@Edge origin logic.
+- [ ] Add a test that verifies catalog-data keys never change value once written (immutability property across 1000 random writes).
+
+### Deliverables
+
+- [ ] 24-hour soak test green (no panics, no catalog corruption, no secondary index gaps)
+- [ ] TPC-H SF10 results published as a CI artifact
+- [ ] `checkpoint pin/unpin/list` CLI implemented and integration-tested
+- [ ] Lambda reader example implemented and documented
+- [ ] `docs/integration/lambda-reader.md` and `docs/integration/cdn-caching.md` written
+
+---
+## v0.44.0 — JVM Bindings
+
+> Ship a Java/Kotlin binding over the stable `rocklake.h` C ABI from v0.35.0, enabling native integration with Spark, Flink, and JVM-based analytics engines without the PG-wire sidecar.
+
+### JNI Binding Implementation
+
+- [ ] Implement a JNI wrapper in `bindings/java/` that exposes the core `rocklake.h` functions to Java:
+  - `RockLakeCatalog.open(path, options)` → opaque handle
+  - `RockLakeCatalog.getSnapshot()` → `long snapshotId`
+  - `RockLakeCatalog.listDataFiles(tableId, snapshotId)` → `List<DataFileRow>`
+  - `RockLakeCatalog.describeTable(tableId, snapshotId)` → `List<ColumnRow>`
+  - `RockLakeCatalog.createSnapshot(changes)` → `long snapshotId`
+  - `RockLakeCatalog.close()`
+- [ ] Use JNA or JNI (evaluate; prefer JNI for performance). Provide a `RockLakeNative` class that loads the native library from the JAR.
+- [ ] Define a Kotlin-idiomatic wrapper (`RockLakeCatalog.kt`) using coroutines for async operations.
+- [ ] Add `bindings/java/build.gradle.kts` with `cargo build --release -p rocklake-ffi` as a Gradle task and the native library as a JAR resource.
+
+### Maven/Gradle Artifact
+
+- [ ] Publish to Maven Central (or GitHub Packages as an interim): `io.trickle:rocklake-java:<version>`.
+- [ ] Include native libraries for Linux x86-64, Linux aarch64, and macOS arm64 as classifier artifacts.
+- [ ] Provide a `rocklake-java-bom` bill of materials POM for version management.
+- [ ] Document publishing process in `docs/contributing/release-process.md`.
+
+### Spark & Flink Integration Examples
+
+- [ ] Add `bindings/java/examples/SparkCatalogReader.java`: a Spark 3.5 driver program that opens a RockLake catalog, calls `listDataFiles()`, and registers the Parquet paths with a Spark `DataFrameReader`.
+- [ ] Add `bindings/java/examples/FlinkCatalogSource.java`: a Flink `SourceFunction` stub that reads snapshot diffs from the RockLake catalog on each checkpoint interval.
+- [ ] Document both examples in `docs/integration/jvm-bindings.md`.
+
+### CI Integration
+
+- [ ] Add CI job `jvm-bindings`: compile the Java binding, run unit tests, run the Spark example against a LocalFS catalog, verify output row count.
+- [ ] Pin JDK 21 LTS as the supported JVM version. Add JDK 17 as a secondary check.
+
+### Deliverables
+
+- [ ] JNI binding implements all core C ABI functions
+- [ ] Kotlin wrapper with coroutine support
+- [ ] Maven artifact published (GitHub Packages)
+- [ ] Spark and Flink examples documented and tested
+- [ ] `jvm-bindings` CI job green
+- [ ] `docs/integration/jvm-bindings.md` written
+
+---
 ## v0.38.0 — Release Certification & Platform Support
 
 > Compatibility manifest system (TOML validator, CI gates, docs-sync enforcement); Rust MSRV reconciliation; Windows x86-64 platform support; final release-blocking gates for v1.0.
@@ -4190,274 +4449,6 @@ Enforce final certification requirements before v1.0:
 - [ ] All release gates green before v1.0 tag
 
 ---
-
-## v0.39.0 — Observability & Operational Tooling
-
-> Add production-grade visibility into RockLake's runtime behaviour: metrics, tracing, diagnostics, and automated orphan-file cleanup.
-
-### Prometheus Metrics Endpoint
-
-- [ ] Add a `--metrics-addr` flag to `rocklake serve` that starts an HTTP `/metrics` endpoint compatible with the Prometheus text exposition format.
-- [ ] Instrument catalog operation latency histograms: `rocklake_catalog_op_duration_seconds{op="create_snapshot"|"list_data_files"|"describe_table"|...}`.
-- [ ] Instrument PG-wire metrics: active sessions, query latency (`rocklake_pgwire_query_duration_seconds`), error rate by SQLSTATE.
-- [ ] Instrument SlateDB-level metrics where available: compaction lag, memtable size, SST count.
-- [ ] Instrument GC and excision operations: `rocklake_gc_retain_from_snapshot`, `rocklake_excision_bytes_deleted_total`.
-- [ ] Add a Grafana dashboard JSON template to `docs/operations/grafana-dashboard.json`.
-
-### OpenTelemetry Tracing
-
-- [ ] Instrument catalog write paths with OTLP spans: `create_snapshot`, `register_data_file`, `commit_transaction`.
-- [ ] Instrument PG-wire request lifecycle: startup, query parse, execute, response.
-- [ ] Add `--otlp-endpoint` flag; default: disabled. Document in `docs/operations/monitoring.md`.
-- [ ] Add trace propagation across the SlateDB write and compaction boundary where observable.
-- [ ] Integration test: start a Jaeger all-in-one container; verify spans appear for a DuckDB attach + insert round-trip.
-
-### `rocklake diagnose` CLI
-
-- [ ] Implement `rocklake diagnose --catalog <path>` that produces a structured health report covering:
-  - Catalog format version and writer epoch
-  - Current snapshot ID and `retain-from` floor
-  - Secondary index (`TAG_DATA_FILE_BY_SNAPSHOT`) consistency check: scan primary data-file keys and verify each has a matching secondary key
-  - Orphan Parquet file detection: list `{data_root}/` in object storage and report files not referenced by any live catalog snapshot
-  - Snapshot gap detection: missing snapshot IDs between `retain-from` and current
-- [ ] Output as human-readable text (default) and `--json` for machine consumption.
-- [ ] Add `rocklake diagnose` to CI as a post-integration-test gate; fail if any P0 findings are reported.
-- [ ] Document in `docs/operations/diagnostics.md`.
-
-### Orphan File Sweep
-
-- [ ] Implement `rocklake sweep-orphans --catalog <path> --grace-period-hours <N> [--apply]` that identifies Parquet files present in object storage but not referenced in any live catalog snapshot after the grace period.
-- [ ] Default grace period: 24 hours. Make configurable.
-- [ ] Dry-run mode (default): print orphan file list without deleting. `--apply` performs deletion.
-- [ ] Integrate orphan sweep into the GC workflow documentation as a recommended periodic operation.
-- [ ] Add integration test: write files, abort the catalog commit, run sweep after grace period, verify files are deleted.
-
-### Deliverables
-
-- [ ] `/metrics` endpoint on all CI integration tests; verified with `curl`
-- [ ] OTLP spans captured in Jaeger integration test
-- [ ] `rocklake diagnose` green on all test catalogs in CI
-- [ ] `rocklake sweep-orphans` integration test green
-- [ ] `docs/operations/monitoring.md` updated with metrics reference and OTLP instructions
-- [ ] `docs/operations/diagnostics.md` written
-
----
-
-## v0.40.0 — Fault Injection & Security Testing
-
-> Validate catalog correctness under failure and adversarial conditions: kill-9 recovery, S3 error injection, IAM credential isolation, and protocol-level security hardening.
-
-### Tier 6 — Fault Injection Suite
-
-The `fail` crate is already used; this milestone wires it comprehensively into pre-release CI.
-
-- [ ] Add `fail` injection points at every catalog write boundary: before SlateDB commit, after Parquet write but before `register_data_file`, between primary and secondary key writes in `register_data_file`.
-- [ ] Add kill-9 tests: start a writer, inject a failure mid-snapshot, restart, verify the next writer fences correctly and the catalog is consistent.
-- [ ] Add S3 error injection via toxiproxy: 503 responses, connection drops, partial reads. Verify RockLake returns correct errors (not silent empty results) and retries appropriately.
-- [ ] Add GC race test: run GC concurrently with active writes; verify `retain-from` never advances past live snapshots.
-- [ ] Add compaction race test: concurrent SlateDB compaction during catalog scan; verify prefix-scan latest-value semantics hold.
-- [ ] Measure kill-9 → writer-available SLO: target p99 < 10 seconds. Document in `docs/operations/failover.md`.
-- [ ] Wire all fault injection tests into a `fault-injection` CI job that runs on every pre-release tag.
-
-### Tier 8 — Security Testing
-
-- [ ] **IAM credential isolation**: using MinIO, configure `catalog-only` and `data-only` policies. Verify the PG-wire sidecar cannot read or write `data/` prefix; verify DuckDB data-plane access cannot read or write `catalogs/` prefix. Verify expected SQLSTATE `42501` is returned.
-- [ ] **SQL injection guards**: fuzz the PG-wire SQL classifier with adversarial inputs (NUL bytes, overlong strings, nested quotes, Unicode lookalikes). Verify the dispatcher returns `SQLSTATE 42601` or `42000`, never a wrong result or panic.
-- [ ] **TLS audit**: verify TLS 1.1-and-older rejected; TLS 1.2 and 1.3 accepted; `--require-tls` with plaintext client returns correct PG error code. Add as a separate CI job (`tls-security`).
-- [ ] **Auth timing**: verify password comparison is constant-time (using `subtle::ConstantTimeEq` or equivalent); add a regression test that confirms no fast-path exit on wrong-length passwords.
-- [ ] **Excision audit trail**: run `rocklake excise --apply`; verify the audit record is written under `0xFF | "excised"` prefix and is visible to `rocklake diagnose`.
-- [ ] Wire all security tests into a `security` CI job on pre-release tags.
-
-### Deliverables
-
-- [ ] `fault-injection` CI job green on pre-release
-- [ ] `security` CI job green on pre-release
-- [ ] Kill-9 → writer-available SLO measured and documented
-- [ ] IAM isolation verified on MinIO; expected errors documented
-- [ ] SQL injection fuzz results: zero panics, zero wrong results
-- [ ] `docs/operations/failover.md` and `docs/operations/security.md` updated
-
----
-
-## v0.41.0 — Migration Tooling & DuckLake Forward Compatibility
-
-> Ship a production-quality `rocklake migrate-from-ducklake` tool and establish a forward-compatibility gate for DuckLake v1.1+.
-
-### `rocklake migrate-from-ducklake`
-
-This tool was listed as a v1.0 GA requirement but has no implementation milestone. It reads an existing PostgreSQL- or SQLite-backed DuckLake catalog, replays its current snapshot into a fresh RockLake catalog, and emits a verification report. Data files are not copied — they remain at their original object-store paths.
-
-- [ ] Implement `rocklake migrate-from-ducklake --source postgres://... --catalog s3://... [--dry-run]` that:
-  1. Connects to the source catalog (PostgreSQL or SQLite) and reads all 28 DuckLake spec tables at the current snapshot using the correct MVCC predicate (`begin_snapshot <= N AND (end_snapshot IS NULL OR end_snapshot > N)`).
-  2. Opens a fresh RockLake catalog at the target path and replays each table via the standard write API.
-  3. Writes the secondary `TAG_DATA_FILE_BY_SNAPSHOT` index for every replayed data file (fixes the known import bug).
-  4. Emits a verification report: row counts per table, snapshot ID range, data file count, any skipped/rejected rows.
-- [ ] Add `--dry-run` mode that reports what would be migrated without writing anything.
-- [ ] End-to-end test: migrate a PostgreSQL-backed DuckLake at SF1 scale; verify `list_data_files()` returns the same results as the source; verify `rocklake diagnose` reports no secondary index gaps.
-- [ ] End-to-end test: same for SQLite source.
-- [ ] Document cutover procedure, rollback plan, and known-incompatibility surfaces in `docs/operations/migration-from-ducklake.md`.
-
-### Export/Import MVCC Correctness
-
-Fix the two known export/import bugs from the assessment:
-
-- [ ] `export-catalog`: apply full MVCC predicate (`begin_snapshot <= N AND (end_snapshot IS NULL OR end_snapshot > N)`) for all versioned tables — not just `begin_snapshot <= N`.
-- [ ] `import_catalog`: write both the canonical data-file key and the secondary `key_data_file_by_snapshot()` entry atomically.
-- [ ] Add regression tests: export at snapshot N, import into a fresh catalog, query `list_data_files()`, verify no retired files appear and no files are missing.
-
-### DuckLake v1.1 Forward-Compatibility Gate
-
-- [ ] Audit DuckLake 1.1 development (`V1_1_DEV_1`) for schema changes relative to v1.0.
-- [ ] Add a forward-compatibility gate: RockLake opens a v1.1 catalog in read-only mode with an explicit `SQLSTATE 0A000` message listing the unsupported version.
-- [ ] Add a `--accept-version V1_1_DEV_1` flag to opt into experimental v1.1 support once the spec stabilises.
-- [ ] Document the DuckLake version upgrade policy in `docs/operations/ducklake-version-upgrade.md`.
-- [ ] Add a CI job that pins a known DuckLake 1.1 pre-release binary and verifies the rejection gate fires correctly.
-
-### Deliverables
-
-- [ ] `rocklake migrate-from-ducklake` end-to-end tests green on PostgreSQL and SQLite sources at SF1
-- [ ] Export/import MVCC regression tests green
-- [ ] Secondary index repair on import verified by `rocklake diagnose`
-- [ ] DuckLake v1.1 rejection gate in CI
-- [ ] `docs/operations/migration-from-ducklake.md` and `docs/operations/ducklake-version-upgrade.md` written
-
----
-
-## v0.42.0 — Performance Benchmarks & Cost Analysis
-
-> Publish a definitive performance comparison between RockLake and DuckLake-on-PostgreSQL / DuckLake-on-SQLite; establish S3 Express as (or rule it out as) the recommended production tier; wire benchmark regression CI.
-
-### TPC-H Catalog Benchmark Suite
-
-- [ ] Implement a standalone benchmark binary under `benches/catalog_bench.rs` (using `criterion`) covering:
-  - `get_current_snapshot()` — cold-process and warm-cache
-  - `list_data_files(table)` at 10⁴, 10⁵, 10⁶ file counts
-  - `describe_table` at 50, 100, 500 columns
-  - `create_snapshot` at 1, 10, 100, 1 000 file additions
-  - `prune_files` with a single typed column predicate at 10⁵ files
-  - Concurrent reader throughput at 1, 4, 16 `DbReader` processes
-- [ ] Run all benchmarks on: LocalFS, MinIO (same host), S3 Standard (same region), S3 Express One Zone.
-- [ ] Compare against PostgreSQL-backed DuckLake on RDS (same AZ) and SQLite-backed DuckLake.
-- [ ] Publish p50/p95/p99/p99.9 for every combination in `benchmarks/v0.42-catalog-bench.json`.
-- [ ] Results must be reproducible within ±10% across three independent runs on the same hardware.
-
-### S3 Express Optimization
-
-- [ ] Profile `get_current_snapshot()` and `list_data_files()` on S3 Express; identify dominant API call costs.
-- [ ] Evaluate and implement SlateDB tuning for S3 Express: manifest pre-fetch, SST size tuning, batch-read coalescing.
-- [ ] **S3 Express acceptance gate**: if `get_current_snapshot()` on S3 Express is within 2× of PostgreSQL p99, declare S3 Express the recommended production tier; document in `docs/performance/s3-express-validation.md`.
-- [ ] If common operations exceed 3× PostgreSQL p99, document the gap and a v0.43+ optimization plan.
-
-### Cost-per-Operation Analysis
-
-- [ ] Instrument S3 API call counts per catalog operation using `object_store` request counting.
-- [ ] Publish cost-per-operation estimates (at $0.023/GB-month S3 Standard, $0.0045 per 1k PUT, $0.00035 per 1k GET) for the common operation families.
-- [ ] Add a `docs/performance/cost-analysis.md` page with cost crossover comparison vs. RDS PostgreSQL.
-
-### Benchmark Regression CI (Tiers 9 & 10)
-
-- [ ] Add a weekly scheduled CI job `benchmark-regression` that runs the catalog benchmark suite on a consistent EC2 instance type and compares results against a stored baseline (`benchmarks/baseline.json`).
-- [ ] Fail the job if any operation regresses > 10% vs. the baseline.
-- [ ] Add a `scripts/update_benchmark_baseline.py` script for intentional baseline updates with a required justification comment.
-
-### Deliverables
-
-- [ ] `benchmarks/v0.42-catalog-bench.json` published
-- [ ] S3 Express acceptance decision documented in `docs/performance/s3-express-validation.md`
-- [ ] Cost analysis in `docs/performance/cost-analysis.md`
-- [ ] Benchmark regression CI job stable and documented
-
----
-
-## v0.43.0 — Scale Testing, Soak & Serverless Readers
-
-> Run at scale, validate long-running stability, and ship the checkpoint-pinned reader API for Lambda/serverless use cases.
-
-### Tier 7 — Scale & Soak Testing
-
-- [ ] Set up a dedicated EC2 `c6i.4xlarge` GitHub Actions runner configuration for scale tests (annotated as `self-hosted, scale-test`).
-- [ ] Implement a 24-hour soak test (`tests/soak/soak_24h.rs`): continuously write and read 100k-row snapshots; assert catalog consistency, secondary index integrity, and zero-panic at the end.
-- [ ] Run TPC-H SF10 catalog workload: 10M data files, 100 concurrent readers, 10 concurrent writers; measure p50/p95/p99 and verify linear reader scaling.
-- [ ] Add a `rocklake-testkit` `SoakHarness` that manages soak process lifecycle and captures metrics over the run.
-- [ ] Wire into CI as a pre-release manual-trigger job `scale-soak` with results stored as artifacts.
-
-### Checkpoint-Pinned Reader API
-
-- [ ] Implement `rocklake checkpoint pin --name <name> --snapshot-id <N>` which creates a named SlateDB checkpoint pinned at a specific `dl_snapshot_id`.
-- [ ] Implement `rocklake checkpoint unpin --name <name>`.
-- [ ] Implement `rocklake checkpoint list` showing all pinned checkpoints with their snapshot IDs and creation timestamps.
-- [ ] Checkpoint pins are stored as infrastructure keys under `0xFF | "checkpoint-pin" | name`; they survive process restart.
-- [ ] Add integration test: pin a checkpoint, write 100 more snapshots, open a read-only `rocklake-client` against the pinned checkpoint, verify it sees exactly the pinned snapshot and cannot write.
-
-### Lambda Reader Pattern
-
-- [ ] Add `crates/rocklake-client/examples/lambda_reader.rs`: an AWS Lambda handler stub (using `lambda_runtime` or similar) that opens a `DbReader` against a named checkpoint and returns `list_data_files()` as JSON. No `Db` writer handle opened.
-- [ ] Document IAM policy for Lambda catalog-prefix read-only access in `docs/integration/lambda-reader.md`.
-- [ ] Add integration test: spin up the Lambda pattern as a subprocess; verify it returns correct results and cannot write.
-- [ ] Document cold-start latency with S3 Express checkpoint caching in `/tmp`.
-
-### CDN Cache Contract
-
-- [ ] Document the cache contract: catalog-data keys are immutable by design; any HTTP GET for a catalog prefix key can be safely cached using the SlateDB checkpoint generation as the cache-control key.
-- [ ] Add `docs/integration/cdn-caching.md` with example CloudFront distribution configuration and Lambda@Edge origin logic.
-- [ ] Add a test that verifies catalog-data keys never change value once written (immutability property across 1000 random writes).
-
-### Deliverables
-
-- [ ] 24-hour soak test green (no panics, no catalog corruption, no secondary index gaps)
-- [ ] TPC-H SF10 results published as a CI artifact
-- [ ] `checkpoint pin/unpin/list` CLI implemented and integration-tested
-- [ ] Lambda reader example implemented and documented
-- [ ] `docs/integration/lambda-reader.md` and `docs/integration/cdn-caching.md` written
-
----
-
-## v0.44.0 — JVM Bindings
-
-> Ship a Java/Kotlin binding over the stable `rocklake.h` C ABI from v0.35.0, enabling native integration with Spark, Flink, and JVM-based analytics engines without the PG-wire sidecar.
-
-### JNI Binding Implementation
-
-- [ ] Implement a JNI wrapper in `bindings/java/` that exposes the core `rocklake.h` functions to Java:
-  - `RockLakeCatalog.open(path, options)` → opaque handle
-  - `RockLakeCatalog.getSnapshot()` → `long snapshotId`
-  - `RockLakeCatalog.listDataFiles(tableId, snapshotId)` → `List<DataFileRow>`
-  - `RockLakeCatalog.describeTable(tableId, snapshotId)` → `List<ColumnRow>`
-  - `RockLakeCatalog.createSnapshot(changes)` → `long snapshotId`
-  - `RockLakeCatalog.close()`
-- [ ] Use JNA or JNI (evaluate; prefer JNI for performance). Provide a `RockLakeNative` class that loads the native library from the JAR.
-- [ ] Define a Kotlin-idiomatic wrapper (`RockLakeCatalog.kt`) using coroutines for async operations.
-- [ ] Add `bindings/java/build.gradle.kts` with `cargo build --release -p rocklake-ffi` as a Gradle task and the native library as a JAR resource.
-
-### Maven/Gradle Artifact
-
-- [ ] Publish to Maven Central (or GitHub Packages as an interim): `io.trickle:rocklake-java:<version>`.
-- [ ] Include native libraries for Linux x86-64, Linux aarch64, and macOS arm64 as classifier artifacts.
-- [ ] Provide a `rocklake-java-bom` bill of materials POM for version management.
-- [ ] Document publishing process in `docs/contributing/release-process.md`.
-
-### Spark & Flink Integration Examples
-
-- [ ] Add `bindings/java/examples/SparkCatalogReader.java`: a Spark 3.5 driver program that opens a RockLake catalog, calls `listDataFiles()`, and registers the Parquet paths with a Spark `DataFrameReader`.
-- [ ] Add `bindings/java/examples/FlinkCatalogSource.java`: a Flink `SourceFunction` stub that reads snapshot diffs from the RockLake catalog on each checkpoint interval.
-- [ ] Document both examples in `docs/integration/jvm-bindings.md`.
-
-### CI Integration
-
-- [ ] Add CI job `jvm-bindings`: compile the Java binding, run unit tests, run the Spark example against a LocalFS catalog, verify output row count.
-- [ ] Pin JDK 21 LTS as the supported JVM version. Add JDK 17 as a secondary check.
-
-### Deliverables
-
-- [ ] JNI binding implements all core C ABI functions
-- [ ] Kotlin wrapper with coroutine support
-- [ ] Maven artifact published (GitHub Packages)
-- [ ] Spark and Flink examples documented and tested
-- [ ] `jvm-bindings` CI job green
-- [ ] `docs/integration/jvm-bindings.md` written
-
----
-
 ## v0.45.0 — GA Readiness Gate
 
 > Verify that RockLake is genuinely ready for external production use: dogfood deployment, external developer test, documentation completeness, and final v1.0 release preparation.
@@ -4885,3 +4876,4 @@ Some acceptance criteria cannot run in normal CI: 24 h soaks, 1 TB inputs, and T
 - A drop-in for any workload without first reading the performance analysis in `docs/performance.md`
 
 **Choose RockLake when:** you are serverless or spot-based and cannot afford a persistent database server; you want a lakehouse with zero external infrastructure; you need cheap point-in-time catalog snapshots; your workload is write-heavy rather than read-heavy; or you are already in the SlateDB ecosystem.
+
