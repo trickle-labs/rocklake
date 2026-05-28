@@ -83,7 +83,9 @@ jobs:
              -lpthread -ldl -lm
 
       - name: Run C smoke test
-        run: /tmp/ffi_smoke_test /tmp/rl_smoke_ci
+        run: |
+          mkdir -p /tmp/rl_smoke_ci
+          /tmp/ffi_smoke_test /tmp/rl_smoke_ci
 
   # F-26: CLI smoke test — verify every documented flag is present in --help.
   smoke-test:
