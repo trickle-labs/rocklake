@@ -86,7 +86,7 @@ binding on every roadmap release below.
 | **v0.28.0 — Writer Fencing & Concurrency Correctness** | Replace wall-clock millisecond writer epochs with a transactional monotonic counter; fix GC lease/pin checks outside the transaction; inject deterministic clock in writer-fencing tests; make rebuild atomically transactional | Done |
 | **v0.29.0 — Recovery Correctness** | Fix import to write secondary data-file index; apply MVCC predicate in export; make rebuild atomic; add export/import round-trip tests that exercise `list_data_files()` and reader scans | Done |
 | **v0.30.0 — PG-Wire & Protocol Hardening** | Make binary COPY parser fail-closed on truncation; sync CLI flags with documentation; fix migration docs; propagate object-store listing errors from `rebuild` command | Done |
-| **v0.31.0 — DataFusion Hardening** | Propagate catalog errors instead of `unwrap_or_default()`; error on data files with no readable root; carry data root explicitly; make AsyncBridge fallible; expand type mapping | Planning |
+| **v0.31.0 — DataFusion Hardening** | Propagate catalog errors instead of `unwrap_or_default()`; error on data files with no readable root; carry data root explicitly; make AsyncBridge fallible; expand type mapping | Done |
 | **v0.32.0 — DuckLake Export Completeness** | Make `export-catalog` cover all 28+ DuckLake tables; reconcile 32-vs-28 table count; correct backup/restore documentation; fix CLI docs | Planning |
 | **v0.33.0 — Security & Key Encoding Hardening** | Redact raw values from parameter-error messages; reject over-length identifiers in key encoding; classify `rocklake_catalog.*` mutations as read-only (SQLSTATE 25006); fix FFI NUL-string silent truncation | Planning |
 | **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Planning |
@@ -3787,37 +3787,37 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 ### Tasks
 
 #### Error Propagation
-- [ ] Replace `unwrap_or_default()` in `schema_names()` and `table_names()` with error logging at `ERROR` level plus surfacing a `DataFusionError::External` where the DataFusion trait permits it.
-- [ ] Replace `list_data_files(...).await.unwrap_or_default()` with explicit error propagation; surface catalog errors to query planning.
-- [ ] When `parquet_files` is non-empty and `data_root` is `None`, return `DataFusionError::Plan` explaining that the data root is not available for this object store type.
+- [x] Replace `unwrap_or_default()` in `schema_names()` and `table_names()` with error logging at `ERROR` level plus surfacing a `DataFusionError::External` where the DataFusion trait permits it.
+- [x] Replace `list_data_files(...).await.unwrap_or_default()` with explicit error propagation; surface catalog errors to query planning.
+- [x] When `parquet_files` is non-empty and `data_root` is `None`, return `DataFusionError::Plan` explaining that the data root is not available for this object store type.
 
 #### Stable `data_root` Resolution
-- [ ] Remove the `Display`-string parsing for `ObjectStore` in `catalog_provider.rs`.
-- [ ] Carry the local root path explicitly through the provider builder and `open()`, reading it from the `data_path` catalog metadata key.
-- [ ] Add a test that sets up a catalog with a known `data_path` and verifies `scan()` resolves file URLs correctly.
+- [x] Remove the `Display`-string parsing for `ObjectStore` in `catalog_provider.rs`.
+- [x] Carry the local root path explicitly through the provider builder and `open()`, reading it from the `data_path` catalog metadata key.
+- [x] Add a test that sets up a catalog with a known `data_path` and verifies `scan()` resolves file URLs correctly.
 
 #### Fallible `AsyncBridge`
-- [ ] Make `AsyncBridge::new()` return `Result<AsyncBridge, DataFusionError>` and propagate runtime-creation and thread-spawn failures.
-- [ ] Replace `expect()` in `run_sync()` with proper error returns.
-- [ ] Add a test that exercises bridge failure paths (e.g., deliberately poisoned channel).
+- [x] Make `AsyncBridge::new()` return `Result<AsyncBridge, DataFusionError>` and propagate runtime-creation and thread-spawn failures.
+- [x] Replace `expect()` in `run_sync()` with proper error returns.
+- [x] Add a test that exercises bridge failure paths (e.g., deliberately poisoned channel).
 
 #### Type Mapping Completeness
-- [ ] Extend `map_data_type()` to cover all DuckLake v1.0 scalar types (DECIMAL, HUGEINT, TIMESTAMP WITH TIME ZONE, INTERVAL, UUID, JSON, BLOB variants).
-- [ ] For unsupported nested/variant/geometry types, return `DataFusionError::NotImplemented` with the type name rather than silently using UTF-8.
-- [ ] Reuse the type parser from `rocklake-core` if one exists; otherwise add a shared `DuckLakeType::to_arrow()` function there.
+- [x] Extend `map_data_type()` to cover all DuckLake v1.0 scalar types (DECIMAL, HUGEINT, TIMESTAMP WITH TIME ZONE, INTERVAL, UUID, JSON, BLOB variants).
+- [x] For unsupported nested/variant/geometry types, return `DataFusionError::NotImplemented` with the type name rather than silently using UTF-8.
+- [x] Reuse the type parser from `rocklake-core` if one exists; otherwise add a shared `DuckLakeType::to_arrow()` function there.
 
 #### Table Count Reconciliation
-- [ ] Define an authoritative `CATALOG_TABLE_REGISTRY` constant or function in `rocklake-datafusion` that lists all registered catalog tables and distinguishes DuckLake spec tables from RockLake extension/virtual tables.
-- [ ] Update `virtual_catalog_registers_all_32_tables()` to use the registry and document which 4 extra tables are RockLake extensions.
-- [ ] Update `README.md` and relevant docs from "28 DuckLake tables" to the correct count with an explanation.
+- [x] Define an authoritative `CATALOG_TABLE_REGISTRY` constant or function in `rocklake-datafusion` that lists all registered catalog tables and distinguishes DuckLake spec tables from RockLake extension/virtual tables.
+- [x] Update `virtual_catalog_registers_all_32_tables()` to use the registry and document which 4 extra tables are RockLake extensions.
+- [x] Update `README.md` and relevant docs from "28 DuckLake tables" to the correct count with an explanation.
 
 ### Definition of Done
-- [ ] Catalog I/O errors surface as `DataFusionError` and do not produce empty results.
-- [ ] Non-local object store with registered data files returns an error, not zero rows.
-- [ ] `data_root` is resolved from catalog metadata, not from Display parsing.
-- [ ] `AsyncBridge` is fallible; construction and channel failures do not panic.
-- [ ] All DuckLake v1.0 scalar types map to correct Arrow types; unsupported types return an error.
-- [ ] Table count registry exists; docs are updated.
+- [x] Catalog I/O errors surface as `DataFusionError` and do not produce empty results.
+- [x] Non-local object store with registered data files returns an error, not zero rows.
+- [x] `data_root` is resolved from catalog metadata, not from Display parsing.
+- [x] `AsyncBridge` is fallible; construction and channel failures do not panic.
+- [x] All DuckLake v1.0 scalar types map to correct Arrow types; unsupported types return an error.
+- [x] Table count registry exists; docs are updated.
 
 ---
 

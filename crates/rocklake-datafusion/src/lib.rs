@@ -8,4 +8,6 @@ pub mod catalog_provider;
 pub mod virtual_catalog;
 
 pub use catalog_provider::RockLakeCatalogProvider;
-pub use virtual_catalog::VirtualCatalogContext;
+pub use virtual_catalog::{
+    catalog_table_names, VirtualCatalogContext, DUCKLAKE_SPEC_TABLES, ROCKLAKE_EXTENSION_TABLES,
+};

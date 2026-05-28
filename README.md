@@ -59,7 +59,7 @@ RockLake operates as three logically separable planes, all sharing the same Slat
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   CATALOG (SlateDB)                         │
-│           28 DuckLake tables (v1.0 schema)                  │
+│           28 DuckLake spec tables + 4 RockLake extension tables           │
 └──────┬──────────────────────────────────────────────────────┘
        │
                       ┌───────────────────────────────────────┐
@@ -132,7 +132,7 @@ RockLake is a Cargo workspace of focused crates, each with a clear responsibilit
 | Crate | Purpose |
 |---|---|
 | `rocklake-core` | Foundational types: binary key layout, MVCC visibility logic, protobuf encoding, counter allocation |
-| `rocklake-catalog` | All 28 DuckLake v1.0 catalog operations: schemas, tables, columns, snapshots, and data files |
+| `rocklake-catalog` | All 28 DuckLake v1.0 catalog operations + 4 RockLake extension tables (32 total): schemas, tables, columns, snapshots, and data files |
 | `rocklake-sql` | Bounded SQL parser and AST dispatcher — only the shapes DuckDB actually emits |
 | `rocklake-pgwire` | PostgreSQL wire protocol sidecar binary (startup, simple query, extended query) |
 | `rocklake-datafusion` | DataFusion integration for query planning |
