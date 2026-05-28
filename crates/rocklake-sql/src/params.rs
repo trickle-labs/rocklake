@@ -23,7 +23,7 @@ impl ParamValues {
             .map_err(|_| super::SqlDispatchError::TypeMismatch {
                 idx: idx + 1,
                 expected: "u64",
-                actual: val.to_string(),
+                actual: format!("<string len={}>", val.len()),
             })
     }
 
@@ -35,7 +35,7 @@ impl ParamValues {
             .map_err(|_| super::SqlDispatchError::TypeMismatch {
                 idx: idx + 1,
                 expected: "i64",
-                actual: val.to_string(),
+                actual: format!("<string len={}>", val.len()),
             })
     }
 
@@ -59,7 +59,7 @@ impl ParamValues {
             _ => Err(super::SqlDispatchError::TypeMismatch {
                 idx: idx + 1,
                 expected: "bool",
-                actual: val.to_string(),
+                actual: format!("<string len={}>", val.len()),
             }),
         }
     }
@@ -157,5 +157,43 @@ mod tests {
     fn test_to_json_string_empty() {
         let params = ParamValues::new(vec![]);
         assert_eq!(params.to_json_string(), "{}");
+    }
+
+    #[test]
+    fn type_mismatch_does_not_contain_secret() {
+        // A secret-shaped string (e.g. API key) must not appear verbatim in any
+        // TypeMismatch error message — only its length is disclosed.
+        let secret = "sk-1234567890abcdef_SUPER_SECRET_KEY_VALUE";
+        let params = ParamValues::new(vec![Some(secret.to_string())]);
+
+        let err_u64 = params.get_u64(0).unwrap_err().to_string();
+        assert!(
+            !err_u64.contains(secret),
+            "get_u64 TypeMismatch must not echo the secret; got: {err_u64}"
+        );
+        assert!(
+            err_u64.contains(&format!("len={}", secret.len())),
+            "get_u64 TypeMismatch must include length; got: {err_u64}"
+        );
+
+        let err_i64 = params.get_i64(0).unwrap_err().to_string();
+        assert!(
+            !err_i64.contains(secret),
+            "get_i64 TypeMismatch must not echo the secret; got: {err_i64}"
+        );
+        assert!(
+            err_i64.contains(&format!("len={}", secret.len())),
+            "get_i64 TypeMismatch must include length; got: {err_i64}"
+        );
+
+        let err_bool = params.get_bool(0).unwrap_err().to_string();
+        assert!(
+            !err_bool.contains(secret),
+            "get_bool TypeMismatch must not echo the secret; got: {err_bool}"
+        );
+        assert!(
+            err_bool.contains(&format!("len={}", secret.len())),
+            "get_bool TypeMismatch must include length; got: {err_bool}"
+        );
     }
 }

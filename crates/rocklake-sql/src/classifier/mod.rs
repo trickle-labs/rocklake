@@ -269,6 +269,12 @@ pub enum StatementKind {
     VirtualCatalogScan {
         table_name: String,
     },
+    /// `INSERT`/`UPDATE`/`DELETE` against `rocklake_catalog.*` — rejected with
+    /// SQLSTATE 25006 (read-only transaction). The virtual catalog is read-only;
+    /// all write paths must go through the dedicated write operations.
+    VirtualCatalogMutation {
+        table_name: String,
+    },
 
     // ─── v0.18 DuckLake Standard Interface ─────────────────────────────
     /// `SELECT * FROM table_changes('schema.table', start_snapshot := N, end_snapshot := M)`

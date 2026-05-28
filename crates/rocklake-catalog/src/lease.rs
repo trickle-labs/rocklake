@@ -44,7 +44,7 @@ pub async fn hold_snapshot(
         expires_at_unix_ms,
     };
 
-    let key = keys::key_snapshot_lease(consumer_id);
+    let key = keys::key_snapshot_lease(consumer_id)?;
     let value = row.encode_to_vec();
     db.put(&key, &value).await?;
 
@@ -53,7 +53,7 @@ pub async fn hold_snapshot(
 
 /// Release a snapshot lease by consumer_id.
 pub async fn release_snapshot(db: &Db, consumer_id: &str) -> CatalogResult<bool> {
-    let key = keys::key_snapshot_lease(consumer_id);
+    let key = keys::key_snapshot_lease(consumer_id)?;
     let existed = db.get(&key).await?.is_some();
     db.delete(&key).await?;
     Ok(existed)

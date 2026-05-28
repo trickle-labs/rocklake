@@ -88,7 +88,7 @@ binding on every roadmap release below.
 | **v0.30.0 — PG-Wire & Protocol Hardening** | Make binary COPY parser fail-closed on truncation; sync CLI flags with documentation; fix migration docs; propagate object-store listing errors from `rebuild` command | Done |
 | **v0.31.0 — DataFusion Hardening** | Propagate catalog errors instead of `unwrap_or_default()`; error on data files with no readable root; carry data root explicitly; make AsyncBridge fallible; expand type mapping | Done |
 | **v0.32.0 — DuckLake Export Completeness** | Make `export-catalog` cover all 28+ DuckLake tables; reconcile 32-vs-28 table count; correct backup/restore documentation; fix CLI docs | Done |
-| **v0.33.0 — Security & Key Encoding Hardening** | Redact raw values from parameter-error messages; reject over-length identifiers in key encoding; classify `rocklake_catalog.*` mutations as read-only (SQLSTATE 25006); fix FFI NUL-string silent truncation | Planning |
+| **v0.33.0 — Security & Key Encoding Hardening** | Redact raw values from parameter-error messages; reject over-length identifiers in key encoding; classify `rocklake_catalog.*` mutations as read-only (SQLSTATE 25006); fix FFI NUL-string silent truncation | Done |
 | **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Planning |
 | **v0.35.0 — Embedded Catalog Client Library** | Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library; add a `rocklake-client` Rust crate as the idiomatic high-level API; ship language bindings for Python (PyO3), Go (cgo), and Node.js (napi-rs); document building against the C ABI from any language; validate non-DuckDB clients (Polars, DataFusion, Spark, Trino) against the same catalog | Planning |
 | **v0.36.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation from v0.35.0 to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; C++ catalog registration against DuckDB's community extension API is the remaining gap | Planning |
@@ -3863,30 +3863,30 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 ### Tasks
 
 #### Redact Parameter Values from Errors
-- [ ] In `params.rs`, replace `actual: val.to_string()` with `actual: format!("<{} len={}>", val_type_name, val.len())` or equivalent.
-- [ ] Update all `TypeMismatch` display implementations to not render raw parameter content.
-- [ ] Add a test that asserts a `TypeMismatch` error for a secret-shaped string does not contain the secret in its `Display` output.
+- [x] In `params.rs`, replace `actual: val.to_string()` with `actual: format!("<{} len={}>", val_type_name, val.len())` or equivalent.
+- [x] Update all `TypeMismatch` display implementations to not render raw parameter content.
+- [x] Add a test that asserts a `TypeMismatch` error for a secret-shaped string does not contain the secret in its `Display` output.
 
 #### Key Encoding Length Guards
-- [ ] In `keys.rs`, add a validation helper `validate_identifier_len(s: &str) -> CatalogResult<()>` that returns `Err(CatalogError::InvalidInput(...))` for strings longer than `u16::MAX` bytes.
-- [ ] Call this helper at the entry points of `key_snapshot_lease()`, `key_extension_schema()`, and `prefix_extension_table()` before truncation.
-- [ ] Add tests that pass a string of exactly `u16::MAX`, exactly `u16::MAX + 1`, and a very long string, and assert the correct pass/fail behavior.
+- [x] In `keys.rs`, add a validation helper `validate_identifier_len(s: &str) -> CatalogResult<()>` that returns `Err(CatalogError::InvalidInput(...))` for strings longer than `u16::MAX` bytes.
+- [x] Call this helper at the entry points of `key_snapshot_lease()`, `key_extension_schema()`, and `prefix_extension_table()` before truncation.
+- [x] Add tests that pass a string of exactly `u16::MAX`, exactly `u16::MAX + 1`, and a very long string, and assert the correct pass/fail behavior.
 
 #### Virtual Catalog Read-Only SQLSTATE
-- [ ] In `classifier/ast.rs`, add explicit `INSERT`, `UPDATE`, and `DELETE` classification branches for tables with a `rocklake_catalog.` schema prefix, returning `StatementKind::VirtualCatalogMutation`.
-- [ ] In the PG-wire executor, map `VirtualCatalogMutation` to `RockLakeError::ReadOnlyReplica` with SQLSTATE `25006`.
-- [ ] Add a test that sends `INSERT INTO rocklake_catalog.ducklake_snapshot ...` and asserts the response is `25006`.
+- [x] In `classifier/ast.rs`, add explicit `INSERT`, `UPDATE`, and `DELETE` classification branches for tables with a `rocklake_catalog.` schema prefix, returning `StatementKind::VirtualCatalogMutation`.
+- [x] In the PG-wire executor, map `VirtualCatalogMutation` to `RockLakeError::ReadOnlyReplica` with SQLSTATE `25006`.
+- [x] Add a test that sends `INSERT INTO rocklake_catalog.ducklake_snapshot ...` and asserts the response is `25006`.
 
 #### FFI NUL-String Safety
-- [ ] Centralize `CString` conversion in `crates/rocklake-ffi/src/lib.rs` into a `to_c_string(s: &str) -> CString` helper that returns a known safe fallback on embedded NUL (e.g., `CString::new("<invalid-utf8>").unwrap()`).
-- [ ] Replace all `CString::new(...).unwrap_or_default()` call sites with the new helper.
-- [ ] Add a test that passes a string containing `\0` through the FFI layer and verifies the fallback string is returned rather than an empty string.
+- [x] Centralize `CString` conversion in `crates/rocklake-ffi/src/lib.rs` into a `to_c_string(s: &str) -> CString` helper that returns a known safe fallback on embedded NUL (e.g., `CString::new("<invalid-utf8>").unwrap()`).
+- [x] Replace all `CString::new(...).unwrap_or_default()` call sites with the new helper.
+- [x] Add a test that passes a string containing `\0` through the FFI layer and verifies the fallback string is returned rather than an empty string.
 
 ### Definition of Done
-- [ ] `TypeMismatch` error messages contain no raw parameter values.
-- [ ] Identifiers longer than `u16::MAX` bytes are rejected at key construction with a clear error.
-- [ ] `INSERT`/`UPDATE`/`DELETE` on `rocklake_catalog.*` returns SQLSTATE `25006`.
-- [ ] FFI `CString` conversion uses safe fallback for embedded NUL; no `unwrap_or_default()` on string conversion.
+- [x] `TypeMismatch` error messages contain no raw parameter values.
+- [x] Identifiers longer than `u16::MAX` bytes are rejected at key construction with a clear error.
+- [x] `INSERT`/`UPDATE`/`DELETE` on `rocklake_catalog.*` returns SQLSTATE `25006`.
+- [x] FFI `CString` conversion uses safe fallback for embedded NUL; no `unwrap_or_default()` on string conversion.
 
 ---
 

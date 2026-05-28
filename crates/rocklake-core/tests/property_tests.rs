@@ -390,7 +390,7 @@ fn distinct_consumer_ids_produce_distinct_lease_keys() {
         "abcd",
         "dcba",
     ];
-    let keys: Vec<Vec<u8>> = ids.iter().map(|id| key_snapshot_lease(id)).collect();
+    let keys: Vec<Vec<u8>> = ids.iter().map(|id| key_snapshot_lease(id).unwrap()).collect();
     for i in 0..keys.len() {
         for j in (i + 1)..keys.len() {
             assert_ne!(
@@ -416,7 +416,7 @@ fn distinct_extension_key_triples_no_collision() {
     ];
     let keys: Vec<Vec<u8>> = cases
         .iter()
-        .map(|(ext, table, row)| key_extension_schema(*ext, table, *row))
+        .map(|(ext, table, row)| key_extension_schema(*ext, table, *row).unwrap())
         .collect();
     for i in 0..keys.len() {
         for j in (i + 1)..keys.len() {
@@ -437,8 +437,8 @@ proptest! {
     ) {
         // Two distinct consumer IDs must never produce the same lease key.
         if a != b {
-            let ka = key_snapshot_lease(&a);
-            let kb = key_snapshot_lease(&b);
+            let ka = key_snapshot_lease(&a).unwrap();
+            let kb = key_snapshot_lease(&b).unwrap();
             prop_assert_ne!(ka, kb);
         }
     }

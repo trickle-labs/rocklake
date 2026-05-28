@@ -1579,6 +1579,9 @@ async fn execute_classified<'a>(
             execute_virtual_catalog_scan(table_name, store).await
         }
 
+        // INSERT/UPDATE/DELETE against rocklake_catalog.* → SQLSTATE 25006.
+        StatementKind::VirtualCatalogMutation { .. } => Err(RockLakeError::ReadOnlyReplica),
+
         // ─── v0.18: DuckLake Standard Interface ────────────────────────────
         StatementKind::TableChanges {
             ref table_ref,
