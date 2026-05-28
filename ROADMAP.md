@@ -83,7 +83,15 @@ binding on every roadmap release below.
 | **v0.27.12 — Containerized Multi-Backend Object Store Emulator Testing** | Implement containerized GCS/Azure emulators; verify catalog CRUD, snapshot commit, and epoch fencing; persist/expose data-file and delete-file spec fields (footer_size, partition_id, encryption_key) | Done |
 | **v0.27.13 — Real Multi-Client & Multi-Driver Interoperability Certification** | Build multi-driver compat suite; verify binary formats; validate client schema discovery; enforce visibility constraints (begin_snapshot/end_snapshot) and sort data files by file_order; archive planning docs as generic DuckLake CDC contract reference | Done |
 | **v0.27.14 — Security Hardening & Protocol-Level Testing** | Verify constant-time auth; SCRAM-SHA-256; TLS version gating; implement atomic metadata commits, consolidated stats deltas, and repeatable-read writer fencing (SQLSTATE 40001) | Done |
-| **v0.35.0 — Strategy C: Native DuckDB Extension** | Complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; `rocklake-ffi` C ABI already done; C++ catalog registration is the remaining gap | Planning |
+| **v0.28.0 — Writer Fencing & Concurrency Correctness** | Replace wall-clock millisecond writer epochs with a transactional monotonic counter; fix GC lease/pin checks outside the transaction; inject deterministic clock in writer-fencing tests; make rebuild atomically transactional | Planning |
+| **v0.29.0 — Recovery Correctness** | Fix import to write secondary data-file index; apply MVCC predicate in export; make rebuild atomic; add export/import round-trip tests that exercise `list_data_files()` and reader scans | Planning |
+| **v0.30.0 — PG-Wire & Protocol Hardening** | Make binary COPY parser fail-closed on truncation; sync CLI flags with documentation; fix migration docs; propagate object-store listing errors from `rebuild` command | Planning |
+| **v0.31.0 — DataFusion Hardening** | Propagate catalog errors instead of `unwrap_or_default()`; error on data files with no readable root; carry data root explicitly; make AsyncBridge fallible; expand type mapping | Planning |
+| **v0.32.0 — DuckLake Export Completeness** | Make `export-catalog` cover all 28+ DuckLake tables; reconcile 32-vs-28 table count; correct backup/restore documentation; fix CLI docs | Planning |
+| **v0.33.0 — Security & Key Encoding Hardening** | Redact raw values from parameter-error messages; reject over-length identifiers in key encoding; classify `rocklake_catalog.*` mutations as read-only (SQLSTATE 25006); fix FFI NUL-string silent truncation | Planning |
+| **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Planning |
+| **v0.35.0 — Embedded Catalog Client Library** | Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library; add a `rocklake-client` Rust crate as the idiomatic high-level API; ship language bindings for Python (PyO3), Go (cgo), and Node.js (napi-rs); document building against the C ABI from any language; validate non-DuckDB clients (Polars, DataFusion, Spark, Trino) against the same catalog | Planning |
+| **v0.36.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation from v0.35.0 to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; C++ catalog registration against DuckDB's community extension API is the remaining gap | Planning |
 | **v0.40.0 — Full Ecosystem Compatibility Certification** | Release-blocking CI evidence for every `docs/compatibility.md` row: real DuckDB/DuckLake versions, SQL clients, Spark/Trino/Presto disposition, DataFusion, object stores, TLS/auth, Rust/MSRV, and release platforms | Planning |
 | **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
@@ -3663,9 +3671,356 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 
 ---
 
-## v0.35.0 — Strategy C: Native DuckDB Extension
+## v0.28.0 — Writer Fencing & Concurrency Correctness
 
-> Complete the native DuckDB extension so that `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar. This eliminates the Postgres-scanner compatibility burden entirely for local and embedded use. The `rocklake-ffi` Rust C ABI is already complete (v0.5, v0.9.2); the `extension/` C++ wrapper exists but stubs catalog type registration pending DuckDB's community extension catalog API.
+> Replace the wall-clock millisecond writer epoch with a collision-proof monotonic identity, and make GC lease/pin enforcement truly transactional. These are the P0/P1 concurrency correctness issues identified in Assessment Report 1.
+
+### Background
+
+`CatalogStore::open()` currently derives `writer_epoch` from `SystemTime::now().as_millis()`. Two writers that open in the same millisecond compute an identical epoch and can both pass `check_epoch()`. The concurrent-writer-fencing tests work around this by sleeping 2 ms. Similarly, `gc_apply()` documents a single serializable transaction for retain-from read, pin scan, lease scan, and retain-from write — but the pin and lease scans run against the database handle outside the transaction.
+
+### Tasks
+
+#### Monotonic Writer Epoch
+- [ ] Replace `SystemTime::now().as_millis()` in `store.rs` with a CAS loop against a persisted `SYSTEM_WRITER_EPOCH_COUNTER` key that atomically reads, increments, and writes the next epoch.
+- [ ] Reject `existing_epoch >= writer_epoch` (not just `existing > writer_epoch`) in the open-time CAS loop so that equal epochs from different writers are treated as a conflict.
+- [ ] Update `check_epoch()` in `writer/snapshot.rs` to compare both epoch value and a writer identity nonce (UUID stored alongside the epoch), so stale writers with an identical epoch value are rejected.
+- [ ] Remove the `tokio::time::sleep(Duration::from_millis(2))` calls from `concurrent_writer_fencing.rs` and `v028_atomicity_tests.rs` and replace them with the deterministic monotonic counter.
+- [ ] Add a no-sleep concurrent test that opens two writers in the same OS tick and asserts that exactly one is fenced.
+
+#### Transactional GC Lease/Pin Enforcement
+- [ ] Add `read_pinned_snapshots_in_tx(tx: &DbTransaction)` and `minimum_leased_snapshot_in_tx(tx: &DbTransaction)` helpers in `gc.rs` / `lease.rs`.
+- [ ] Refactor `gc_apply()` to call these helpers through the same `SerializableSnapshot` transaction used for the retain-from write.
+- [ ] Add a concurrency test that acquires a snapshot lease concurrently with `gc_apply()` and asserts the GC transaction either conflicts or correctly accounts for the new lease.
+
+#### Atomic `rebuild_catalog()`
+- [ ] Wrap the sequential `db.put()` calls in `rebuild_catalog()` in a single `WriteBatch` or transaction; commit only when all rows are staged.
+- [ ] Add a test that simulates a mid-rebuild crash (by dropping the batch before commit) and asserts the catalog is either fully present or fully absent.
+
+### Definition of Done
+- [ ] No `sleep`-based ordering in writer-fencing tests; collision test passes deterministically.
+- [ ] Two concurrent writers opening in the same millisecond: exactly one succeeds, the other returns a fencing error.
+- [ ] `gc_apply()` pin/lease scan runs inside the same transaction as retain-from write; concurrency test green.
+- [ ] `rebuild_catalog()` is atomic; partial-rebuild test passes.
+
+---
+
+## v0.29.0 — Recovery Correctness
+
+> Fix export/import so that a catalog restored from NDJSON is fully readable by normal query paths. Identified as P1 in Assessment Report 1.
+
+### Background
+
+`import_catalog()` writes `ducklake_data_file` rows at the canonical primary key only. `reader.list_data_files()` scans the secondary `TAG_DATA_FILE_BY_SNAPSHOT` index. After import the secondary index is missing, so readers return zero data files even though the catalog rows exist. Additionally `export_catalog()` does not apply the MVCC `end_snapshot` filter, so exports can contain retired rows that resurrect deleted data on restore.
+
+### Tasks
+
+#### Secondary Index on Import
+- [ ] In `import_catalog()`, for each imported `ducklake_data_file` row write both `keys::key_data_file(table_id, data_file_id)` and `keys::key_data_file_by_snapshot(table_id, begin_snapshot, data_file_id)`.
+- [ ] Verify that `reader.list_data_files()` returns the correct file list after import.
+- [ ] Extend the existing export/import round-trip test in `v04_tests.rs` to open a `CatalogStore`, call `list_data_files()`, read tables and columns, verify counters, and assert no data files are missing.
+
+#### MVCC Filter in Export
+- [ ] Apply `begin_snapshot <= target_snapshot && (end_snapshot IS NULL || end_snapshot > target_snapshot)` for every versioned row in `export_catalog()` (data files, delete files, schemas, tables, columns).
+- [ ] Add a regression test: create a table, add a data file, retire it, export at a later snapshot, import, and assert the retired file is absent.
+
+#### Export Coverage Tracking
+- [ ] Add a manifest assertion in the export tests that lists every expected table category and fails if the export omits one. This is a prerequisite for the full-coverage work in v0.32.0.
+
+#### Checkpoint Counter Fix
+- [ ] In `restore_checkpoint()`, skip the `hide_snapshot + 1` counter advance when `hide_snapshot == meta.snapshot_id + 1` (no post-checkpoint facts). Only advance past `hide_snapshot` when it is actually used as a tombstone boundary.
+
+### Definition of Done
+- [ ] Import + `list_data_files()` round-trip test passes with real data files.
+- [ ] Retired data files are excluded from exports at the correct snapshot.
+- [ ] Export manifest test exists and passes.
+- [ ] Checkpoint counter advance is conditional; no-op restore test passes.
+
+---
+
+## v0.30.0 — PG-Wire & Protocol Hardening
+
+> Make the binary COPY parser fail closed on truncation, and synchronize all CLI flags and documentation with the actual implementation. P1/P2 findings from Assessment Report 1.
+
+### Background
+
+`parse_binary_copy_rows()` silently returns partial rows on truncation, and `on_copy_done()` treats them as a successful bootstrap. This is a data-corruption class bug. Separately, the CLI documentation advertises `--at-snapshot`, `--at-time`, `--schema`, `--table`, `--merge`, and `--dry-run` flags that the binary does not parse. The migration docs describe a `pg-migrate` invocation that does not match what `cmd_pg_migrate()` actually does.
+
+### Tasks
+
+#### Fail-Closed COPY Parser
+- [ ] Change `parse_binary_copy_rows()` to return `Result<Vec<_>, CopyParseError>`.
+- [ ] Return `Err` on any truncated field count, field length, or field body; on malformed binary COPY signature; and on a missing end-of-data marker.
+- [ ] Propagate the error through `on_copy_done()` as a PostgreSQL protocol error message (SQLSTATE `08P01` — protocol violation).
+- [ ] Add unit tests for truncation after signature, mid-field-count, mid-length, mid-field-body, and missing end-of-data.
+
+#### CLI Flags Sync
+- [ ] Audit `cmd_export()` and `cmd_import()` against `docs/operations/cli-reference.md`. Either implement each documented flag or remove it from the docs.
+- [ ] `cmd_rebuild()`: propagate `object_store.list(...)` errors instead of `unwrap_or_default()`. The command must exit non-zero and print a diagnostic on list failure.
+- [ ] Add a CLI docs-to-parser test that reads the help text and asserts every documented flag appears in the parser.
+
+#### Migration Docs Fix
+- [ ] Rewrite `docs/operations/migration-from-ducklake.md` to match the actual NDJSON-based `migrate-from-ducklake` path.
+- [ ] Split out the CSV/full-table migration as a future planned feature with a clearly marked "not yet implemented" notice.
+
+#### Native Extension Disclosure
+- [ ] Update the usage comment block in `extension/src/rocklake_extension.cpp` to say "ABI smoke wrapper only; `ATTACH` registration is pending v0.36.0."
+- [ ] Remove or annotate the `ATTACH 'ducklake:slatedb:...'` example in extension docs so it is clearly marked as a planned interface.
+
+### Definition of Done
+- [ ] Truncated binary COPY stream returns a protocol error; bootstrap is not marked complete.
+- [ ] `rocklake rebuild` exits non-zero on object-store list failure.
+- [ ] CLI docs and parser flags are in sync; conformance test passes.
+- [ ] Migration docs describe only currently working paths.
+- [ ] C++ extension source does not claim a functional native attach.
+
+---
+
+## v0.31.0 — DataFusion Hardening
+
+> Propagate catalog and storage errors in the DataFusion integration rather than silently returning empty results or panicking. P1/P2 findings from Assessment Report 1.
+
+### Background
+
+`schema_names()`, `table_names()`, and `list_data_files()` use `unwrap_or_default()`, converting catalog I/O or decode failures into empty results. `scan()` returns `EmptyExec` when Parquet files exist but `data_root` is `None`, silently returning zero rows for any non-local object store or misconfigured catalog. `AsyncBridge` uses `expect()` for runtime and channel operations. `data_root` is extracted by parsing the `ObjectStore` `Display` string, which is brittle.
+
+### Tasks
+
+#### Error Propagation
+- [ ] Replace `unwrap_or_default()` in `schema_names()` and `table_names()` with error logging at `ERROR` level plus surfacing a `DataFusionError::External` where the DataFusion trait permits it.
+- [ ] Replace `list_data_files(...).await.unwrap_or_default()` with explicit error propagation; surface catalog errors to query planning.
+- [ ] When `parquet_files` is non-empty and `data_root` is `None`, return `DataFusionError::Plan` explaining that the data root is not available for this object store type.
+
+#### Stable `data_root` Resolution
+- [ ] Remove the `Display`-string parsing for `ObjectStore` in `catalog_provider.rs`.
+- [ ] Carry the local root path explicitly through the provider builder and `open()`, reading it from the `data_path` catalog metadata key.
+- [ ] Add a test that sets up a catalog with a known `data_path` and verifies `scan()` resolves file URLs correctly.
+
+#### Fallible `AsyncBridge`
+- [ ] Make `AsyncBridge::new()` return `Result<AsyncBridge, DataFusionError>` and propagate runtime-creation and thread-spawn failures.
+- [ ] Replace `expect()` in `run_sync()` with proper error returns.
+- [ ] Add a test that exercises bridge failure paths (e.g., deliberately poisoned channel).
+
+#### Type Mapping Completeness
+- [ ] Extend `map_data_type()` to cover all DuckLake v1.0 scalar types (DECIMAL, HUGEINT, TIMESTAMP WITH TIME ZONE, INTERVAL, UUID, JSON, BLOB variants).
+- [ ] For unsupported nested/variant/geometry types, return `DataFusionError::NotImplemented` with the type name rather than silently using UTF-8.
+- [ ] Reuse the type parser from `rocklake-core` if one exists; otherwise add a shared `DuckLakeType::to_arrow()` function there.
+
+#### Table Count Reconciliation
+- [ ] Define an authoritative `CATALOG_TABLE_REGISTRY` constant or function in `rocklake-datafusion` that lists all registered catalog tables and distinguishes DuckLake spec tables from RockLake extension/virtual tables.
+- [ ] Update `virtual_catalog_registers_all_32_tables()` to use the registry and document which 4 extra tables are RockLake extensions.
+- [ ] Update `README.md` and relevant docs from "28 DuckLake tables" to the correct count with an explanation.
+
+### Definition of Done
+- [ ] Catalog I/O errors surface as `DataFusionError` and do not produce empty results.
+- [ ] Non-local object store with registered data files returns an error, not zero rows.
+- [ ] `data_root` is resolved from catalog metadata, not from Display parsing.
+- [ ] `AsyncBridge` is fallible; construction and channel failures do not panic.
+- [ ] All DuckLake v1.0 scalar types map to correct Arrow types; unsupported types return an error.
+- [ ] Table count registry exists; docs are updated.
+
+---
+
+## v0.32.0 — DuckLake Export Completeness
+
+> Expand `export-catalog` to cover all DuckLake catalog tables and correct the backup/restore documentation so operators can rely on it for disaster recovery. P1 DuckLake conformance finding from Assessment Report 1.
+
+### Background
+
+`export_catalog()` exports snapshots, schemas, tables, columns, data files, delete files, and inlined inserts. It omits table stats, column stats, file column stats, views, macros, tags, column tags, partition info, sort info, schema versions, encrypted secrets, encryption keys, schema changes, column mapping, name mapping, file partition values, file variant stats, and several other v1.0 fields. The CLI and docs claim "all 28 catalog tables" are exported.
+
+### Tasks
+
+#### Complete Table Export
+- [ ] Enumerate all rows in the DuckLake schema registry (28 spec tables plus any RockLake extension tables) and implement export for every category missing from `export_catalog()`.
+- [ ] Add the following to the export: `ducklake_table_stats`, `ducklake_table_column_stats`, `ducklake_file_column_stats`, `ducklake_view`, `ducklake_macro`, `ducklake_macro_impl`, `ducklake_macro_parameters`, `ducklake_tag`, `ducklake_column_tag`, `ducklake_partition_info`, `ducklake_sort_info`, `ducklake_sort_expression`, `ducklake_schema_version`, `ducklake_schema_changes`, `ducklake_column_mapping`, `ducklake_name_mapping`, `ducklake_encrypted_secret`, `ducklake_encryption_key`, `ducklake_file_partition_value`, `ducklake_file_variant_stats`.
+- [ ] Add a manifest assertion in the export test that lists every expected table and fails if any is omitted.
+
+#### Import Completeness
+- [ ] Extend `import_catalog()` to restore all newly exported categories.
+- [ ] Verify that the round-trip test from v0.29.0 still passes with the extended export/import.
+
+#### Documentation Accuracy
+- [ ] Rewrite `docs/operations/backup-restore.md` to list exactly which tables and fields are exported, at what snapshot, and what is not covered (e.g., active leases, transient GC state).
+- [ ] Remove or mark as "planned" all documented options (`--at-snapshot`, `--at-time`, `--schema`, `--table`, `--merge`, `--dry-run`) that are not yet implemented. Implement at least `--at-snapshot` as it is the most critical for point-in-time recovery.
+
+### Definition of Done
+- [ ] `export-catalog` exports all 28+ DuckLake spec tables.
+- [ ] Import restores all exported rows; round-trip test with `list_data_files()` and reader scan passes.
+- [ ] Export manifest test passes and covers every expected table.
+- [ ] `docs/operations/backup-restore.md` accurately describes scope and limitations.
+
+---
+
+## v0.33.0 — Security & Key Encoding Hardening
+
+> Redact sensitive data from error messages, reject over-length identifiers before they silently truncate, and enforce the documented read-only SQLSTATE for virtual catalog mutations. P2 security findings from Assessment Report 1.
+
+### Background
+
+`get_u64()`, `get_i64()`, and `get_bool()` in `rocklake-sql` include `actual: val.to_string()` in `TypeMismatch` errors, echoing raw parameter values to clients and logs. Key encoding in `rocklake-core` silently truncates identifiers longer than 65,535 bytes, which can cause key collisions. The SQL classifier does not classify `INSERT`/`UPDATE`/`DELETE` against `rocklake_catalog.*` as read-only mutations, so they receive wrong SQLSTATE codes.
+
+### Tasks
+
+#### Redact Parameter Values from Errors
+- [ ] In `params.rs`, replace `actual: val.to_string()` with `actual: format!("<{} len={}>", val_type_name, val.len())` or equivalent.
+- [ ] Update all `TypeMismatch` display implementations to not render raw parameter content.
+- [ ] Add a test that asserts a `TypeMismatch` error for a secret-shaped string does not contain the secret in its `Display` output.
+
+#### Key Encoding Length Guards
+- [ ] In `keys.rs`, add a validation helper `validate_identifier_len(s: &str) -> CatalogResult<()>` that returns `Err(CatalogError::InvalidInput(...))` for strings longer than `u16::MAX` bytes.
+- [ ] Call this helper at the entry points of `key_snapshot_lease()`, `key_extension_schema()`, and `prefix_extension_table()` before truncation.
+- [ ] Add tests that pass a string of exactly `u16::MAX`, exactly `u16::MAX + 1`, and a very long string, and assert the correct pass/fail behavior.
+
+#### Virtual Catalog Read-Only SQLSTATE
+- [ ] In `classifier/ast.rs`, add explicit `INSERT`, `UPDATE`, and `DELETE` classification branches for tables with a `rocklake_catalog.` schema prefix, returning `StatementKind::VirtualCatalogMutation`.
+- [ ] In the PG-wire executor, map `VirtualCatalogMutation` to `RockLakeError::ReadOnlyReplica` with SQLSTATE `25006`.
+- [ ] Add a test that sends `INSERT INTO rocklake_catalog.ducklake_snapshot ...` and asserts the response is `25006`.
+
+#### FFI NUL-String Safety
+- [ ] Centralize `CString` conversion in `crates/rocklake-ffi/src/lib.rs` into a `to_c_string(s: &str) -> CString` helper that returns a known safe fallback on embedded NUL (e.g., `CString::new("<invalid-utf8>").unwrap()`).
+- [ ] Replace all `CString::new(...).unwrap_or_default()` call sites with the new helper.
+- [ ] Add a test that passes a string containing `\0` through the FFI layer and verifies the fallback string is returned rather than an empty string.
+
+### Definition of Done
+- [ ] `TypeMismatch` error messages contain no raw parameter values.
+- [ ] Identifiers longer than `u16::MAX` bytes are rejected at key construction with a clear error.
+- [ ] `INSERT`/`UPDATE`/`DELETE` on `rocklake_catalog.*` returns SQLSTATE `25006`.
+- [ ] FFI `CString` conversion uses safe fallback for embedded NUL; no `unwrap_or_default()` on string conversion.
+
+---
+
+## v0.34.0 — Testing, FFI & Operational Completeness
+
+> Add a C/C++ ABI smoke test, fix CI test resource limits, eliminate millisecond-collision IDs in checkpoint and excision, and document the C header ownership contract. P2/P3 findings from Assessment Report 1.
+
+### Background
+
+There is no external C or C++ test that compiles against `rocklake.h`, which means ABI regressions pass Rust tests and fail only for real consumers. The full workspace test suite is killed by `SIGKILL` when run concurrently, hiding real failures. Checkpoint and excision audit IDs both use `SystemTime::now().as_millis()` as keys, so two operations in the same millisecond overwrite each other. The C header lacks ownership, nullability, and thread-safety documentation.
+
+### Tasks
+
+#### C/C++ ABI Smoke Test
+- [ ] Add `tests/ffi_smoke.c` (or `tests/ffi_smoke.cpp`) that includes `rocklake.h`, opens a temporary catalog, calls `rocklake_list_schemas()`, handles an error return, calls `rocklake_close()`, and frees all returned structures.
+- [ ] Wire the C test into the CI build via `CMakeLists.txt` or a `build.rs` integration test that compiles and runs it.
+- [ ] Ensure the test covers the full lifecycle: open, list, error, free.
+
+#### CI Test Concurrency Configuration
+- [ ] Profile the `rocklake-catalog --test integration_tests` binary under default concurrency to identify which tests OOM or race for the same resource.
+- [ ] Add a `.cargo/config.toml` or `nextest.toml` specifying `test-threads = 1` for the integration test binary, or mark individual heavy tests with `#[serial_test::serial]`.
+- [ ] Verify `cargo test --workspace --all-targets` completes without `SIGKILL` in CI.
+
+#### Monotonic Checkpoint and Excision IDs
+- [ ] In `checkpoint.rs`, replace `SystemTime::now().as_millis() as u64` with a CAS-incremented `SYSTEM_CHECKPOINT_COUNTER` key so checkpoint IDs are unique even under automation.
+- [ ] In `excise.rs`, replace `timestamp_millis` as the sole audit key component with a composite `timestamp_millis || monotonic_seq` (8 bytes + 4 bytes) or a UUID4 suffix.
+- [ ] Add a test that creates two checkpoints/excisions with the same mocked timestamp and asserts both are stored with distinct keys.
+
+#### Export/Import Module Documentation
+- [ ] Remove `#![allow(missing_docs)]` from `crates/rocklake-catalog/src/export.rs`.
+- [ ] Add doc comments to every `pub` struct, field, and function, including atomicity guarantees, completeness limitations, and error conditions.
+
+#### C Header Ownership Documentation
+- [ ] For each exported function in `include/rocklake.h`, add a documentation comment block specifying: ownership transfer (caller-owned vs. borrow), nullable vs. non-null for pointer parameters, thread-safety contract, and which `rocklake_free_*` function to call.
+- [ ] Reference `docs/architecture/ffi-safety.md` from the header preamble.
+
+### Definition of Done
+- [ ] C smoke test compiles and passes in CI.
+- [ ] Full workspace test suite completes without `SIGKILL` in CI.
+- [ ] Two same-millisecond checkpoints have distinct keys; same for excision audit entries.
+- [ ] `export.rs` has no `allow(missing_docs)` and all public symbols are documented.
+- [ ] Every function in `rocklake.h` has an ownership/thread-safety doc comment.
+
+---
+
+## v0.35.0 — Embedded Catalog Client Library
+
+> Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library that any language ecosystem can bind to. DuckDB is a first-class consumer, but the library must be usable by Python notebooks, Go microservices, Node.js serverless functions, and JVM-based engines (Spark, Trino) without any PG-wire sidecar. The `rocklake-ffi` C ABI is already 90% there; the remaining work is documentation, naming neutrality, idiomatic language bindings, and a higher-level Rust client crate. The stable `rocklake.h` C header produced here becomes the foundation for the native DuckDB extension in v0.36.0.
+
+### Motivation
+
+The current `rocklake-ffi` crate was designed alongside the DuckDB extension and contains DuckDB-shaped assumptions in its naming, error codes, and lifecycle model. Making it a first-class multi-language library requires:
+
+1. Auditing and removing DuckDB-isms from the C ABI (e.g., `ABI_VERSION` naming, `RockLakeErrorCode` values that mirror DuckDB internals).
+2. A new `rocklake-client` Rust crate that wraps `rocklake-catalog` with an ergonomic, async-first Rust API — independent of both DuckDB and the C ABI.
+3. Language bindings that provide idiomatic interfaces in Python, Go, and Node.js.
+4. Validation that non-DuckDB analytical engines can read and write a RockLake catalog using the same immutable MVCC storage.
+
+### Step 1 — Audit and Neutralize the C ABI
+
+- [ ] Rename `ABI_VERSION` to `ROCKLAKE_ABI_VERSION` and update the constant comment to remove the DuckDB-extension-specific framing.
+- [ ] Audit all `RockLakeErrorCode` values and ensure they map to generic catalog semantics rather than DuckDB-internal concepts. Add a `ROCKLAKE_OK`, `ROCKLAKE_ERR_CONFLICT`, `ROCKLAKE_ERR_FENCED` convention that matches POSIX-style error models.
+- [ ] Generate a stable C header (`include/rocklake.h`) from `cbindgen` and commit it to `crates/rocklake-ffi/include/`. This header is the contract for all language bindings and is the interface the native DuckDB extension (v0.36.0) will wrap.
+- [ ] Write `docs/reference/c-api.md` documenting every exported function, its ownership model, and the error code semantics.
+- [ ] Add a `#[deprecated]` path for any symbol renamed during the audit to maintain backward compatibility for one release cycle.
+
+### Step 2 — `rocklake-client` Rust Crate
+
+- [ ] Add `crates/rocklake-client/` to the workspace.
+- [ ] Define a `CatalogClient` struct wrapping `rocklake-catalog`'s `CatalogStore` with an async-first API: `open()`, `close()`, `snapshot_id()`, `list_schemas()`, `list_tables()`, `get_table()`, `list_data_files()`, `begin_write()`, `commit()`, `rollback()`.
+- [ ] Add a `CatalogClientBuilder` for configuration: object-store URL, auth, TLS, epoch, retry policy.
+- [ ] Expose a synchronous blocking wrapper (`CatalogClientSync`) for contexts that cannot use async Rust (e.g., C extension threads, Python GIL).
+- [ ] Write doc-tests for every public method in `rocklake-client`.
+- [ ] Add `rocklake-client` to the workspace version policy and release workflow.
+
+### Step 3 — Python Bindings (PyO3)
+
+- [ ] Create `bindings/python/` as a `maturin`-based Python package (`rocklake-py`).
+- [ ] Expose `RockLakeCatalog`, `RockLakeTable`, `RockLakeSnapshot`, and `RockLakeDataFile` as Python classes.
+- [ ] Implement `list_data_files()` returning a list of Python dicts compatible with `pandas.DataFrame` and `polars.DataFrame` construction.
+- [ ] Publish a `pyproject.toml` and wheel build job to GitHub Actions.
+- [ ] Add integration tests in `bindings/python/tests/` that attach a catalog, create a table, insert data files, and read them back — without any PG-wire sidecar.
+- [ ] Publish to PyPI under `rocklake` once bindings stabilize.
+
+### Step 4 — Go Bindings (cgo)
+
+- [ ] Create `bindings/go/` as a Go module (`github.com/trickle-labs/rocklake-go`).
+- [ ] Wrap the C ABI via `cgo` with a `Catalog` struct, `Open()`, `Close()`, `ListSchemas()`, `ListTables()`, `ListDataFiles()`, `BeginWrite()`, `Commit()` functions.
+- [ ] Ship pre-built `.a` static libraries for Linux x86-64/arm64 and macOS arm64 as release assets so consumers do not need a Rust toolchain.
+- [ ] Add an integration test in `bindings/go/test/` covering the same lifecycle as the Python tests.
+- [ ] Publish the Go module to `pkg.go.dev`.
+
+### Step 5 — Node.js Bindings (napi-rs)
+
+- [ ] Create `bindings/nodejs/` as an `napi-rs` package (`@rocklake/client`).
+- [ ] Expose `Catalog`, `Table`, `Snapshot`, and `DataFile` classes with both callback and `Promise`-based async APIs.
+- [ ] Add an integration test in `bindings/nodejs/test/` using the same lifecycle.
+- [ ] Publish to npm under `@rocklake/client`.
+
+### Step 6 — Non-DuckDB Engine Validation
+
+- [ ] **Polars**: write a Python script that opens a RockLake catalog, calls `list_data_files()` to get Parquet URLs, and reads them with `polars.read_parquet()`. Assert row counts match. Add to CI.
+- [ ] **DataFusion (Rust)**: add a `rocklake-datafusion` integration test that attaches a catalog using `rocklake-client` (not the existing PG-wire bridge) and runs a `SELECT COUNT(*)` query.
+- [ ] **Spark (optional, documented)**: document the path for Spark users to call the Go or Python bindings from PySpark or to use the JVM FFI if a JVM binding is contributed later.
+- [ ] Add a `docs/integration/client-library.md` page covering all language bindings, object-store URL format, versioning policy, and the non-DuckDB engine matrix.
+
+### Step 7 — Documentation and Examples
+
+- [ ] Add `docs/reference/c-api.md` with full function reference (generated from `cbindgen` output and hand-annotated).
+- [ ] Add `docs/integration/client-library.md` with a quickstart for each language (Rust, Python, Go, Node.js).
+- [ ] Add a `examples/` directory under each language binding with a self-contained runnable demo.
+- [ ] Update `docs/getting-started/what-is-rocklake.md` to describe the embedded client library as a third deployment option alongside Strategy B (PG-wire) and the Native DuckDB Extension (v0.36.0).
+- [ ] Update the glossary: rename "Strategy C" to "Native DuckDB Extension" and add a new "Embedded Client Library" entry for the generic path.
+
+### Definition of Done
+
+- [ ] `include/rocklake.h` committed and generated by `cbindgen` in CI.
+- [ ] `rocklake-client` crate published to crates.io with doc-tests passing.
+- [ ] Python wheel published to PyPI; `pip install rocklake` + 10-line example works.
+- [ ] Go module published to `pkg.go.dev`; `go get github.com/trickle-labs/rocklake-go` + 10-line example works.
+- [ ] Node.js package published to npm; `npm install @rocklake/client` + 10-line example works.
+- [ ] Polars and DataFusion non-DuckDB engine validation tests green in CI.
+- [ ] `docs/integration/client-library.md` written and reviewed.
+- [ ] No DuckDB-isms remain in `rocklake-ffi` public symbols.
+
+---
+
+## v0.36.0 — Native DuckDB Extension
+
+> Build on the stable C ABI and `rocklake-client` foundation established in v0.35.0 to complete the native DuckDB extension so that `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar. This eliminates the Postgres-scanner compatibility burden entirely for local and embedded use. The `extension/` C++ wrapper exists but stubs catalog type registration pending DuckDB's community extension catalog API.
+
+### Prerequisite
+
+This milestone depends on v0.35.0 (Embedded Catalog Client Library) being complete. The stable `rocklake.h` C header, the language-neutral `ROCKLAKE_ABI_VERSION` constant, and the documented ownership model produced in v0.35.0 are the interface the C++ extension wraps. The DuckDB extension is a first-class consumer of the general client library, not a special case.
 
 ### Current State
 
@@ -3688,7 +4043,7 @@ The v0.5 roadmap described Strategy C as Done, but the C++ extension in `extensi
 
 If the public extension API supports catalog registration:
 
-- [ ] Implement `RockLakeCatalog : duckdb::Catalog` in `extension/src/` delegating all virtual methods to `RockLakeCatalogWrapper` (which already wraps the C FFI calls).
+- [ ] Implement `RockLakeCatalog : duckdb::Catalog` in `extension/src/` delegating all virtual methods to `RockLakeCatalogWrapper` (which wraps the stable C FFI calls from `include/rocklake.h` produced in v0.35.0).
 - [ ] Register the attach handler for the `slatedb:` scheme in `rocklake_extension_init()` using DuckDB's `StorageExtension` or equivalent API.
 - [ ] Implement the minimum required virtual methods for a read-only attach: `ScanEntry`, `GetEntry` (schemas, tables, columns), `GetTableIOFunction` (Parquet scan via existing data path).
 - [ ] Implement write-path virtual methods for `CreateEntry` (table, schema, data file registration) delegating to `rocklake_ffi` write functions.
@@ -3700,7 +4055,7 @@ If the public extension API does not yet support catalog registration:
 
 ### Step 3 — Build System
 
-- [ ] Update `extension/CMakeLists.txt` to link against the DuckDB extension development headers (`duckdb.hpp`, `duckdb/main/extension_util.hpp`).
+- [ ] Update `extension/CMakeLists.txt` to link against the DuckDB extension development headers (`duckdb.hpp`, `duckdb/main/extension_util.hpp`) and the `rocklake.h` header from `crates/rocklake-ffi/include/`.
 - [ ] Add a `build-extension` Makefile target or `justfile` recipe: `cargo build --release -p rocklake-ffi && cmake --build extension/build`.
 - [ ] Output artifact: `rocklake.duckdb_extension` compatible with the DuckDB 1.5.x ABI.
 - [ ] Add `extension/` to the release workflow (`release.yml`) so binaries for Linux x86-64/arm64 and macOS arm64 are attached to each GitHub Release.
@@ -3708,28 +4063,28 @@ If the public extension API does not yet support catalog registration:
 ### Step 4 — End-to-End Tests
 
 - [ ] Add `tests/native_extension_e2e.rs` (or a shell-based golden test): `LOAD rocklake; ATTACH 'ducklake:slatedb:///tmp/test-catalog' AS lake; CREATE SCHEMA lake.s; CREATE TABLE lake.s.t (id INTEGER); INSERT INTO lake.s.t VALUES (1); SELECT * FROM lake.s.t` — asserts row count and value without starting a RockLake sidecar process.
-- [ ] Add a parity test: run the same DuckLake tutorial operations against both the PG-wire sidecar (Strategy B) and the native extension (Strategy C) against the same catalog path; assert identical query results.
-- [ ] Wire the Strategy C tests into CI under a separate job `native-extension` that builds the `.duckdb_extension` artifact and runs the end-to-end tests.
+- [ ] Add a parity test: run the same DuckLake tutorial operations against both the PG-wire sidecar (Strategy B) and the native extension against the same catalog path; assert identical query results.
+- [ ] Wire the native extension tests into CI under a separate job `native-extension` that builds the `.duckdb_extension` artifact and runs the end-to-end tests.
 
 ### Step 5 — Documentation
 
 - [ ] Update `docs/architecture/crate-structure.md` with the current accurate status of the `extension/` directory and `rocklake-ffi` crate.
 - [ ] Update `docs/getting-started/` to add a section on the native extension attach path alongside the existing PG-wire sidecar instructions.
-- [ ] Add `docs/integration/native-extension.md` covering: when to use Strategy C vs. Strategy B, install steps, connection string format (`ducklake:slatedb:s3://bucket/catalog` or `ducklake:slatedb:///local/path`), known limitations vs. PG-wire, and ABI versioning policy.
+- [ ] Add `docs/integration/native-extension.md` covering: when to use the native extension vs. Strategy B, install steps, connection string format (`ducklake:slatedb:s3://bucket/catalog` or `ducklake:slatedb:///local/path`), known limitations vs. PG-wire, and ABI versioning policy.
 - [ ] Update `docs/compatibility.md` with a new `Native Extension` row in the deployment matrix.
-- [ ] Update `docs/design-decisions/` page covering Strategy B vs. Strategy C to reflect actual current status.
+- [ ] Update `docs/design-decisions/` page covering Strategy B vs. the native extension to reflect actual current status.
 
 ### Why This Eliminates the Postgres-Scanner Problem
 
 When using the native extension, DuckDB calls into `rocklake.duckdb_extension` directly as an in-process function call. There is no TCP connection, no PG-wire handshake, no `postgres_scanner` initialization, and no system catalog probing (`DISCARD ALL`, `to_regclass`, `pg_namespace` scans). The DuckDB 1.5.x postgres-scanner compatibility work in v0.27.4 is permanently unnecessary for this path.
 
-Strategy B (PG-wire sidecar) remains for use cases that require remote access, multi-client, or non-DuckDB SQL clients. Both strategies share the same `rocklake-catalog` / `rocklake-core` stack and produce identical catalog state.
+Strategy B (PG-wire sidecar) remains for use cases that require remote access, multi-client, or non-DuckDB SQL clients. Both paths share the same `rocklake-catalog` / `rocklake-core` stack and produce identical catalog state.
 
 ### Definition of Done
 
 - [ ] Decision gate from Step 1 documented; either the extension registers correctly or the upstream blocker is filed with a public tracking issue.
 - [ ] `LOAD rocklake; ATTACH 'ducklake:slatedb:///tmp/test' AS lake; CREATE TABLE lake.main.t (id INTEGER); INSERT INTO lake.main.t VALUES (1); SELECT * FROM lake.main.t` passes in CI without any `rocklake serve` process running.
-- [ ] Strategy B and Strategy C produce identical results on the same catalog path (parity test green).
+- [ ] Strategy B and the native extension produce identical results on the same catalog path (parity test green).
 - [ ] `.duckdb_extension` binary attached to the GitHub Release for Linux x86-64/arm64 and macOS arm64.
 - [ ] `docs/integration/native-extension.md` written and reviewed.
 - [ ] `docs/compatibility.md` Native Extension row present with CI evidence.
