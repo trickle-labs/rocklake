@@ -2030,3 +2030,25 @@ async fn rollback_mid_batch_leaves_catalog_unchanged() {
         "rollback must leave catalog with no schemas, but got {count} rows"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.36.0: Backend compatibility suite (in-memory)
+//
+// The shared `catalog_backend_compat_test!` macro generates a standard suite
+// of catalog integration tests against a given ObjectStore backend.
+//
+// The LocalFS and emulator backends are tested via:
+//   - crates/rocklake-catalog/tests/backend_compat.rs  (LocalFS + emulators)
+//   - crates/rocklake-catalog/tests/v02712_backend_compat_tests.rs (GCS/Azure)
+//
+// Here we wire the in-memory backend as a fast smoke-check to ensure the
+// pgwire integration test binary also exercises the compat suite.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[allow(unused_imports)]
+use rocklake_testkit::catalog_backend_compat_test;
+
+catalog_backend_compat_test!(
+    pgwire_inmem_backend,
+    std::sync::Arc::new(object_store::memory::InMemory::new())
+);

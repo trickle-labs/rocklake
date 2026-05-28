@@ -36,11 +36,19 @@ jobs:
       - name: Pull fake-gcs-server image
         run: docker pull fsouza/fake-gcs-server:latest
 
-      - name: Run GCS emulator catalog compatibility tests
+      - name: Run GCS emulator catalog compatibility tests (v0.27.12 suite)
         run: |
           cargo test \
             -p rocklake-catalog \
             --test v02712_backend_compat_tests \
+            --features gcs-emulator \
+            -- --nocapture
+
+      - name: Run GCS emulator backend compat (v0.36.0 suite)
+        run: |
+          cargo test \
+            -p rocklake-catalog \
+            --test backend_compat \
             --features gcs-emulator \
             -- --nocapture
 
@@ -59,10 +67,18 @@ jobs:
       - name: Pull Azurite image
         run: docker pull mcr.microsoft.com/azure-storage/azurite:latest
 
-      - name: Run Azure emulator catalog compatibility tests
+      - name: Run Azure emulator catalog compatibility tests (v0.27.12 suite)
         run: |
           cargo test \
             -p rocklake-catalog \
             --test v02712_backend_compat_tests \
+            --features azure-emulator \
+            -- --nocapture
+
+      - name: Run Azure emulator backend compat (v0.36.0 suite)
+        run: |
+          cargo test \
+            -p rocklake-catalog \
+            --test backend_compat \
             --features azure-emulator \
             -- --nocapture

@@ -91,7 +91,7 @@ binding on every roadmap release below.
 | **v0.33.0 — Security & Key Encoding Hardening** | Redact raw values from parameter-error messages; reject over-length identifiers in key encoding; classify `rocklake_catalog.*` mutations as read-only (SQLSTATE 25006); fix FFI NUL-string silent truncation | Done |
 | **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Done |
 | **v0.35.0 — Embedded Catalog Client Library** | Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library; add a `rocklake-client` Rust crate as the idiomatic high-level API; ship language bindings for Python (PyO3), Go (cgo), and Node.js (napi-rs); document building against the C ABI from any language; validate non-DuckDB clients (Polars, DataFusion, Spark, Trino) against the same catalog | Done |
-| **v0.36.0 — SQL Clients & Object Storage Backend Testing** | Real psql, pgcli, DBeaver, Metabase smoke tests; GCS and Azure emulator harnesses; containerized backend compat suite; TLS 1.2/1.3 protocol gating | Planning |
+| **v0.36.0 — SQL Clients & Object Storage Backend Testing** | Real psql, pgcli, DBeaver, Metabase smoke tests; GCS and Azure emulator harnesses; containerized backend compat suite; TLS 1.2/1.3 protocol gating | Done |
 | **v0.37.0 — Engine Integration & Wire Protocol Hardening** | Real Spark 3.5 and Trino 432+ jobs; DataFusion matrix integration; wire-corpus replay with golden assertions; version-policy checks | Planning |
 | **v0.38.0 — Release Certification & Platform Support** | Compatibility manifest system (TOML validator, CI gates, docs-sync); Rust MSRV reconciliation; Windows x86-64 CI and release artifacts; release gates and final certification | Planning |
 | **v0.39.0 — Observability & Operational Tooling** | Prometheus `/metrics` endpoint; OpenTelemetry tracing; `rocklake diagnose` CLI; orphan file sweep with configurable grace period | Planning |
@@ -105,6 +105,19 @@ binding on every roadmap release below.
 | **v1.0 — General Availability** | All v0.45.0 readiness gates green; TPC-H @ SF10/SF100 benchmarks; S3 Express acceptance; real-world validation | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, additional performance optimizations | Future |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
+
+Detailed sequence for v0.36–v0.45:
+
+* v0.36: SQL clients (psql, DBeaver, Metabase) + object-store backends (GCS, Azure)
+* v0.37: Engine integration (Spark 3.5, Trino 432+) + DataFusion + wire-corpus replay
+* v0.38: Release certification (compatibility manifest, MSRV, Windows, platform support)
+* v0.39: Observability (Prometheus, OpenTelemetry, rocklake diagnose, orphan sweep)
+* v0.40: Fault injection & security testing (Tier 6, Tier 8)
+* v0.41: Migration tooling + DuckLake forward compatibility
+* v0.42: Performance benchmarks (TPC-H catalog suite, S3 Express, cost analysis)
+* v0.43: Scale testing, soak & serverless readers (Tier 7: 24h soak, TPC-H SF10)
+* v0.44: JVM bindings (Java/Kotlin via JNI, Maven artifact)
+* v0.45: GA readiness gate (dogfood, docs pass, v1.0 release prep)
 
 ---
 
@@ -4031,51 +4044,51 @@ The current `rocklake-ffi` crate was designed alongside the DuckDB extension and
 
 Real PostgreSQL clients and BI tools, not test harnesses:
 
-- [ ] Add real `psql` CLI smoke tests for PostgreSQL client versions 16, 17, and 18 against RockLake, covering: startup handshake, simple query, extended/prepared query, transaction (BEGIN/COMMIT/ROLLBACK), auth failure, and TLS-required modes.
-- [ ] Add pgcli 4.x smoke coverage against RockLake for connection setup, catalog SELECT, transaction, TLS-required connection, and auth failure.
-- [ ] Add DBeaver 24.x coverage using its bundled PostgreSQL JDBC driver or a headless DBeaver-compatible JDBC smoke harness. Record the driver version in the manifest.
-- [ ] Add Metabase 0.49+ coverage with a containerized Metabase instance or API-driven smoke harness that registers RockLake as a PostgreSQL database and runs a catalog query.
-- [ ] Fail the workflow when the selected test count is zero (ensure tests actually run).
+- [x] Add real `psql` CLI smoke tests for PostgreSQL client versions 16, 17, and 18 against RockLake, covering: startup handshake, simple query, extended/prepared query, transaction (BEGIN/COMMIT/ROLLBACK), auth failure, and TLS-required modes.
+- [x] Add pgcli 4.x smoke coverage against RockLake for connection setup, catalog SELECT, transaction, TLS-required connection, and auth failure.
+- [x] Add DBeaver 24.x coverage using its bundled PostgreSQL JDBC driver or a headless DBeaver-compatible JDBC smoke harness. Record the driver version in the manifest.
+- [x] Add Metabase 0.49+ coverage with a containerized Metabase instance or API-driven smoke harness that registers RockLake as a PostgreSQL database and runs a catalog query.
+- [x] Fail the workflow when the selected test count is zero (ensure tests actually run).
 
 ### Object Storage Backend Emulator Harnesses
 
 Extend `rocklake-testkit` with containerized emulator support for GCS and Azure Blob alongside MinIO:
 
-- [ ] Implement `GcsEmulatorHarness` in `crates/rocklake-testkit/src/gcs_emulator_harness.rs` with `GoogleCloudStorageBuilder` configuration and container lifecycle (Docker for `fsouza/fake-gcs-server`).
-- [ ] Implement `AzureEmulatorHarness` in `crates/rocklake-testkit/src/azure_emulator_harness.rs` with `MicrosoftAzureBuilder` configuration and container lifecycle (Docker for Azurite).
-- [ ] Add conditional features to `Cargo.toml`: `gcs-emulator` and `azure-emulator` (default: off for local dev comfort).
+- [x] Implement `GcsEmulatorHarness` in `crates/rocklake-testkit/src/gcs_emulator_harness.rs` with `GoogleCloudStorageBuilder` configuration and container lifecycle (Docker for `fsouza/fake-gcs-server`).
+- [x] Implement `AzureEmulatorHarness` in `crates/rocklake-testkit/src/azure_emulator_harness.rs` with `MicrosoftAzureBuilder` configuration and container lifecycle (Docker for Azurite).
+- [x] Add conditional features to `Cargo.toml`: `gcs-emulator` and `azure-emulator` (default: off for local dev comfort).
 
 ### Shared Backend Compatibility Suite
 
 Factorize backend tests into a reusable macro:
 
-- [ ] Implement `catalog_backend_compat_test!()` macro covering: catalog open/create, snapshot commit, read-after-write, list/prefix scan, writer fencing, and recovery from fresh process. Parameterized by harness type (MinIO, GCS, Azure).
-- [ ] Wire the macro into `crates/rocklake-pgwire/tests/integration_tests.rs` and `crates/rocklake-catalog/tests/backend_compat.rs` as gated tests.
-- [ ] LocalFS, MinIO, GCS, and Azure Blob all pass the suite.
+- [x] Implement `catalog_backend_compat_test!()` macro covering: catalog open/create, snapshot commit, read-after-write, list/prefix scan, writer fencing, and recovery from fresh process. Parameterized by harness type (MinIO, GCS, Azure).
+- [x] Wire the macro into `crates/rocklake-pgwire/tests/integration_tests.rs` and `crates/rocklake-catalog/tests/backend_compat.rs` as gated tests.
+- [x] LocalFS, MinIO, GCS, and Azure Blob all pass the suite.
 
 ### TLS Protocol-Version Gating
 
 Enforce protocol version acceptance/rejection:
 
-- [ ] Add tests verifying TLS 1.2 accepted, TLS 1.3 accepted, and TLS 1.1-and-older rejected as separate checks.
-- [ ] Include auth + TLS combined coverage (e.g., SCRAM-SHA-256 over TLS 1.3).
-- [ ] Wire into CI as `tls-compat` job.
+- [x] Add tests verifying TLS 1.2 accepted, TLS 1.3 accepted, and TLS 1.1-and-older rejected as separate checks.
+- [x] Include auth + TLS combined coverage (e.g., SCRAM-SHA-256 over TLS 1.3).
+- [x] Wire into CI as `tls-compat` job.
 
 ### CI Integration
 
-- [ ] Add new CI job: `sql-clients` (psql, pgcli, DBeaver, Metabase containers).
-- [ ] Add new CI job: `backend-compat` (LocalFS, MinIO, GCS, Azure; gated features).
-- [ ] Add new CI job: `tls-compat`.
-- [ ] All three run on every PR merge; GCS and Azure tests use credentials from protected secrets.
+- [x] Add new CI job: `sql-clients` (psql, pgcli, DBeaver, Metabase containers).
+- [x] Add new CI job: `backend-compat` (LocalFS, MinIO, GCS, Azure; gated features).
+- [x] Add new CI job: `tls-compat`.
+- [x] All three run on every PR merge; GCS and Azure tests use credentials from protected secrets.
 
 ### Deliverables
 
-- [ ] psql 16/17/18, pgcli 4.x, DBeaver 24.x, Metabase 0.49+ all smoke-test green
-- [ ] GcsEmulatorHarness and AzureEmulatorHarness implemented and integrated
-- [ ] Shared backend compat suite macro verified on all four backends
-- [ ] TLS protocol-version gates enforced (1.2, 1.3 accepted; 1.1+ rejected)
-- [ ] CI jobs for SQL clients, backend compat, and TLS all green on every merge
-- [ ] `docs/compatibility.md` updated with tested versions for all clients and backends
+- [x] psql 16/17/18, pgcli 4.x, DBeaver 24.x, Metabase 0.49+ all smoke-test green
+- [x] GcsEmulatorHarness and AzureEmulatorHarness implemented and integrated
+- [x] Shared backend compat suite macro verified on all four backends
+- [x] TLS protocol-version gates enforced (1.2, 1.3 accepted; 1.1+ rejected)
+- [x] CI jobs for SQL clients, backend compat, and TLS all green on every merge
+- [x] `docs/compatibility.md` updated with tested versions for all clients and backends
 
 ---
 ## v0.39.0 — Observability & Operational Tooling

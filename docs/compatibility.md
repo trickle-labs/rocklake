@@ -59,10 +59,10 @@ and not applied.
 
 | Client | Version Tested | Status | Notes |
 |--------|---------------|--------|-------|
-| psql | 16, 17, 18 | ✅ Supported | Standard PostgreSQL client |
-| DBeaver | 24.x | ✅ Supported | JDBC PostgreSQL driver |
-| pgcli | 4.x | ✅ Supported | |
-| Metabase | 0.49+ | ✅ Supported | PostgreSQL connection |
+| psql | 16, 17, 18 | ✅ Supported | Standard PostgreSQL client (v0.36.0: smoke tests for handshake, query, transaction, auth failure, TLS) |
+| pgcli | 4.x | ✅ Supported | v0.36.0: connection setup, catalog SELECT, transaction, auth failure, TLS-required |
+| DBeaver | 24.x | ✅ Supported | JDBC PostgreSQL driver 42.7.3 (v0.36.0: startup query sequence, schema browser validated) |
+| Metabase | 0.49+ | ✅ Supported | PostgreSQL connection (v0.36.0: connection registration, catalog query validated) |
 
 ## Apache Spark
 
@@ -92,10 +92,10 @@ and not applied.
 | Backend | Version | Status | Notes |
 |---------|---------|--------|-------|
 | AWS S3 | — | ✅ Supported | Via `object_store` 0.12 |
-| Google Cloud Storage | — | ✅ Supported | Via `object_store` 0.12 |
-| Azure Blob Storage | — | ✅ Supported | Via `object_store` 0.12 |
+| Google Cloud Storage | — | ✅ Supported | Via `object_store` 0.12; v0.36.0: GcsEmulatorHarness + backend_compat suite |
+| Azure Blob Storage | — | ✅ Supported | Via `object_store` 0.12; v0.36.0: AzureEmulatorHarness + backend_compat suite |
 | MinIO | RELEASE.2024+ | ✅ Supported | S3-compatible endpoint |
-| Local filesystem | — | ✅ Supported | Development / testing |
+| Local filesystem | — | ✅ Supported | Development / testing; v0.36.0: LocalFS backend_compat suite |
 
 ## SlateDB
 
@@ -108,9 +108,9 @@ and not applied.
 
 | TLS Version | Status | Notes |
 |-------------|--------|-------|
-| TLS 1.3 | ✅ Supported | Default |
-| TLS 1.2 | ✅ Supported | Via rustls |
-| TLS 1.1 or older | ❌ Rejected | Security policy |
+| TLS 1.3 | ✅ Supported | Default; v0.36.0: acceptance verified by protocol-version gating test |
+| TLS 1.2 | ✅ Supported | Via rustls; v0.36.0: acceptance verified by protocol-version gating test |
+| TLS 1.1 or older | ❌ Rejected | Security policy; v0.36.0: rejection structurally guaranteed by rustls (no TLS11 constant) |
 
 ## Rust
 
