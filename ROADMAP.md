@@ -87,7 +87,7 @@ binding on every roadmap release below.
 | **v0.29.0 — Recovery Correctness** | Fix import to write secondary data-file index; apply MVCC predicate in export; make rebuild atomic; add export/import round-trip tests that exercise `list_data_files()` and reader scans | Done |
 | **v0.30.0 — PG-Wire & Protocol Hardening** | Make binary COPY parser fail-closed on truncation; sync CLI flags with documentation; fix migration docs; propagate object-store listing errors from `rebuild` command | Done |
 | **v0.31.0 — DataFusion Hardening** | Propagate catalog errors instead of `unwrap_or_default()`; error on data files with no readable root; carry data root explicitly; make AsyncBridge fallible; expand type mapping | Done |
-| **v0.32.0 — DuckLake Export Completeness** | Make `export-catalog` cover all 28+ DuckLake tables; reconcile 32-vs-28 table count; correct backup/restore documentation; fix CLI docs | Planning |
+| **v0.32.0 — DuckLake Export Completeness** | Make `export-catalog` cover all 28+ DuckLake tables; reconcile 32-vs-28 table count; correct backup/restore documentation; fix CLI docs | Done |
 | **v0.33.0 — Security & Key Encoding Hardening** | Redact raw values from parameter-error messages; reject over-length identifiers in key encoding; classify `rocklake_catalog.*` mutations as read-only (SQLSTATE 25006); fix FFI NUL-string silent truncation | Planning |
 | **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Planning |
 | **v0.35.0 — Embedded Catalog Client Library** | Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library; add a `rocklake-client` Rust crate as the idiomatic high-level API; ship language bindings for Python (PyO3), Go (cgo), and Node.js (napi-rs); document building against the C ABI from any language; validate non-DuckDB clients (Polars, DataFusion, Spark, Trino) against the same catalog | Planning |
@@ -3832,23 +3832,23 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 ### Tasks
 
 #### Complete Table Export
-- [ ] Enumerate all rows in the DuckLake schema registry (28 spec tables plus any RockLake extension tables) and implement export for every category missing from `export_catalog()`.
-- [ ] Add the following to the export: `ducklake_table_stats`, `ducklake_table_column_stats`, `ducklake_file_column_stats`, `ducklake_view`, `ducklake_macro`, `ducklake_macro_impl`, `ducklake_macro_parameters`, `ducklake_tag`, `ducklake_column_tag`, `ducklake_partition_info`, `ducklake_sort_info`, `ducklake_sort_expression`, `ducklake_schema_version`, `ducklake_schema_changes`, `ducklake_column_mapping`, `ducklake_name_mapping`, `ducklake_encrypted_secret`, `ducklake_encryption_key`, `ducklake_file_partition_value`, `ducklake_file_variant_stats`.
-- [ ] Add a manifest assertion in the export test that lists every expected table and fails if any is omitted.
+- [x] Enumerate all rows in the DuckLake schema registry (28 spec tables plus any RockLake extension tables) and implement export for every category missing from `export_catalog()`.
+- [x] Add the following to the export: `ducklake_table_stats`, `ducklake_table_column_stats`, `ducklake_file_column_stats`, `ducklake_view`, `ducklake_macro`, `ducklake_macro_impl`, `ducklake_macro_parameters`, `ducklake_tag`, `ducklake_column_tag`, `ducklake_partition_info`, `ducklake_sort_info`, `ducklake_sort_expression`, `ducklake_schema_version`, `ducklake_schema_changes`, `ducklake_column_mapping`, `ducklake_name_mapping`, `ducklake_encrypted_secret`, `ducklake_encryption_key`, `ducklake_file_partition_value`, `ducklake_file_variant_stats`.
+- [x] Add a manifest assertion in the export test that lists every expected table and fails if any is omitted.
 
 #### Import Completeness
-- [ ] Extend `import_catalog()` to restore all newly exported categories.
-- [ ] Verify that the round-trip test from v0.29.0 still passes with the extended export/import.
+- [x] Extend `import_catalog()` to restore all newly exported categories.
+- [x] Verify that the round-trip test from v0.29.0 still passes with the extended export/import.
 
 #### Documentation Accuracy
-- [ ] Rewrite `docs/operations/backup-restore.md` to list exactly which tables and fields are exported, at what snapshot, and what is not covered (e.g., active leases, transient GC state).
-- [ ] Remove or mark as "planned" all documented options (`--at-snapshot`, `--at-time`, `--schema`, `--table`, `--merge`, `--dry-run`) that are not yet implemented. Implement at least `--at-snapshot` as it is the most critical for point-in-time recovery.
+- [x] Rewrite `docs/operations/backup-restore.md` to list exactly which tables and fields are exported, at what snapshot, and what is not covered (e.g., active leases, transient GC state).
+- [x] Remove or mark as "planned" all documented options (`--at-snapshot`, `--at-time`, `--schema`, `--table`, `--merge`, `--dry-run`) that are not yet implemented. Implement at least `--at-snapshot` as it is the most critical for point-in-time recovery.
 
 ### Definition of Done
-- [ ] `export-catalog` exports all 28+ DuckLake spec tables.
-- [ ] Import restores all exported rows; round-trip test with `list_data_files()` and reader scan passes.
-- [ ] Export manifest test passes and covers every expected table.
-- [ ] `docs/operations/backup-restore.md` accurately describes scope and limitations.
+- [x] `export-catalog` exports all 28+ DuckLake spec tables.
+- [x] Import restores all exported rows; round-trip test with `list_data_files()` and reader scan passes.
+- [x] Export manifest test passes and covers every expected table.
+- [x] `docs/operations/backup-restore.md` accurately describes scope and limitations.
 
 ---
 

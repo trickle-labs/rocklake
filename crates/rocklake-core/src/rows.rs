@@ -761,3 +761,39 @@ pub struct ExtensionSchemaRow {
     #[prost(string, tag = "4")]
     pub data_json: String,
 }
+
+// ─── v0.32.0: Encryption ──────────────────────────────────────────────────
+
+/// Encrypted secret row (tag 0x24).
+/// Stores per-catalog encrypted access credentials used by encrypted files.
+/// DuckLake v1.0 spec: `ducklake_encrypted_secret`.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct EncryptedSecretRow {
+    #[prost(uint64, tag = "1")]
+    pub secret_id: u64,
+    #[prost(string, tag = "2")]
+    pub secret_name: String,
+    /// The encrypted blob (opaque, hex-encoded). Redacted in export for security.
+    #[prost(string, tag = "3")]
+    pub encrypted_secret: String,
+}
+
+/// Encryption key metadata row (tag 0x25).
+/// Stores the type and optional key material for catalog-level encryption.
+/// DuckLake v1.0 spec: `ducklake_encryption_key`.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct EncryptionKeyRow {
+    #[prost(uint64, tag = "1")]
+    pub catalog_id: u64,
+    #[prost(uint64, tag = "2")]
+    pub begin_snapshot: u64,
+    #[prost(uint64, optional, tag = "3")]
+    pub end_snapshot: Option<u64>,
+    #[prost(string, tag = "4")]
+    pub encryption_type: String,
+    #[prost(string, optional, tag = "5")]
+    pub key_id: Option<String>,
+    /// Encrypted key material (opaque). Redacted in export for security.
+    #[prost(string, optional, tag = "6")]
+    pub encryption_key: Option<String>,
+}

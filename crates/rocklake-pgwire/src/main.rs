@@ -81,7 +81,7 @@ Commands:
   corpus diff|validate           Wire-corpus diff and validation
   tune [--target-cost-usd N]     Output recommended settings
   migrate-from-ducklake          Migrate from an external DuckLake catalog
-  export-catalog                 Export all 28 catalog tables to NDJSON
+  export-catalog                 Export all 32 DuckLake catalog tables to NDJSON
 
 Options:
   --catalog <path>             Catalog path (required for most commands)
@@ -1213,18 +1213,22 @@ async fn cmd_migrate_from_ducklake(args: &[String]) -> Result<(), Box<dyn std::e
 
 // ─── export-catalog ────────────────────────────────────────────────────────
 
-/// Export all 28 DuckLake v1.0 catalog tables to a JSON-lines file.
+/// Export all DuckLake catalog tables (28 spec + 4 extension) to a JSON-lines file.
 ///
 /// This produces an interop dump suitable for migration or debugging.
+/// Sensitive fields (encryption keys, secrets) are redacted in the output.
 ///
 /// Example:
 ///   rocklake export-catalog --catalog ./my-catalog --out catalog-dump.ndjson
+///   rocklake export-catalog --catalog ./my-catalog --out snap1.ndjson --at-snapshot 1
 async fn cmd_export_catalog(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let catalog_url = extract_string_arg(args, "--catalog")
         .ok_or("--catalog <path> is required for export-catalog")?;
     let output_path =
         extract_string_arg(args, "--out").unwrap_or_else(|| "catalog-export.ndjson".to_string());
-    let snapshot_id = extract_numeric_arg(args, "--snapshot-id");
+    // Accept both --at-snapshot (preferred) and --snapshot-id (legacy)
+    let snapshot_id = extract_numeric_arg(args, "--at-snapshot")
+        .or_else(|| extract_numeric_arg(args, "--snapshot-id"));
 
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
@@ -1234,7 +1238,7 @@ async fn cmd_export_catalog(args: &[String]) -> Result<(), Box<dyn std::error::E
 
     let result = rocklake_catalog::export::export_catalog(&db, snapshot_id, &mut file).await?;
 
-    println!("Export complete (all 28 DuckLake v1.0 catalog tables):");
+    println!("Export complete (28 DuckLake spec + 4 extension catalog tables):");
     println!("  Rows exported:   {}", result.rows_exported);
     println!("  Tables exported: {}", result.tables_exported);
     println!("  Output:          {output_path}");
