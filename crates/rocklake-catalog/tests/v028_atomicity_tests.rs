@@ -99,7 +99,7 @@ async fn concurrent_snapshot_ids_only_winner_visible() {
         .unwrap();
 
     // Ensure clock advances so writer B gets a strictly newer epoch.
-    tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+    // v0.28.0: sleep removed — monotonic counter guarantees ordering.
 
     // Writer B opens second — it now owns the epoch.
     let mut store_b = CatalogStore::open(test_opts(&dir)).await.unwrap();
@@ -177,7 +177,7 @@ async fn writer_fencing_no_partial_artifacts() {
     writer_a.create_schema("another_partial").await.unwrap();
 
     // Ensure clock advances.
-    tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+    // v0.28.0: sleep removed — monotonic counter guarantees ordering.
 
     // Writer B opens, taking ownership of the epoch.
     let mut store_b = CatalogStore::open(test_opts(&dir)).await.unwrap();
@@ -347,7 +347,7 @@ async fn losing_writer_snapshot_not_in_snapshot_changes() {
         .await
         .unwrap();
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+    // v0.28.0: sleep removed — monotonic counter guarantees ordering.
 
     // Writer B opens, wins the epoch.
     let mut store_b = CatalogStore::open(test_opts(&dir)).await.unwrap();
