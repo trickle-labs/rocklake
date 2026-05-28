@@ -58,6 +58,23 @@ pub async fn create_checkpoint(db: &Db, label: Option<&str>) -> CatalogResult<Ch
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
+    // Guard: if the wall-clock millis would collide with an existing key
+    // (e.g. two checkpoints created in the same millisecond under automation),
+    // advance the counter past the collision.  We always use
+    // `COUNTER_NEXT_CHECKPOINT_ID` as the authoritative ID source so checkpoint
+    // IDs are unique and strictly monotonic regardless of clock resolution.
+    let counter_key = keys::key_counter(COUNTER_NEXT_CHECKPOINT_ID);
+    let next_counter = match db.get(&counter_key).await? {
+        Some(data) => values::decode_counter(&data)?,
+        None => 0,
+    };
+    // Use the larger of the wall-clock millis and the persisted counter so the
+    // ID space is roughly time-ordered for human readability while guaranteeing
+    // no collision.
+    let id = id.max(next_counter);
+    // Persist counter = id + 1 so the next checkpoint always gets id + 1 at minimum.
+    db.put(&counter_key, &values::encode_counter(id + 1))
+        .await?;
 
     let created_at = chrono::Utc::now().to_rfc3339();
 
@@ -283,4 +300,43 @@ fn checkpoint_key(id: u64) -> Vec<u8> {
     buf.extend_from_slice(b"checkpoint:");
     buf.extend_from_slice(&id.to_be_bytes());
     buf
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use object_store::local::LocalFileSystem;
+    use object_store::path::Path as ObjectPath;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    async fn open_test_db(dir: &std::path::Path) -> slatedb::Db {
+        let fs: Arc<dyn object_store::ObjectStore> =
+            Arc::new(LocalFileSystem::new_with_prefix(dir).unwrap());
+        slatedb::Db::open(ObjectPath::from("catalog"), fs)
+            .await
+            .unwrap()
+    }
+
+    /// Two checkpoints created in rapid succession must have distinct,
+    /// monotonically increasing IDs even if the wall clock has not advanced.
+    #[tokio::test]
+    async fn two_rapid_checkpoints_have_distinct_ids() {
+        let dir = TempDir::new().unwrap();
+        let db = open_test_db(dir.path()).await;
+
+        let c1 = create_checkpoint(&db, None).await.unwrap();
+        let c2 = create_checkpoint(&db, None).await.unwrap();
+
+        assert_ne!(
+            c1.id, c2.id,
+            "consecutive checkpoints must have distinct IDs"
+        );
+        assert!(c2.id > c1.id, "checkpoint IDs must be strictly increasing");
+
+        db.close().await.unwrap();
+    }
 }

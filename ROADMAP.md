@@ -89,7 +89,7 @@ binding on every roadmap release below.
 | **v0.31.0 — DataFusion Hardening** | Propagate catalog errors instead of `unwrap_or_default()`; error on data files with no readable root; carry data root explicitly; make AsyncBridge fallible; expand type mapping | Done |
 | **v0.32.0 — DuckLake Export Completeness** | Make `export-catalog` cover all 28+ DuckLake tables; reconcile 32-vs-28 table count; correct backup/restore documentation; fix CLI docs | Done |
 | **v0.33.0 — Security & Key Encoding Hardening** | Redact raw values from parameter-error messages; reject over-length identifiers in key encoding; classify `rocklake_catalog.*` mutations as read-only (SQLSTATE 25006); fix FFI NUL-string silent truncation | Done |
-| **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Planning |
+| **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Done |
 | **v0.35.0 — Embedded Catalog Client Library** | Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library; add a `rocklake-client` Rust crate as the idiomatic high-level API; ship language bindings for Python (PyO3), Go (cgo), and Node.js (napi-rs); document building against the C ABI from any language; validate non-DuckDB clients (Polars, DataFusion, Spark, Trino) against the same catalog | Planning |
 | **v0.36.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation from v0.35.0 to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; C++ catalog registration against DuckDB's community extension API is the remaining gap | Planning |
 | **v0.40.0 — Full Ecosystem Compatibility Certification** | Release-blocking CI evidence for every `docs/compatibility.md` row: real DuckDB/DuckLake versions, SQL clients, Spark/Trino/Presto disposition, DataFusion, object stores, TLS/auth, Rust/MSRV, and release platforms | Planning |
@@ -3901,34 +3901,34 @@ There is no external C or C++ test that compiles against `rocklake.h`, which mea
 ### Tasks
 
 #### C/C++ ABI Smoke Test
-- [ ] Add `tests/ffi_smoke.c` (or `tests/ffi_smoke.cpp`) that includes `rocklake.h`, opens a temporary catalog, calls `rocklake_list_schemas()`, handles an error return, calls `rocklake_close()`, and frees all returned structures.
-- [ ] Wire the C test into the CI build via `CMakeLists.txt` or a `build.rs` integration test that compiles and runs it.
-- [ ] Ensure the test covers the full lifecycle: open, list, error, free.
+- [x] Add `tests/ffi_smoke.c` (or `tests/ffi_smoke.cpp`) that includes `rocklake.h`, opens a temporary catalog, calls `rocklake_list_schemas()`, handles an error return, calls `rocklake_close()`, and frees all returned structures.
+- [x] Wire the C test into the CI build via `CMakeLists.txt` or a `build.rs` integration test that compiles and runs it.
+- [x] Ensure the test covers the full lifecycle: open, list, error, free.
 
 #### CI Test Concurrency Configuration
-- [ ] Profile the `rocklake-catalog --test integration_tests` binary under default concurrency to identify which tests OOM or race for the same resource.
-- [ ] Add a `.cargo/config.toml` or `nextest.toml` specifying `test-threads = 1` for the integration test binary, or mark individual heavy tests with `#[serial_test::serial]`.
-- [ ] Verify `cargo test --workspace --all-targets` completes without `SIGKILL` in CI.
+- [x] Profile the `rocklake-catalog --test integration_tests` binary under default concurrency to identify which tests OOM or race for the same resource.
+- [x] Add a `.cargo/config.toml` or `nextest.toml` specifying `test-threads = 1` for the integration test binary, or mark individual heavy tests with `#[serial_test::serial]`.
+- [x] Verify `cargo test --workspace --all-targets` completes without `SIGKILL` in CI.
 
 #### Monotonic Checkpoint and Excision IDs
-- [ ] In `checkpoint.rs`, replace `SystemTime::now().as_millis() as u64` with a CAS-incremented `SYSTEM_CHECKPOINT_COUNTER` key so checkpoint IDs are unique even under automation.
-- [ ] In `excise.rs`, replace `timestamp_millis` as the sole audit key component with a composite `timestamp_millis || monotonic_seq` (8 bytes + 4 bytes) or a UUID4 suffix.
-- [ ] Add a test that creates two checkpoints/excisions with the same mocked timestamp and asserts both are stored with distinct keys.
+- [x] In `checkpoint.rs`, replace `SystemTime::now().as_millis() as u64` with a CAS-incremented `SYSTEM_CHECKPOINT_COUNTER` key so checkpoint IDs are unique even under automation.
+- [x] In `excise.rs`, replace `timestamp_millis` as the sole audit key component with a composite `timestamp_millis || monotonic_seq` (8 bytes + 4 bytes) or a UUID4 suffix.
+- [x] Add a test that creates two checkpoints/excisions with the same mocked timestamp and asserts both are stored with distinct keys.
 
 #### Export/Import Module Documentation
-- [ ] Remove `#![allow(missing_docs)]` from `crates/rocklake-catalog/src/export.rs`.
-- [ ] Add doc comments to every `pub` struct, field, and function, including atomicity guarantees, completeness limitations, and error conditions.
+- [x] Remove `#![allow(missing_docs)]` from `crates/rocklake-catalog/src/export.rs`.
+- [x] Add doc comments to every `pub` struct, field, and function, including atomicity guarantees, completeness limitations, and error conditions.
 
 #### C Header Ownership Documentation
-- [ ] For each exported function in `include/rocklake.h`, add a documentation comment block specifying: ownership transfer (caller-owned vs. borrow), nullable vs. non-null for pointer parameters, thread-safety contract, and which `rocklake_free_*` function to call.
-- [ ] Reference `docs/architecture/ffi-safety.md` from the header preamble.
+- [x] For each exported function in `include/rocklake.h`, add a documentation comment block specifying: ownership transfer (caller-owned vs. borrow), nullable vs. non-null for pointer parameters, thread-safety contract, and which `rocklake_free_*` function to call.
+- [x] Reference `docs/architecture/ffi-safety.md` from the header preamble.
 
 ### Definition of Done
-- [ ] C smoke test compiles and passes in CI.
-- [ ] Full workspace test suite completes without `SIGKILL` in CI.
-- [ ] Two same-millisecond checkpoints have distinct keys; same for excision audit entries.
-- [ ] `export.rs` has no `allow(missing_docs)` and all public symbols are documented.
-- [ ] Every function in `rocklake.h` has an ownership/thread-safety doc comment.
+- [x] C smoke test compiles and passes in CI.
+- [x] Full workspace test suite completes without `SIGKILL` in CI.
+- [x] Two same-millisecond checkpoints have distinct keys; same for excision audit entries.
+- [x] `export.rs` has no `allow(missing_docs)` and all public symbols are documented.
+- [x] Every function in `rocklake.h` has an ownership/thread-safety doc comment.
 
 ---
 

@@ -137,6 +137,13 @@ pub const INLINED_SUBTYPE_DELETE: u8 = 0x02;
 pub const COUNTER_NEXT_SNAPSHOT_ID: u8 = 0x01;
 pub const COUNTER_NEXT_CATALOG_ID: u8 = 0x02;
 pub const COUNTER_NEXT_FILE_ID: u8 = 0x03;
+/// Monotonic checkpoint ID counter — avoids millisecond-collision overwrites.
+/// Incremented by `checkpoint::create_checkpoint()`.
+pub const COUNTER_NEXT_CHECKPOINT_ID: u8 = 0x04;
+/// Monotonic excision sequence counter — used as a tiebreaker suffix on the
+/// `excised:<timestamp_millis>:<seq>` audit key so two excisions in the same
+/// millisecond are stored under distinct keys.
+pub const COUNTER_NEXT_EXCISION_SEQ: u8 = 0x05;
 /// Per-table column ID counter: `0xFE | 0x10 | table_id(u64 BE)`.
 pub const COUNTER_NEXT_COLUMN_ID_PREFIX: u8 = 0x10;
 
