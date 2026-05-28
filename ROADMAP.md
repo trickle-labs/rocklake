@@ -91,9 +91,11 @@ binding on every roadmap release below.
 | **v0.33.0 — Security & Key Encoding Hardening** | Redact raw values from parameter-error messages; reject over-length identifiers in key encoding; classify `rocklake_catalog.*` mutations as read-only (SQLSTATE 25006); fix FFI NUL-string silent truncation | Done |
 | **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Done |
 | **v0.35.0 — Embedded Catalog Client Library** | Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library; add a `rocklake-client` Rust crate as the idiomatic high-level API; ship language bindings for Python (PyO3), Go (cgo), and Node.js (napi-rs); document building against the C ABI from any language; validate non-DuckDB clients (Polars, DataFusion, Spark, Trino) against the same catalog | Done |
-| **v0.36.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation from v0.35.0 to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; eliminates all Postgres-scanner compatibility burden for local/embedded use; C++ catalog registration against DuckDB's community extension API is the remaining gap | Planning |
-| **v0.40.0 — Full Ecosystem Compatibility Certification** | Release-blocking CI evidence for every `docs/compatibility.md` row: real DuckDB/DuckLake versions, SQL clients, Spark/Trino/Presto disposition, DataFusion, object stores, TLS/auth, Rust/MSRV, and release platforms | Planning |
-| **v1.0 — General Availability** | TPC-H @ SF10/SF100 benchmarks, S3 Express acceptance gate, real-world validation gate | Planning |
+| **v0.37.0 — SQL Clients & Object Storage Backend Testing** | Real psql, pgcli, DBeaver, Metabase smoke tests; GCS and Azure emulator harnesses; containerized backend compat suite; TLS 1.2/1.3 protocol gating | Planning |
+| **v0.38.0 — Engine Integration & Wire Protocol Hardening** | Real Spark 3.5 and Trino 432+ jobs; DataFusion matrix integration; wire-corpus replay with golden assertions; version-policy checks | Planning |
+| **v0.39.0 — Release Certification & Platform Support** | Compatibility manifest system (TOML validator, CI gates, docs-sync); Rust MSRV reconciliation; Windows x86-64 CI and release artifacts; release gates and final certification | Planning |
+| **v0.50.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; blocked on upstream DuckDB community extension catalog API | Exploration |
+| **v1.0 — General Availability** | All v0.39.0 certification gates green; TPC-H @ SF10/SF100 benchmarks; S3 Express acceptance; real-world validation | Planning |
 | **v1.x — Ecosystem Expansion** | Async FFI v2, Lambda/edge integration, checkpoint-pinned readers, additional performance optimizations | Future |
 | **v2.x — General Fact Store** | Non-DuckLake schemas on the same immutable substrate; alternative query interfaces; multi-writer exploration | Exploration |
 
@@ -4014,181 +4016,203 @@ The current `rocklake-ffi` crate was designed alongside the DuckDB extension and
 
 ---
 
-## v0.36.0 — Native DuckDB Extension
+## v0.37.0 — SQL Clients & Object Storage Backend Testing
 
-> Build on the stable C ABI and `rocklake-client` foundation established in v0.35.0 to complete the native DuckDB extension so that `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar. This eliminates the Postgres-scanner compatibility burden entirely for local and embedded use. The `extension/` C++ wrapper exists but stubs catalog type registration pending DuckDB's community extension catalog API.
+> Bring real SQL client compatibility (psql, pgcli, DBeaver, Metabase) online against RockLake; implement containerized GCS and Azure emulator harnesses; establish the backend compatibility test suite reusable across all object stores.
 
-### Prerequisite
+### SQL Client Smoke Tests
 
-This milestone depends on v0.35.0 (Embedded Catalog Client Library) being complete. The stable `rocklake.h` C header, the language-neutral `ROCKLAKE_ABI_VERSION` constant, and the documented ownership model produced in v0.35.0 are the interface the C++ extension wraps. The DuckDB extension is a first-class consumer of the general client library, not a special case.
+Real PostgreSQL clients and BI tools, not test harnesses:
 
-### Current State
-
-The v0.5 roadmap described Strategy C as Done, but the C++ extension in `extension/src/rocklake_extension.cpp` explicitly defers the key step:
-
-```cpp
-// catalog type registration would go here
-// once DuckDB's extension catalog API is available for community extensions.
-```
-
-`INSTALL rocklake; ATTACH 'ducklake:slatedb:...' AS lake` does not work today. The Rust FFI layer is real; the DuckDB integration is a skeleton.
-
-### Step 1 — DuckDB Extension Catalog API Research
-
-- [ ] Audit DuckDB 1.5.x source for `CatalogType`, `AttachFunction`, and custom storage extension registration. Determine whether a community extension can register a new `ATTACH` scheme without modifying DuckDB core.
-- [ ] Evaluate the community extension distribution path: [extension.duckdb.org](https://extension.duckdb.org) repository submission vs. self-hosted `custom_extension_repository`.
-- [ ] Decision gate: **can the extension register a `slatedb:` attach handler via the public DuckDB extension API, or does it require an upstream DuckDB change or fork?** Record the finding in `docs/architecture/crate-structure.md`.
-
-### Step 2 — C++ Catalog Implementation
-
-If the public extension API supports catalog registration:
-
-- [ ] Implement `RockLakeCatalog : duckdb::Catalog` in `extension/src/` delegating all virtual methods to `RockLakeCatalogWrapper` (which wraps the stable C FFI calls from `include/rocklake.h` produced in v0.35.0).
-- [ ] Register the attach handler for the `slatedb:` scheme in `rocklake_extension_init()` using DuckDB's `StorageExtension` or equivalent API.
-- [ ] Implement the minimum required virtual methods for a read-only attach: `ScanEntry`, `GetEntry` (schemas, tables, columns), `GetTableIOFunction` (Parquet scan via existing data path).
-- [ ] Implement write-path virtual methods for `CreateEntry` (table, schema, data file registration) delegating to `rocklake_ffi` write functions.
-
-If the public extension API does not yet support catalog registration:
-
-- [ ] Document the blocker in `docs/architecture/crate-structure.md` and file a DuckDB upstream issue/discussion requesting the required API surface.
-- [ ] Provide a workaround path documented in `docs/integration/native-extension.md`: load the extension manually with a custom DuckDB build, or use the PG-wire sidecar (Strategy B) for all use cases until the upstream API is available.
-
-### Step 3 — Build System
-
-- [ ] Update `extension/CMakeLists.txt` to link against the DuckDB extension development headers (`duckdb.hpp`, `duckdb/main/extension_util.hpp`) and the `rocklake.h` header from `crates/rocklake-ffi/include/`.
-- [ ] Add a `build-extension` Makefile target or `justfile` recipe: `cargo build --release -p rocklake-ffi && cmake --build extension/build`.
-- [ ] Output artifact: `rocklake.duckdb_extension` compatible with the DuckDB 1.5.x ABI.
-- [ ] Add `extension/` to the release workflow (`release.yml`) so binaries for Linux x86-64/arm64 and macOS arm64 are attached to each GitHub Release.
-
-### Step 4 — End-to-End Tests
-
-- [ ] Add `tests/native_extension_e2e.rs` (or a shell-based golden test): `LOAD rocklake; ATTACH 'ducklake:slatedb:///tmp/test-catalog' AS lake; CREATE SCHEMA lake.s; CREATE TABLE lake.s.t (id INTEGER); INSERT INTO lake.s.t VALUES (1); SELECT * FROM lake.s.t` — asserts row count and value without starting a RockLake sidecar process.
-- [ ] Add a parity test: run the same DuckLake tutorial operations against both the PG-wire sidecar (Strategy B) and the native extension against the same catalog path; assert identical query results.
-- [ ] Wire the native extension tests into CI under a separate job `native-extension` that builds the `.duckdb_extension` artifact and runs the end-to-end tests.
-
-### Step 5 — Documentation
-
-- [ ] Update `docs/architecture/crate-structure.md` with the current accurate status of the `extension/` directory and `rocklake-ffi` crate.
-- [ ] Update `docs/getting-started/` to add a section on the native extension attach path alongside the existing PG-wire sidecar instructions.
-- [ ] Add `docs/integration/native-extension.md` covering: when to use the native extension vs. Strategy B, install steps, connection string format (`ducklake:slatedb:s3://bucket/catalog` or `ducklake:slatedb:///local/path`), known limitations vs. PG-wire, and ABI versioning policy.
-- [ ] Update `docs/compatibility.md` with a new `Native Extension` row in the deployment matrix.
-- [ ] Update `docs/design-decisions/` page covering Strategy B vs. the native extension to reflect actual current status.
-
-### Why This Eliminates the Postgres-Scanner Problem
-
-When using the native extension, DuckDB calls into `rocklake.duckdb_extension` directly as an in-process function call. There is no TCP connection, no PG-wire handshake, no `postgres_scanner` initialization, and no system catalog probing (`DISCARD ALL`, `to_regclass`, `pg_namespace` scans). The DuckDB 1.5.x postgres-scanner compatibility work in v0.27.4 is permanently unnecessary for this path.
-
-Strategy B (PG-wire sidecar) remains for use cases that require remote access, multi-client, or non-DuckDB SQL clients. Both paths share the same `rocklake-catalog` / `rocklake-core` stack and produce identical catalog state.
-
-### Definition of Done
-
-- [ ] Decision gate from Step 1 documented; either the extension registers correctly or the upstream blocker is filed with a public tracking issue.
-- [ ] `LOAD rocklake; ATTACH 'ducklake:slatedb:///tmp/test' AS lake; CREATE TABLE lake.main.t (id INTEGER); INSERT INTO lake.main.t VALUES (1); SELECT * FROM lake.main.t` passes in CI without any `rocklake serve` process running.
-- [ ] Strategy B and the native extension produce identical results on the same catalog path (parity test green).
-- [ ] `.duckdb_extension` binary attached to the GitHub Release for Linux x86-64/arm64 and macOS arm64.
-- [ ] `docs/integration/native-extension.md` written and reviewed.
-- [ ] `docs/compatibility.md` Native Extension row present with CI evidence.
-
----
-
-## v0.40.0 — Full Ecosystem Compatibility Certification
-
-> Turn the compatibility matrix into release-blocking evidence. No v0.40.0 tag may ship until every supported, expected, untested, or unsupported claim in `docs/compatibility.md` is backed by an automated check, an explicit negative test, or a deliberate documentation downgrade.
-
-### Current Gap Analysis
-
-The workflow named `DuckDB Compatibility Matrix` is not a full compatibility matrix today and does not fully test every variant described in `docs/compatibility.md`.
-
-- [ ] **DuckDB / DuckLake:** CI checks that `tests/fixtures/wire-corpus/duckdb-1.5.x.jsonl` exists, then runs the same package tests for every matrix entry. It does not pass the selected client fixture into the replay test, does not run a real DuckDB process, does not attach the real `ducklake` extension, and does not prove DuckDB 1.5.x patch streams.
-- [ ] **Wire corpus replay:** The current corpus tests mostly validate fixture presence, JSON shape, or SQL classifier acceptance. They do not replay each selected corpus end-to-end through PG-wire, assert response messages, or compare final catalog state with golden DuckLake-backed output.
-- [ ] **PostgreSQL clients:** The compatibility workflow runs `cargo test --package rocklake-pgwire -- --include-ignored psql_compat`, but no listed test currently contains `psql_compat`; this can pass while running zero client compatibility tests. The workflow also starts PostgreSQL containers even though the compatibility target should be a RockLake server exercised by real clients. DBeaver, pgcli, and Metabase have no automated coverage.
-- [ ] **Spark / Trino / Presto:** Spark 3.5 and Trino 432 have small synthetic corpus fixtures and classifier checks only. There is no real Spark connector, Trino connector, or Presto job, and the documented Trino 400-431 / Presto disposition is not actively verified.
-- [ ] **DataFusion:** DataFusion 45 is pinned and has local integration tests, including Parquet scan coverage, but those tests are not wired into the compatibility matrix and there is no docs-to-test evidence mapping for the supported DataFusion row or the unsupported `< 45` row.
-- [ ] **Object storage:** Local filesystem is covered indirectly by many tests. GCS and Azure checks only validate builder construction, not real read/write/list/commit behavior. AWS S3 and MinIO are documented as supported but are not exercised by this compatibility workflow as real backends.
-- [ ] **SlateDB:** The workspace pins SlateDB 0.13, but `docs/compatibility.md` is not validated against Cargo metadata and the unsupported 0.12 row has no explicit compatibility-policy check.
-- [ ] **TLS and authentication:** Tests cover basic TLS-required/plaintext rejection, optional TLS startup, and password authentication behavior. They do not prove TLS 1.2 acceptance, TLS 1.3 acceptance, or TLS 1.1-and-older rejection as separate protocol-version gates.
-- [ ] **Rust toolchain:** The workspace and CI declare MSRV 1.93, while `docs/compatibility.md` still says 1.80. Stable and MSRV checks are Linux-only and are not tied to the compatibility matrix.
-- [ ] **Platforms and release artifacts:** CI tests Ubuntu and macOS latest only. Release artifacts are built for Linux x86-64, Linux aarch64, and macOS arm64. Windows x86-64 is documented as supported but has no CI test, no release build, and no release installation instructions. macOS x86-64 was removed from `docs/compatibility.md` but still appears in binary deployment documentation.
-- [ ] **Unsupported rows:** Rows marked unsupported or not tested are not consistently asserted. Spark 3.3, DataFusion `< 45`, SlateDB 0.12, Rust below MSRV, and TLS 1.1-or-older need either explicit negative tests or a compatibility manifest entry explaining why no runtime test is possible.
-
-### Compatibility Evidence Manifest
-
-- [ ] Add `tests/fixtures/compatibility-matrix.toml` as the source of truth for every row in `docs/compatibility.md`. Each entry must include component, version/range, platform if applicable, claimed status, required CI job, test command, fixture or artifact path, and last-reviewed date.
-- [ ] Add a CI gate that validates `docs/compatibility.md` against the manifest. A supported row without evidence, an evidence entry without a matching test, or a docs row missing from the manifest fails the build.
-- [ ] Define allowed statuses precisely: `supported` means automated release-blocking evidence; `expected` means non-blocking scheduled evidence plus documented risk; `untested` means no support promise; `unsupported` means an explicit rejection, incompatibility reason, or version-policy check.
-- [ ] Require every compatibility job to publish a compact JSON result artifact consumed by the manifest validator, so the docs cannot drift from the last green run.
-
-### DuckDB / DuckLake Certification
-
-- [ ] Replace the current fixture-exists workflow with versioned real-client jobs for every supported DuckDB/DuckLake combination in the manifest.
-- [ ] For each supported DuckDB version, start RockLake as a real PG-wire sidecar, install/load the DuckDB `ducklake` extension, attach via `ducklake:postgres://...`, and run the v0.27 end-to-end lifecycle on LocalFS and MinIO.
-- [ ] Replay the selected wire corpus named by the matrix entry, not a generic test filter. Assert protocol responses, SQLSTATEs, and final catalog rows against golden fixtures.
-- [ ] Capture and validate new DuckDB patch/minor corpora before a version is added to the supported matrix. Weekly scheduled jobs detect new DuckDB releases and open a tracking issue when a corpus is missing.
-- [ ] Keep `docs/integration/duckdb-compatibility.md` synchronized with the same manifest; remove or downgrade any DuckDB version claim that is not certified.
-
-### SQL Client Certification
-
-- [ ] Add real `psql` CLI smoke tests for PostgreSQL client versions 16, 17, and 18 against RockLake, including startup, simple query, extended/prepared query, transaction, auth failure, and TLS-required modes.
-- [ ] Rename or add tests so the CI filter cannot silently run zero tests; fail the workflow when the selected test count is zero.
+- [ ] Add real `psql` CLI smoke tests for PostgreSQL client versions 16, 17, and 18 against RockLake, covering: startup handshake, simple query, extended/prepared query, transaction (BEGIN/COMMIT/ROLLBACK), auth failure, and TLS-required modes.
 - [ ] Add pgcli 4.x smoke coverage against RockLake for connection setup, catalog SELECT, transaction, TLS-required connection, and auth failure.
 - [ ] Add DBeaver 24.x coverage using its bundled PostgreSQL JDBC driver or a headless DBeaver-compatible JDBC smoke harness. Record the driver version in the manifest.
 - [ ] Add Metabase 0.49+ coverage with a containerized Metabase instance or API-driven smoke harness that registers RockLake as a PostgreSQL database and runs a catalog query.
+- [ ] Fail the workflow when the selected test count is zero (ensure tests actually run).
 
-### Spark, Trino, Presto, and DataFusion
+### Object Storage Backend Emulator Harnesses
 
-- [ ] Run a real Spark 3.5 job against RockLake through the documented pg-wire path. Cover schema discovery, table discovery, Parquet file listing, snapshot visibility, and a write path if the connector supports it.
-- [ ] Run a real Trino 432+ job against RockLake through the documented pg-wire path. Cover catalog discovery, table discovery, predicate pushdown/file pruning expectations, and snapshot visibility.
-- [ ] Decide the Trino 400-431 and Presto compatibility status in the manifest. If either remains `untested` or `unsupported`, `docs/compatibility.md` must say so plainly; if either becomes supported, add a real engine smoke job first.
-- [ ] Promote `cargo test -p rocklake-datafusion` into the compatibility workflow for DataFusion 45 and include the Parquet scan test as the supported-row evidence.
-- [ ] Add a version-policy check proving DataFusion `< 45` is outside the supported range, or remove the row from the public matrix.
+Extend `rocklake-testkit` with containerized emulator support for GCS and Azure Blob alongside MinIO:
 
-### Object Storage Backend Testing
+- [ ] Implement `GcsEmulatorHarness` in `crates/rocklake-testkit/src/gcs_emulator_harness.rs` with `GoogleCloudStorageBuilder` configuration and container lifecycle (Docker for `fsouza/fake-gcs-server`).
+- [ ] Implement `AzureEmulatorHarness` in `crates/rocklake-testkit/src/azure_emulator_harness.rs` with `MicrosoftAzureBuilder` configuration and container lifecycle (Docker for Azurite).
+- [ ] Add conditional features to `Cargo.toml`: `gcs-emulator` and `azure-emulator` (default: off for local dev comfort).
 
-Local testing strategy for all supported object stores via containerized emulators:
+### Shared Backend Compatibility Suite
 
-| Backend | Local Emulator | Harness Pattern | Exercise |
-|---------|---|---|---|
-| **AWS S3** | MinIO (`minio/minio:latest`) | [MinioHarness](crates/rocklake-testkit/src/minio_harness.rs) (existing) | Catalog open/create, snapshot commit, read-after-write, list/prefix scan, writer fencing, recovery from fresh process |
-| **GCS** | Google Cloud Emulator or `fsouza/fake-gcs-server` | GcsEmulatorHarness (new) | Same as MinIO; use `GoogleCloudStorageBuilder` configured for emulator endpoint |
-| **Azure Blob** | Azurite (`mcr.microsoft.com/azure-storage/azurite`) | AzureEmulatorHarness (new) | Same as MinIO; use `MicrosoftAzureBuilder` configured for emulator endpoint |
+Factorize backend tests into a reusable macro:
 
-Each harness follows the MinioHarness pattern: start Docker container → wait for readiness → configure ObjectStore builder → return `Arc<dyn ObjectStore>` → teardown after test.
+- [ ] Implement `catalog_backend_compat_test!()` macro covering: catalog open/create, snapshot commit, read-after-write, list/prefix scan, writer fencing, and recovery from fresh process. Parameterized by harness type (MinIO, GCS, Azure).
+- [ ] Wire the macro into `crates/rocklake-pgwire/tests/integration_tests.rs` and `crates/rocklake-catalog/tests/backend_compat.rs` as gated tests.
+- [ ] LocalFS, MinIO, GCS, and Azure Blob all pass the suite.
 
-Harnesses are added to `rocklake-testkit` and exposed as conditional features (`gcs-emulator`, `azure-emulator`, `minio-tests`) to allow local testing without requiring all Docker images.
+### TLS Protocol-Version Gating
 
-- [ ] Implement `GcsEmulatorHarness` in `crates/rocklake-testkit/src/gcs_emulator_harness.rs` with `GoogleCloudStorageBuilder` configuration and container lifecycle management.
-- [ ] Implement `AzureEmulatorHarness` in `crates/rocklake-testkit/src/azure_emulator_harness.rs` with `MicrosoftAzureBuilder` configuration and container lifecycle management.
-- [ ] Add shared backend test suite exercisable by all three harnesses: `catalog_backend_compat_test!()` macro covering open/create, commit, read-after-write, list/prefix, writer fencing, and recovery.
-- [ ] Wire all three harnesses into `crates/rocklake-pgwire/tests/integration_tests.rs` as optional gated tests.
+Enforce protocol version acceptance/rejection:
 
-### Storage, TLS, Rust, and Platform Matrix
+- [ ] Add tests verifying TLS 1.2 accepted, TLS 1.3 accepted, and TLS 1.1-and-older rejected as separate checks.
+- [ ] Include auth + TLS combined coverage (e.g., SCRAM-SHA-256 over TLS 1.3).
+- [ ] Wire into CI as `tls-compat` job.
 
-- [ ] Add real backend compatibility jobs for LocalFS, MinIO, AWS S3, GCS, and Azure Blob in the CI workflow. Each supported backend must exercise the shared backend compatibility suite (open/create, snapshot commit, read-after-write, list/prefix scan, writer fencing, recovery from fresh process).
-- [ ] LocalFS and MinIO tests run on every CI push. GCS and Azure Blob tests run on protected scheduled/release workflows or when explicitly triggered, backed by real cloud credentials.
-- [ ] Add TLS protocol-version tests using real client handshakes: TLS 1.2 accepted, TLS 1.3 accepted, TLS 1.1 and older rejected. Include auth + TLS combined coverage.
-- [ ] Reconcile Rust compatibility by either updating `docs/compatibility.md` to MSRV 1.93 or lowering the workspace MSRV with proof. Stable and MSRV checks must be represented in the manifest.
-- [ ] Add Windows x86-64 CI and release artifacts before claiming Windows support. The release workflow must build, checksum, upload, and document the Windows binary.
-- [ ] Keep Linux x86-64, Linux aarch64, and macOS arm64 release jobs as supported platform evidence. Remove stale macOS x86-64 deployment docs unless a macOS x86-64 build/test/release job is restored.
+### CI Integration
 
-### Release Gates
-
-- [ ] `DuckDB Compatibility Matrix` renamed or expanded to `Ecosystem Compatibility Matrix`, with separate jobs for real clients, corpus replay, SQL clients, engines, object stores, TLS/auth, Rust, and platforms.
-- [ ] `docs/compatibility.md` and `docs/integration/duckdb-compatibility.md` cannot be edited to add a supported row unless the manifest and CI evidence are updated in the same PR.
-- [ ] `mkdocs build --strict`, the compatibility manifest validator, all release-blocking compatibility jobs, and all release artifact builds are green before tagging v0.40.0.
-- [ ] Publish a v0.40.0 compatibility report under `benchmarks/` or `docs/performance/` with the exact component versions, platforms, object stores, and CI run URLs used for certification.
+- [ ] Add new CI job: `sql-clients` (psql, pgcli, DBeaver, Metabase containers).
+- [ ] Add new CI job: `backend-compat` (LocalFS, MinIO, GCS, Azure; gated features).
+- [ ] Add new CI job: `tls-compat`.
+- [ ] All three run on every PR merge; GCS and Azure tests use credentials from protected secrets.
 
 ### Deliverables
 
-- [ ] Compatibility evidence manifest checked in and enforced in CI
-- [ ] Real DuckDB/DuckLake matrix green for every supported version
-- [ ] Wire corpus replay tests assert responses and final state per selected fixture
-- [ ] SQL client compatibility green for psql 16/17/18, DBeaver 24.x, pgcli 4.x, and Metabase 0.49+
-- [ ] Spark, Trino, Presto disposition, and DataFusion compatibility rows reconciled with automated evidence
-- [ ] LocalFS, MinIO, AWS S3, GCS, and Azure Blob backend compatibility certified or downgraded honestly
-- [ ] TLS 1.2, TLS 1.3, TLS rejection, auth, Rust/MSRV, and platform release evidence represented in the manifest
-- [ ] Windows x86-64 build/test/release support added before Windows remains listed as supported
-- [ ] Stale macOS x86-64 documentation removed or macOS x86-64 support restored with evidence
-- [ ] `docs/compatibility.md` fully generated from or validated against current compatibility evidence
+- [ ] psql 16/17/18, pgcli 4.x, DBeaver 24.x, Metabase 0.49+ all smoke-test green
+- [ ] GcsEmulatorHarness and AzureEmulatorHarness implemented and integrated
+- [ ] Shared backend compat suite macro verified on all four backends
+- [ ] TLS protocol-version gates enforced (1.2, 1.3 accepted; 1.1+ rejected)
+- [ ] CI jobs for SQL clients, backend compat, and TLS all green on every merge
+- [ ] `docs/compatibility.md` updated with tested versions for all clients and backends
+
+---
+
+## v0.38.0 — Engine Integration & Wire Protocol Hardening
+
+> Real Spark 3.5 and Trino 432+ jobs; DataFusion matrix integration; wire-corpus replay with golden assertions.
+
+### Real Engine Jobs
+
+Replace synthetic fixtures with actual engine execution:
+
+- [ ] Run a real Spark 3.5 job against RockLake through the documented pg-wire path. Cover: schema discovery, table discovery, Parquet file listing, snapshot visibility, and write path if the Spark connector supports it. Publish results to a test fixture.
+- [ ] Run a real Trino 432+ job against RockLake through the documented pg-wire path. Cover: catalog discovery, table discovery, predicate pushdown/file pruning expectations, and snapshot visibility.
+- [ ] Decide the Trino 400-431 and Presto compatibility status definitively: if either remains untested/unsupported, downgrade docs accordingly; if either becomes supported, add real smoke coverage first.
+- [ ] Add a CI job `engine-compat` that runs Spark and Trino containers against a live RockLake sidecar; publish results as artifacts.
+
+### DataFusion Matrix Integration
+
+Wire DataFusion into the compatibility ecosystem:
+
+- [ ] Promote `cargo test -p rocklake-datafusion` into the compatibility workflow as the evidence for DataFusion 45 support.
+- [ ] Include the Parquet scan test as the primary supported-row evidence.
+- [ ] Add a version-policy check (explicit test or bounds check) proving DataFusion `< 45` is outside the supported range.
+- [ ] Add DataFusion row to compatibility-matrix CI job.
+
+### Wire-Corpus Replay with Golden Assertions
+
+Upgrade corpus tests from fixture validation to semantic replay:
+
+- [ ] For each wire corpus (DuckDB 1.5.x, Spark 3.5, Trino 432), replay every message sequence through PG-wire and assert: response messages, SQLSTATEs, column OIDs, and final catalog row counts match golden fixtures.
+- [ ] Store golden fixtures for each corpus in `tests/fixtures/golden/{corpus_name}/`.
+- [ ] Add `--update-golden` flag to replay tests for refreshing fixtures when semantics change intentionally.
+
+### Protocol Hardening
+
+Harden edge cases discovered in corpus replay:
+
+- [ ] Fix any protocol violations found by golden assertions (malformed RowDescription, wrong OIDs, truncation, etc.).
+- [ ] Ensure `ERROR` responses include correct `SQLSTATE` codes.
+- [ ] Verify `NOTICE` / `WARNING` message formatting.
+
+### Deliverables
+
+- [ ] Real Spark 3.5 job green; results published
+- [ ] Real Trino 432+ job green; results published
+- [ ] Spark 3.5, Trino 432+ rows in compatibility manifest
+- [ ] DataFusion 45 integration into CI
+- [ ] Wire-corpus replay tests assert responses, OIDs, SQLSTATEs, and final state
+- [ ] Golden fixtures stored and validated on every CI run
+- [ ] `engine-compat` CI job stable and reproducible
+
+---
+
+## v0.39.0 — Release Certification & Platform Support
+
+> Compatibility manifest system (TOML validator, CI gates, docs-sync enforcement); Rust MSRV reconciliation; Windows x86-64 platform support; final release-blocking gates for v1.0.
+
+### Compatibility Evidence Manifest System
+
+Formalize the source of truth for all compatibility claims:
+
+- [ ] Add `tests/fixtures/compatibility-matrix.toml` as the definitive manifest. Each entry includes: component, version/range, platform, claimed status, CI job, test command, fixture path, last-reviewed date.
+- [ ] Add a CI gate that validates `docs/compatibility.md` against the manifest: supported rows must have evidence; unsupported/untested rows must be explicitly documented.
+- [ ] Define statuses: `supported` (automated release-blocking), `expected` (non-blocking + risk doc), `untested` (no promise), `unsupported` (explicit rejection or version-policy check).
+- [ ] Require all compatibility jobs to publish compact JSON result artifacts consumed by the manifest validator; docs cannot drift from the last green run.
+- [ ] Enforce docs-sync: PR edits to `docs/compatibility.md` must update the manifest in the same commit.
+
+### Rust MSRV Reconciliation
+
+Align documentation and workspace:
+
+- [ ] Audit Cargo.toml: workspace declares MSRV 1.93.
+- [ ] Audit docs: `docs/compatibility.md` still claims 1.80.
+- [ ] Update `docs/compatibility.md` to MSRV 1.93 and pin a GitHub Actions job that verifies builds with Rust 1.93.
+- [ ] Add MSRV check to CI (stable and MSRV 1.93 on Linux and macOS).
+
+### Windows x86-64 Platform Support
+
+Add Windows to the supported platform matrix:
+
+- [ ] Add Windows x86-64 to CI: compile, run unit tests, and run integration tests on `windows-latest`.
+- [ ] Build Windows x86-64 release artifact (`rocklake.exe` and `.dll` for FFI).
+- [ ] Add Windows x86-64 to the release workflow: checksum, upload, and document installation instructions.
+- [ ] Test Windows + TLS, Windows + auth, and Windows + object-store backend selection.
+- [ ] Update `docs/getting-started/` and `docs/operations/deployment.md` with Windows instructions.
+
+### macOS Platform Reconciliation
+
+Clarify macOS platform status:
+
+- [ ] Audit current state: CI tests macOS latest (arm64); release builds include macOS arm64.
+- [ ] Audit docs: macOS x86-64 references are stale but still present in deployment docs.
+- [ ] Decision: either (1) remove macOS x86-64 from all docs, or (2) add macOS x86-64 to CI and release builds.
+- [ ] If option 2: add `macos-13` (Intel) to CI and release workflow.
+
+### Release-Blocking Gates
+
+Enforce final certification requirements before v1.0:
+
+- [ ] Compatibility manifest validator, all three engine/client/backend CI jobs, and all release artifact builds must be green before tagging.
+- [ ] `mkdocs build --strict` must pass.
+- [ ] All 10 test tiers from [plans/e2e-integration-tests.md](plans/e2e-integration-tests.md) must be at least Tier 5 (client compat) green; Tiers 6+ scheduled or pending.
+
+### Deliverables
+
+- [ ] `tests/fixtures/compatibility-matrix.toml` implemented and enforced in CI
+- [ ] Compatibility validator CI job: enforces manifest vs. docs alignment
+- [ ] Rust MSRV reconciled to 1.93; CI job validates it
+- [ ] Windows x86-64: CI, release artifact, and docs complete
+- [ ] macOS platform status clarified (x86-64 added or documented as unsupported)
+- [ ] `docs/compatibility.md` fully synchronized with manifest evidence
+- [ ] All release gates green before v1.0 tag
+
+---
+
+## v0.50.0 — Native DuckDB Extension
+
+> **Status: Exploration** — Blocked on upstream DuckDB community extension catalog API.
+
+Build on the stable C ABI and `rocklake-client` foundation from v0.35.0 to complete the native DuckDB extension so that `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar.
+
+### Prerequisite Research (v0.36 Discovery Gate)
+
+Before scheduling any implementation work, audit DuckDB 1.5.x for the required extension API:
+
+- [ ] Can a community extension register a custom `ATTACH` scheme (e.g., `slatedb:`) via the public DuckDB extension API without modifying DuckDB core?
+- [ ] Document findings in `docs/architecture/crate-structure.md`.
+
+### Implementation Path (If Upstream API Exists)
+
+- [ ] Implement `RockLakeCatalog : duckdb::Catalog` delegating to `RockLakeCatalogWrapper` (wrapping stable C FFI from v0.35.0).
+- [ ] Register the attach handler for `slatedb:` scheme using DuckDB's `StorageExtension` API.
+- [ ] Implement read-path virtual methods: `ScanEntry`, `GetEntry`, `GetTableIOFunction`.
+- [ ] Implement write-path virtual methods: `CreateEntry`, delegating to `rocklake_ffi` functions.
+- [ ] Update `extension/CMakeLists.txt` to link DuckDB extension headers and `rocklake.h`.
+- [ ] Output artifact: `rocklake.duckdb_extension` for DuckDB 1.5.x.
+- [ ] Add native-extension tests to CI.
+- [ ] Document in `docs/integration/native-extension.md`.
+
+### Fallback (If Upstream API Does Not Exist)
+
+- [ ] File a DuckDB upstream issue requesting the extension catalog API.
+- [ ] Document the blocker and the workaround (PG-wire sidecar or custom DuckDB build).
+- [ ] Defer v0.50.0 pending upstream acceptance.
 
 ---
 
