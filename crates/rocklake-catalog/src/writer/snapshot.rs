@@ -5,6 +5,7 @@ use rocklake_core::mvcc::SnapshotId;
 use rocklake_core::rows::{SnapshotChangesRow, SnapshotRow};
 use rocklake_core::tags::{
     COUNTER_NEXT_CATALOG_ID, COUNTER_NEXT_FILE_ID, COUNTER_NEXT_SNAPSHOT_ID, SYSTEM_WRITER_EPOCH,
+    SYSTEM_WRITER_NONCE,
 };
 use rocklake_core::values;
 use slatedb::{DbTransaction, IsolationLevel};
@@ -197,6 +198,9 @@ impl CatalogWriter {
 
     pub(super) async fn check_epoch(&self, tx: &DbTransaction) -> CatalogResult<()> {
         let epoch_key = keys::key_system(SYSTEM_WRITER_EPOCH);
+        let nonce_key = keys::key_system(SYSTEM_WRITER_NONCE);
+
+        // Verify epoch value.
         match tx
             .get(&epoch_key)
             .await
@@ -212,6 +216,27 @@ impl CatalogWriter {
                 return Err(CatalogError::WriterEpochMismatch);
             }
         }
+
+        // v0.28.0: Also verify the nonce so two writers that raced to the same
+        // epoch counter value (theoretically impossible with the CAS loop, but
+        // belt-and-suspenders) are still distinguished.
+        match tx
+            .get(&nonce_key)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            Some(data) => {
+                let stored_nonce =
+                    std::str::from_utf8(&data).map_err(|_| CatalogError::WriterEpochMismatch)?;
+                if stored_nonce != self.writer_nonce {
+                    return Err(CatalogError::WriterEpochMismatch);
+                }
+            }
+            None => {
+                return Err(CatalogError::WriterEpochMismatch);
+            }
+        }
+
         Ok(())
     }
 }

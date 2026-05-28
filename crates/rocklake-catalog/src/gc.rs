@@ -9,7 +9,7 @@ use rocklake_core::keys;
 use rocklake_core::rows::SnapshotRow;
 use rocklake_core::tags::*;
 use rocklake_core::values;
-use slatedb::{Db, IsolationLevel};
+use slatedb::{Db, DbTransaction, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 
@@ -90,9 +90,9 @@ pub async fn gc_plan(db: &Db, retention_days: u64) -> CatalogResult<GcPlan> {
 
 /// Apply a GC plan: advance the retain-from key transactionally.
 ///
-/// v0.19: Wraps the retain-from read, pin scan, lease scan, and retain-from write
-/// in a single `SerializableSnapshot` transaction to prevent a lease acquired
-/// between the scan and the write from being unprotected.
+/// v0.28.0: Pin scan, lease scan, and retain-from write all run inside the same
+/// `SerializableSnapshot` transaction so a lease acquired concurrently between
+/// the scan and the write is correctly accounted for.
 #[tracing::instrument(skip(db), fields(new_retain_from))]
 pub async fn gc_apply(db: &Db, new_retain_from: u64) -> CatalogResult<GcApplyResult> {
     let retain_from_key = keys::key_system(SYSTEM_RETAIN_FROM);
@@ -121,8 +121,8 @@ pub async fn gc_apply(db: &Db, new_retain_from: u64) -> CatalogResult<GcApplyRes
             });
         }
 
-        // Check pinned snapshots inside the transaction.
-        let pinned = read_pinned_snapshots(db).await?;
+        // v0.28.0: Check pinned snapshots inside the same transaction.
+        let pinned = read_pinned_snapshots_in_tx(&tx).await?;
         if let Some(&min_pin) = pinned.iter().min() {
             if new_retain_from >= min_pin {
                 return Err(CatalogError::PinnedSnapshotBlocks {
@@ -132,8 +132,8 @@ pub async fn gc_apply(db: &Db, new_retain_from: u64) -> CatalogResult<GcApplyRes
             }
         }
 
-        // Check snapshot leases inside the transaction.
-        if let Some(min_leased) = crate::lease::minimum_leased_snapshot(db).await? {
+        // v0.28.0: Check snapshot leases inside the same transaction.
+        if let Some(min_leased) = crate::lease::minimum_leased_snapshot_in_tx(&tx).await? {
             if new_retain_from > min_leased {
                 return Err(CatalogError::PinnedSnapshotBlocks {
                     pinned_snapshot: min_leased,
@@ -179,6 +179,28 @@ pub async fn read_pinned_snapshots(db: &Db) -> CatalogResult<Vec<u64>> {
     let prefix = pinned_snapshot_prefix();
     let mut pinned = Vec::new();
     let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let id = values::decode_counter(&kv.value)?;
+        pinned.push(id);
+    }
+    Ok(pinned)
+}
+
+/// v0.28.0: Read pinned snapshots inside an existing transaction.
+///
+/// Must be called through the same transaction used for the retain-from write so
+/// the pin scan is part of the same serializable read set.
+pub async fn read_pinned_snapshots_in_tx(tx: &DbTransaction) -> CatalogResult<Vec<u64>> {
+    let prefix = pinned_snapshot_prefix();
+    let mut pinned = Vec::new();
+    let mut iter = tx
+        .scan_prefix(&prefix)
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
     while let Some(kv) = iter
         .next()
         .await

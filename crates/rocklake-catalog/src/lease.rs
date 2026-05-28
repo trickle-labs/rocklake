@@ -7,7 +7,7 @@
 use prost::Message;
 use rocklake_core::keys;
 use rocklake_core::rows::SnapshotLeaseRow;
-use slatedb::Db;
+use slatedb::{Db, DbTransaction};
 
 use crate::error::{CatalogError, CatalogResult};
 
@@ -97,6 +97,46 @@ pub async fn list_active_leases(db: &Db) -> CatalogResult<Vec<SnapshotLeaseRow>>
 pub async fn minimum_leased_snapshot(db: &Db) -> CatalogResult<Option<u64>> {
     let leases = list_active_leases(db).await?;
     Ok(leases.iter().map(|l| l.min_snapshot_id).min())
+}
+
+/// v0.28.0: Get the minimum leased snapshot inside an existing transaction.
+///
+/// Scans lease rows through `tx` so the read is part of the same serializable
+/// read set used for the retain-from write in `gc_apply()`.
+pub async fn minimum_leased_snapshot_in_tx(tx: &DbTransaction) -> CatalogResult<Option<u64>> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| CatalogError::Internal("system clock before UNIX epoch".to_string()))?
+        .as_millis() as u64;
+
+    let prefix = keys::prefix_snapshot_leases();
+    let mut min_snapshot: Option<u64> = None;
+
+    let mut iter = tx
+        .scan_prefix(&prefix)
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row = SnapshotLeaseRow::decode(kv.value.as_ref()).map_err(|e| {
+            CatalogError::Internal(format!(
+                "corrupt snapshot lease row (key {:?}): {e}",
+                kv.key
+            ))
+        })?;
+        if row.expires_at_unix_ms > now_ms {
+            min_snapshot = Some(match min_snapshot {
+                None => row.min_snapshot_id,
+                Some(cur) => cur.min(row.min_snapshot_id),
+            });
+        }
+    }
+
+    Ok(min_snapshot)
 }
 
 /// Compute the end key for a prefix scan (increment last byte).

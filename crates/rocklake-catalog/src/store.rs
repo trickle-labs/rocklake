@@ -9,6 +9,7 @@ use rocklake_core::values;
 use slatedb::{Db, IsolationLevel};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::encryption::{AesGcmTransformer, EncryptionConfig};
 use crate::error::{CatalogError, CatalogResult};
@@ -32,6 +33,9 @@ pub struct CatalogStore {
     db: Db,
     counters: CounterCache,
     writer_epoch: u64,
+    /// v0.28.0: UUID nonce generated at open time, stored alongside the epoch so
+    /// two writers with the same counter value can be distinguished at commit.
+    writer_nonce: String,
     schema_version: u64,
     /// In-memory cache of the current `retain-from` floor.
     /// Updated eagerly on `open()` and after every `gc_apply()`.
@@ -87,49 +91,44 @@ impl CatalogStore {
         // length-prefixed encoding. This is a no-op on already-migrated catalogs.
         crate::key_migration::migrate_key_encoding_if_needed(&db).await?;
 
-        // v0.19: CAS-protected writer epoch acquisition.
-        // Read the current epoch, validate no other writer holds a non-expired lease,
-        // and atomically CAS a new epoch. Fail closed when epoch key is missing after
-        // initialization (which means corruption) or when another writer holds it.
-        let writer_epoch = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| CatalogError::Internal("system clock before UNIX epoch".to_string()))?
-            .as_millis() as u64;
-
+        // v0.28.0: CAS-protected monotonic writer epoch acquisition.
+        // The epoch is a persisted counter incremented by each successful open.
+        // A UUID nonce is stored alongside the epoch so two writers that race
+        // to the same counter value can still be distinguished at commit time.
         let epoch_key = keys::key_system(SYSTEM_WRITER_EPOCH);
+        let nonce_key = keys::key_system(SYSTEM_WRITER_NONCE);
+        let writer_nonce = Uuid::new_v4().to_string();
 
-        // Transactional CAS: read current epoch, verify we can claim it, write new epoch.
-        loop {
+        let writer_epoch: u64 = loop {
             let tx = db
                 .begin(IsolationLevel::SerializableSnapshot)
                 .await
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
 
-            let current_epoch = match tx
+            let current_epoch: u64 = match tx
                 .get(&epoch_key)
                 .await
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?
             {
-                Some(data) => Some(values::decode_counter(&data)?),
-                None => None, // First open — no epoch exists yet
+                Some(data) => values::decode_counter(&data)?,
+                None => 0, // First open — counter starts at zero
             };
 
-            // If an existing epoch is newer than ours, another writer is active.
-            if let Some(existing) = current_epoch {
-                if existing > writer_epoch {
-                    return Err(CatalogError::WriterEpochMismatch);
-                }
-            }
+            let new_epoch = current_epoch.checked_add(1).ok_or_else(|| {
+                CatalogError::Internal("writer epoch counter overflow".to_string())
+            })?;
 
-            // Write our new epoch atomically.
-            tx.put(&epoch_key, values::encode_counter(writer_epoch))
+            // Write the new epoch and nonce atomically.
+            tx.put(&epoch_key, values::encode_counter(new_epoch))
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            tx.put(&nonce_key, writer_nonce.as_bytes())
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
 
             match tx.commit().await {
-                Ok(_) => break,
-                Err(_) => continue, // CAS conflict — retry
+                Ok(_) => break new_epoch,
+                Err(_) => continue, // CAS conflict — another writer beat us; retry
             }
-        }
+        };
 
         // Load current schema version (from latest snapshot, or 0)
         let schema_version = Self::load_schema_version(&db, &counters).await;
@@ -142,6 +141,7 @@ impl CatalogStore {
             db,
             counters,
             writer_epoch,
+            writer_nonce,
             schema_version,
             retain_from_cache,
             object_store: object_store_ref,
@@ -245,6 +245,7 @@ impl CatalogStore {
                 self.counters.peek_file_id(),
             ),
             self.writer_epoch,
+            self.writer_nonce.clone(),
             self.schema_version,
         )
     }

@@ -83,7 +83,7 @@ binding on every roadmap release below.
 | **v0.27.12 — Containerized Multi-Backend Object Store Emulator Testing** | Implement containerized GCS/Azure emulators; verify catalog CRUD, snapshot commit, and epoch fencing; persist/expose data-file and delete-file spec fields (footer_size, partition_id, encryption_key) | Done |
 | **v0.27.13 — Real Multi-Client & Multi-Driver Interoperability Certification** | Build multi-driver compat suite; verify binary formats; validate client schema discovery; enforce visibility constraints (begin_snapshot/end_snapshot) and sort data files by file_order; archive planning docs as generic DuckLake CDC contract reference | Done |
 | **v0.27.14 — Security Hardening & Protocol-Level Testing** | Verify constant-time auth; SCRAM-SHA-256; TLS version gating; implement atomic metadata commits, consolidated stats deltas, and repeatable-read writer fencing (SQLSTATE 40001) | Done |
-| **v0.28.0 — Writer Fencing & Concurrency Correctness** | Replace wall-clock millisecond writer epochs with a transactional monotonic counter; fix GC lease/pin checks outside the transaction; inject deterministic clock in writer-fencing tests; make rebuild atomically transactional | Planning |
+| **v0.28.0 — Writer Fencing & Concurrency Correctness** | Replace wall-clock millisecond writer epochs with a transactional monotonic counter; fix GC lease/pin checks outside the transaction; inject deterministic clock in writer-fencing tests; make rebuild atomically transactional | Done |
 | **v0.29.0 — Recovery Correctness** | Fix import to write secondary data-file index; apply MVCC predicate in export; make rebuild atomic; add export/import round-trip tests that exercise `list_data_files()` and reader scans | Planning |
 | **v0.30.0 — PG-Wire & Protocol Hardening** | Make binary COPY parser fail-closed on truncation; sync CLI flags with documentation; fix migration docs; propagate object-store listing errors from `rebuild` command | Planning |
 | **v0.31.0 — DataFusion Hardening** | Propagate catalog errors instead of `unwrap_or_default()`; error on data files with no readable root; carry data root explicitly; make AsyncBridge fallible; expand type mapping | Planning |
@@ -3682,26 +3682,26 @@ Focused regression tests cover known SQL shapes. A corpus-based suite is needed 
 ### Tasks
 
 #### Monotonic Writer Epoch
-- [ ] Replace `SystemTime::now().as_millis()` in `store.rs` with a CAS loop against a persisted `SYSTEM_WRITER_EPOCH_COUNTER` key that atomically reads, increments, and writes the next epoch.
-- [ ] Reject `existing_epoch >= writer_epoch` (not just `existing > writer_epoch`) in the open-time CAS loop so that equal epochs from different writers are treated as a conflict.
-- [ ] Update `check_epoch()` in `writer/snapshot.rs` to compare both epoch value and a writer identity nonce (UUID stored alongside the epoch), so stale writers with an identical epoch value are rejected.
-- [ ] Remove the `tokio::time::sleep(Duration::from_millis(2))` calls from `concurrent_writer_fencing.rs` and `v028_atomicity_tests.rs` and replace them with the deterministic monotonic counter.
-- [ ] Add a no-sleep concurrent test that opens two writers in the same OS tick and asserts that exactly one is fenced.
+- [x] Replace `SystemTime::now().as_millis()` in `store.rs` with a CAS loop against a persisted `SYSTEM_WRITER_EPOCH_COUNTER` key that atomically reads, increments, and writes the next epoch.
+- [x] Reject `existing_epoch >= writer_epoch` (not just `existing > writer_epoch`) in the open-time CAS loop so that equal epochs from different writers are treated as a conflict.
+- [x] Update `check_epoch()` in `writer/snapshot.rs` to compare both epoch value and a writer identity nonce (UUID stored alongside the epoch), so stale writers with an identical epoch value are rejected.
+- [x] Remove the `tokio::time::sleep(Duration::from_millis(2))` calls from `concurrent_writer_fencing.rs` and `v028_atomicity_tests.rs` and replace them with the deterministic monotonic counter.
+- [x] Add a no-sleep concurrent test that opens two writers in the same OS tick and asserts that exactly one is fenced.
 
 #### Transactional GC Lease/Pin Enforcement
-- [ ] Add `read_pinned_snapshots_in_tx(tx: &DbTransaction)` and `minimum_leased_snapshot_in_tx(tx: &DbTransaction)` helpers in `gc.rs` / `lease.rs`.
-- [ ] Refactor `gc_apply()` to call these helpers through the same `SerializableSnapshot` transaction used for the retain-from write.
-- [ ] Add a concurrency test that acquires a snapshot lease concurrently with `gc_apply()` and asserts the GC transaction either conflicts or correctly accounts for the new lease.
+- [x] Add `read_pinned_snapshots_in_tx(tx: &DbTransaction)` and `minimum_leased_snapshot_in_tx(tx: &DbTransaction)` helpers in `gc.rs` / `lease.rs`.
+- [x] Refactor `gc_apply()` to call these helpers through the same `SerializableSnapshot` transaction used for the retain-from write.
+- [x] Add a concurrency test that acquires a snapshot lease concurrently with `gc_apply()` and asserts the GC transaction either conflicts or correctly accounts for the new lease.
 
 #### Atomic `rebuild_catalog()`
-- [ ] Wrap the sequential `db.put()` calls in `rebuild_catalog()` in a single `WriteBatch` or transaction; commit only when all rows are staged.
-- [ ] Add a test that simulates a mid-rebuild crash (by dropping the batch before commit) and asserts the catalog is either fully present or fully absent.
+- [x] Wrap the sequential `db.put()` calls in `rebuild_catalog()` in a single `WriteBatch` or transaction; commit only when all rows are staged.
+- [x] Add a test that simulates a mid-rebuild crash (by dropping the batch before commit) and asserts the catalog is either fully present or fully absent.
 
 ### Definition of Done
-- [ ] No `sleep`-based ordering in writer-fencing tests; collision test passes deterministically.
-- [ ] Two concurrent writers opening in the same millisecond: exactly one succeeds, the other returns a fencing error.
-- [ ] `gc_apply()` pin/lease scan runs inside the same transaction as retain-from write; concurrency test green.
-- [ ] `rebuild_catalog()` is atomic; partial-rebuild test passes.
+- [x] No `sleep`-based ordering in writer-fencing tests; collision test passes deterministically.
+- [x] Two concurrent writers opening in the same millisecond: exactly one succeeds, the other returns a fencing error.
+- [x] `gc_apply()` pin/lease scan runs inside the same transaction as retain-from write; concurrency test green.
+- [x] `rebuild_catalog()` is atomic; partial-rebuild test passes.
 
 ---
 

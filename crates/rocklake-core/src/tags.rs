@@ -138,6 +138,9 @@ pub const COUNTER_NEXT_ROWID_PREFIX: u8 = 0x11;
 // ─── System Key Suffixes ───────────────────────────────────────────────────
 
 pub const SYSTEM_WRITER_EPOCH: &[u8] = b"writer-epoch";
+/// v0.28.0: UUID nonce stored alongside the writer epoch so two writers that
+/// race to the same epoch counter value can still be distinguished at commit.
+pub const SYSTEM_WRITER_NONCE: &[u8] = b"writer-nonce";
 pub const SYSTEM_ENDPOINT: &[u8] = b"endpoint";
 pub const SYSTEM_RETAIN_FROM: &[u8] = b"retain-from";
 pub const SYSTEM_CATALOG_FORMAT_VERSION: &[u8] = b"catalog-format-version";

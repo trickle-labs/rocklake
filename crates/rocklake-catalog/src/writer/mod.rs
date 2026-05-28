@@ -52,6 +52,8 @@ pub struct CatalogWriter {
     pub(crate) db: Db,
     pub(crate) counters: CounterCache,
     writer_epoch: u64,
+    /// v0.28.0: UUID nonce used alongside the epoch to fence stale writers.
+    writer_nonce: String,
     schema_changed: bool,
     current_schema_version: u64,
     /// Staged (key, value) pairs committed atomically by `create_snapshot()`.
@@ -69,12 +71,14 @@ impl CatalogWriter {
         db: Db,
         counters: CounterCache,
         writer_epoch: u64,
+        writer_nonce: String,
         schema_version: u64,
     ) -> Self {
         Self {
             db,
             counters,
             writer_epoch,
+            writer_nonce,
             schema_changed: false,
             current_schema_version: schema_version,
             staged: Vec::new(),

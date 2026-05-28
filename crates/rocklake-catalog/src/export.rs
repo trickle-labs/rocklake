@@ -13,7 +13,7 @@ use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values;
 use serde::{Deserialize, Serialize};
-use slatedb::Db;
+use slatedb::{Db, WriteBatch};
 use std::io::{BufRead, Write};
 
 use crate::error::{CatalogError, CatalogResult};
@@ -527,14 +527,19 @@ pub fn pg_migrate<R: BufRead, W: Write>(reader: R, writer: &mut W) -> CatalogRes
 /// Rebuild a catalog from Parquet files in the data path.
 /// Synthesizes a minimal catalog with one snapshot, one schema, one table,
 /// and data files for every path supplied.
+///
+/// v0.28.0: All rows are staged in a `WriteBatch` and committed atomically so a
+/// mid-rebuild crash leaves the catalog either fully present or fully absent.
 pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u64> {
     use crate::init;
     use crate::verify;
 
-    // Initialize counters
+    // Initialize counters (idempotent; writes to SlateDB outside the batch
+    // since the catalog must be initialized before the batch can be composed).
     let _counters = init::initialize_catalog(db).await?;
 
     let mut file_count = 0u64;
+    let mut batch = WriteBatch::new();
 
     // Create a default schema (schema_id = 1)
     let schema_id = 1u64;
@@ -547,8 +552,10 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
         path: None,
         path_is_relative: None,
     };
-    let key = keys::key_schema(schema_id);
-    db.put(&key, &values::encode_value(&schema_row)).await?;
+    batch.put(
+        &keys::key_schema(schema_id),
+        &values::encode_value(&schema_row),
+    );
 
     // Create the default table (table_id = 2, because catalog IDs 1..=2 are used)
     let table_id = 2u64;
@@ -562,8 +569,10 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
         table_uuid: None,
         path_is_relative: None,
     };
-    let key = keys::key_table(schema_id, table_id, 1);
-    db.put(&key, &values::encode_value(&table_row)).await?;
+    batch.put(
+        &keys::key_table(schema_id, table_id, 1),
+        &values::encode_value(&table_row),
+    );
 
     // Register data files under the default table
     let mut file_id = 1u64;
@@ -586,11 +595,13 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
             mapping_id: None,
             partial_max: None,
         };
-        let key = keys::key_data_file(table_id, file_id);
-        db.put(&key, &values::encode_value(&row)).await?;
+        let encoded = values::encode_value(&row);
+        batch.put(&keys::key_data_file(table_id, file_id), &encoded);
         // Write secondary index for O(log N) snapshot-bounded scans.
-        let sec_key = keys::key_data_file_by_snapshot(table_id, 1 /* snapshot_id */, file_id);
-        db.put(&sec_key, &values::encode_value(&row)).await?;
+        batch.put(
+            &keys::key_data_file_by_snapshot(table_id, 1, file_id),
+            &encoded,
+        );
         file_id += 1;
         file_count += 1;
     }
@@ -605,19 +616,25 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
         next_catalog_id: None,
         next_file_id: None,
     };
-    let key = keys::key_snapshot(1);
-    db.put(&key, &values::encode_value(&snapshot_row)).await?;
+    batch.put(&keys::key_snapshot(1), &values::encode_value(&snapshot_row));
 
     // Update counters: next_snapshot = 2, next_catalog_id = table_id + 1 = 3,
     // next_file_id = file_id (already incremented past the last used id)
-    let counter_key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
-    db.put(&counter_key, &values::encode_counter(2)).await?;
-    let counter_key = keys::key_counter(COUNTER_NEXT_CATALOG_ID);
-    db.put(&counter_key, &values::encode_counter(table_id + 1))
-        .await?;
-    let counter_key = keys::key_counter(COUNTER_NEXT_FILE_ID);
-    db.put(&counter_key, &values::encode_counter(file_id))
-        .await?;
+    batch.put(
+        &keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID),
+        &values::encode_counter(2),
+    );
+    batch.put(
+        &keys::key_counter(COUNTER_NEXT_CATALOG_ID),
+        &values::encode_counter(table_id + 1),
+    );
+    batch.put(
+        &keys::key_counter(COUNTER_NEXT_FILE_ID),
+        &values::encode_counter(file_id),
+    );
+
+    // Commit all rows atomically.
+    db.write(batch).await?;
 
     // Verify the rebuilt catalog is coherent
     verify::verify_catalog(db).await?;

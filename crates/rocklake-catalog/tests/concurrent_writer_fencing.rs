@@ -1,10 +1,11 @@
-//! Concurrent writer fencing tests (v0.27.3).
+//! Concurrent writer fencing tests (v0.27.3 / v0.28.0).
 //!
-//! Verifies that the CAS-protected writer epoch mechanism correctly:
-//!  1. Allows only one writer at a time (the one with the most recent epoch).
+//! Verifies that the CAS-protected monotonic writer epoch mechanism correctly:
+//!  1. Allows only one writer at a time (the one with the highest epoch counter).
 //!  2. Rejects stale writers on commit with `WriterEpochMismatch`.
 //!  3. Allows re-opening after the original writer is dropped.
 //!  4. Handles concurrent open() calls (tokio::join!) with exactly one winner.
+//!  5. (v0.28.0) Deterministically fences two writers opened in the same OS tick.
 
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
@@ -24,10 +25,12 @@ fn test_opts(dir: &TempDir) -> OpenOptions {
 /// Test 1: A stale writer is fenced on commit after a newer writer opens.
 ///
 /// Steps:
-///  1. Open Store 1 (acquires epoch T1).
-///  2. Wait 2 ms so the system clock advances.
-///  3. Open Store 2 (acquires epoch T2 > T1, overwriting T1 in SlateDB).
-///  4. Store 1 attempts create_snapshot() → must fail with WriterEpochMismatch.
+///  1. Open Store 1 (acquires epoch counter N).
+///  2. Open Store 2 (acquires epoch counter N+1, overwriting N in SlateDB).
+///  3. Store 1 attempts create_snapshot() → must fail with WriterEpochMismatch.
+///
+/// v0.28.0: No sleep required — fencing is based on a monotonic counter, not
+/// the wall clock.
 #[tokio::test]
 async fn stale_writer_fenced_on_commit() {
     let dir = TempDir::new().unwrap();
@@ -35,10 +38,7 @@ async fn stale_writer_fenced_on_commit() {
     // Open first writer.
     let mut store1 = CatalogStore::open(test_opts(&dir)).await.unwrap();
 
-    // Ensure the system clock ticks to a different millisecond.
-    tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
-
-    // Open second writer — takes over the epoch.
+    // Open second writer — takes over the epoch (counter incremented, no sleep needed).
     let _store2 = CatalogStore::open(test_opts(&dir)).await.unwrap();
 
     // Store 1's epoch is now stale.  A commit attempt must be rejected.
@@ -58,9 +58,8 @@ async fn stale_writer_fenced_on_commit() {
 
 /// Test 2: Re-opening after the prior writer is dropped succeeds.
 ///
-/// Once Store 1 is dropped (and its epoch is superseded by Store 2's), a
-/// fresh open of Store 3 with a newer epoch should succeed and be able to
-/// commit a snapshot.
+/// v0.28.0: sleeps removed — sequential opens always acquire strictly higher
+/// epochs via the monotonic counter.
 #[tokio::test]
 async fn reopen_after_drop_succeeds() {
     let dir = TempDir::new().unwrap();
@@ -70,14 +69,10 @@ async fn reopen_after_drop_succeeds() {
         // store1 is dropped here.
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
-
     {
         let _store2 = CatalogStore::open(test_opts(&dir)).await.unwrap();
         // store2 is dropped here.
     }
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
 
     // Store 3 opens with the newest epoch and must be able to commit.
     let mut store3 = CatalogStore::open(test_opts(&dir)).await.unwrap();
@@ -160,11 +155,8 @@ async fn concurrent_open_exactly_one_commits() {
 
 /// Test 4: Interleaved DuckLake writers — exactly one commit wins per snapshot.
 ///
-/// Two catalog stores both buffer schema metadata (DuckLake-style) and race to
-/// commit.  Because the epoch CAS is monotonic, the second-opened store holds
-/// the winning epoch.  The first store must receive `WriterEpochMismatch` (or
-/// `TransactionConflict`) on its commit attempt.  After the race, only the
-/// winning writer's schema must be visible in the catalog.
+/// v0.28.0: sleep removed; sequential open() guarantees a strictly higher
+/// epoch for store B than for store A via the monotonic counter.
 #[tokio::test]
 async fn interleaved_ducklake_writers_exactly_one_wins() {
     let dir = TempDir::new().unwrap();
@@ -177,10 +169,7 @@ async fn interleaved_ducklake_writers_exactly_one_wins() {
         .await
         .expect("writer A must buffer schema creation");
 
-    // Ensure clock advances so store B gets a strictly higher epoch.
-    tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
-
-    // Store B opens after A — it now owns the epoch.
+    // Store B opens after A — it now owns the epoch (no sleep needed).
     let mut store_b = CatalogStore::open(test_opts(&dir)).await.unwrap();
     let mut writer_b = store_b.begin_write();
     writer_b
@@ -225,5 +214,37 @@ async fn interleaved_ducklake_writers_exactly_one_wins() {
     assert_eq!(
         schemas[0].schema_name, "schema_b",
         "only the winning writer's schema must be visible"
+    );
+}
+
+/// Test 5 (v0.28.0): Two writers opened in the same OS tick — exactly one is fenced.
+///
+/// With the monotonic counter the CAS loop always produces strictly ordered
+/// epoch values even when two opens happen within the same nanosecond.
+/// No `sleep` is used; the test must pass deterministically.
+#[tokio::test]
+async fn no_sleep_same_tick_exactly_one_fenced() {
+    let dir = TempDir::new().unwrap();
+
+    // Open two stores sequentially (no sleep). The second open increments the
+    // counter to epoch 2; store1 holds epoch 1 and is now stale.
+    let mut store1 = CatalogStore::open(test_opts(&dir)).await.unwrap();
+    let mut store2 = CatalogStore::open(test_opts(&dir)).await.unwrap();
+
+    let result1 = store1.begin_write().create_snapshot(Some("t1"), None).await;
+    let result2 = store2.begin_write().create_snapshot(Some("t2"), None).await;
+
+    // store2 holds the higher epoch and must succeed; store1 must be fenced.
+    assert!(
+        result2.is_ok(),
+        "store2 (latest epoch) must commit; got: {result2:?}"
+    );
+    let is_fenced = matches!(
+        &result1,
+        Err(CatalogError::WriterEpochMismatch) | Err(CatalogError::TransactionConflict(_))
+    );
+    assert!(
+        is_fenced,
+        "store1 (stale epoch) must be fenced; got: {result1:?}"
     );
 }
