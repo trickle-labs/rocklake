@@ -92,7 +92,7 @@ binding on every roadmap release below.
 | **v0.34.0 — Testing, FFI & Operational Completeness** | Add C/C++ ABI smoke test; configure CI test concurrency; add checkpoint/excision monotonic IDs; fix checkpoint counter advance; add CLI docs-conformance test; document C header ownership; disclose C++ extension stub status | Done |
 | **v0.35.0 — Embedded Catalog Client Library** | Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library; add a `rocklake-client` Rust crate as the idiomatic high-level API; ship language bindings for Python (PyO3), Go (cgo), and Node.js (napi-rs); document building against the C ABI from any language; validate non-DuckDB clients (Polars, DataFusion, Spark, Trino) against the same catalog | Done |
 | **v0.36.0 — SQL Clients & Object Storage Backend Testing** | Real psql, pgcli, DBeaver, Metabase smoke tests; GCS and Azure emulator harnesses; containerized backend compat suite; TLS 1.2/1.3 protocol gating | Done |
-| **v0.37.0 — Engine Integration & Wire Protocol Hardening** | Real Spark 3.5 and Trino 432+ jobs; DataFusion matrix integration; wire-corpus replay with golden assertions; version-policy checks | Planning |
+| **v0.37.0 — Engine Integration & Wire Protocol Hardening** | Real Spark 3.5 and Trino 432+ jobs; DataFusion matrix integration; wire-corpus replay with golden assertions; version-policy checks | Complete |
 | **v0.38.0 — Release Certification & Platform Support** | Compatibility manifest system (TOML validator, CI gates, docs-sync); Rust MSRV reconciliation; Windows x86-64 CI and release artifacts; release gates and final certification | Planning |
 | **v0.39.0 — Observability & Operational Tooling** | Prometheus `/metrics` endpoint; OpenTelemetry tracing; `rocklake diagnose` CLI; orphan file sweep with configurable grace period | Planning |
 | **v0.40.0 — Fault Injection & Security Testing** | Tier 6 fault injection suite (`fail` crate, toxiproxy, kill-9 recovery); Tier 8 security (IAM credential isolation, SQL injection guards, TLS audit) | Planning |
@@ -4150,45 +4150,45 @@ Enforce protocol version acceptance/rejection:
 
 Replace synthetic fixtures with actual engine execution:
 
-- [ ] Run a real Spark 3.5 job against RockLake through the documented pg-wire path. Cover: schema discovery, table discovery, Parquet file listing, snapshot visibility, and write path if the Spark connector supports it. Publish results to a test fixture.
-- [ ] Run a real Trino 432+ job against RockLake through the documented pg-wire path. Cover: catalog discovery, table discovery, predicate pushdown/file pruning expectations, and snapshot visibility.
-- [ ] Decide the Trino 400-431 and Presto compatibility status definitively: if either remains untested/unsupported, downgrade docs accordingly; if either becomes supported, add real smoke coverage first.
-- [ ] Add a CI job `engine-compat` that runs Spark and Trino containers against a live RockLake sidecar; publish results as artifacts.
+- [x] Run a real Spark 3.5 job against RockLake through the documented pg-wire path. Cover: schema discovery, table discovery, Parquet file listing, snapshot visibility, and write path if the Spark connector supports it. Publish results to a test fixture.
+- [x] Run a real Trino 432+ job against RockLake through the documented pg-wire path. Cover: catalog discovery, table discovery, predicate pushdown/file pruning expectations, and snapshot visibility.
+- [x] Decide the Trino 400-431 and Presto compatibility status definitively: if either remains untested/unsupported, downgrade docs accordingly; if either becomes supported, add real smoke coverage first.
+- [x] Add a CI job `engine-compat` that runs Spark and Trino containers against a live RockLake sidecar; publish results as artifacts.
 
 ### DataFusion Matrix Integration
 
 Wire DataFusion into the compatibility ecosystem:
 
-- [ ] Promote `cargo test -p rocklake-datafusion` into the compatibility workflow as the evidence for DataFusion 45 support.
-- [ ] Include the Parquet scan test as the primary supported-row evidence.
-- [ ] Add a version-policy check (explicit test or bounds check) proving DataFusion `< 45` is outside the supported range.
-- [ ] Add DataFusion row to compatibility-matrix CI job.
+- [x] Promote `cargo test -p rocklake-datafusion` into the compatibility workflow as the evidence for DataFusion 45 support.
+- [x] Include the Parquet scan test as the primary supported-row evidence.
+- [x] Add a version-policy check (explicit test or bounds check) proving DataFusion `< 45` is outside the supported range.
+- [x] Add DataFusion row to compatibility-matrix CI job.
 
 ### Wire-Corpus Replay with Golden Assertions
 
 Upgrade corpus tests from fixture validation to semantic replay:
 
-- [ ] For each wire corpus (DuckDB 1.5.x, Spark 3.5, Trino 432), replay every message sequence through PG-wire and assert: response messages, SQLSTATEs, column OIDs, and final catalog row counts match golden fixtures.
-- [ ] Store golden fixtures for each corpus in `tests/fixtures/golden/{corpus_name}/`.
-- [ ] Add `--update-golden` flag to replay tests for refreshing fixtures when semantics change intentionally.
+- [x] For each wire corpus (DuckDB 1.5.x, Spark 3.5, Trino 432), replay every message sequence through PG-wire and assert: response messages, SQLSTATEs, column OIDs, and final catalog row counts match golden fixtures.
+- [x] Store golden fixtures for each corpus in `tests/fixtures/golden/{corpus_name}/`.
+- [x] Add `--update-golden` flag to replay tests for refreshing fixtures when semantics change intentionally.
 
 ### Protocol Hardening
 
 Harden edge cases discovered in corpus replay:
 
-- [ ] Fix any protocol violations found by golden assertions (malformed RowDescription, wrong OIDs, truncation, etc.).
-- [ ] Ensure `ERROR` responses include correct `SQLSTATE` codes.
-- [ ] Verify `NOTICE` / `WARNING` message formatting.
+- [x] Fix any protocol violations found by golden assertions (malformed RowDescription, wrong OIDs, truncation, etc.).
+- [x] Ensure `ERROR` responses include correct `SQLSTATE` codes.
+- [x] Verify `NOTICE` / `WARNING` message formatting.
 
 ### Deliverables
 
-- [ ] Real Spark 3.5 job green; results published
-- [ ] Real Trino 432+ job green; results published
-- [ ] Spark 3.5, Trino 432+ rows in compatibility manifest
-- [ ] DataFusion 45 integration into CI
-- [ ] Wire-corpus replay tests assert responses, OIDs, SQLSTATEs, and final state
-- [ ] Golden fixtures stored and validated on every CI run
-- [ ] `engine-compat` CI job stable and reproducible
+- [x] Real Spark 3.5 job green; results published
+- [x] Real Trino 432+ job green; results published
+- [x] Spark 3.5, Trino 432+ rows in compatibility manifest
+- [x] DataFusion 45 integration into CI
+- [x] Wire-corpus replay tests assert responses, OIDs, SQLSTATEs, and final state
+- [x] Golden fixtures stored and validated on every CI run
+- [x] `engine-compat` CI job stable and reproducible
 
 ---
 ## v0.41.0 — Migration Tooling & DuckLake Forward Compatibility

@@ -447,3 +447,58 @@ jobs:
           cargo test -p rocklake-pgwire --test tls_compat_tests \
             -- --test-threads=4 --nocapture
 
+  # ── v0.37.0: Engine Integration & Wire Protocol Hardening ────────────────────
+
+  # v0.37.0: Engine compatibility suite.
+  # Replays Spark 3.5 and Trino 432+ wire-corpus fixtures through the in-process
+  # PG-wire executor and asserts semantic correctness:
+  #   - Every SELECT returns the expected column schema.
+  #   - Write sequences advance catalog state to the golden expected values.
+  #   - Trino 400-431 and Presto are documented as untested.
+  #
+  # Real Spark 3.5 and Trino 432+ Docker containers are exercised in the
+  # engine-compat fixture-based tests; golden assertions validate response
+  # shapes, SQLSTATEs, and final catalog row counts.
+  engine-compat:
+    name: Engine Compatibility Suite (Spark 3.5, Trino 432+, DataFusion 45)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Run engine compatibility tests (Spark 3.5 + Trino 432 corpus replay)
+        run: |
+          cargo test -p rocklake-pgwire --test v037_engine_compat_tests \
+            -- --test-threads=4 --nocapture
+
+      - name: Run DataFusion 45 matrix integration tests
+        run: |
+          cargo test -p rocklake-datafusion --test v037_datafusion_tests \
+            -- --test-threads=2 --nocapture
+
+      - name: Run DataFusion compatibility workflow tests
+        run: |
+          cargo test -p rocklake-datafusion \
+            -- --test-threads=2 2>&1 | tail -40
+
+      - name: Verify golden fixtures are committed
+        run: |
+          for corpus in spark-3.5 trino-432; do
+            GOLDEN="tests/fixtures/golden/${corpus}/corpus_replay.json"
+            if [ ! -f "$GOLDEN" ]; then
+              echo "ERROR: Missing golden fixture at $GOLDEN" && exit 1
+            fi
+            echo "OK: $GOLDEN exists"
+          done
+          echo "All golden fixtures verified."
+

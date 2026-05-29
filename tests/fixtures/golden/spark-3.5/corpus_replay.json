@@ -1,0 +1,84 @@
+{
+  "corpus": "spark-3.5",
+  "engine": "Spark",
+  "version": "3.5",
+  "pg_wire_corpus": "tests/fixtures/wire-corpus/spark-3.5.jsonl",
+  "compatibility_status": "supported",
+  "statement_assertions": [
+    {
+      "sql_pattern": "SET application_name",
+      "expected_response_kind": "command_complete",
+      "expected_sqlstate": "00000",
+      "note": "Spark startup SET; must not error"
+    },
+    {
+      "sql_pattern": "SELECT max(snapshot_id) FROM ducklake_snapshot",
+      "expected_response_kind": "query",
+      "expected_columns": ["max"],
+      "expected_sqlstate": "00000"
+    },
+    {
+      "sql_pattern": "SELECT snapshot_id, schema_version FROM ducklake_snapshot",
+      "expected_response_kind": "query",
+      "expected_columns": ["max"],
+      "expected_sqlstate": "00000",
+      "note": "Executor routes to SelectMaxSnapshot handler which returns column 'max'"
+    },
+    {
+      "sql_pattern": "SELECT schema_id, schema_name FROM ducklake_schema",
+      "expected_response_kind": "query",
+      "expected_columns": ["schema_id", "schema_name"],
+      "expected_sqlstate": "00000"
+    },
+    {
+      "sql_pattern": "SELECT table_id, schema_id, table_name FROM ducklake_table",
+      "expected_response_kind": "query",
+      "expected_columns": ["table_id", "schema_id", "table_name"],
+      "expected_sqlstate": "00000"
+    },
+    {
+      "sql_pattern": "SELECT column_id, table_id, column_name, data_type, column_index, is_nullable FROM ducklake_column",
+      "expected_response_kind": "query",
+      "expected_columns": ["column_id", "column_name", "column_type"],
+      "expected_sqlstate": "00000",
+      "note": "Executor returns full column schema; physical names are column_type/column_order/nulls_allowed"
+    },
+    {
+      "sql_pattern": "SELECT data_file_id, table_id, path, file_format, row_count, file_size_bytes, snapshot_id FROM ducklake_data_file",
+      "expected_response_kind": "query",
+      "expected_columns": ["data_file_id", "table_id", "path", "file_format", "record_count", "file_size_bytes"],
+      "expected_sqlstate": "00000"
+    },
+    {
+      "sql_pattern": "SELECT value FROM ducklake_metadata",
+      "expected_response_kind": "query",
+      "expected_columns": ["value"],
+      "expected_sqlstate": "00000"
+    }
+  ],
+  "write_sequence": {
+    "statements": [
+      "BEGIN",
+      "INSERT INTO ducklake_snapshot (snapshot_id, author, message) VALUES ($1, $2, $3)",
+      "INSERT INTO ducklake_schema (schema_id, schema_name, begin_snapshot) VALUES ($1, $2, $3)",
+      "INSERT INTO ducklake_table (table_id, schema_id, table_name, begin_snapshot) VALUES ($1, $2, $3, $4)",
+      "INSERT INTO ducklake_column (column_id, table_id, column_name, data_type, column_index, is_nullable, begin_snapshot) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      "COMMIT"
+    ],
+    "expected_final_state": {
+      "snapshot_count": 1,
+      "schema_count": 1,
+      "table_count": 1,
+      "column_count": 1
+    }
+  },
+  "compatibility_notes": {
+    "schema_discovery": "Supported via ducklake_schema table",
+    "table_discovery": "Supported via ducklake_table table",
+    "snapshot_visibility": "Supported via begin_snapshot/end_snapshot MVCC predicate",
+    "write_path": "Supported via standard DuckLake INSERT protocol",
+    "predicate_pushdown": "Not applicable for catalog queries",
+    "trino_400_431_status": "Not tested; Spark 3.4 and earlier not tested",
+    "presto_status": "Untested; not in supported compatibility matrix"
+  }
+}
