@@ -1077,5 +1077,5 @@ fn engine_compat_test_count_sentinel() {
     //
     // This test asserts that the file compiles and links — if it didn't,
     // none of the above tests would run.
-    assert!(true, "engine-compat suite sentinel");
+    // (No assertion needed; the function existing and compiling is the sentinel.)
 }
