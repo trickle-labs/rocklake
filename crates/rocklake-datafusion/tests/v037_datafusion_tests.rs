@@ -167,7 +167,7 @@ async fn datafusion_45_parquet_scan_primary_evidence() {
     w.add_column(tid, "val", "BIGINT", 1, false, None)
         .await
         .unwrap();
-    let parquet_rel = format!("data/events.parquet");
+    let parquet_rel = "data/events.parquet".to_string();
     w.register_data_file(
         tid,
         &parquet_rel,
