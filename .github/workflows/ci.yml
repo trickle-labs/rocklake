@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -54,11 +54,23 @@ jobs:
           echo "/opt/homebrew/opt/postgresql@16/bin" >> "$GITHUB_PATH"
           pip3 install --quiet pgcli || pip install --quiet pgcli || true
 
-      - name: Test
+      - name: Test (Linux / macOS)
+        if: runner.os != 'Windows'
         run: |
           # rocklake-catalog and rocklake-ffi tests spawn multiple Tokio runtimes;
           # run them single-threaded to avoid SIGKILL from memory pressure.
           cargo test --workspace --exclude rocklake-ffi --exclude rocklake-catalog
+          cargo test -p rocklake-catalog -- --test-threads=1
+          cargo test -p rocklake-ffi -- --test-threads=1
+          cargo test -p rocklake-client -- --test-threads=1
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Run workspace tests single-threaded on Windows to avoid memory pressure
+          # and port-binding races in the PG-wire tests.
+          cargo test --workspace --exclude rocklake-ffi --exclude rocklake-catalog -- --test-threads=1
           cargo test -p rocklake-catalog -- --test-threads=1
           cargo test -p rocklake-ffi -- --test-threads=1
           cargo test -p rocklake-client -- --test-threads=1
@@ -140,10 +152,14 @@ jobs:
       - name: Run cargo deny (advisories + bans + sources + licenses)
         run: cargo deny check advisories bans sources licenses
 
-  # v0.21: MSRV 1.93 compliance check — ensures the workspace compiles on the declared minimum toolchain.
+  # v0.21/v0.38: MSRV 1.93 compliance check — ensures the workspace compiles on
+  # the declared minimum toolchain on both Linux and macOS.
   msrv:
-    name: MSRV Check (1.93)
-    runs-on: ubuntu-latest
+    name: MSRV Check (1.93) (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.93
@@ -446,6 +462,92 @@ jobs:
         run: |
           cargo test -p rocklake-pgwire --test tls_compat_tests \
             -- --test-threads=4 --nocapture
+
+  # ── v0.38.0: Release Certification & Platform Support ───────────────────────
+
+  # v0.38.0: Compatibility manifest validator — verifies that docs/compatibility.md
+  # is consistent with tests/fixtures/compatibility-matrix.toml.  Every 'supported'
+  # entry in the manifest must have a matching row in the docs; every supported
+  # entry must reference a CI job; referenced fixture files must exist on disk.
+  compatibility-manifest:
+    name: Compatibility Manifest Validator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tomli (Python < 3.11 fallback)
+        run: pip install tomli
+
+      - name: Validate compatibility manifest
+        run: python scripts/validate_compatibility_manifest.py
+
+  # v0.38.0: Windows x86-64 unit + integration tests (separate job from the main
+  # check matrix so Windows failures are clearly identified in the CI summary).
+  check-windows:
+    name: Windows x86-64 Unit Tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (Windows)
+        shell: pwsh
+        run: cargo clippy --all-targets --all-features
+
+      - name: Unit tests (Windows, single-threaded)
+        shell: pwsh
+        run: |
+          cargo test --workspace --exclude rocklake-ffi --exclude rocklake-catalog -- --test-threads=1
+          cargo test -p rocklake-catalog -- --test-threads=1
+          cargo test -p rocklake-ffi -- --test-threads=1
+          cargo test -p rocklake-client -- --test-threads=1
+
+  # v0.38.0: Release-blocking gates — validates that all required pre-release
+  # conditions are met: manifest validator green, mkdocs build strict, golden
+  # fixtures committed.
+  release-gates:
+    name: Release-Blocking Gates
+    runs-on: ubuntu-latest
+    needs:
+      - check
+      - compatibility-manifest
+      - engine-compat
+      - sql-clients
+      - backend-compat
+      - tls-compat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install mkdocs dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: mkdocs build --strict
+        run: mkdocs build --strict
+
+      - name: Verify compatibility manifest exists
+        run: |
+          test -f tests/fixtures/compatibility-matrix.toml || \
+            (echo "ERROR: compatibility-matrix.toml missing" && exit 1)
+          echo "OK: compatibility-matrix.toml present"
+
+      - name: Verify golden fixtures present
+        run: |
+          for corpus in spark-3.5 trino-432; do
+            GOLDEN="tests/fixtures/golden/${corpus}/corpus_replay.json"
+            if [ ! -f "$GOLDEN" ]; then
+              echo "ERROR: Missing golden fixture at $GOLDEN" && exit 1
+            fi
+            echo "OK: $GOLDEN"
+          done
 
   # ── v0.37.0: Engine Integration & Wire Protocol Hardening ────────────────────
 

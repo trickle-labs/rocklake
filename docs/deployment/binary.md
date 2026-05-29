@@ -29,18 +29,25 @@ Download the pre-built binary for your platform from the GitHub releases page:
 === "macOS (Apple Silicon)"
 
     ```bash
-    curl -L https://github.com/rocklake/rocklake/releases/latest/download/rocklake-darwin-aarch64 -o rocklake
+    curl -L https://github.com/rocklake/rocklake/releases/latest/download/rocklake-macos-arm64 -o rocklake
     chmod +x rocklake
     sudo mv rocklake /usr/local/bin/
     ```
 
-=== "macOS (Intel)"
+=== "Windows (x86-64)"
 
-    ```bash
-    curl -L https://github.com/rocklake/rocklake/releases/latest/download/rocklake-darwin-x86_64 -o rocklake
-    chmod +x rocklake
-    sudo mv rocklake /usr/local/bin/
+    ```powershell
+    Invoke-WebRequest -Uri "https://github.com/rocklake/rocklake/releases/latest/download/rocklake-windows-x86_64.exe" -OutFile rocklake.exe
+    # Verify checksum (recommended)
+    $expected = (Invoke-WebRequest "https://github.com/rocklake/rocklake/releases/latest/download/rocklake-windows-x86_64.exe.sha256").Content.Split()[0]
+    $actual   = (Get-FileHash rocklake.exe -Algorithm SHA256).Hash.ToLower()
+    if ($expected -ne $actual) { Write-Error "Checksum mismatch" }
+    # Move to a directory on your PATH
+    Move-Item rocklake.exe "$env:USERPROFILE\.local\bin\rocklake.exe"
     ```
+
+    !!! note "macOS Intel (x86-64)"
+        macOS Intel (x86-64) is not supported. All Apple hardware shipped since late 2020 uses Apple Silicon. Use the arm64 binary on any Mac.
 
 Verify the installation:
 

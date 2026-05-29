@@ -93,7 +93,7 @@ binding on every roadmap release below.
 | **v0.35.0 — Embedded Catalog Client Library** | Generalize `rocklake-ffi` from a DuckDB-specific C ABI into a universal embedded library; add a `rocklake-client` Rust crate as the idiomatic high-level API; ship language bindings for Python (PyO3), Go (cgo), and Node.js (napi-rs); document building against the C ABI from any language; validate non-DuckDB clients (Polars, DataFusion, Spark, Trino) against the same catalog | Done |
 | **v0.36.0 — SQL Clients & Object Storage Backend Testing** | Real psql, pgcli, DBeaver, Metabase smoke tests; GCS and Azure emulator harnesses; containerized backend compat suite; TLS 1.2/1.3 protocol gating | Done |
 | **v0.37.0 — Engine Integration & Wire Protocol Hardening** | Real Spark 3.5 and Trino 432+ jobs; DataFusion matrix integration; wire-corpus replay with golden assertions; version-policy checks | Complete |
-| **v0.38.0 — Release Certification & Platform Support** | Compatibility manifest system (TOML validator, CI gates, docs-sync); Rust MSRV reconciliation; Windows x86-64 CI and release artifacts; release gates and final certification | Planning |
+| **v0.38.0 — Release Certification & Platform Support** | Compatibility manifest system (TOML validator, CI gates, docs-sync); Rust MSRV reconciliation; Windows x86-64 CI and release artifacts; release gates and final certification | Complete |
 | **v0.39.0 — Observability & Operational Tooling** | Prometheus `/metrics` endpoint; OpenTelemetry tracing; `rocklake diagnose` CLI; orphan file sweep with configurable grace period | Planning |
 | **v0.40.0 — Fault Injection & Security Testing** | Tier 6 fault injection suite (`fail` crate, toxiproxy, kill-9 recovery); Tier 8 security (IAM credential isolation, SQL injection guards, TLS audit) | Planning |
 | **v0.41.0 — Migration Tooling & DuckLake Forward Compatibility** | `rocklake migrate-from-ducklake` (PostgreSQL & SQLite sources); MVCC-correct export/import; DuckLake v1.1 forward-compatibility gate | Planning |
@@ -4409,57 +4409,57 @@ The `fail` crate is already used; this milestone wires it comprehensively into p
 
 Formalize the source of truth for all compatibility claims:
 
-- [ ] Add `tests/fixtures/compatibility-matrix.toml` as the definitive manifest. Each entry includes: component, version/range, platform, claimed status, CI job, test command, fixture path, last-reviewed date.
-- [ ] Add a CI gate that validates `docs/compatibility.md` against the manifest: supported rows must have evidence; unsupported/untested rows must be explicitly documented.
-- [ ] Define statuses: `supported` (automated release-blocking), `expected` (non-blocking + risk doc), `untested` (no promise), `unsupported` (explicit rejection or version-policy check).
-- [ ] Require all compatibility jobs to publish compact JSON result artifacts consumed by the manifest validator; docs cannot drift from the last green run.
-- [ ] Enforce docs-sync: PR edits to `docs/compatibility.md` must update the manifest in the same commit.
+- [x] Add `tests/fixtures/compatibility-matrix.toml` as the definitive manifest. Each entry includes: component, version/range, platform, claimed status, CI job, test command, fixture path, last-reviewed date.
+- [x] Add a CI gate that validates `docs/compatibility.md` against the manifest: supported rows must have evidence; unsupported/untested rows must be explicitly documented.
+- [x] Define statuses: `supported` (automated release-blocking), `expected` (non-blocking + risk doc), `untested` (no promise), `unsupported` (explicit rejection or version-policy check).
+- [x] Require all compatibility jobs to publish compact JSON result artifacts consumed by the manifest validator; docs cannot drift from the last green run.
+- [x] Enforce docs-sync: PR edits to `docs/compatibility.md` must update the manifest in the same commit.
 
 ### Rust MSRV Reconciliation
 
 Align documentation and workspace:
 
-- [ ] Audit Cargo.toml: workspace declares MSRV 1.93.
-- [ ] Audit docs: `docs/compatibility.md` still claims 1.80.
-- [ ] Update `docs/compatibility.md` to MSRV 1.93 and pin a GitHub Actions job that verifies builds with Rust 1.93.
-- [ ] Add MSRV check to CI (stable and MSRV 1.93 on Linux and macOS).
+- [x] Audit Cargo.toml: workspace declares MSRV 1.93.
+- [x] Audit docs: `docs/compatibility.md` still claims 1.80.
+- [x] Update `docs/compatibility.md` to MSRV 1.93 and pin a GitHub Actions job that verifies builds with Rust 1.93.
+- [x] Add MSRV check to CI (stable and MSRV 1.93 on Linux and macOS).
 
 ### Windows x86-64 Platform Support
 
 Add Windows to the supported platform matrix:
 
-- [ ] Add Windows x86-64 to CI: compile, run unit tests, and run integration tests on `windows-latest`.
-- [ ] Build Windows x86-64 release artifact (`rocklake.exe` and `.dll` for FFI).
-- [ ] Add Windows x86-64 to the release workflow: checksum, upload, and document installation instructions.
-- [ ] Test Windows + TLS, Windows + auth, and Windows + object-store backend selection.
-- [ ] Update `docs/getting-started/` and `docs/operations/deployment.md` with Windows instructions.
+- [x] Add Windows x86-64 to CI: compile, run unit tests, and run integration tests on `windows-latest`.
+- [x] Build Windows x86-64 release artifact (`rocklake.exe` and `.dll` for FFI).
+- [x] Add Windows x86-64 to the release workflow: checksum, upload, and document installation instructions.
+- [x] Test Windows + TLS, Windows + auth, and Windows + object-store backend selection.
+- [x] Update `docs/getting-started/` and `docs/operations/deployment.md` with Windows instructions.
 
 ### macOS Platform Reconciliation
 
 Clarify macOS platform status:
 
-- [ ] Audit current state: CI tests macOS latest (arm64); release builds include macOS arm64.
-- [ ] Audit docs: macOS x86-64 references are stale but still present in deployment docs.
-- [ ] Decision: either (1) remove macOS x86-64 from all docs, or (2) add macOS x86-64 to CI and release builds.
-- [ ] If option 2: add `macos-13` (Intel) to CI and release workflow.
+- [x] Audit current state: CI tests macOS latest (arm64); release builds include macOS arm64.
+- [x] Audit docs: macOS x86-64 references are stale but still present in deployment docs.
+- [x] Decision: either (1) remove macOS x86-64 from all docs, or (2) add macOS x86-64 to CI and release builds.
+- [x] If option 2: add `macos-13` (Intel) to CI and release workflow.
 
 ### Release-Blocking Gates
 
 Enforce final certification requirements before v1.0:
 
-- [ ] Compatibility manifest validator, all three engine/client/backend CI jobs, and all release artifact builds must be green before tagging.
-- [ ] `mkdocs build --strict` must pass.
-- [ ] All 10 test tiers from [plans/e2e-integration-tests.md](plans/e2e-integration-tests.md) must be at least Tier 5 (client compat) green; Tiers 6+ scheduled or pending.
+- [x] Compatibility manifest validator, all three engine/client/backend CI jobs, and all release artifact builds must be green before tagging.
+- [x] `mkdocs build --strict` must pass.
+- [x] All 10 test tiers from [plans/e2e-integration-tests.md](plans/e2e-integration-tests.md) must be at least Tier 5 (client compat) green; Tiers 6+ scheduled or pending.
 
 ### Deliverables
 
-- [ ] `tests/fixtures/compatibility-matrix.toml` implemented and enforced in CI
-- [ ] Compatibility validator CI job: enforces manifest vs. docs alignment
-- [ ] Rust MSRV reconciled to 1.93; CI job validates it
-- [ ] Windows x86-64: CI, release artifact, and docs complete
-- [ ] macOS platform status clarified (x86-64 added or documented as unsupported)
-- [ ] `docs/compatibility.md` fully synchronized with manifest evidence
-- [ ] All release gates green before v1.0 tag
+- [x] `tests/fixtures/compatibility-matrix.toml` implemented and enforced in CI
+- [x] Compatibility validator CI job: enforces manifest vs. docs alignment
+- [x] Rust MSRV reconciled to 1.93; CI job validates it
+- [x] Windows x86-64: CI, release artifact, and docs complete
+- [x] macOS platform status clarified (x86-64 added or documented as unsupported)
+- [x] `docs/compatibility.md` fully synchronized with manifest evidence
+- [x] All release gates green before v1.0 tag
 
 ---
 ## v0.45.0 — GA Readiness Gate

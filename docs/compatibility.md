@@ -124,10 +124,11 @@ and not applied.
 
 | Platform | Architecture | Status | Notes |
 |----------|-------------|--------|-------|
-| Linux (Ubuntu 22.04+) | x86-64 | ✅ Supported | Primary CI target |
-| Linux | aarch64 | ✅ Supported | Release binary provided |
-| macOS 13+ | arm64 (Apple Silicon) | ✅ Supported | Release binary provided |
-| Windows | x86-64 | ✅ Supported | Release binary provided |
+| Linux (Ubuntu 22.04+) | x86-64 | ✅ Supported | Primary CI target; release binary provided |
+| Linux | aarch64 | ✅ Supported | Release binary provided via cross-compilation |
+| macOS 13+ | arm64 (Apple Silicon) | ✅ Supported | CI runs on `macos-latest`; release binary provided |
+| macOS | x86-64 (Intel) | ❌ Not supported | Intel macOS is not tested in CI and no release binary is provided. All Apple hardware shipped since late 2020 uses Apple Silicon. Intel macOS support is deferred pending community demand. |
+| Windows | x86-64 | ✅ Supported | CI runs on `windows-latest` (v0.38.0+); `rocklake.exe` and FFI DLL release artifacts provided |
 
 ## Version Policy
 
