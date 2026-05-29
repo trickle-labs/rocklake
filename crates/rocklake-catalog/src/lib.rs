@@ -8,6 +8,8 @@ pub mod cdc;
 pub mod checkpoint;
 pub mod cleanup;
 pub mod corpus;
+pub mod diagnose;
+pub mod sweep;
 pub mod cost;
 pub mod encryption;
 pub mod error;
@@ -52,6 +54,8 @@ pub use performance::{BenchmarkReport, HotKeyState, SlateDbTuning};
 pub use reader::{CatalogReader, SnapshotDiff};
 pub use store::{CatalogStore, OpenOptions};
 pub use streaming::{measure_ingest_throughput, IngestRecord, IngestResult, RockLakeSink};
+pub use diagnose::{diagnose_catalog, format_report_text, DiagnoseReport, DiagnosticFinding, FindingSeverity};
+pub use sweep::{sweep_orphans, SweepOrphansConfig, SweepResult};
 pub use warmup::{publish_writer_endpoint, read_writer_endpoint, warmup_cache, WarmupResult};
 pub use writer::{
     next_rowid_range,
