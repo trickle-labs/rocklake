@@ -162,7 +162,7 @@ fn sql_injection_nul_bytes_rejected_with_correct_sqlstate() {
 
     for query_bytes in adversarial_queries {
         // Check for NUL bytes.
-        let has_nul = query_bytes.iter().any(|&b| b == 0);
+        let has_nul = query_bytes.contains(&0);
         assert!(has_nul, "Test query must contain NUL byte");
 
         // The SQL classifier must reject queries with NUL bytes.
@@ -175,10 +175,8 @@ fn sql_injection_nul_bytes_rejected_with_correct_sqlstate() {
 }
 
 fn classify_query_for_nul(query: &[u8]) -> &'static str {
-    if query.iter().any(|&b| b == 0) {
+    if query.contains(&0) || std::str::from_utf8(query).is_err() {
         "42601" // syntax_error
-    } else if std::str::from_utf8(query).is_err() {
-        "42601"
     } else {
         "00000"
     }
@@ -396,7 +394,7 @@ fn sql_injection_fuzz_zero_panics_zero_wrong_results() {
 
 fn classify_sql_safe(query: &str) -> &'static str {
     // Guard: NUL bytes → reject.
-    if query.as_bytes().iter().any(|&b| b == 0) {
+    if query.as_bytes().contains(&0) {
         return "UNKNOWN";
     }
     // Guard: overlong → reject.
@@ -678,7 +676,7 @@ fn excision_audit_trail_prefix_follows_convention() {
     // Key must be distinct from normal catalog keys (which start with tag bytes).
     // Normal tags are in range 0x01–0xFE; the 0xFF prefix is reserved for
     // infrastructure/audit keys.
-    let normal_catalog_key = vec![0x01u8, 0x00, 0x01]; // TAG_SCHEMA | version | id
+    let normal_catalog_key = [0x01u8, 0x00, 0x01]; // TAG_SCHEMA | version | id
     assert_ne!(
         audit_key[0], normal_catalog_key[0],
         "Excision audit key prefix 0xFF must be distinct from catalog tag 0x01"
