@@ -10,21 +10,35 @@ You need two tools installed before you begin:
 
 **RockLake.** Either download a pre-built binary from the [releases page](https://github.com/trickle-labs/rocklake/releases), or build from source:
 
-```bash
-git clone https://github.com/trickle-labs/rocklake.git
-cd rocklake
-cargo build --release
-```
+=== "Linux / macOS"
 
-The binary will appear at `target/release/rocklake`. You can copy it to a directory on your PATH or reference it by its full path in the commands below.
+    ```bash
+    git clone https://github.com/trickle-labs/rocklake.git
+    cd rocklake
+    cargo build --release
+    ```
 
-**DuckDB 1.2 or later.** Download from [duckdb.org](https://duckdb.org). After installation, verify the version:
+    The binary will appear at `target/release/rocklake`. Copy it to a directory on your PATH or reference it by its full path.
+
+=== "Windows"
+
+    ```powershell
+    git clone https://github.com/trickle-labs/rocklake.git
+    cd rocklake
+    cargo build --release
+    ```
+
+    The binary will appear at `target\release\rocklake.exe`. Move it to a directory on your `PATH` (e.g. `%USERPROFILE%\.local\bin\`) or reference it by its full path.
+
+    Alternatively, download the pre-built `rocklake-windows-x86_64.exe` from the [releases page](https://github.com/trickle-labs/rocklake/releases) and rename it to `rocklake.exe`.
+
+**DuckDB 1.5 or later.** Download from [duckdb.org](https://duckdb.org). After installation, verify the version:
 
 ```bash
 duckdb --version
 ```
 
-You should see `v1.2.0` or later. Then install the `ducklake` extension (this only needs to happen once):
+You should see `v1.5.0` or later. Then install the `ducklake` extension (this only needs to happen once):
 
 ```bash
 duckdb -c "INSTALL ducklake;"
@@ -34,9 +48,17 @@ duckdb -c "INSTALL ducklake;"
 
 Open a terminal and start RockLake, pointing it at a local directory where the catalog will be stored. The directory does not need to exist — RockLake will create it and initialize a fresh catalog:
 
-```bash
-rocklake serve --catalog /tmp/my-lakehouse --bind 127.0.0.1:5432
-```
+=== "Linux / macOS"
+
+    ```bash
+    rocklake serve --catalog /tmp/my-lakehouse --bind 127.0.0.1:5432
+    ```
+
+=== "Windows"
+
+    ```powershell
+    rocklake.exe serve --catalog C:\tmp\my-lakehouse --bind 127.0.0.1:5432
+    ```
 
 You should see output like this:
 

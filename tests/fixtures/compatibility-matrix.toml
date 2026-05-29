@@ -1,0 +1,475 @@
+# RockLake Compatibility Evidence Manifest
+#
+# This file is the single source of truth for all compatibility claims in
+# docs/compatibility.md. Every row in that document must have a corresponding
+# entry here with machine-readable evidence.
+#
+# Statuses:
+#   supported   — automated release-blocking CI job; claim is enforceable
+#   expected    — non-blocking; risk documented; no CI enforcement
+#   untested    — no promise made; community contributions welcome
+#   unsupported — explicit rejection; version-policy check or incompatibility
+#
+# Fields:
+#   component      — category (ducklake, duckdb, spark, trino, …)
+#   name           — human-readable identifier for the row
+#   version        — version or version range
+#   platform       — "all" or specific platform
+#   status         — one of supported | expected | untested | unsupported
+#   ci_job         — GitHub Actions job ID that provides evidence (empty if N/A)
+#   test_command   — cargo test command or equivalent (empty if N/A)
+#   fixture_path   — path to fixture file if applicable (empty if N/A)
+#   last_reviewed  — ISO-8601 date of last manual review
+#   notes          — short human note
+
+# ────────────────────────────────────────────────────────────────────────────
+# DuckLake Protocol
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "ducklake"
+name = "DuckLake v1.0 catalog format (all 28 spec tables)"
+version = "1.0"
+platform = "all"
+status = "supported"
+ci_job = "ducklake-corpus"
+test_command = "cargo test -p rocklake-pgwire --test v027_10_ducklake_compat_tests"
+fixture_path = "tests/fixtures/ducklake-corpus"
+last_reviewed = "2026-05-29"
+notes = "Catalog Version 7 / V1_0. CI runs on every push/PR."
+
+[[entry]]
+component = "ducklake"
+name = "DuckLake v1.1 rejection gate"
+version = "1.1"
+platform = "all"
+status = "unsupported"
+ci_job = "ducklake-corpus"
+test_command = "cargo test -p rocklake-pgwire --test v027_10_ducklake_compat_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "V1_1_DEV_1 migrations are classified and never applied."
+
+# ────────────────────────────────────────────────────────────────────────────
+# DuckDB Client Versions
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "duckdb"
+name = "DuckDB 1.5.x"
+version = "1.5.x"
+platform = "all"
+status = "supported"
+ci_job = "ducklake-corpus"
+test_command = "cargo test -p rocklake-pgwire --test v027_10_ducklake_compat_tests"
+fixture_path = "tests/fixtures/wire-corpus"
+last_reviewed = "2026-05-29"
+notes = "Primary supported version. All postgres-scanner init queries handled."
+
+[[entry]]
+component = "duckdb"
+name = "DuckDB < 1.5.2"
+version = "< 1.5.2"
+platform = "all"
+status = "unsupported"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Older versions do not support DuckLake 1.0."
+
+# ────────────────────────────────────────────────────────────────────────────
+# SQL Clients
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "sql-client"
+name = "psql 16/17/18"
+version = "16, 17, 18"
+platform = "linux"
+status = "supported"
+ci_job = "sql-clients"
+test_command = "cargo test -p rocklake-pgwire --test v036_sql_client_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Handshake, query, transaction, auth failure, TLS smoke tests."
+
+[[entry]]
+component = "sql-client"
+name = "pgcli 4.x"
+version = "4.x"
+platform = "linux"
+status = "supported"
+ci_job = "sql-clients"
+test_command = "cargo test -p rocklake-pgwire --test v036_sql_client_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Connection setup, catalog SELECT, transaction, TLS-required."
+
+[[entry]]
+component = "sql-client"
+name = "DBeaver 24.x"
+version = "24.x"
+platform = "all"
+status = "supported"
+ci_job = "sql-clients"
+test_command = "cargo test -p rocklake-pgwire --test v036_sql_client_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "JDBC PostgreSQL driver 42.7.3; startup query sequence validated."
+
+[[entry]]
+component = "sql-client"
+name = "Metabase 0.49+"
+version = "0.49+"
+platform = "all"
+status = "supported"
+ci_job = "sql-clients"
+test_command = "cargo test -p rocklake-pgwire --test v036_sql_client_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Connection registration and catalog query validated."
+
+# ────────────────────────────────────────────────────────────────────────────
+# Apache Spark
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "spark"
+name = "Apache Spark 3.5.x"
+version = "3.5.x"
+platform = "all"
+status = "supported"
+ci_job = "engine-compat"
+test_command = "cargo test -p rocklake-pgwire --test v037_engine_compat_tests"
+fixture_path = "tests/fixtures/golden/spark-3.5/corpus_replay.json"
+last_reviewed = "2026-05-29"
+notes = "Full wire-corpus validated in CI via in-process replay."
+
+[[entry]]
+component = "spark"
+name = "Apache Spark 3.4.x"
+version = "3.4.x"
+platform = "all"
+status = "expected"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Expected to work; not tested."
+
+[[entry]]
+component = "spark"
+name = "Apache Spark 3.3.x and older"
+version = "< 3.4"
+platform = "all"
+status = "unsupported"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Extended query protocol required; older versions not supported."
+
+# ────────────────────────────────────────────────────────────────────────────
+# Trino / Presto
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "trino"
+name = "Trino 432+"
+version = "432+"
+platform = "all"
+status = "supported"
+ci_job = "engine-compat"
+test_command = "cargo test -p rocklake-pgwire --test v037_engine_compat_tests"
+fixture_path = "tests/fixtures/golden/trino-432/corpus_replay.json"
+last_reviewed = "2026-05-29"
+notes = "Full wire-corpus validated in CI via in-process replay."
+
+[[entry]]
+component = "trino"
+name = "Trino 400-431"
+version = "400-431"
+platform = "all"
+status = "expected"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Expected to work; not tested."
+
+[[entry]]
+component = "trino"
+name = "Presto"
+version = "any"
+platform = "all"
+status = "untested"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "May work; contributions welcome."
+
+# ────────────────────────────────────────────────────────────────────────────
+# Apache DataFusion
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "datafusion"
+name = "DataFusion 45.0.0"
+version = "45.0.0"
+platform = "all"
+status = "supported"
+ci_job = "engine-compat"
+test_command = "cargo test -p rocklake-datafusion --test v037_datafusion_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Default version; Parquet scan validated."
+
+[[entry]]
+component = "datafusion"
+name = "DataFusion < 45"
+version = "< 45"
+platform = "all"
+status = "unsupported"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "API breaking changes in v45."
+
+# ────────────────────────────────────────────────────────────────────────────
+# Object Storage Backends
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "object-storage"
+name = "AWS S3"
+version = "any"
+platform = "all"
+status = "supported"
+ci_job = "backend-compat"
+test_command = "cargo test -p rocklake-catalog --test backend_compat"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Via object_store 0.12."
+
+[[entry]]
+component = "object-storage"
+name = "Google Cloud Storage"
+version = "any"
+platform = "all"
+status = "supported"
+ci_job = "gcs-emulator"
+test_command = "cargo test -p rocklake-catalog --test backend_compat -- gcs"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Via object_store 0.12; GcsEmulatorHarness + backend_compat suite."
+
+[[entry]]
+component = "object-storage"
+name = "Azure Blob Storage"
+version = "any"
+platform = "all"
+status = "supported"
+ci_job = "azure-emulator"
+test_command = "cargo test -p rocklake-catalog --test backend_compat -- azure"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Via object_store 0.12; AzureEmulatorHarness + backend_compat suite."
+
+[[entry]]
+component = "object-storage"
+name = "MinIO"
+version = "RELEASE.2024+"
+platform = "all"
+status = "supported"
+ci_job = "backend-compat"
+test_command = "cargo test -p rocklake-catalog --test backend_compat"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "S3-compatible endpoint."
+
+[[entry]]
+component = "object-storage"
+name = "Local filesystem"
+version = "any"
+platform = "all"
+status = "supported"
+ci_job = "backend-compat"
+test_command = "cargo test -p rocklake-catalog --test backend_compat"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Development / testing. LocalFS backend_compat suite."
+
+# ────────────────────────────────────────────────────────────────────────────
+# SlateDB
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "slatedb"
+name = "SlateDB 0.13.x"
+version = "0.13.x"
+platform = "all"
+status = "supported"
+ci_job = "check"
+test_command = "cargo test --workspace"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Pinned in workspace Cargo.toml."
+
+[[entry]]
+component = "slatedb"
+name = "SlateDB 0.12.x"
+version = "0.12.x"
+platform = "all"
+status = "unsupported"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "API incompatible."
+
+# ────────────────────────────────────────────────────────────────────────────
+# TLS
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "tls"
+name = "TLS 1.3"
+version = "1.3"
+platform = "all"
+status = "supported"
+ci_job = "tls-compat"
+test_command = "cargo test -p rocklake-pgwire --test tls_compat_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Default. Acceptance verified by protocol-version gating test."
+
+[[entry]]
+component = "tls"
+name = "TLS 1.2"
+version = "1.2"
+platform = "all"
+status = "supported"
+ci_job = "tls-compat"
+test_command = "cargo test -p rocklake-pgwire --test tls_compat_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Via rustls. Acceptance verified by protocol-version gating test."
+
+[[entry]]
+component = "tls"
+name = "TLS 1.1 and older"
+version = "1.1"
+platform = "all"
+status = "unsupported"
+ci_job = "tls-compat"
+test_command = "cargo test -p rocklake-pgwire --test tls_compat_tests"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Rejected. Security policy; rustls provides no TLS 1.1 constant."
+
+# ────────────────────────────────────────────────────────────────────────────
+# Rust Toolchain
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "rust"
+name = "Rust stable latest"
+version = "stable"
+platform = "all"
+status = "supported"
+ci_job = "check"
+test_command = "cargo test --workspace"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Recommended. CI runs with stable on Linux and macOS."
+
+[[entry]]
+component = "rust"
+name = "Rust 1.93 (MSRV)"
+version = "1.93"
+platform = "linux,macos"
+status = "supported"
+ci_job = "msrv"
+test_command = "cargo check --workspace --all-targets"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Minimum supported Rust version. CI verifies on Linux and macOS."
+
+[[entry]]
+component = "rust"
+name = "Rust < 1.93"
+version = "< 1.93"
+platform = "all"
+status = "unsupported"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Not supported."
+
+# ────────────────────────────────────────────────────────────────────────────
+# Platforms
+# ────────────────────────────────────────────────────────────────────────────
+
+[[entry]]
+component = "platform"
+name = "Linux x86-64 (Ubuntu 22.04+)"
+version = "Ubuntu 22.04+"
+platform = "linux-x86_64"
+status = "supported"
+ci_job = "check"
+test_command = "cargo test --workspace"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Primary CI target. Release binary provided."
+
+[[entry]]
+component = "platform"
+name = "Linux aarch64"
+version = "any"
+platform = "linux-aarch64"
+status = "supported"
+ci_job = "build"
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Release binary provided via cross-compilation."
+
+[[entry]]
+component = "platform"
+name = "macOS 13+ arm64 (Apple Silicon)"
+version = "macOS 13+"
+platform = "macos-arm64"
+status = "supported"
+ci_job = "check"
+test_command = "cargo test --workspace"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "CI runs on macos-latest (arm64). Release binary provided."
+
+[[entry]]
+component = "platform"
+name = "macOS x86-64 (Intel)"
+version = "macOS 13+"
+platform = "macos-x86_64"
+status = "unsupported"
+ci_job = ""
+test_command = ""
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "Intel macOS is not tested in CI and no release binary is provided. All Apple hardware shipped after 2020 uses Apple Silicon; Intel macOS support is deferred to community request."
+
+[[entry]]
+component = "platform"
+name = "Windows x86-64"
+version = "Windows 10/11, Server 2022"
+platform = "windows-x86_64"
+status = "supported"
+ci_job = "check-windows"
+test_command = "cargo test --workspace"
+fixture_path = ""
+last_reviewed = "2026-05-29"
+notes = "CI runs on windows-latest. Release binary (rocklake.exe) and FFI DLL provided."
