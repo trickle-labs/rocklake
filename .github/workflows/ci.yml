@@ -33,6 +33,33 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features
 
+      # v0.46.0: Panic-free production code gate.
+      # Rejects any new .unwrap() in production (non-test) source files.
+      # Excluded: test modules (#[cfg(test)]), doc-test examples, and the
+      # fault_injection.rs Mutex::lock().unwrap() calls (infallible on
+      # non-poisoned mutexes).
+      - name: No unwrap() in production code
+        if: runner.os == 'Linux'
+        run: |
+          # Collect all unwrap() calls in production source, excluding known
+          # test-only and infallible patterns.
+          HITS=$(grep -rn '\.unwrap()' \
+            crates/rocklake-catalog/src/ \
+            crates/rocklake-pgwire/src/ \
+            crates/rocklake-core/src/ \
+            crates/rocklake-client/src/ \
+            crates/rocklake-ffi/src/ \
+            2>/dev/null \
+            | grep -v '^\s*//' \
+            | grep -v 'fault_injection\.rs' \
+            | grep -v '\.expect(' \
+            || true)
+          if [ -n "$HITS" ]; then
+            echo "ERROR: production unwrap() calls found:"
+            echo "$HITS"
+            exit 1
+          fi
+
       - name: Free disk space (Linux only)
         if: runner.os == 'Linux'
         run: |
