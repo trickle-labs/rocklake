@@ -1,8 +1,8 @@
 # S3 Express One Zone Validation
 
 This page documents the v0.42.0 S3 Express One Zone acceptance evaluation for
-RockLake as described in the
-[roadmap](../../ROADMAP.md#v042---performance-benchmarks--cost-analysis).
+RockLake as described in the v0.42.0 roadmap entry
+(Performance Benchmarks & Cost Analysis).
 
 ## Decision
 
@@ -11,12 +11,11 @@ latency-sensitive workloads.**
 
 The acceptance gate requires that `get_current_snapshot()` on S3 Express is
 within **2× of PostgreSQL p99**. Based on scaled measurements from the
-LocalFS benchmark suite (see [benchmarks/v0.42-catalog-bench.json](
-../../benchmarks/v0.42-catalog-bench.json)) and AWS published throughput data,
+LocalFS benchmark suite (see `benchmarks/v0.42-catalog-bench.json`) and AWS published throughput data,
 the estimated p99 ratio is **0.51×** — comfortably inside the gate.
 
 Final acceptance on real AWS hardware should be performed before v1.0 GA
-(tracked in [v0.43.0](../../ROADMAP.md#v043---scale-testing-soak--serverless-readers)).
+(tracked in the v0.43.0 roadmap: Scale Testing, Soak & Serverless Readers).
 
 ---
 
