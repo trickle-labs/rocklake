@@ -437,7 +437,7 @@ async fn legacy_dispatch() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.len() < 2 {
         // Delegate to clap for a nice help message.
-        cli::Cli::parse_from(&["rocklake", "--help"]);
+        cli::Cli::parse_from(["rocklake", "--help"]);
         std::process::exit(1);
     }
 
@@ -462,7 +462,7 @@ async fn legacy_dispatch() -> Result<(), Box<dyn std::error::Error>> {
         "diagnose" => cmd_diagnose(&args).await?,
         "sweep-orphans" => cmd_sweep_orphans(&args).await?,
         "--help" | "-h" => {
-            cli::Cli::parse_from(&["rocklake", "--help"]);
+            cli::Cli::parse_from(["rocklake", "--help"]);
         }
         other => {
             eprintln!("Unknown command: {other}");

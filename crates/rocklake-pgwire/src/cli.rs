@@ -30,7 +30,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Start the PG-Wire sidecar server.
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
 
     /// Visibility GC — advance the retain-from watermark.
     #[command(subcommand)]
