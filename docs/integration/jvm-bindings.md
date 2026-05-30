@@ -374,5 +374,5 @@ If you already have a compiled native library, skip the Cargo build step:
 - [Spark Integration Guide](./spark.md)
 - [Flink Integration Guide](./flink.md)
 - [Python Bindings](./python-bindings.md)
-- [Go Bindings](./go-bindings.md)
-- [Node.js Bindings](./nodejs-bindings.md)
+- [Go Bindings](https://github.com/trickle-labs/rocklake/tree/main/bindings/go)
+- [Node.js Bindings](https://github.com/trickle-labs/rocklake/tree/main/bindings/nodejs)
