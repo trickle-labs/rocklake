@@ -134,17 +134,15 @@ async fn checkpoint_unpin_nonexistent_returns_not_found() {
     store.close().await.unwrap();
 }
 
-/// Read-only client pinned at snapshot N sees exactly N schemas regardless of
+/// Read-only reader pinned at snapshot N sees exactly N schemas regardless of
 /// how many more snapshots are committed afterwards.
+///
+/// Uses `store.read_at(snapshot_id)` — opening a second `CatalogStore` against
+/// the same in-memory path triggers SlateDB writer-fencing ("detected newer DB
+/// client"), so we read via the existing store instead.
 #[tokio::test]
 async fn read_only_client_sees_only_pinned_snapshot() {
-    let object_store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
-    let opts = OpenOptions {
-        object_store: Arc::clone(&object_store),
-        path: ObjectPath::from("ro-test"),
-        encryption: None,
-    };
-    let mut store = CatalogStore::open(opts.clone()).await.unwrap();
+    let mut store = open_in_memory().await;
 
     // Write 3 schemas across separate snapshots.
     for name in &["s1", "s2", "s3"] {
@@ -154,34 +152,25 @@ async fn read_only_client_sees_only_pinned_snapshot() {
         store.commit_writer(result);
     }
 
-    // Pin at snapshot 2 (after s1 and s2 exist, before s3).
+    // Pin at snapshot 2 so that only s1 and s2 are visible (s3 is at snapshot 3).
+    let pin_snapshot_id = 2u64;
     let db = store.db();
-    let pin_snapshot_id = {
-        // snapshot IDs are 1-indexed by the writer; after 3 commits the latest is 3.
-        // Pin at snapshot 2 so that only s1 and s2 are visible.
-        2u64
-    };
     pin_checkpoint(db, "pinned-at-2", pin_snapshot_id)
         .await
         .unwrap();
 
-    // Open a read-only client at the pinned snapshot.
-    let reader_store = CatalogStore::open(opts).await.unwrap();
-    let reader = reader_store
-        .read_at(SnapshotId::new(pin_snapshot_id))
-        .unwrap();
+    // Read at the pinned snapshot via the existing store (no second open needed).
+    let reader = store.read_at(SnapshotId::new(pin_snapshot_id)).unwrap();
     let schemas = reader.list_schemas().await.unwrap();
 
-    // At snapshot 2: s1 (created at snapshot 1) and s2 (created at snapshot 2)
-    // are visible; s3 (created at snapshot 3) is not.
+    // At snapshot 2: s1 (snapshot 1) and s2 (snapshot 2) are visible; s3 is not.
     assert_eq!(
         schemas.len(),
         2,
-        "read-only client should see 2 schemas at pinned snapshot 2, got: {schemas:?}"
+        "read-only reader should see 2 schemas at pinned snapshot 2, got: {schemas:?}"
     );
 
     store.close().await.unwrap();
-    reader_store.close().await.unwrap();
 }
 
 // ─── CDN cache contract: key immutability ─────────────────────────────────
