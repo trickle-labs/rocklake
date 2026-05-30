@@ -78,7 +78,7 @@ rocklake checkpoint unpin --name production
 ## Example Handler
 
 See
-[`crates/rocklake-client/examples/lambda_reader.rs`](../../crates/rocklake-client/examples/lambda_reader.rs)
+[`crates/rocklake-client/examples/lambda_reader.rs`](https://github.com/trickle-labs/rocklake/blob/main/crates/rocklake-client/examples/lambda_reader.rs)
 for a complete example handler that:
 
 1. Opens the catalog from `ROCKLAKE_CATALOG_URI`
