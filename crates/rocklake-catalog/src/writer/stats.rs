@@ -651,7 +651,13 @@ mod stats_unit_tests {
             "42.0 < 42.5"
         );
         // Verify top-level entry point does not panic on these inputs.
-        assert!(stats_value_less_or_equal("42", "100"), "42 <= 100 (integer stats)");
-        assert!(!stats_value_less_or_equal("100", "42"), "100 not <= 42 (integer stats)");
+        assert!(
+            stats_value_less_or_equal("42", "100"),
+            "42 <= 100 (integer stats)"
+        );
+        assert!(
+            !stats_value_less_or_equal("100", "42"),
+            "100 not <= 42 (integer stats)"
+        );
     }
 }

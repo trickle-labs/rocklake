@@ -202,7 +202,6 @@ impl FaultInjectorInstance {
     }
 }
 
-
 // ─── SLO Measurement ─────────────────────────────────────────────────────────
 
 /// Measure the time from a simulated kill-9 (catalog drop) to when the next

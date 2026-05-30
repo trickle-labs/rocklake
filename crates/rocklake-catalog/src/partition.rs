@@ -196,9 +196,9 @@ impl PartitionedWriter {
             let store = CatalogStore::open(opts).await?;
             self.catalogs.insert(dataset_name.to_string(), store);
         }
-        self.catalogs
-            .get_mut(dataset_name)
-            .ok_or_else(|| CatalogError::Internal(format!("dataset '{dataset_name}' not found after insert")))
+        self.catalogs.get_mut(dataset_name).ok_or_else(|| {
+            CatalogError::Internal(format!("dataset '{dataset_name}' not found after insert"))
+        })
     }
 
     /// Close all dataset catalogs.

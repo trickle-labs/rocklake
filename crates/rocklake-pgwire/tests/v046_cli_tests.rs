@@ -23,9 +23,10 @@ fn help_exits_zero(args: &[&str]) {
         eprintln!("skipping {args:?}: binary not found at {bin:?}");
         return;
     }
-    let output = Command::new(&bin).args(args).output().unwrap_or_else(|e| {
-        panic!("failed to run {:?} with args {args:?}: {e}", bin)
-    });
+    let output = Command::new(&bin)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run {:?} with args {args:?}: {e}", bin));
     assert_eq!(
         output.status.code(),
         Some(0),

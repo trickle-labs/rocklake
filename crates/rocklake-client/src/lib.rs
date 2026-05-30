@@ -176,9 +176,7 @@ impl CatalogClientBuilder {
 /// - `gs://bucket/prefix` → `GoogleCloudStorageBuilder` (reads `GOOGLE_APPLICATION_CREDENTIALS`)
 /// - `az://container/prefix` or `abfs://container/prefix` → `MicrosoftAzureBuilder` (reads `AZURE_*`)
 fn build_object_store(uri: &str) -> ClientResult<Arc<dyn object_store::ObjectStore>> {
-    if let Some(without_scheme) = uri
-        .strip_prefix("file://")
-    {
+    if let Some(without_scheme) = uri.strip_prefix("file://") {
         let store = LocalFileSystem::new_with_prefix(without_scheme).map_err(|e| {
             ClientError::Config(format!("cannot open local store at {without_scheme}: {e}"))
         })?;
@@ -222,9 +220,8 @@ fn build_object_store(uri: &str) -> ClientResult<Arc<dyn object_store::ObjectSto
         )));
     }
 
-    let store = LocalFileSystem::new_with_prefix(uri).map_err(|e| {
-        ClientError::Config(format!("cannot open local store at {uri}: {e}"))
-    })?;
+    let store = LocalFileSystem::new_with_prefix(uri)
+        .map_err(|e| ClientError::Config(format!("cannot open local store at {uri}: {e}")))?;
     Ok(Arc::new(store))
 }
 
@@ -261,9 +258,7 @@ impl std::fmt::Debug for CatalogClient {
 
 impl CatalogClient {
     /// Acquire a read guard, returning an error if the catalog has been closed.
-    async fn read(
-        &self,
-    ) -> ClientResult<tokio::sync::RwLockReadGuard<'_, Option<CatalogStore>>> {
+    async fn read(&self) -> ClientResult<tokio::sync::RwLockReadGuard<'_, Option<CatalogStore>>> {
         let guard = self.store.read().await;
         if guard.is_none() {
             return Err(ClientError::Config("catalog has been closed".to_owned()));
@@ -621,9 +616,9 @@ mod tests {
         let mut tasks = Vec::new();
         for _ in 0..8 {
             let c = client.clone();
-            tasks.push(tokio::spawn(async move {
-                c.list_schemas(0).await.unwrap()
-            }));
+            tasks.push(tokio::spawn(
+                async move { c.list_schemas(0).await.unwrap() },
+            ));
         }
 
         for task in tasks {

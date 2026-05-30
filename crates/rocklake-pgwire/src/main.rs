@@ -30,8 +30,11 @@ use rocklake_pgwire::server::{run_server, ServerConfig};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::from_default_env()
-                .add_directive("info".parse().unwrap_or_else(|_| tracing_subscriber::filter::LevelFilter::INFO.into())),
+            EnvFilter::from_default_env().add_directive(
+                "info"
+                    .parse()
+                    .unwrap_or_else(|_| tracing_subscriber::filter::LevelFilter::INFO.into()),
+            ),
         )
         .init();
 
@@ -77,22 +80,53 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
             synthetic.extend(["--catalog".to_string(), a.catalog]);
             synthetic.extend(["--bind".to_string(), a.bind]);
             synthetic.extend(["--max-sessions".to_string(), a.max_sessions.to_string()]);
-            if let Some(p) = a.metrics_port { synthetic.extend(["--metrics-port".to_string(), p.to_string()]); }
+            if let Some(p) = a.metrics_port {
+                synthetic.extend(["--metrics-port".to_string(), p.to_string()]);
+            }
             synthetic.extend(["--metrics-path".to_string(), a.metrics_path]);
-            if let Some(c) = a.tls_cert { synthetic.extend(["--tls-cert".to_string(), c]); }
-            if let Some(k) = a.tls_key { synthetic.extend(["--tls-key".to_string(), k]); }
-            if a.tls_required { synthetic.push("--tls-required".to_string()); }
-            if let Some(u) = a.auth_user { synthetic.extend(["--auth-user".to_string(), u]); }
-            if let Some(p) = a.auth_password { synthetic.extend(["--auth-password".to_string(), p]); }
-            let mode = if a.read_only { "reader".to_string() } else { a.mode };
+            if let Some(c) = a.tls_cert {
+                synthetic.extend(["--tls-cert".to_string(), c]);
+            }
+            if let Some(k) = a.tls_key {
+                synthetic.extend(["--tls-key".to_string(), k]);
+            }
+            if a.tls_required {
+                synthetic.push("--tls-required".to_string());
+            }
+            if let Some(u) = a.auth_user {
+                synthetic.extend(["--auth-user".to_string(), u]);
+            }
+            if let Some(p) = a.auth_password {
+                synthetic.extend(["--auth-password".to_string(), p]);
+            }
+            let mode = if a.read_only {
+                "reader".to_string()
+            } else {
+                a.mode
+            };
             synthetic.extend(["--mode".to_string(), mode]);
             synthetic.extend(["--cost-mode".to_string(), a.cost_mode]);
-            if let Some(e) = a.s3_endpoint { synthetic.extend(["--s3-endpoint".to_string(), e]); }
-            if a.s3_path_style { synthetic.push("--s3-path-style".to_string()); }
-            if let Some(k) = a.encryption_key { synthetic.extend(["--encryption-key".to_string(), k]); }
-            if let Some(p) = a.datafusion_pg_wire { synthetic.extend(["--datafusion-pg-wire".to_string(), p.to_string()]); }
-            if !a.extension_schemas.is_empty() { synthetic.extend(["--extension-schemas".to_string(), a.extension_schemas.join(",")]); }
-            if let Some(o) = a.otlp_endpoint { synthetic.extend(["--otlp-endpoint".to_string(), o]); }
+            if let Some(e) = a.s3_endpoint {
+                synthetic.extend(["--s3-endpoint".to_string(), e]);
+            }
+            if a.s3_path_style {
+                synthetic.push("--s3-path-style".to_string());
+            }
+            if let Some(k) = a.encryption_key {
+                synthetic.extend(["--encryption-key".to_string(), k]);
+            }
+            if let Some(p) = a.datafusion_pg_wire {
+                synthetic.extend(["--datafusion-pg-wire".to_string(), p.to_string()]);
+            }
+            if !a.extension_schemas.is_empty() {
+                synthetic.extend([
+                    "--extension-schemas".to_string(),
+                    a.extension_schemas.join(","),
+                ]);
+            }
+            if let Some(o) = a.otlp_endpoint {
+                synthetic.extend(["--otlp-endpoint".to_string(), o]);
+            }
             cmd_serve(&synthetic).await?;
         }
         Commands::Gc(sub) => {
@@ -101,8 +135,15 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
                 GcSubcommand::Plan(a) => ("plan", a),
                 GcSubcommand::Apply(a) => ("apply", a),
             };
-            let synthetic = vec!["rocklake".to_string(), "gc".to_string(), subcmd.to_string(),
-                "--catalog".to_string(), args.catalog, "--retention-days".to_string(), args.retention_days.to_string()];
+            let synthetic = vec![
+                "rocklake".to_string(),
+                "gc".to_string(),
+                subcmd.to_string(),
+                "--catalog".to_string(),
+                args.catalog,
+                "--retention-days".to_string(),
+                args.retention_days.to_string(),
+            ];
             cmd_gc(&synthetic).await?;
         }
         Commands::Excise(sub) => {
@@ -111,49 +152,105 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
                 ExciseSubcommand::Plan(a) => ("plan", a),
                 ExciseSubcommand::Apply(a) => ("apply", a),
             };
-            let synthetic = vec!["rocklake".to_string(), "excise".to_string(), subcmd.to_string(),
-                "--catalog".to_string(), args.catalog, "--before".to_string(), args.before.to_string()];
+            let synthetic = vec![
+                "rocklake".to_string(),
+                "excise".to_string(),
+                subcmd.to_string(),
+                "--catalog".to_string(),
+                args.catalog,
+                "--before".to_string(),
+                args.before.to_string(),
+            ];
             cmd_excise(&synthetic).await?;
         }
         Commands::Checkpoint(sub) => {
             use cli::CheckpointSubcommand;
             match sub {
                 CheckpointSubcommand::Create(a) => {
-                    let mut s = vec!["rocklake".to_string(), "checkpoint".to_string(), "create".to_string(),
-                        "--catalog".to_string(), a.catalog];
-                    if let Some(l) = a.label { s.extend(["--label".to_string(), l]); }
+                    let mut s = vec![
+                        "rocklake".to_string(),
+                        "checkpoint".to_string(),
+                        "create".to_string(),
+                        "--catalog".to_string(),
+                        a.catalog,
+                    ];
+                    if let Some(l) = a.label {
+                        s.extend(["--label".to_string(), l]);
+                    }
                     cmd_checkpoint(&s).await?;
                 }
                 CheckpointSubcommand::List(a) => {
-                    let s = vec!["rocklake".to_string(), "checkpoint".to_string(), "list".to_string(),
-                        "--catalog".to_string(), a.catalog];
+                    let s = vec![
+                        "rocklake".to_string(),
+                        "checkpoint".to_string(),
+                        "list".to_string(),
+                        "--catalog".to_string(),
+                        a.catalog,
+                    ];
                     cmd_checkpoint(&s).await?;
                 }
                 CheckpointSubcommand::Restore(a) => {
-                    let s = vec!["rocklake".to_string(), "checkpoint".to_string(), "restore".to_string(),
-                        "--catalog".to_string(), a.catalog, "--id".to_string(), a.id.to_string()];
+                    let s = vec![
+                        "rocklake".to_string(),
+                        "checkpoint".to_string(),
+                        "restore".to_string(),
+                        "--catalog".to_string(),
+                        a.catalog,
+                        "--id".to_string(),
+                        a.id.to_string(),
+                    ];
                     cmd_checkpoint(&s).await?;
                 }
             }
         }
         Commands::Export(a) => {
-            let mut s = vec!["rocklake".to_string(), "export".to_string(), a.catalog, "--output".to_string(), a.output];
-            if let Some(id) = a.snapshot_id { s.extend(["--snapshot-id".to_string(), id.to_string()]); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "export".to_string(),
+                a.catalog,
+                "--output".to_string(),
+                a.output,
+            ];
+            if let Some(id) = a.snapshot_id {
+                s.extend(["--snapshot-id".to_string(), id.to_string()]);
+            }
             cmd_export(&s).await?;
         }
         Commands::Import(a) => {
-            let s = vec!["rocklake".to_string(), "import".to_string(), a.catalog, "--input".to_string(), a.input];
+            let s = vec![
+                "rocklake".to_string(),
+                "import".to_string(),
+                a.catalog,
+                "--input".to_string(),
+                a.input,
+            ];
             cmd_import(&s).await?;
         }
         Commands::PgMigrate(a) => {
-            let s = vec!["rocklake".to_string(), "pg-migrate".to_string(), "--input".to_string(), a.input];
+            let s = vec![
+                "rocklake".to_string(),
+                "pg-migrate".to_string(),
+                "--input".to_string(),
+                a.input,
+            ];
             cmd_pg_migrate(&s).await?;
         }
         Commands::Rebuild(a) => {
-            let mut s = vec!["rocklake".to_string(), "rebuild".to_string(), "--catalog".to_string(), a.catalog];
-            if let Some(d) = a.data_root { s.extend(["--data-root".to_string(), d]); }
-            if let Some(e) = a.s3_endpoint { s.extend(["--s3-endpoint".to_string(), e]); }
-            if a.s3_path_style { s.push("--s3-path-style".to_string()); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "rebuild".to_string(),
+                "--catalog".to_string(),
+                a.catalog,
+            ];
+            if let Some(d) = a.data_root {
+                s.extend(["--data-root".to_string(), d]);
+            }
+            if let Some(e) = a.s3_endpoint {
+                s.extend(["--s3-endpoint".to_string(), e]);
+            }
+            if a.s3_path_style {
+                s.push("--s3-path-style".to_string());
+            }
             cmd_rebuild(&s).await?;
         }
         Commands::Inspect(sub) => {
@@ -163,7 +260,13 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
                 InspectSubcommand::ApiCosts(a) => ("api-costs", a),
                 InspectSubcommand::CacheUtilization(a) => ("cache-utilization", a),
             };
-            let s = vec!["rocklake".to_string(), "inspect".to_string(), subcmd.to_string(), "--catalog".to_string(), args.catalog];
+            let s = vec![
+                "rocklake".to_string(),
+                "inspect".to_string(),
+                subcmd.to_string(),
+                "--catalog".to_string(),
+                args.catalog,
+            ];
             cmd_inspect(&s).await?;
         }
         Commands::Verify(sub) => {
@@ -172,68 +275,155 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
                 VerifySubcommand::Catalog(a) => ("catalog", a),
                 VerifySubcommand::DataFiles(a) => ("data-files", a),
             };
-            let s = vec!["rocklake".to_string(), "verify".to_string(), subcmd.to_string(), "--catalog".to_string(), args.catalog];
+            let s = vec![
+                "rocklake".to_string(),
+                "verify".to_string(),
+                subcmd.to_string(),
+                "--catalog".to_string(),
+                args.catalog,
+            ];
             cmd_verify(&s).await?;
         }
         Commands::Repair(a) => {
-            let mut s = vec!["rocklake".to_string(), "repair".to_string(), "--catalog".to_string(), a.catalog];
-            if a.dry_run { s.push("--dry-run".to_string()); }
-            if a.apply { s.push("--apply".to_string()); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "repair".to_string(),
+                "--catalog".to_string(),
+                a.catalog,
+            ];
+            if a.dry_run {
+                s.push("--dry-run".to_string());
+            }
+            if a.apply {
+                s.push("--apply".to_string());
+            }
             cmd_repair(&s).await?;
         }
         Commands::Warmup(a) => {
-            let mut s = vec!["rocklake".to_string(), "warmup".to_string(), "--catalog".to_string(), a.catalog];
-            if let Some(t) = a.tables { s.extend(["--tables".to_string(), t.to_string()]); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "warmup".to_string(),
+                "--catalog".to_string(),
+                a.catalog,
+            ];
+            if let Some(t) = a.tables {
+                s.extend(["--tables".to_string(), t.to_string()]);
+            }
             cmd_warmup(&s).await?;
         }
         Commands::Migrate(a) => {
-            let mut s = vec!["rocklake".to_string(), "migrate".to_string(), "--catalog".to_string(), a.catalog];
-            if a.dry_run { s.push("--dry-run".to_string()); }
-            if a.apply { s.push("--apply".to_string()); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "migrate".to_string(),
+                "--catalog".to_string(),
+                a.catalog,
+            ];
+            if a.dry_run {
+                s.push("--dry-run".to_string());
+            }
+            if a.apply {
+                s.push("--apply".to_string());
+            }
             cmd_migrate(&s).await?;
         }
         Commands::Corpus(sub) => {
             use cli::CorpusSubcommand;
             match sub {
                 CorpusSubcommand::Diff(a) => {
-                    let s = vec!["rocklake".to_string(), "corpus".to_string(), "diff".to_string(), a.left, a.right];
+                    let s = vec![
+                        "rocklake".to_string(),
+                        "corpus".to_string(),
+                        "diff".to_string(),
+                        a.left,
+                        a.right,
+                    ];
                     cmd_corpus(&s).await?;
                 }
                 CorpusSubcommand::Validate(a) => {
-                    let s = vec!["rocklake".to_string(), "corpus".to_string(), "validate".to_string(), "--catalog".to_string(), a.catalog, a.corpus];
+                    let s = vec![
+                        "rocklake".to_string(),
+                        "corpus".to_string(),
+                        "validate".to_string(),
+                        "--catalog".to_string(),
+                        a.catalog,
+                        a.corpus,
+                    ];
                     cmd_corpus(&s).await?;
                 }
             }
         }
         Commands::Tune(a) => {
-            let mut s = vec!["rocklake".to_string(), "tune".to_string(), "--catalog".to_string(), a.catalog];
-            if let Some(c) = a.target_cost_usd { s.extend(["--target-cost-usd".to_string(), c.to_string()]); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "tune".to_string(),
+                "--catalog".to_string(),
+                a.catalog,
+            ];
+            if let Some(c) = a.target_cost_usd {
+                s.extend(["--target-cost-usd".to_string(), c.to_string()]);
+            }
             cmd_tune(&s).await?;
         }
         Commands::MigrateFromDucklake(a) => {
-            let mut s = vec!["rocklake".to_string(), "migrate-from-ducklake".to_string(),
-                "--source".to_string(), a.source, "--catalog".to_string(), a.catalog];
-            if a.dry_run { s.push("--dry-run".to_string()); }
-            for v in a.accept_versions { s.extend(["--accept-version".to_string(), v]); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "migrate-from-ducklake".to_string(),
+                "--source".to_string(),
+                a.source,
+                "--catalog".to_string(),
+                a.catalog,
+            ];
+            if a.dry_run {
+                s.push("--dry-run".to_string());
+            }
+            for v in a.accept_versions {
+                s.extend(["--accept-version".to_string(), v]);
+            }
             cmd_migrate_from_ducklake(&s).await?;
         }
         Commands::ExportCatalog(a) => {
-            let mut s = vec!["rocklake".to_string(), "export-catalog".to_string(),
-                "--catalog".to_string(), a.catalog, "--out".to_string(), a.out];
-            if let Some(id) = a.at_snapshot { s.extend(["--at-snapshot".to_string(), id.to_string()]); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "export-catalog".to_string(),
+                "--catalog".to_string(),
+                a.catalog,
+                "--out".to_string(),
+                a.out,
+            ];
+            if let Some(id) = a.at_snapshot {
+                s.extend(["--at-snapshot".to_string(), id.to_string()]);
+            }
             cmd_export_catalog(&s).await?;
         }
         Commands::Diagnose(a) => {
-            let mut s = vec!["rocklake".to_string(), "diagnose".to_string(), "--catalog".to_string(), a.catalog];
-            if a.json { s.push("--json".to_string()); }
-            if let Some(d) = a.data_root { s.extend(["--data-root".to_string(), d]); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "diagnose".to_string(),
+                "--catalog".to_string(),
+                a.catalog,
+            ];
+            if a.json {
+                s.push("--json".to_string());
+            }
+            if let Some(d) = a.data_root {
+                s.extend(["--data-root".to_string(), d]);
+            }
             cmd_diagnose(&s).await?;
         }
         Commands::SweepOrphans(a) => {
-            let mut s = vec!["rocklake".to_string(), "sweep-orphans".to_string(),
-                "--catalog".to_string(), a.catalog, "--data-root".to_string(), a.data_root,
-                "--grace-period-hours".to_string(), a.grace_period_hours.to_string()];
-            if a.apply { s.push("--apply".to_string()); }
+            let mut s = vec![
+                "rocklake".to_string(),
+                "sweep-orphans".to_string(),
+                "--catalog".to_string(),
+                a.catalog,
+                "--data-root".to_string(),
+                a.data_root,
+                "--grace-period-hours".to_string(),
+                a.grace_period_hours.to_string(),
+            ];
+            if a.apply {
+                s.push("--apply".to_string());
+            }
             cmd_sweep_orphans(&s).await?;
         }
     }
