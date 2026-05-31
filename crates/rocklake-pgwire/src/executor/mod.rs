@@ -495,7 +495,7 @@ async fn execute_classified<'a>(
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
                     .map_err(RockLakeError::from)?
             };
-            let tables = if let Some(schema_id) = schema_id {
+            let raw_tables = if let Some(schema_id) = schema_id {
                 reader
                     .list_tables(schema_id)
                     .await
@@ -513,6 +513,20 @@ async fn execute_classified<'a>(
                 }
                 tables
             };
+            // Skip tables with no columns — stubs created by rebuild_catalog or
+            // other non-DuckLake paths have no column metadata and cause DuckLake
+            // clients to abort with "Table entry X does not have any columns".
+            let mut tables = Vec::with_capacity(raw_tables.len());
+            for t in raw_tables {
+                let has_cols = reader
+                    .describe_table(t.table_id)
+                    .await
+                    .map_err(RockLakeError::from)?
+                    .is_some_and(|(_, cols)| !cols.is_empty());
+                if has_cols {
+                    tables.push(t);
+                }
+            }
             Ok(vec![make_tables_response(tables)])
         }
         StatementKind::SelectColumns => {

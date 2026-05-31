@@ -565,6 +565,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         bind_addr: config.bind_addr,
         max_sessions: config.max_sessions,
         max_active_scans: 25,
+        metrics: Some(metrics.clone()),
         tls: rocklake_pgwire::server::TlsConfig {
             cert_path: config.tls_cert,
             key_path: config.tls_key,
@@ -593,6 +594,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             bind_addr: df_addr,
             max_sessions: server_config.max_sessions,
             max_active_scans: server_config.max_active_scans,
+            metrics: None,
             tls: rocklake_pgwire::server::TlsConfig::default(),
             auth: rocklake_pgwire::server::AuthConfig::default(),
             extension_schemas: config.extension_schemas,

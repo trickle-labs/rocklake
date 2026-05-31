@@ -595,6 +595,7 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                     client.close().await?;
                     return Ok(());
                 }
+
                 save_startup_parameters_to_metadata(client, startup);
                 if !self.auth.is_enabled() {
                     finish_authentication(client, &DefaultServerParameterProvider::default())
