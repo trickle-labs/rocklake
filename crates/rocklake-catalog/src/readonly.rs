@@ -150,6 +150,29 @@ impl ReadOnlyCatalog {
         Ok(())
     }
 
+    /// Creates a `ReadOnlyCatalog` from an existing [`slatedb::Db`] handle.
+    ///
+    /// **Test-only.** In tests it is sometimes necessary to share a single
+    /// `Db` handle between a [`CatalogStore`] writer and a `ReadOnlyCatalog`
+    /// reader to avoid the SlateDB WAL-based fencing that occurs when two
+    /// independent `Db::open()` calls target the same object-store path.
+    ///
+    /// The caller must invoke [`refresh()`](Self::refresh) at least once
+    /// after construction to populate `current_snapshot_id`.
+    ///
+    /// This method is intentionally `pub` (not `pub(crate)`) so that
+    /// integration tests in `tests/` can access it; it is hidden from
+    /// generated documentation and must not be used in production code.
+    #[doc(hidden)]
+    pub fn from_db_for_test(db: Db, object_store: Arc<dyn object_store::ObjectStore>) -> Self {
+        Self {
+            db,
+            current_snapshot_id: SnapshotId::new(0),
+            retain_from: Arc::new(AtomicU64::new(0)),
+            object_store,
+        }
+    }
+
     // ── internal ───────────────────────────────────────────────────────────
 
     async fn read_latest_snapshot_id(db: &Db) -> SnapshotId {
