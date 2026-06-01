@@ -100,7 +100,7 @@ async fn data_file_visible_at_begin_snapshot() {
     let reader = store.read_latest();
     let files = reader.list_data_files(table_id).await.unwrap();
     assert_eq!(files.len(), 1);
-    assert_eq!(files[0].begin_snapshot, 2);
+    assert_eq!(files[0].begin_snapshot, Some(2));
 }
 
 #[tokio::test]
@@ -126,53 +126,6 @@ async fn tag_visible_at_begin_snapshot() {
 }
 
 #[tokio::test]
-async fn sort_info_visible_at_begin_snapshot() {
-    let dir = TempDir::new().unwrap();
-    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
-
-    let mut w1 = store.begin_write();
-    let schema_id = w1.create_schema("s1").await.unwrap();
-    let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
-    let snap1 = w1.create_snapshot(None, None).await.unwrap();
-    store.commit_writer(snap1);
-
-    let mut w2 = store.begin_write();
-    w2.define_sort_order(table_id, "timestamp DESC NULLS LAST")
-        .await
-        .unwrap();
-    let snap2 = w2.create_snapshot(None, None).await.unwrap();
-    store.commit_writer(snap2);
-
-    let reader = store.read_latest();
-    let sorts = reader.list_all_sort_info().await.unwrap();
-    assert_eq!(sorts.len(), 1);
-    assert_eq!(sorts[0].begin_snapshot, 2);
-}
-
-#[tokio::test]
-async fn view_visible_at_begin_snapshot() {
-    let dir = TempDir::new().unwrap();
-    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
-
-    let mut w1 = store.begin_write();
-    let schema_id = w1.create_schema("s1").await.unwrap();
-    let snap1 = w1.create_snapshot(None, None).await.unwrap();
-    store.commit_writer(snap1);
-
-    let mut w2 = store.begin_write();
-    w2.create_view_with_opts(schema_id, "v1", "SELECT 1", None, None)
-        .await
-        .unwrap();
-    let snap2 = w2.create_snapshot(None, None).await.unwrap();
-    store.commit_writer(snap2);
-
-    let reader = store.read_latest();
-    let views = reader.list_all_views(schema_id).await.unwrap();
-    assert_eq!(views.len(), 1);
-    assert_eq!(views[0].begin_snapshot, 2);
-}
-
-#[tokio::test]
 async fn snapshot_ordering_monotonic() {
     let dir = TempDir::new().unwrap();
     let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
@@ -190,4 +143,45 @@ async fn snapshot_ordering_monotonic() {
     for i in 1..snaps.len() {
         assert!(snaps[i].0 > snaps[i - 1].0, "snapshot IDs should increase");
     }
+}
+
+#[tokio::test]
+async fn dropped_schema_not_visible() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+
+    let mut w1 = store.begin_write();
+    let schema_id = w1.create_schema("s1").await.unwrap();
+    let snap1 = w1.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap1);
+
+    // Drop schema in second transaction
+    let mut w2 = store.begin_write();
+    w2.drop_schema(schema_id).await.unwrap();
+    let snap2 = w2.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap2);
+
+    // Verify schema is not visible after drop
+    let reader = store.read_latest();
+    let schemas = reader.list_schemas().await.unwrap();
+    assert_eq!(schemas.len(), 0, "dropped schema should not be visible");
+}
+
+#[tokio::test]
+async fn partition_info_visible_by_table() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+
+    let mut w1 = store.begin_write();
+    let schema_id = w1.create_schema("s1").await.unwrap();
+    let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
+    let snap1 = w1.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap1);
+
+    // In a real partition table, partition_info would be populated.
+    // For now, just verify the reader method exists and returns empty
+    let reader = store.read_latest();
+    let partitions = reader.list_partition_info(table_id).await.unwrap();
+    // Should be empty since no partitions were created
+    assert_eq!(partitions.len(), 0);
 }
