@@ -495,7 +495,7 @@ async fn execute_classified<'a>(
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
                     .map_err(RockLakeError::from)?
             };
-            let tables = if let Some(schema_id) = schema_id {
+            let raw_tables = if let Some(schema_id) = schema_id {
                 reader
                     .list_tables(schema_id)
                     .await
@@ -513,7 +513,7 @@ async fn execute_classified<'a>(
                 }
                 tables
             };
-            Ok(vec![make_tables_response(tables)])
+            Ok(vec![make_tables_response(raw_tables)])
         }
         StatementKind::SelectColumns => {
             let table_id = params.get_u64(0).ok();

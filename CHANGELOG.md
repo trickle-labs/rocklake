@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.47.0] — 2026-05-31
+
+### Added
+
+- **Read-Only Catalog Access (RFC-01)**: `CatalogStore::open_readonly()` and `CatalogStore::open_without_epoch()` open SlateDB without acquiring or incrementing the writer epoch, enabling zero-contention horizontal reader scale-out.
+- **`ReadOnlyCatalog` Struct**: Holds a `Db` handle and current snapshot ID; exposes `reader() -> CatalogReader` and `async fn refresh() -> CatalogResult<SnapshotId>` to advance to the latest committed snapshot without writer coordination.
+- **`CatalogClientBuilder::build_readonly()`**: Client-level read-only builder exposed in all language bindings (Python, Go, Node.js, Java).
+- **`rocklake_open_readonly()` C FFI**: `ReadOnlyCatalog` accessible from C via `rocklake_open_readonly()`; `rocklake.h` updated.
+- **`--read-only` CLI flag**: `rocklake serve --read-only` internally calls `open_without_epoch`; alias for `--mode reader`.
+- **Connection Pooling**: Idle-connection pool added to the PG-Wire server; `--idle-connection-timeout` (default: 60s) closes stale connections automatically.
+- **Graceful SIGTERM Drain**: On `SIGTERM`, the server stops accepting new connections and waits up to `--drain-timeout` (default: 30s) for in-flight queries before exiting cleanly.
+- **Session Prometheus Gauges**: `active_sessions` and `idle_sessions` Prometheus gauge metrics added to the PG-Wire server.
+- **DataFusion AsyncBridge Backpressure**: `sync_channel` capacity in `AsyncBridge` increased from 64 to configurable `--datafusion-bridge-queue-depth` (default: 256); `datafusion_bridge_queue_depth` gauge metric added.
+- **Reader-Mode K8s Manifests**: `rocklake-reader` Deployment manifest with HPA and Pod Disruption Budget added to `docs/deployment/kubernetes.md`.
+- **16-Pod Reader Fleet Benchmark**: Startup benchmark (`benchmarks/v047-reader-fleet.json`) confirming all 16 reader pods complete startup in under 5 seconds on real S3 with zero CAS conflicts.
+- **Read-Scale-Out Documentation**: `docs/concepts/read-scale-out.md` documenting read-only mode, writer-vs-reader service routing, and zero-contention guarantees.
+
+### Fixed
+
+- **DataFusion Bridge Backpressure**: Increased `AsyncBridge` channel depth from 64 to 256 to prevent blocking under high concurrent DataFusion query loads.
+
 ## [0.45.0] — 2026-05-30
 
 ### Added
