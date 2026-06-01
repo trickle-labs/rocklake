@@ -12,7 +12,7 @@ use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 
 use rocklake_catalog::{CatalogStore, OpenOptions};
-use rocklake_pgwire::{executor};
+use rocklake_pgwire::executor;
 use rocklake_pgwire::session::SessionState;
 use rocklake_sql::ParamValues;
 
@@ -46,7 +46,10 @@ async fn exec(
     let mut res = executor::execute_sql(sql, params, store, &mut session, &nm(), &ext())
         .await
         .unwrap_or_else(|e| panic!("execute_sql failed for `{sql}`: {e}"));
-    assert!(!res.is_empty(), "execute_sql returned empty vec for: `{sql}`");
+    assert!(
+        !res.is_empty(),
+        "execute_sql returned empty vec for: `{sql}`"
+    );
     res.remove(0)
 }
 
@@ -105,7 +108,7 @@ async fn e2e_complete_table_lifecycle() {
     .await;
 
     // CREATE: Columns
-    for (col_name, col_type, col_order) in vec![
+    for (col_name, col_type, col_order) in [
         ("user_id", "BIGINT", 0),
         ("event_name", "VARCHAR", 1),
         ("event_time", "TIMESTAMP", 2),
@@ -126,15 +129,30 @@ async fn e2e_complete_table_lifecycle() {
     }
 
     // READ: Verify schema structure
-    let resp = exec("SELECT * FROM ducklake_schema", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_schema",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, schema_count) = inspect_query(resp).await;
     assert!(schema_count > 0, "should have created schema");
 
-    let resp = exec("SELECT * FROM ducklake_table", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_table",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, table_count) = inspect_query(resp).await;
     assert!(table_count > 0, "should have created table");
 
-    let resp = exec("SELECT * FROM ducklake_column", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_column",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, column_count) = inspect_query(resp).await;
     assert_eq!(column_count, 3, "should have created 3 columns");
 
@@ -155,7 +173,12 @@ async fn e2e_complete_table_lifecycle() {
     .await;
 
     // VERIFY: Data files visible
-    let resp = exec("SELECT * FROM ducklake_data_file", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_data_file",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, file_count) = inspect_query(resp).await;
     assert!(file_count > 0, "should have created data files");
 }
@@ -241,15 +264,30 @@ async fn e2e_snapshot_and_metadata_tracking() {
     .await;
 
     // VERIFY: All recorded
-    let resp = exec("SELECT * FROM ducklake_snapshot", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_snapshot",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, snap_count) = inspect_query(resp).await;
     assert!(snap_count > 0, "should have snapshot");
 
-    let resp = exec("SELECT * FROM ducklake_snapshot_changes", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_snapshot_changes",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, change_count) = inspect_query(resp).await;
     assert!(change_count > 0, "should have snapshot changes");
 
-    let resp = exec("SELECT * FROM ducklake_metadata", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_metadata",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, meta_count) = inspect_query(resp).await;
     assert!(meta_count > 0, "should have metadata");
 }
@@ -341,10 +379,18 @@ async fn e2e_column_stats_tracking() {
     .await;
 
     // VERIFY: Stats recorded
-    let resp = exec("SELECT * FROM ducklake_table_column_stats", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_table_column_stats",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have column stats");
-    assert!(cols.contains(&"null_count".to_string()), "should have null_count");
+    assert!(
+        cols.contains(&"null_count".to_string()),
+        "should have null_count"
+    );
 }
 
 /// Test multi-file scenarios with partition info.
@@ -420,7 +466,10 @@ async fn e2e_partitioned_table_operations() {
             &store,
             &ParamValues::new(vec![
                 Some("2".to_string()),
-                Some(format!("data/metrics/hour={}/part-0001.parquet", partition_value)),
+                Some(format!(
+                    "data/metrics/hour={}/part-0001.parquet",
+                    partition_value
+                )),
                 Some("parquet".to_string()),
                 Some("3600".to_string()),
                 Some("262144".to_string()),
@@ -431,16 +480,34 @@ async fn e2e_partitioned_table_operations() {
     }
 
     // VERIFY: Partition structure
-    let resp = exec("SELECT * FROM ducklake_partition_info", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_partition_info",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, part_count) = inspect_query(resp).await;
     assert!(part_count > 0, "should have partition info");
 
-    let resp = exec("SELECT * FROM ducklake_partition_column", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_partition_column",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have partition columns");
-    assert!(cols.contains(&"table_id".to_string()), "should have table_id");
+    assert!(
+        cols.contains(&"table_id".to_string()),
+        "should have table_id"
+    );
 
-    let resp = exec("SELECT * FROM ducklake_data_file", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_data_file",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (_, file_count) = inspect_query(resp).await;
     assert_eq!(file_count, 3, "should have 3 data files for partitions");
 }
@@ -517,15 +584,31 @@ async fn e2e_delete_file_operations() {
     .await;
 
     // VERIFY: Delete operations tracked
-    let resp = exec("SELECT * FROM ducklake_delete_file", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_delete_file",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have delete files");
-    assert!(cols.contains(&"delete_count".to_string()), "should have delete_count");
+    assert!(
+        cols.contains(&"delete_count".to_string()),
+        "should have delete_count"
+    );
 
-    let resp = exec("SELECT * FROM ducklake_files_scheduled_for_deletion", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_files_scheduled_for_deletion",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have scheduled deletions");
-    assert!(cols.contains(&"data_file_id".to_string()), "should have data_file_id");
+    assert!(
+        cols.contains(&"data_file_id".to_string()),
+        "should have data_file_id"
+    );
 }
 
 /// Test view operations and metadata persistence.
@@ -567,10 +650,18 @@ async fn e2e_view_operations() {
     .await;
 
     // VERIFY: View persisted
-    let resp = exec("SELECT * FROM ducklake_view", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_view",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have view");
-    assert!(cols.contains(&"view_name".to_string()), "should have view_name");
+    assert!(
+        cols.contains(&"view_name".to_string()),
+        "should have view_name"
+    );
     assert!(cols.contains(&"sql".to_string()), "should have sql");
 }
 
@@ -641,14 +732,30 @@ async fn e2e_sort_expression_operations() {
     .await;
 
     // VERIFY: Sort structure
-    let resp = exec("SELECT * FROM ducklake_sort_info", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_sort_info",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have sort info");
-    assert!(cols.contains(&"table_id".to_string()), "should have table_id");
+    assert!(
+        cols.contains(&"table_id".to_string()),
+        "should have table_id"
+    );
 
-    let resp = exec("SELECT * FROM ducklake_sort_expression", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_sort_expression",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have sort expressions");
-    assert!(cols.contains(&"expression".to_string()), "should have expression");
+    assert!(
+        cols.contains(&"expression".to_string()),
+        "should have expression"
+    );
     assert!(cols.contains(&"dialect".to_string()), "should have dialect");
 }

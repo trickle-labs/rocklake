@@ -34,9 +34,10 @@ use catalog::{
     make_inlined_data_tables_response, make_inlined_rows_response,
     make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
     make_macros_response, make_metadata_response, make_metadata_table_empty_response,
-    make_name_mapping_response, make_schema_version_response, make_schema_versions_response,
-    make_schemas_response, make_snapshot_changes_response, make_snapshot_row_response,
-    make_snapshot_stats_changes_response, make_sort_info_response,
+    make_name_mapping_response, make_partition_columns_response, make_partition_info_response,
+    make_schema_version_response, make_schema_versions_response, make_schemas_response,
+    make_snapshot_changes_response, make_snapshot_row_response,
+    make_snapshot_stats_changes_response, make_sort_expressions_response, make_sort_info_response,
     make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
     make_tags_response, make_views_response, parse_inlined_table_ids,
 };
@@ -946,6 +947,54 @@ async fn execute_classified<'a>(
             // Return empty for now; name mappings are typically queried with WHERE clauses
             let rows = Vec::new();
             Ok(vec![make_name_mapping_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_partition_info" =>
+        {
+            let table_id = params.get_u64(0).ok();
+            let reader = { store.lock().await.read_latest() };
+            let rows = if let Some(table_id) = table_id {
+                reader
+                    .list_partition_info(table_id)
+                    .await
+                    .map_err(RockLakeError::from)?
+            } else {
+                Vec::new()
+            };
+            Ok(vec![make_partition_info_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_partition_column" =>
+        {
+            let partition_id = params.get_u64(0).ok();
+            let reader = { store.lock().await.read_latest() };
+            let rows = if let Some(partition_id) = partition_id {
+                reader
+                    .list_partition_columns(partition_id)
+                    .await
+                    .map_err(RockLakeError::from)?
+            } else {
+                Vec::new()
+            };
+            Ok(vec![make_partition_columns_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_sort_expression" =>
+        {
+            let table_id = params.get_u64(0).ok();
+            let reader = { store.lock().await.read_latest() };
+            let rows = if let Some(table_id) = table_id {
+                reader
+                    .list_sort_expressions(table_id)
+                    .await
+                    .map_err(RockLakeError::from)?
+            } else {
+                Vec::new()
+            };
+            Ok(vec![make_sort_expressions_response(rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {

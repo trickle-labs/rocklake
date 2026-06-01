@@ -2586,6 +2586,147 @@ fn decode_bytea_literal(value: &str) -> Vec<u8> {
     }
 }
 
+/// v0.47.3: Build a PgWire response for `SELECT * FROM ducklake_partition_info`.
+pub(super) fn make_partition_info_response(
+    rows: Vec<rocklake_core::rows::PartitionInfoRow>,
+) -> Response<'static> {
+    let schema = crate::schema_registry::partition_info_schema();
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.partition_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.table_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.begin_snapshot.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let end = r.end_snapshot.map(|e| e.to_string());
+        encoder
+            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.47.3: Build a PgWire response for `SELECT * FROM ducklake_partition_column`.
+pub(super) fn make_partition_columns_response(
+    rows: Vec<rocklake_core::rows::PartitionColumnRow>,
+) -> Response<'static> {
+    let schema = crate::schema_registry::partition_column_schema();
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.partition_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let table_id = r.table_id.map(|t| t.to_string());
+        encoder
+            .encode_field_with_type_and_format(&table_id, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.partition_key_index.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.column_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&r.transform, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.47.3: Build a PgWire response for `SELECT * FROM ducklake_sort_expression`.
+pub(super) fn make_sort_expressions_response(
+    rows: Vec<rocklake_core::rows::SortExpressionRow>,
+) -> Response<'static> {
+    let schema = crate::schema_registry::sort_expression_schema();
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.sort_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let table_id = r.table_id.map(|t| t.to_string());
+        encoder
+            .encode_field_with_type_and_format(&table_id, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.sort_key_index.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&r.expression, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&r.dialect, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        let sort_dir = r.sort_direction.as_deref().unwrap_or("ASC");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(sort_dir.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let null_ord = r.null_order.as_deref().unwrap_or("NULLS LAST");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(null_ord.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
 pub(super) fn make_metadata_table_empty_response(table_name: &str) -> Response<'static> {
     // Use the schema registry as the single source of truth for all registered
     // DuckLake metadata tables.
@@ -2880,10 +3021,18 @@ pub(super) fn make_file_variant_stats_response(
         // bloom_filter_offset and bloom_filter_length are not in FileVariantStatsRow;
         // default to NULL for now to match the current simplified schema.
         encoder
-            .encode_field_with_type_and_format(&None as &Option<String>, &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(
+                &None as &Option<String>,
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
             .expect("pgwire field encoding is infallible");
         encoder
-            .encode_field_with_type_and_format(&None as &Option<String>, &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(
+                &None as &Option<String>,
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }

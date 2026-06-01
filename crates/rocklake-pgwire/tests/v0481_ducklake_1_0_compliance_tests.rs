@@ -12,8 +12,8 @@ use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 
 use rocklake_catalog::{CatalogStore, OpenOptions};
-use rocklake_pgwire::{executor, schema_registry};
 use rocklake_pgwire::session::SessionState;
+use rocklake_pgwire::{executor, schema_registry};
 use rocklake_sql::ParamValues;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -46,7 +46,10 @@ async fn exec(
     let mut res = executor::execute_sql(sql, params, store, &mut session, &nm(), &ext())
         .await
         .unwrap_or_else(|e| panic!("execute_sql failed for `{sql}`: {e}"));
-    assert!(!res.is_empty(), "execute_sql returned empty vec for: `{sql}`");
+    assert!(
+        !res.is_empty(),
+        "execute_sql returned empty vec for: `{sql}`"
+    );
     res.remove(0)
 }
 
@@ -430,10 +433,18 @@ async fn catalog_schema_and_table_operations() {
     .await;
 
     // Query schema
-    let resp = exec("SELECT * FROM ducklake_schema", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_schema",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have created schema");
-    assert!(cols.contains(&"schema_name".to_string()), "should have schema_name column");
+    assert!(
+        cols.contains(&"schema_name".to_string()),
+        "should have schema_name column"
+    );
 
     // Insert table
     exec(
@@ -448,10 +459,18 @@ async fn catalog_schema_and_table_operations() {
     .await;
 
     // Query table
-    let resp = exec("SELECT * FROM ducklake_table", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_table",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have created table");
-    assert!(cols.contains(&"table_name".to_string()), "should have table_name column");
+    assert!(
+        cols.contains(&"table_name".to_string()),
+        "should have table_name column"
+    );
 }
 
 /// Test column operations.
@@ -495,10 +514,18 @@ async fn catalog_column_operations() {
     .await;
 
     // Read columns back
-    let resp = exec("SELECT * FROM ducklake_column", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_column",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have created column");
-    assert!(cols.contains(&"column_name".to_string()), "should have column_name column");
+    assert!(
+        cols.contains(&"column_name".to_string()),
+        "should have column_name column"
+    );
 }
 
 /// Test data file and delete file operations.
@@ -546,12 +573,26 @@ async fn catalog_file_operations() {
     .await;
 
     // Verify data file has all fields
-    let resp = exec("SELECT * FROM ducklake_data_file", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_data_file",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have created data file");
-    assert!(cols.contains(&"footer_size".to_string()), "should have footer_size");
-    assert!(cols.contains(&"partition_id".to_string()), "should have partition_id");
-    assert!(cols.contains(&"mapping_id".to_string()), "should have mapping_id");
+    assert!(
+        cols.contains(&"footer_size".to_string()),
+        "should have footer_size"
+    );
+    assert!(
+        cols.contains(&"partition_id".to_string()),
+        "should have partition_id"
+    );
+    assert!(
+        cols.contains(&"mapping_id".to_string()),
+        "should have mapping_id"
+    );
 
     // Insert delete file
     exec(
@@ -568,10 +609,18 @@ async fn catalog_file_operations() {
     .await;
 
     // Verify delete file
-    let resp = exec("SELECT * FROM ducklake_delete_file", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_delete_file",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have created delete file");
-    assert!(cols.contains(&"delete_count".to_string()), "should have delete_count");
+    assert!(
+        cols.contains(&"delete_count".to_string()),
+        "should have delete_count"
+    );
 }
 
 /// Test metadata, snapshot, and stats operations.
@@ -584,15 +633,17 @@ async fn catalog_metadata_snapshot_stats() {
     exec(
         "INSERT INTO ducklake_metadata (key, value) VALUES ($1, $2)",
         &store,
-        &ParamValues::new(vec![
-            Some("version".to_string()),
-            Some("1.0".to_string()),
-        ]),
+        &ParamValues::new(vec![Some("version".to_string()), Some("1.0".to_string())]),
     )
     .await;
 
     // Verify metadata
-    let resp = exec("SELECT * FROM ducklake_metadata", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_metadata",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have metadata");
     assert!(cols.contains(&"key".to_string()), "should have key");
@@ -614,11 +665,22 @@ async fn catalog_metadata_snapshot_stats() {
     .await;
 
     // Verify snapshot
-    let resp = exec("SELECT * FROM ducklake_snapshot", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_snapshot",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have snapshot");
-    assert!(cols.contains(&"next_catalog_id".to_string()), "should have next_catalog_id");
-    assert!(cols.contains(&"next_file_id".to_string()), "should have next_file_id");
+    assert!(
+        cols.contains(&"next_catalog_id".to_string()),
+        "should have next_catalog_id"
+    );
+    assert!(
+        cols.contains(&"next_file_id".to_string()),
+        "should have next_file_id"
+    );
 }
 
 /// Test mapping table operations.
@@ -652,33 +714,43 @@ async fn catalog_mapping_operations() {
     exec(
         "INSERT INTO ducklake_column_mapping (table_id, mapping_type) VALUES ($1, $2)",
         &store,
-        &ParamValues::new(vec![
-            Some("2".to_string()),
-            Some("standard".to_string()),
-        ]),
+        &ParamValues::new(vec![Some("2".to_string()), Some("standard".to_string())]),
     )
     .await;
 
     // Verify column mapping
-    let resp = exec("SELECT * FROM ducklake_column_mapping", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_column_mapping",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have column_mapping");
-    assert!(cols.contains(&"table_id".to_string()), "should have table_id");
+    assert!(
+        cols.contains(&"table_id".to_string()),
+        "should have table_id"
+    );
 
     // Insert name mapping
     exec(
         "INSERT INTO ducklake_name_mapping (column_id, name) VALUES ($1, $2)",
         &store,
-        &ParamValues::new(vec![
-            Some("1".to_string()),
-            Some("event_id".to_string()),
-        ]),
+        &ParamValues::new(vec![Some("1".to_string()), Some("event_id".to_string())]),
     )
     .await;
 
     // Verify name mapping
-    let resp = exec("SELECT * FROM ducklake_name_mapping", &store, &ParamValues::default()).await;
+    let resp = exec(
+        "SELECT * FROM ducklake_name_mapping",
+        &store,
+        &ParamValues::default(),
+    )
+    .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have name_mapping");
-    assert!(cols.contains(&"column_id".to_string()), "should have column_id");
+    assert!(
+        cols.contains(&"column_id".to_string()),
+        "should have column_id"
+    );
 }

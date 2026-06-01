@@ -628,7 +628,7 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
         "ducklake_files_scheduled_for_deletion" => Some(files_scheduled_for_deletion_schema()),
         "ducklake_inlined_data_tables" => Some(inlined_data_tables_schema()),
         "ducklake_schema_version" => Some(schema_version_schema()),
-        "ducklake_schema_versions" => Some(schema_version_schema()),  // DuckLake spec uses plural form
+        "ducklake_schema_versions" => Some(schema_version_schema()), // DuckLake spec uses plural form
         "ducklake_schema_changes" => Some(schema_changes_schema()),
         "ducklake_encrypted_secret" => Some(encrypted_secret_schema()),
         "ducklake_encryption_key" => Some(encryption_key_schema()),

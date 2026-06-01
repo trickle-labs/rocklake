@@ -844,6 +844,72 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// List all `ducklake_partition_info` rows visible at this snapshot for a table.
+    pub async fn list_partition_info(&self, table_id: u64) -> CatalogResult<Vec<PartitionInfoRow>> {
+        let prefix = keys::prefix_for_tag(TAG_PARTITION_INFO);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: PartitionInfoRow = values::decode_value(&kv.value)?;
+            if row.table_id == table_id
+                && mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id)
+            {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// List all `ducklake_partition_column` rows visible at this snapshot for a partition.
+    pub async fn list_partition_columns(
+        &self,
+        partition_id: u64,
+    ) -> CatalogResult<Vec<PartitionColumnRow>> {
+        let prefix = keys::prefix_for_tag(TAG_PARTITION_COLUMN);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: PartitionColumnRow = values::decode_value(&kv.value)?;
+            if row.partition_id == partition_id {
+                rows.push(row);
+            }
+        }
+        // Sort by partition_key_index
+        rows.sort_by_key(|r| r.partition_key_index);
+        Ok(rows)
+    }
+
+    /// List all `ducklake_sort_expression` rows visible at this snapshot for a table.
+    pub async fn list_sort_expressions(
+        &self,
+        table_id: u64,
+    ) -> CatalogResult<Vec<SortExpressionRow>> {
+        let prefix = keys::prefix_for_tag(TAG_SORT_EXPRESSION);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SortExpressionRow = values::decode_value(&kv.value)?;
+            if row.table_id.unwrap_or(0) == table_id {
+                rows.push(row);
+            }
+        }
+        // Sort by sort_id
+        rows.sort_by_key(|r| r.sort_id);
+        Ok(rows)
+    }
+
     // ─── v0.10: Snapshot Diff (CDC Output Primitive) ────────────────────────
 
     /// Compute the diff between two snapshots.
