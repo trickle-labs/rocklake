@@ -101,6 +101,12 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                 let table_name = extract_table_name(&from.relation)
                     .unwrap_or_default()
                     .to_lowercase();
+                // DuckLake CHECKPOINT deletes flushed inlined rows — check first before requiring schema
+                if table_name.starts_with("ducklake_inlined_data_") {
+                    return StatementKind::DeleteInlinedDataRows {
+                        table_name,
+                    };
+                }
                 if table_name.contains('.') {
                     let parts: Vec<&str> = table_name.splitn(2, '.').collect();
                     if parts.len() == 2 {
@@ -109,12 +115,6 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                         // Reject mutations against the read-only virtual catalog (SQLSTATE 25006).
                         if schema == "rocklake_catalog" {
                             return StatementKind::VirtualCatalogMutation {
-                                table_name: table.to_string(),
-                            };
-                        }
-                        // DuckLake CHECKPOINT deletes flushed inlined rows.
-                        if table.starts_with("ducklake_inlined_data_") {
-                            return StatementKind::DeleteInlinedDataRows {
                                 table_name: table.to_string(),
                             };
                         }
