@@ -594,8 +594,8 @@ async fn golden_ducklake_sort_expression() {
         "first column must be sort_id, got: {cols:?}"
     );
     assert!(
-        cols.contains(&"sort_order".to_string()),
-        "must have sort_order: {cols:?}"
+        cols.contains(&"sort_direction".to_string()),
+        "must have sort_direction: {cols:?}"
     );
 }
 
