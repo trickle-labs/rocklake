@@ -66,7 +66,10 @@ async fn column_visible_at_begin_snapshot() {
     store.commit_writer(snap1);
 
     let mut w2 = store.begin_write();
-    let _col_id = w2.add_column(table_id, "c1", "INT", 0, true, None).await.unwrap();
+    let _col_id = w2
+        .add_column(table_id, "c1", "INT", 0, true, None)
+        .await
+        .unwrap();
     let snap2 = w2.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap2);
 

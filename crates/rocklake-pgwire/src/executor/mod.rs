@@ -36,8 +36,8 @@ use catalog::{
     make_macros_response, make_metadata_response, make_metadata_table_empty_response,
     make_name_mapping_response, make_partition_columns_response, make_partition_info_response,
     make_schema_version_response, make_schema_versions_response, make_schemas_response,
-    make_snapshot_changes_response, make_snapshot_row_response, make_sort_expressions_response,
-    make_snapshot_stats_changes_response, make_sort_info_response,
+    make_snapshot_changes_response, make_snapshot_row_response,
+    make_snapshot_stats_changes_response, make_sort_expressions_response, make_sort_info_response,
     make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
     make_tags_response, make_views_response, parse_inlined_table_ids,
 };

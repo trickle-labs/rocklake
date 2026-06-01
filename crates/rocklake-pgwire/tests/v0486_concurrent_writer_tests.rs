@@ -126,7 +126,11 @@ async fn writer_lease_released_on_commit() {
 
     let reader = store.read_latest();
     let tables = reader.list_tables(schema_id).await.unwrap();
-    assert_eq!(tables.len(), 1, "writer B should successfully acquire lock after A releases it");
+    assert_eq!(
+        tables.len(),
+        1,
+        "writer B should successfully acquire lock after A releases it"
+    );
 }
 
 #[tokio::test]
@@ -150,5 +154,9 @@ async fn writer_lease_timeout_releases() {
 
     let reader = store.read_latest();
     let tables = reader.list_tables(schema_id).await.unwrap();
-    assert_eq!(tables.len(), 1, "system should recover after writer release");
+    assert_eq!(
+        tables.len(),
+        1,
+        "system should recover after writer release"
+    );
 }

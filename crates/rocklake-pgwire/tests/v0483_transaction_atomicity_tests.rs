@@ -126,10 +126,7 @@ async fn partial_batch_failure_cascades() {
 
     // Start batch: create table (but simulate failure by not committing)
     let mut w2 = store.begin_write();
-    let table_id = w2
-        .create_table(schema_id, "t1", None)
-        .await
-        .unwrap();
+    let table_id = w2.create_table(schema_id, "t1", None).await.unwrap();
     let _col_id = w2
         .add_column(table_id, "c1", "INT", 0, true, None)
         .await
@@ -140,7 +137,11 @@ async fn partial_batch_failure_cascades() {
     // Verify entire batch was rolled back
     let reader = store.read_latest();
     let tables = reader.list_tables(schema_id).await.unwrap();
-    assert_eq!(tables.len(), 0, "table should not exist after batch rollback");
+    assert_eq!(
+        tables.len(),
+        0,
+        "table should not exist after batch rollback"
+    );
 }
 
 #[tokio::test]
@@ -156,19 +157,13 @@ async fn writer_fencing_detects_conflict() {
 
     // Writer A creates table_a and commits
     let mut w_a = store.begin_write();
-    let _table_a = w_a
-        .create_table(schema_id, "ta", None)
-        .await
-        .unwrap();
+    let _table_a = w_a.create_table(schema_id, "ta", None).await.unwrap();
     let snap_a = w_a.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap_a);
 
     // Writer B creates table_b and commits (should succeed)
     let mut w_b = store.begin_write();
-    let _table_b = w_b
-        .create_table(schema_id, "tb", None)
-        .await
-        .unwrap();
+    let _table_b = w_b.create_table(schema_id, "tb", None).await.unwrap();
     let snap_b = w_b.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap_b);
 
@@ -186,10 +181,7 @@ async fn multi_insert_snapshot_ordering() {
     // Create schema and table
     let mut w1 = store.begin_write();
     let schema_id = w1.create_schema("s1").await.unwrap();
-    let table_id = w1
-        .create_table(schema_id, "t1", None)
-        .await
-        .unwrap();
+    let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
     let snap1 = w1.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap1);
 
@@ -228,10 +220,7 @@ async fn transaction_isolation_no_dirty_reads() {
 
     // Writer starts creating table but doesn't commit
     let mut w1 = store.begin_write();
-    let table_id = w1
-        .create_table(schema_id, "t1", None)
-        .await
-        .unwrap();
+    let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
 
     // Reader sees schema but NOT the uncommitted table
     let reader = store.read_latest();
@@ -241,10 +230,7 @@ async fn transaction_isolation_no_dirty_reads() {
     // After commit, reader sees the table
     drop(w1);
     let mut w2 = store.begin_write();
-    let _ = w2
-        .create_table(schema_id, "t1", None)
-        .await
-        .unwrap();
+    let _ = w2.create_table(schema_id, "t1", None).await.unwrap();
     let snap2 = w2.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap2);
 

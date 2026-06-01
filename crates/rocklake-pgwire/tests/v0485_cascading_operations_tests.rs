@@ -35,7 +35,11 @@ async fn drop_schema_cascades_to_tables() {
 
     let reader = store.read_latest();
     let tables = reader.list_tables(schema_id).await.unwrap();
-    assert_eq!(tables.len(), 0, "tables should be invisible after schema drop");
+    assert_eq!(
+        tables.len(),
+        0,
+        "tables should be invisible after schema drop"
+    );
 }
 
 #[tokio::test]
@@ -46,7 +50,10 @@ async fn drop_schema_cascades_to_columns() {
     let mut w1 = store.begin_write();
     let schema_id = w1.create_schema("s1").await.unwrap();
     let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
-    let _c1 = w1.add_column(table_id, "c1", "INT", 0, true, None).await.unwrap();
+    let _c1 = w1
+        .add_column(table_id, "c1", "INT", 0, true, None)
+        .await
+        .unwrap();
     let snap1 = w1.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap1);
 
@@ -56,8 +63,16 @@ async fn drop_schema_cascades_to_columns() {
     store.commit_writer(snap2);
 
     let reader = store.read_latest();
-    let (_table, cols) = reader.describe_table(table_id).await.unwrap().unwrap_or_default();
-    assert_eq!(cols.len(), 0, "columns should be invisible after schema drop");
+    let (_table, cols) = reader
+        .describe_table(table_id)
+        .await
+        .unwrap()
+        .unwrap_or_default();
+    assert_eq!(
+        cols.len(),
+        0,
+        "columns should be invisible after schema drop"
+    );
 }
 
 #[tokio::test]
@@ -81,7 +96,11 @@ async fn drop_schema_cascades_to_data_files() {
 
     let reader = store.read_latest();
     let files = reader.list_data_files(table_id).await.unwrap();
-    assert_eq!(files.len(), 0, "data files should be invisible after schema drop");
+    assert_eq!(
+        files.len(),
+        0,
+        "data files should be invisible after schema drop"
+    );
 }
 
 #[tokio::test]
@@ -92,7 +111,10 @@ async fn drop_table_cascades_to_columns() {
     let mut w1 = store.begin_write();
     let schema_id = w1.create_schema("s1").await.unwrap();
     let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
-    let _c1 = w1.add_column(table_id, "c1", "INT", 0, true, None).await.unwrap();
+    let _c1 = w1
+        .add_column(table_id, "c1", "INT", 0, true, None)
+        .await
+        .unwrap();
     let snap1 = w1.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap1);
 
@@ -127,7 +149,11 @@ async fn drop_table_cascades_to_data_files() {
 
     let reader = store.read_latest();
     let files = reader.list_data_files(table_id).await.unwrap();
-    assert_eq!(files.len(), 0, "data files should be invisible after table drop");
+    assert_eq!(
+        files.len(),
+        0,
+        "data files should be invisible after table drop"
+    );
 }
 
 #[tokio::test]
@@ -171,7 +197,11 @@ async fn drop_table_cascades_to_sort_info() {
 
     let reader = store.read_latest();
     let sorts = reader.list_all_sort_info().await.unwrap();
-    assert_eq!(sorts.len(), 0, "sort info should be invisible after table drop");
+    assert_eq!(
+        sorts.len(),
+        0,
+        "sort info should be invisible after table drop"
+    );
 }
 
 #[tokio::test]
@@ -182,8 +212,14 @@ async fn drop_column_cascade_partial() {
     let mut w1 = store.begin_write();
     let schema_id = w1.create_schema("s1").await.unwrap();
     let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
-    let _c1 = w1.add_column(table_id, "c1", "INT", 0, true, None).await.unwrap();
-    let _c2 = w1.add_column(table_id, "c2", "INT", 1, true, None).await.unwrap();
+    let _c1 = w1
+        .add_column(table_id, "c1", "INT", 0, true, None)
+        .await
+        .unwrap();
+    let _c2 = w1
+        .add_column(table_id, "c2", "INT", 1, true, None)
+        .await
+        .unwrap();
     let snap1 = w1.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap1);
 
@@ -233,5 +269,9 @@ async fn dropped_rows_not_in_select_queries() {
     // Read at snapshot 2 should not see the dropped table
     let reader = store.read_at(snap2).unwrap();
     let tables = reader.list_tables(schema_id).await.unwrap();
-    assert_eq!(tables.len(), 0, "dropped table should not appear in query results");
+    assert_eq!(
+        tables.len(),
+        0,
+        "dropped table should not appear in query results"
+    );
 }

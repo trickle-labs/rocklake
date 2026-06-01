@@ -3021,10 +3021,18 @@ pub(super) fn make_file_variant_stats_response(
         // bloom_filter_offset and bloom_filter_length are not in FileVariantStatsRow;
         // default to NULL for now to match the current simplified schema.
         encoder
-            .encode_field_with_type_and_format(&None as &Option<String>, &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(
+                &None as &Option<String>,
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
             .expect("pgwire field encoding is infallible");
         encoder
-            .encode_field_with_type_and_format(&None as &Option<String>, &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(
+                &None as &Option<String>,
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }

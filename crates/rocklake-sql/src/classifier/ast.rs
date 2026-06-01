@@ -103,9 +103,7 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                     .to_lowercase();
                 // DuckLake CHECKPOINT deletes flushed inlined rows — check first before requiring schema
                 if table_name.starts_with("ducklake_inlined_data_") {
-                    return StatementKind::DeleteInlinedDataRows {
-                        table_name,
-                    };
+                    return StatementKind::DeleteInlinedDataRows { table_name };
                 }
                 if table_name.contains('.') {
                     let parts: Vec<&str> = table_name.splitn(2, '.').collect();

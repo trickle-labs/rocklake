@@ -888,7 +888,10 @@ impl CatalogReader {
     }
 
     /// List all `ducklake_sort_expression` rows visible at this snapshot for a table.
-    pub async fn list_sort_expressions(&self, table_id: u64) -> CatalogResult<Vec<SortExpressionRow>> {
+    pub async fn list_sort_expressions(
+        &self,
+        table_id: u64,
+    ) -> CatalogResult<Vec<SortExpressionRow>> {
         let prefix = keys::prefix_for_tag(TAG_SORT_EXPRESSION);
         let mut rows = Vec::new();
         let mut iter = self.db.scan_prefix(&prefix).await?;
