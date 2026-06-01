@@ -513,7 +513,14 @@ async fn execute_classified<'a>(
                 }
                 tables
             };
-            Ok(vec![make_tables_response(raw_tables)])
+            // Filter out the "default" stub table created by rebuild_catalog(). It has no
+            // columns and causes DuckLake to abort with "Table entry 'default' does not
+            // have any columns". This is safe because "default" is not a user-created table.
+            let tables: Vec<_> = raw_tables
+                .into_iter()
+                .filter(|t| t.table_name != "default")
+                .collect();
+            Ok(vec![make_tables_response(tables)])
         }
         StatementKind::SelectColumns => {
             let table_id = params.get_u64(0).ok();
