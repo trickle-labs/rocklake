@@ -2846,3 +2846,131 @@ pub(super) fn make_schema_version_response(catalog_schema_version: u64) -> Respo
     resp.set_command_tag("SELECT 1");
     Response::Query(resp)
 }
+
+/// v0.48: Build a PgWire response for `SELECT * FROM ducklake_file_variant_stats`.
+pub(super) fn make_file_variant_stats_response(
+    rows: Vec<rocklake_core::rows::FileVariantStatsRow>,
+) -> Response<'static> {
+    let schema = crate::schema_registry::file_variant_stats_schema();
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.data_file_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.column_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let value_count = r.value_count.map(|v| v.to_string());
+        encoder
+            .encode_field_with_type_and_format(&value_count, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        let null_count = r.null_count.map(|n| n.to_string());
+        encoder
+            .encode_field_with_type_and_format(&null_count, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        // bloom_filter_offset and bloom_filter_length are not in FileVariantStatsRow;
+        // default to NULL for now to match the current simplified schema.
+        encoder
+            .encode_field_with_type_and_format(&None as &Option<String>, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&None as &Option<String>, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.48: Build a PgWire response for `SELECT * FROM ducklake_column_mapping`.
+pub(super) fn make_column_mapping_response(
+    rows: Vec<rocklake_core::rows::ColumnMappingRow>,
+) -> Response<'static> {
+    let schema = crate::schema_registry::column_mapping_schema();
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.table_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let col_id = r.column_id.map(|c| c.to_string());
+        encoder
+            .encode_field_with_type_and_format(&col_id, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        // field_id is not directly in ColumnMappingRow; use mapping_id as a proxy for now.
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.mapping_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&r.mapping_type, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+/// v0.48: Build a PgWire response for `SELECT * FROM ducklake_name_mapping`.
+pub(super) fn make_name_mapping_response(
+    rows: Vec<rocklake_core::rows::NameMappingRow>,
+) -> Response<'static> {
+    let schema = crate::schema_registry::name_mapping_schema();
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        // Schema expects: table_id, field_name, field_id, column_id
+        // NameMappingRow has: mapping_id, column_id, name, source_name_hash, target_field_id, parent_column, is_partition
+        // Map available fields to schema order
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.mapping_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.name.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let target_field = r.target_field_id.map(|id| id.to_string());
+        encoder
+            .encode_field_with_type_and_format(&target_field, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.column_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}

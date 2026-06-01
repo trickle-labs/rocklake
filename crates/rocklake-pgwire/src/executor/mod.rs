@@ -27,14 +27,15 @@ use crate::notify::NotifyManager;
 use crate::session::{BufferedOp, CopyAccumulator, SessionState};
 
 use catalog::{
-    execute_commit, execute_next_rowid_range, execute_table_changes, make_column_tags_response,
-    make_columns_response, make_data_files_response, make_delete_files_response,
-    make_file_column_stats_response, make_file_ids_response, make_global_table_stats_response,
+    execute_commit, execute_next_rowid_range, execute_table_changes, make_column_mapping_response,
+    make_column_tags_response, make_columns_response, make_data_files_response,
+    make_delete_files_response, make_file_column_stats_response, make_file_ids_response,
+    make_file_variant_stats_response, make_global_table_stats_response,
     make_inlined_data_tables_response, make_inlined_rows_response,
     make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
     make_macros_response, make_metadata_response, make_metadata_table_empty_response,
-    make_schema_version_response, make_schema_versions_response, make_schemas_response,
-    make_snapshot_changes_response, make_snapshot_row_response,
+    make_name_mapping_response, make_schema_version_response, make_schema_versions_response,
+    make_schemas_response, make_snapshot_changes_response, make_snapshot_row_response,
     make_snapshot_stats_changes_response, make_sort_info_response,
     make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
     make_tags_response, make_views_response, parse_inlined_table_ids,
@@ -918,6 +919,33 @@ async fn execute_classified<'a>(
                 .await
                 .map_err(RockLakeError::from)?;
             Ok(vec![make_schema_versions_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_file_variant_stats" =>
+        {
+            let _reader = { store.lock().await.read_latest() };
+            // Return empty for now; variant stats are typically queried with WHERE clauses by table_id/column_id
+            let rows = Vec::new();
+            Ok(vec![make_file_variant_stats_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_column_mapping" =>
+        {
+            let _reader = { store.lock().await.read_latest() };
+            // Return empty for now; column mappings are typically queried with WHERE clauses
+            let rows = Vec::new();
+            Ok(vec![make_column_mapping_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_name_mapping" =>
+        {
+            let _reader = { store.lock().await.read_latest() };
+            // Return empty for now; name mappings are typically queried with WHERE clauses
+            let rows = Vec::new();
+            Ok(vec![make_name_mapping_response(rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
