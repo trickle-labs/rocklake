@@ -103,6 +103,7 @@ binding on every roadmap release below.
 | **v0.45.0 — GA Readiness Gate** | 30-day dogfood deployment; friction log resolution; external developer deployment verification; final docs pass; v1.0 release prep | Complete |
 | **v0.46.0 — Code Hardening & Developer Experience** | Eliminate all production `unwrap()` panics; structured SlateDB error variants; `CatalogClient` RwLock refactor; Node.js `u64` ID fix; multi-URI `CatalogClientBuilder`; CLI migration to `clap`; Docker one-liner; docs alignment (sqlite-vfs removal, K8s image tags) | Complete |
 | **v0.47.0 — Read-Only Catalog Access & Connection Management** | RFC-01: `CatalogStore::open_readonly()` skipping epoch CAS; `ReadOnlyCatalog` struct with `refresh()`; `CatalogClientBuilder::build_readonly()`; connection pooling and graceful drain; reader-mode K8s manifests; DataFusion `AsyncBridge` backpressure fix; 16-pod reader fleet startup benchmark on real S3 | Complete |
+| **v0.47.1 — DuckLake CHECKPOINT / DELETE Support** | `DELETE FROM ducklake_inlined_data_*` support; ctid WHERE-clause row-ID extraction; `CHECKPOINT` end-to-end; DuckLake inlined data flush to external Parquet files | Complete |
 | **v0.48.0 — Paginated Scans, Streaming & Observability Depth** | RFC-03: `list_data_files_paged()` with continuation token; `stream_data_files()` async Stream; PG-wire incremental `DataRow` streaming; proper histogram metrics via `prometheus` crate; per-query trace correlation and `trace_id` propagation; slow-query log; memory pressure and RSS metrics; SF100 catalog benchmark suite | Planning |
 | **v0.49.0 — Tiered NVMe Cache & Multi-Node Production Validation** | RFC-02: `TieredCache` L1/L2/L3 with local SSD spill; `--cache-dir` and `--cache-max-gb` CLI flags; L2 pre-population on cold start; wire up `slatedb_sst_count`/`slatedb_compaction_lag_ms` to real SlateDB stats; real 24h multi-node soak on AWS/GCP (not `InMemory`); GHCR container image with versioned tags; pod disruption budget + HPA documentation; v1.0 gating checklist completion | Planning |
 | **v0.70.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; blocked on upstream DuckDB community extension catalog API | Exploration |
@@ -4626,6 +4627,30 @@ Enforce final certification requirements before v1.0:
 - [x] 16-pod startup benchmark green on real S3; results in `benchmarks/`
 - [x] Connection pooling and graceful drain integration tests pass
 - [x] K8s reader manifests and HPA documentation complete
+
+---
+
+## v0.47.1 — DuckLake CHECKPOINT / DELETE Support
+
+> DuckLake's `CHECKPOINT` command flushes inlined catalog rows to external Parquet
+> files and then issues `DELETE FROM "public".ducklake_inlined_data_<tid>_<sv>
+> WHERE ctid IN (...)` to clean up the stale rows. RockLake previously returned
+> `unsupported feature: DELETE` for these statements, making `CHECKPOINT` unusable
+> and blocking all DuckLake workloads that exceed the inlining row limit.
+
+### DuckLake Inlined Data DELETE
+
+- [x] Add `StatementKind::DeleteInlinedDataRows { table_name: String }` variant to the SQL classifier.
+- [x] Route `DELETE FROM "public".ducklake_inlined_data_*` statements to the new variant in `classifier/ast.rs` (before the existing extension-row fallback).
+- [x] Add `row_ids_from_ctid_sql()` helper in `executor/mod.rs`: parses ctid tuples `(block_number, tuple_index)` from the WHERE clause; extracts `block_number` as row ID (RockLake's ctid encoding).
+- [x] Add executor arm for `DeleteInlinedDataRows`: extracts row IDs, creates `BufferedOp::DeleteInlinedRows`, commits via existing catalog layer (`mark_inlined_insert_deleted`).
+- [x] All existing driver-compat and lifecycle tests pass unmodified.
+
+### Deliverables
+
+- [x] `CHECKPOINT` succeeds end-to-end with DuckDB 1.5.3 (Variegata)
+- [x] Inlined rows are marked deleted (MVCC end_snapshot) after flush
+- [x] `driver_compat`, `v0276_lifecycle_tests`, `v0280_duckdb153_tests` all green
 
 ---
 

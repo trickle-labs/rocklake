@@ -328,6 +328,11 @@ pub enum StatementKind {
         schema_name: String,
         table_name: String,
     },
+    /// `DELETE FROM "public".ducklake_inlined_data_<table_id>_<schema_version> WHERE ctid IN (...)`
+    /// Issued by DuckLake CHECKPOINT to clean up flushed inlined rows.
+    DeleteInlinedDataRows {
+        table_name: String,
+    },
 
     // ─── COPY Protocol ─────────────────────────────────────────────────
     /// `COPY "public"."ducklake_*" FROM STDIN (FORMAT binary)`

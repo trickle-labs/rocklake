@@ -112,6 +112,12 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                                 table_name: table.to_string(),
                             };
                         }
+                        // DuckLake CHECKPOINT deletes flushed inlined rows.
+                        if table.starts_with("ducklake_inlined_data_") {
+                            return StatementKind::DeleteInlinedDataRows {
+                                table_name: table.to_string(),
+                            };
+                        }
                         return StatementKind::DeleteExtensionRows {
                             schema_name: schema.to_string(),
                             table_name: table.to_string(),

@@ -123,6 +123,29 @@ fn literal_insert_values(sql: &str) -> Vec<Option<String>> {
         .unwrap_or_default()
 }
 
+/// Extract row IDs from a DuckLake CHECKPOINT DELETE:
+///   `DELETE FROM ... WHERE ctid IN ('(524288,0)', '(131073,0)')`
+/// Each ctid is `(block_number, tuple_index)`; RockLake encodes row_id as block_number.
+fn row_ids_from_ctid_sql(sql: &str) -> Vec<u64> {
+    let mut ids = Vec::new();
+    let mut rest = sql;
+    while let Some(pos) = rest.find('(') {
+        rest = &rest[pos + 1..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        let num = &rest[..end];
+        if !num.is_empty() {
+            if let Ok(n) = num.parse::<u64>() {
+                if rest[end..].starts_with(',') {
+                    ids.push(n);
+                }
+            }
+        }
+    }
+    ids
+}
+
 fn literal_insert_rows(sql: &str) -> Vec<Vec<Option<String>>> {
     let Some(values_idx) = sql.to_lowercase().find("values") else {
         return Vec::new();
@@ -513,14 +536,7 @@ async fn execute_classified<'a>(
                 }
                 tables
             };
-            // Filter out the "default" stub table created by rebuild_catalog(). It has no
-            // columns and causes DuckLake to abort with "Table entry 'default' does not
-            // have any columns". This is safe because "default" is not a user-created table.
-            let tables: Vec<_> = raw_tables
-                .into_iter()
-                .filter(|t| t.table_name != "default")
-                .collect();
-            Ok(vec![make_tables_response(tables)])
+            Ok(vec![make_tables_response(raw_tables)])
         }
         StatementKind::SelectColumns => {
             let table_id = params.get_u64(0).ok();
@@ -1584,6 +1600,27 @@ async fn execute_classified<'a>(
         // Mutations are rejected with SQLSTATE 25006.
         StatementKind::VirtualCatalogScan { ref table_name } => {
             execute_virtual_catalog_scan(table_name, store).await
+        }
+
+        // DELETE FROM "public".ducklake_inlined_data_<tid>_<sv> WHERE ctid IN (...)
+        // Issued by DuckLake CHECKPOINT after flushing inlined rows to Parquet.
+        StatementKind::DeleteInlinedDataRows { ref table_name } => {
+            let row_ids = row_ids_from_ctid_sql(_sql);
+            let row_count = row_ids.len();
+            if !row_ids.is_empty() {
+                let op = BufferedOp::DeleteInlinedRows {
+                    table_name: table_name.clone(),
+                    row_ids,
+                };
+                if session.in_transaction {
+                    session.pending_txn.push(op)?;
+                } else {
+                    execute_commit(vec![op], store, notify_manager).await?;
+                }
+            }
+            Ok(vec![Response::Execution(Tag::new(&format!(
+                "DELETE {row_count}"
+            )))])
         }
 
         // INSERT/UPDATE/DELETE against rocklake_catalog.* → SQLSTATE 25006.
