@@ -946,11 +946,11 @@ impl CatalogWriter {
         let snapshot_id = self.counters.peek_snapshot_id();
         let key = keys::key_inlined_insert(table_id, schema_version, row_id);
 
-        let existing = self
-            .db
-            .get(&key)
-            .await?
-            .ok_or_else(|| CatalogError::NotFound(format!("inlined row {row_id}")))?;
+        // DuckLake CHECKPOINT may try to delete rows that don't exist (already deleted or never existed).
+        // Like SQL DELETE, this should succeed silently.
+        let Some(existing) = self.db.get(&key).await? else {
+            return Ok(());
+        };
 
         let mut row: InlinedInsertRow = values::decode_value(&existing)?;
         row.end_snapshot = Some(snapshot_id);
