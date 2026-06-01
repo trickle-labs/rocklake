@@ -550,6 +550,7 @@ impl CatalogWriter {
         Ok(column_id)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_column_with_id(
         &mut self,
         column_id: u64,
