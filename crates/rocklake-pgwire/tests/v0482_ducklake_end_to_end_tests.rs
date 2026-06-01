@@ -108,7 +108,7 @@ async fn e2e_complete_table_lifecycle() {
     .await;
 
     // CREATE: Columns
-    for (col_name, col_type, col_order) in vec![
+    for (col_name, col_type, col_order) in [
         ("user_id", "BIGINT", 0),
         ("event_name", "VARCHAR", 1),
         ("event_time", "TIMESTAMP", 2),
