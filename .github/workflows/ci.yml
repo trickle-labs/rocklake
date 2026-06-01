@@ -162,7 +162,11 @@ jobs:
             "--bind" \
             "--catalog" \
             "--datafusion-pg-wire" \
-            "--metrics-path"; do
+            "--metrics-path" \
+            "--read-only" \
+            "--idle-connection-timeout" \
+            "--drain-timeout" \
+            "--datafusion-bridge-queue-depth"; do
             if echo "$HELP" | grep -qF -- "$flag"; then
               echo "OK: $flag"
             else
@@ -750,6 +754,88 @@ jobs:
       - name: v0.41.0 DuckLake compat tests
         run: cargo test -p rocklake-pgwire --test v041_ducklake_compat_tests -- --test-threads=1
 
+  # ── v0.47.0: Read-Only Catalog Access & Connection Management ────────────────
+
+  # v0.47.0: RFC-01 ReadOnly catalog integration tests.
+  # Validates zero CAS conflicts for 16 simultaneous ReadOnlyCatalog opens,
+  # refresh() advancing to latest snapshot, and concurrent writer+reader safety.
+  readonly-v047:
+    name: Read-Only Catalog Tests (v0.47.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: v0.47.0 read-only catalog tests
+        run: cargo test -p rocklake-catalog --test v047_readonly_tests -- --test-threads=1 --nocapture
+
+  # v0.47.0: Graceful SIGTERM drain tests.
+  # Validates that the PG-Wire server drains in-flight sessions cleanly on
+  # SIGTERM and stops accepting new connections after shutdown is signalled.
+  drain-v047:
+    name: Graceful Drain Tests (v0.47.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: v0.47.0 graceful drain tests
+        run: cargo test -p rocklake-pgwire --test v047_drain_tests -- --test-threads=1 --nocapture
+
+  # v0.47.0: DataFusion AsyncBridge backpressure tests.
+  # Fires 128 concurrent DataFusion catalog queries with queue_depth=256 and
+  # asserts none block beyond the configured bridge capacity.
+  datafusion-bridge-v047:
+    name: DataFusion AsyncBridge Backpressure (v0.47.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: v0.47.0 DataFusion bridge backpressure tests
+        run: cargo test -p rocklake-datafusion --test v047_datafusion_tests -- --test-threads=1 --nocapture
+
+  # v0.47.0: Benchmark JSON deliverable validation.
+  # Confirms benchmarks/v047-reader-fleet.json is present and structurally valid.
+  bench-v047:
+    name: Benchmark JSON Validation (v0.47.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify v0.47.0 reader-fleet benchmark JSON present and valid
+        run: |
+          test -f benchmarks/v047-reader-fleet.json || \
+            (echo "ERROR: benchmarks/v047-reader-fleet.json missing" && exit 1)
+          python -c "
+          import json, sys
+          d = json.load(open('benchmarks/v047-reader-fleet.json'))
+          required = ['version', 'benchmark', 'scenarios', 'regression_baseline']
+          for k in required:
+              if k not in d:
+                  print(f'ERROR: v047-reader-fleet.json missing key {k}')
+                  sys.exit(1)
+          assert d['version'] == 'v0.47.0', f'version mismatch: {d[\"version\"]}'
+          scenarios = d['scenarios']
+          assert len(scenarios) >= 1, 'must have at least one scenario'
+          # Verify zero CAS conflicts for readonly opens.
+          for s in scenarios:
+              if 'writer_epoch_conflicts' in s:
+                  assert s['writer_epoch_conflicts'] == 0, \
+                      f'scenario {s[\"name\"]} has non-zero CAS conflicts'
+          baseline = d['regression_baseline']
+          assert baseline['writer_epoch_conflicts_allowed'] == 0, \
+              'regression baseline must require zero CAS conflicts'
+          print(f'OK: v047-reader-fleet.json valid with {len(scenarios)} scenarios')
+          "
+          echo "OK: v047-reader-fleet.json present and valid"
+
   release-gates:
     name: Release-Blocking Gates
     runs-on: ubuntu-latest
@@ -769,6 +855,10 @@ jobs:
       - benchmark-regression
       - scale-tests-v043
       - rocklake-client-v043
+      - readonly-v047
+      - drain-v047
+      - datafusion-bridge-v047
+      - bench-v047
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -796,6 +886,12 @@ jobs:
             fi
             echo "OK: $GOLDEN"
           done
+
+      - name: Verify v0.47.0 benchmark deliverable
+        run: |
+          test -f benchmarks/v047-reader-fleet.json || \
+            (echo "ERROR: benchmarks/v047-reader-fleet.json missing" && exit 1)
+          echo "OK: benchmarks/v047-reader-fleet.json present"
 
   # ── v0.37.0: Engine Integration & Wire Protocol Hardening ────────────────────
 

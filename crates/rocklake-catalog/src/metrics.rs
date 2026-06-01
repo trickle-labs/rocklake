@@ -87,6 +87,12 @@ pub struct CatalogMetrics {
     pub slatedb_compaction_lag_ms: AtomicU64,
     /// Estimated memtable size in bytes.
     pub slatedb_memtable_bytes: AtomicU64,
+
+    // ── v0.47.0: Connection management & DataFusion bridge ───────────────────
+    /// Idle (connected but not querying) session count.
+    pub idle_sessions: AtomicU64,
+    /// Configured DataFusion AsyncBridge channel queue depth.
+    pub datafusion_bridge_queue_depth: AtomicU64,
 }
 
 impl CatalogMetrics {
@@ -128,6 +134,9 @@ impl CatalogMetrics {
             slatedb_sst_count: AtomicU64::new(0),
             slatedb_compaction_lag_ms: AtomicU64::new(0),
             slatedb_memtable_bytes: AtomicU64::new(0),
+            // v0.47.0 connection management & DataFusion bridge
+            idle_sessions: AtomicU64::new(0),
+            datafusion_bridge_queue_depth: AtomicU64::new(256),
         }
     }
 
@@ -163,6 +172,15 @@ impl CatalogMetrics {
 
     pub fn set_active_sessions(&self, count: u64) {
         self.active_sessions.store(count, Ordering::Relaxed);
+    }
+
+    pub fn set_idle_sessions(&self, count: u64) {
+        self.idle_sessions.store(count, Ordering::Relaxed);
+    }
+
+    pub fn set_datafusion_bridge_queue_depth(&self, depth: u64) {
+        self.datafusion_bridge_queue_depth
+            .store(depth, Ordering::Relaxed);
     }
 
     pub fn set_writer_epoch_age_ms(&self, age: u64) {
@@ -340,6 +358,13 @@ impl CatalogMetrics {
             self.active_sessions.load(Ordering::Relaxed)
         ));
 
+        out.push_str("# HELP rocklake_idle_sessions Current idle (connected, not querying) PG sessions.\n");
+        out.push_str("# TYPE rocklake_idle_sessions gauge\n");
+        out.push_str(&format!(
+            "rocklake_idle_sessions {}\n",
+            self.idle_sessions.load(Ordering::Relaxed)
+        ));
+
         out.push_str("# HELP rocklake_max_sessions Maximum allowed sessions.\n");
         out.push_str("# TYPE rocklake_max_sessions gauge\n");
         out.push_str(&format!(
@@ -470,6 +495,17 @@ impl CatalogMetrics {
         out.push_str(&format!(
             "rocklake_slatedb_memtable_bytes {}\n",
             self.slatedb_memtable_bytes.load(Ordering::Relaxed)
+        ));
+
+        // ── v0.47.0: DataFusion bridge queue depth ────────────────────────────
+        out.push_str(
+            "# HELP rocklake_datafusion_bridge_queue_depth \
+             Configured DataFusion AsyncBridge channel queue depth.\n",
+        );
+        out.push_str("# TYPE rocklake_datafusion_bridge_queue_depth gauge\n");
+        out.push_str(&format!(
+            "rocklake_datafusion_bridge_queue_depth {}\n",
+            self.datafusion_bridge_queue_depth.load(Ordering::Relaxed)
         ));
 
         out

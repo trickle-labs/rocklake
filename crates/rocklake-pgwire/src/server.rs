@@ -10,6 +10,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
+use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
 
 use crate::handler::RockLakeServerHandlers;
@@ -94,6 +95,9 @@ pub struct ServerConfig {
     pub idle_connection_timeout: std::time::Duration,
     /// Grace period for in-flight queries during SIGTERM drain (default: 30 s).
     pub drain_timeout: std::time::Duration,
+    /// Optional Prometheus metrics handle.  When set, the server updates the
+    /// `rocklake_idle_sessions` and `rocklake_active_sessions` gauges.
+    pub metrics: Option<Arc<CatalogMetrics>>,
 }
 
 impl Default for ServerConfig {
@@ -107,6 +111,7 @@ impl Default for ServerConfig {
             extension_schemas: vec!["public".to_string(), "pgtrickle".to_string()],
             idle_connection_timeout: std::time::Duration::from_secs(60),
             drain_timeout: std::time::Duration::from_secs(30),
+            metrics: None,
         }
     }
 }
@@ -241,6 +246,7 @@ pub async fn run_server_with_shutdown(
     let counters = SessionCounters::new();
     // Active-session tracking for graceful drain.
     let active_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let metrics_ref = config.metrics.clone();
 
     tokio::select! {
         result = async {
@@ -254,6 +260,7 @@ pub async fn run_server_with_shutdown(
                 let es = extension_schemas.clone();
                 let counters_ref = counters.clone();
                 let active_ref = active_count.clone();
+                let metrics_task = metrics_ref.clone();
 
                 tokio::spawn(async move {
                     let _permit = match semaphore.acquire().await {
@@ -264,6 +271,12 @@ pub async fn run_server_with_shutdown(
                     // Track idle → active transition.
                     counters_ref.idle_sessions.fetch_add(1, Ordering::Relaxed);
                     active_ref.fetch_add(1, Ordering::AcqRel);
+                    if let Some(ref m) = metrics_task {
+                        m.set_idle_sessions(
+                            counters_ref.idle_sessions.load(Ordering::Relaxed).max(0) as u64,
+                        );
+                        m.set_active_sessions(active_ref.load(Ordering::Relaxed) as u64);
+                    }
 
                     info!("New connection from {addr}");
                     let handlers =
@@ -275,6 +288,12 @@ pub async fn run_server_with_shutdown(
 
                     counters_ref.idle_sessions.fetch_sub(1, Ordering::Relaxed);
                     active_ref.fetch_sub(1, Ordering::AcqRel);
+                    if let Some(ref m) = metrics_task {
+                        m.set_idle_sessions(
+                            counters_ref.idle_sessions.load(Ordering::Relaxed).max(0) as u64,
+                        );
+                        m.set_active_sessions(active_ref.load(Ordering::Relaxed) as u64);
+                    }
                 });
             }
             #[allow(unreachable_code)]
