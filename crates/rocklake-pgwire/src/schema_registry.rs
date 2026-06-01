@@ -378,10 +378,10 @@ pub fn partition_info_schema() -> Arc<Vec<FieldInfo>> {
 pub fn partition_column_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("partition_id"),
-        int8t!("partition_index"),
+        int8t!("table_id"),
+        int8t!("partition_key_index"),
         int8t!("column_id"),
         text_col!("transform"),
-        text_col!("transform_param"),
     ])
 }
 
@@ -417,9 +417,11 @@ pub fn sort_info_schema() -> Arc<Vec<FieldInfo>> {
 pub fn sort_expression_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("sort_id"),
-        int8t!("sort_index"),
-        int8t!("column_id"),
-        text_col!("sort_order"),
+        int8t!("table_id"),
+        int8t!("sort_key_index"),
+        text_col!("expression"),
+        text_col!("dialect"),
+        text_col!("sort_direction"),
         text_col!("null_order"),
     ])
 }
@@ -430,9 +432,10 @@ pub fn sort_expression_schema() -> Arc<Vec<FieldInfo>> {
 /// deletion_scheduled_at)` — DuckLake v1.0 spec.
 pub fn files_scheduled_for_deletion_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
+        int8t!("data_file_id"),
         text_col!("path"),
         bool_col!("path_is_relative"),
-        tstz_col!("deletion_scheduled_at"),
+        tstz_col!("schedule_start"),
     ])
 }
 
@@ -625,6 +628,7 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
         "ducklake_files_scheduled_for_deletion" => Some(files_scheduled_for_deletion_schema()),
         "ducklake_inlined_data_tables" => Some(inlined_data_tables_schema()),
         "ducklake_schema_version" => Some(schema_version_schema()),
+        "ducklake_schema_versions" => Some(schema_version_schema()),  // DuckLake spec uses plural form
         "ducklake_schema_changes" => Some(schema_changes_schema()),
         "ducklake_encrypted_secret" => Some(encrypted_secret_schema()),
         "ducklake_encryption_key" => Some(encryption_key_schema()),
