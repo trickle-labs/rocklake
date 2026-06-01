@@ -105,6 +105,7 @@ binding on every roadmap release below.
 | **v0.47.0 — Read-Only Catalog Access & Connection Management** | RFC-01: `CatalogStore::open_readonly()` skipping epoch CAS; `ReadOnlyCatalog` struct with `refresh()`; `CatalogClientBuilder::build_readonly()`; connection pooling and graceful drain; reader-mode K8s manifests; DataFusion `AsyncBridge` backpressure fix; 16-pod reader fleet startup benchmark on real S3 | Complete |
 | **v0.47.1 — DuckLake CHECKPOINT / DELETE Support** | `DELETE FROM ducklake_inlined_data_*` support; ctid WHERE-clause row-ID extraction; `CHECKPOINT` end-to-end; DuckLake inlined data flush to external Parquet files | Complete |
 | **v0.47.2 — DuckLake 1.0 Compliance Audit & Schema/Executor Alignment** | Phase 1-4: Schema registry fixes (partition_column, sort_expression, files_scheduled_for_deletion); response builders for file_variant_stats, column_mapping, name_mapping; 14 compliance unit tests + 3 E2E integration tests; identified all P1 gaps for Phase 5+ roadmap | Complete |
+| **v0.47.3 — DuckLake 1.0 Spec Gap Closure** | Expand simplified schemas (file_variant_stats 6→12, column_mapping, name_mapping); implement write-path/query support for partitions, sort expressions, variant stats; add transaction atomicity, MVCC visibility, cascading ops, concurrent writer tests; real DuckDB integration validation | Planning |
 | **v0.48.0 — Paginated Scans, Streaming & Observability Depth** | RFC-03: `list_data_files_paged()` with continuation token; `stream_data_files()` async Stream; PG-wire incremental `DataRow` streaming; proper histogram metrics via `prometheus` crate; per-query trace correlation and `trace_id` propagation; slow-query log; memory pressure and RSS metrics; SF100 catalog benchmark suite | Planning |
 | **v0.49.0 — Tiered NVMe Cache & Multi-Node Production Validation** | RFC-02: `TieredCache` L1/L2/L3 with local SSD spill; `--cache-dir` and `--cache-max-gb` CLI flags; L2 pre-population on cold start; wire up `slatedb_sst_count`/`slatedb_compaction_lag_ms` to real SlateDB stats; real 24h multi-node soak on AWS/GCP (not `InMemory`); GHCR container image with versioned tags; pod disruption budget + HPA documentation; v1.0 gating checklist completion | Planning |
 | **v0.70.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; blocked on upstream DuckDB community extension catalog API | Exploration |
@@ -4795,6 +4796,154 @@ The following items are registered as P1 (Important) gaps, pending implementatio
 
 ---
 
+## v0.47.3 — DuckLake 1.0 Spec Gap Closure
+
+> Build on v0.47.2's audit and identified P1 gaps to achieve full DuckLake 1.0 specification compliance. Close all 12 identified gaps: expand simplified schemas, implement write-path and query support for advanced features, add comprehensive transaction/concurrency/cascading operation tests, and validate with real DuckDB clients.
+
+### Schema Simplifications → Spec-Complete (6-8 hours)
+
+**file_variant_stats: 6 → 12 columns**
+
+The current schema is a simplified 6-column version. Expand to full spec with variant-specific metadata:
+
+- [ ] Update `FileVariantStatsRow` protobuf in `rocklake-core` to add: `table_id`, `variant_path` (spec field name for current `variant_key`), complete `shredded_type`, `column_size_bytes`, explicit `min_value`/`max_value` (already present)
+- [ ] Expand `file_variant_stats_schema()` in schema_registry from 6 to 12 columns: `data_file_id, column_id, table_id, variant_path, shredded_type, column_size_bytes, min_value, max_value, value_count, null_count, contains_nan, extra_stats`
+- [ ] Update `make_file_variant_stats_response()` to encode all 12 fields in spec order
+- [ ] Add schema projection test: verify exact column names, types, order against spec
+
+**column_mapping: 4 → 3 (reconcile spec mismatch)**
+
+Current schema has 4 columns but spec defines only 3. Resolve the discrepancy:
+
+- [ ] Review DuckLake 1.0 spec and determine whether the current 4-column schema is an extension or incorrect
+- [ ] If spec is 3-column (mapping_id, table_id, type): update schema_registry and proto accordingly
+- [ ] If current 4-column is correct: update spec reference documentation
+- [ ] Add golden-value test: verify exact schema matches spec definition
+
+**name_mapping: 4 → 6 columns (nested/partition support)**
+
+Current schema omits important nested column and partition tracking fields:
+
+- [ ] Expand `NameMappingRow` protobuf to include all 6 spec fields with clear field IDs
+- [ ] Expand `name_mapping_schema()`: `mapping_id, column_id, name, target_field_id, parent_column, is_partition`
+- [ ] Update `make_name_mapping_response()` to encode all 6 fields in spec order
+- [ ] Add test: verify nested column mappings and partition flags are correctly persisted and queryable
+
+### Missing Write-Path & Query Support (7-9 hours)
+
+**Partition Operations: list_partition_info() & list_partition_columns()**
+
+Partition metadata is created but not queryable. Implement full read-side support:
+
+- [ ] Add `list_partition_info(table_id)` method to `CatalogReader` in `rocklake-catalog`; returns all `PartitionInfoRow` for a table
+- [ ] Add `list_partition_columns(partition_id)` method to `CatalogReader`; returns all `PartitionColumnRow` for a partition
+- [ ] Add `make_partition_info_response()` and `make_partition_columns_response()` builders in `executor/catalog.rs`
+- [ ] Add handlers in `executor/mod.rs` for `SelectDuckLakeMetadataTable` matching "ducklake_partition_info" and "ducklake_partition_column"
+- [ ] Add tests: CREATE TABLE with PARTITIONED BY clause; verify partition metadata is queryable; verify partition_id links to table_id correctly
+
+**Sort Expressions: list_sort_expressions()**
+
+Sort metadata is created but not queryable:
+
+- [ ] Add `list_sort_expressions(table_id)` method to `CatalogReader`; returns all `SortExpressionRow` for a table
+- [ ] Add `make_sort_expressions_response()` builder (or extend existing `make_sort_info_response()`)
+- [ ] Add handler in `executor/mod.rs` for full sort_expression table scans
+- [ ] Add test: CREATE TABLE with SORTED BY clause; verify expression, dialect, sort_direction are queryable
+
+**File Variant Stats: Full Write-Path**
+
+Variant stats are partially implemented but not fully queryable. Complete the write-path:
+
+- [ ] Implement `list_file_variant_stats_by_table(table_id)` in `CatalogReader` (currently only `list_file_variant_stats(table_id, column_id)`)
+- [ ] Wire variant stats writes in the executor (currently only registered in proto)
+- [ ] Add test: INSERT data file with variant stats; verify stats are persisted and queryable by table/file/column
+
+### Advanced Testing: Transaction & Concurrency (7-8 hours)
+
+**Transaction Atomicity & ROLLBACK Semantics**
+
+Design and implement tests that exercise MVCC correctness under transaction rollback:
+
+- [ ] Add `v0483_transaction_atomicity_tests.rs` test suite with:
+  - Multi-statement transactions that INSERT schema → table → columns (should all commit together or all rollback)
+  - Explicit ROLLBACK scenarios; verify all ops in the transaction are reverted
+  - Writer isolation: one client INSERTs a file; another client sees it only after COMMIT
+  - Partial failure: one statement in a batch fails; verify entire batch is rolled back
+- [ ] Add writer fencing test: two writers race to commit the same table; verify exactly one wins with SQLSTATE 40001 (serialization failure)
+- [ ] Assert all tests with existing infrastructure (no new framework needed; use `rocklake_testkit`)
+
+**MVCC Visibility Filtering: begin_snapshot / end_snapshot**
+
+Test that snapshot-based visibility filtering works correctly:
+
+- [ ] Add `v0484_mvcc_visibility_tests.rs` with:
+  - Time-travel queries: SELECT at snapshot_id=1, then snapshot_id=2, verify visibility changes
+  - Retired files: INSERT file with begin_snapshot=1, end_snapshot=2; verify it's visible at snapshot 1 but not 3+
+  - Cascading visibility: DROP TABLE marks all related columns/files with end_snapshot; verify they're not visible in future snapshots
+  - Multi-snapshot query: SELECT MAX(snapshot_id) in the middle of a transaction; verify it sees only committed snapshots
+- [ ] Assert visibility predicate is applied consistently across all `SELECT *` paths (schemas, tables, columns, files, stats)
+
+**Cascading Operations: DROP SCHEMA/TABLE Propagation**
+
+Test that schema/table deletion properly cascades and marks dependent rows with end_snapshot:
+
+- [ ] Add `v0485_cascading_operations_tests.rs` with:
+  - DROP SCHEMA: deletes all tables in schema; verify all table rows get end_snapshot; all column rows get end_snapshot; all data_file rows get end_snapshot; all stats rows get end_snapshot
+  - DROP TABLE: deletes all columns, data files, delete files, stats; verify all dependent rows are marked end_snapshot in the same snapshot
+  - DROP COLUMN: marks column and associated stats with end_snapshot; data files remain visible (they're not column-specific in v1.0)
+  - Idempotence: DROP non-existent table should succeed (not error)
+  - Visibility: dropped rows should not appear in SELECT * queries at snapshots >= drop_snapshot
+
+**Concurrent Writer Fencing**
+
+Test that concurrent writers correctly detect conflicts and enforce monotonic epoch advancement:
+
+- [ ] Add `v0486_concurrent_writer_tests.rs` with:
+  - Two writers race to INSERT into the same table; verify one gets 40001 (serialization failure) and must retry
+  - Three writers stagger inserts; verify writer epochs are monotonically increasing
+  - Writer recovery: kill a writer mid-transaction; verify its lease is released and another writer can proceed
+  - Stale commit detection: a writer tries to commit with an old epoch; verify rejection
+
+### Real DuckDB Integration & Validation (4-5 hours)
+
+**DuckDB v1.5.3 as Test Dependency**
+
+Set up actual DuckDB client to validate end-to-end interoperability:
+
+- [ ] Add `duckdb` crate dependency with `--features bundled` in `rocklake-pgwire` dev-dependencies
+- [ ] Create a test helper that spawns `rocklake serve` as a subprocess and connects a real DuckDB client via `postgres_query()`
+- [ ] Add `v0487_real_duckdb_integration_tests.rs` with:
+  - End-to-end table lifecycle: CREATE TABLE in DuckDB, INSERT 1000 rows, query metadata via DuckDB's internal `ducklake_*` views, verify correctness
+  - Schema evolution: ALTER TABLE ADD COLUMN in DuckDB; verify column metadata is correct
+  - CHECKPOINT: trigger CHECKPOINT from DuckDB; verify inlined rows are flushed and queryable
+  - View creation: CREATE VIEW in DuckDB; query the view metadata
+  - Multi-client: run concurrent readers against the catalog while a writer is active
+- [ ] Assert all queries return data matching the spec exactly (column names, types, order, values)
+
+### Deliverables
+
+- [ ] All 12 P1 gaps closed: schemas expanded, write-paths implemented, advanced tests added
+- [ ] New test suites: `v0483_transaction_atomicity`, `v0484_mvcc_visibility`, `v0485_cascading_operations`, `v0486_concurrent_writer`, `v0487_real_duckdb_integration` (40+ new tests)
+- [ ] Real DuckDB integration: end-to-end workflows validated against actual DuckDB client
+- [ ] Spec compliance: 28/28 tables ≥95% spec-compliant; all golden-value assertions green
+- [ ] Zero breaking changes: all existing tests still pass (v0275, v0280, driver_compat, v0481, v0482)
+
+### Success Criteria
+
+- ✓ All 40+ new tests pass
+- ✓ All 12 P1 gaps addressed (schema expansion + write-path + advanced tests)
+- ✓ Real DuckDB integration tests pass end-to-end
+- ✓ Zero regressions in existing tests
+- ✓ Catalog is usable with real DuckDB clients (not just mock)
+- ✓ Documentation updated: `plans/ducklake-1.0-spec-coverage.md` with final compliance report
+
+**Estimated Effort**: 32-48 hours (4-6 week sprint)
+
+**Target Outcome**: v0.47.3 unlocks v0.48.0 (paginated scans) and establishes RockLake as a fully DuckLake 1.0-compliant catalog backend. Production-ready for integration with real DuckLake workflows.
+
+---
+
+## v0.48.0 — Paginated Scans, Streaming & Observability Depth
 
 > Implement RFC-03 from Assessment 2: paginated prefix scans with streaming async iterators, replacing all `Vec`-collecting catalog reads with constant-memory paths. Upgrade the PG-wire executor to stream `DataRow` messages incrementally. Replace hand-rolled histogram counters with real `prometheus` histograms, add per-query trace correlation, slow-query log, and memory pressure metrics. Extend benchmarks to TPC-H SF100.
 
@@ -4809,6 +4958,7 @@ The following items are registered as P1 (Important) gaps, pending implementatio
 - [ ] Add a memory test: stream a 1M-file catalog with a 128 MiB RSS limit; assert no OOM.
 
 ### PG-Wire Incremental Streaming
+
 
 - [ ] Refactor the PG-wire executor for `SELECT * FROM ducklake_data_file` and `SELECT * FROM ducklake_snapshot_changes` to use `stream_data_files` / `stream_snapshots`; send `DataRow` messages as the stream yields rather than buffering the full result set.
 - [ ] Add a PG-wire integration test: execute a large catalog scan over a connection with a slow client receiver; assert the server RSS stays below 2× the page buffer size.
