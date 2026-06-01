@@ -27,7 +27,7 @@ async fn sequential_writers_succeed() {
     store.commit_writer(snap1);
 
     let mut w2 = store.begin_write();
-    let table_id = w2.create_table(schema_id, "t1", None).await.unwrap();
+    let _table_id = w2.create_table(schema_id, "t1", None).await.unwrap();
     let snap2 = w2.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap2);
 
@@ -71,7 +71,7 @@ async fn writer_epochs_monotonically_increasing() {
     let mut epochs = Vec::new();
     for i in 0..3 {
         let mut w = store.begin_write();
-        let schema_id = w.create_schema(&format!("s{}", i)).await.unwrap();
+        let _schema_id = w.create_schema(&format!("s{}", i)).await.unwrap();
         let snap = w.create_snapshot(None, None).await.unwrap();
         epochs.push(snap.0);
         store.commit_writer(snap);
@@ -89,7 +89,7 @@ async fn stale_commit_rejected_with_error() {
     let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
 
     let mut w1 = store.begin_write();
-    let schema_id = w1.create_schema("s1").await.unwrap();
+    let _schema_id = w1.create_schema("s1").await.unwrap();
     let snap1 = w1.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap1);
 
@@ -120,7 +120,7 @@ async fn writer_lease_released_on_commit() {
 
     // Writer B should be able to claim the lock and commit
     let mut w_b = store.begin_write();
-    let table_id = w_b.create_table(schema_id, "t_b", None).await.unwrap();
+    let _table_id = w_b.create_table(schema_id, "t_b", None).await.unwrap();
     let snap_b = w_b.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap_b);
 
@@ -148,7 +148,7 @@ async fn writer_lease_timeout_releases() {
 
     // Another writer should be able to proceed
     let mut w2 = store.begin_write();
-    let table_id = w2.create_table(schema_id, "t1", None).await.unwrap();
+    let _table_id = w2.create_table(schema_id, "t1", None).await.unwrap();
     let snap2 = w2.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap2);
 

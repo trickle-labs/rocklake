@@ -276,7 +276,7 @@ async fn drop_schema_cascades_to_delete_files() {
 
     let mut w1 = store.begin_write();
     let schema_id = w1.create_schema("s1").await.unwrap();
-    let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
+    let _table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
     let snap1 = w1.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap1);
 

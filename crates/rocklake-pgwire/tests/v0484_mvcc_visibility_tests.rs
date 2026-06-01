@@ -3,7 +3,6 @@
 
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{CatalogStore, OpenOptions};
-use rocklake_core::mvcc::SnapshotId;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -23,7 +22,7 @@ async fn schema_visible_at_begin_snapshot() {
     let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
 
     let mut w = store.begin_write();
-    let schema_id = w.create_schema("test").await.unwrap();
+    let _schema_id = w.create_schema("test").await.unwrap();
     let snap = w.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap);
 
@@ -44,7 +43,7 @@ async fn table_visible_at_begin_snapshot() {
     store.commit_writer(snap1);
 
     let mut w2 = store.begin_write();
-    let table_id = w2.create_table(schema_id, "t1", None).await.unwrap();
+    let _table_id = w2.create_table(schema_id, "t1", None).await.unwrap();
     let snap2 = w2.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap2);
 
@@ -133,7 +132,7 @@ async fn snapshot_ordering_monotonic() {
     let mut snaps = Vec::new();
     for i in 0..5 {
         let mut w = store.begin_write();
-        let schema_id = w.create_schema(&format!("s{}", i)).await.unwrap();
+        let _schema_id = w.create_schema(&format!("s{}", i)).await.unwrap();
         let snap = w.create_snapshot(None, None).await.unwrap();
         snaps.push(snap);
         store.commit_writer(snap);

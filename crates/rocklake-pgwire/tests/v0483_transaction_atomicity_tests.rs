@@ -23,7 +23,7 @@ async fn multi_statement_atomic_commit() {
 
     // Create schema in first transaction
     let mut w1 = store.begin_write();
-    let schema_id = w1.create_schema("test_schema").await.unwrap();
+    let _schema_id = w1.create_schema("test_schema").await.unwrap();
     let snap1 = w1.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap1);
 
@@ -47,7 +47,7 @@ async fn multi_statement_atomic_rollback() {
 
     // Start creating a table (but don't commit - simulates rollback)
     let mut w2 = store.begin_write();
-    let table_id = w2
+    let _table_id = w2
         .create_table(schema_id, "test_table", None)
         .await
         .unwrap();
@@ -97,7 +97,7 @@ async fn writer_isolation_prevents_uncommitted_visibility() {
 
     // Create first schema
     let mut w1 = store.begin_write();
-    let schema_id = w1.create_schema("s1").await.unwrap();
+    let _schema_id = w1.create_schema("s1").await.unwrap();
     let snap1 = w1.create_snapshot(None, None).await.unwrap();
     store.commit_writer(snap1);
 
@@ -220,7 +220,7 @@ async fn transaction_isolation_no_dirty_reads() {
 
     // Writer starts creating table but doesn't commit
     let mut w1 = store.begin_write();
-    let table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
+    let _table_id = w1.create_table(schema_id, "t1", None).await.unwrap();
 
     // Reader sees schema but NOT the uncommitted table
     let reader = store.read_latest();
