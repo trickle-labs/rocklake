@@ -4032,7 +4032,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-catalog"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -4064,7 +4064,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-client"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "async-trait",
  "object_store 0.12.5",
@@ -4077,7 +4077,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-core"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "bytes",
  "chrono",
@@ -4098,7 +4098,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-datafusion"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4118,7 +4118,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-ffi"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "object_store 0.12.5",
  "rocklake-catalog",
@@ -4129,7 +4129,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-pgwire"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4167,7 +4167,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-sql"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "arrow",
  "bytes",
@@ -4184,7 +4184,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-testkit"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "chrono",
  "object_store 0.12.5",
@@ -4278,9 +4278,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-native-certs"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
+checksum = "dab5152771c58876a2146916e53e35057e1a4dfa2b9df0f0305b07f611fdea4d"
 dependencies = [
  "openssl-probe",
  "rustls-pki-types",
@@ -5300,9 +5300,9 @@ checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.13.2"
+version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9629274872b2bfaf8d66f5f15725007f635594914870f65218920345aa11aa8c"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-width"
