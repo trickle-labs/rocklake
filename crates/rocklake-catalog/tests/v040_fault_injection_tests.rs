@@ -49,7 +49,7 @@ fn local_opts(dir: &TempDir) -> OpenOptions {
 /// injector is retrievable, and clearing it removes it from the registry.
 #[test]
 fn fail_point_before_slatedb_commit_registers() {
-    let injector = FaultInjector::new();
+    let injector = FaultInjector::instance();
 
     // No fault set initially.
     assert!(
@@ -85,7 +85,7 @@ fn fail_point_before_slatedb_commit_registers() {
 /// correctly named and registered (simulates orphan data file on crash).
 #[test]
 fn fail_point_after_parquet_write_before_register_registers() {
-    let injector = FaultInjector::new();
+    let injector = FaultInjector::instance();
     injector.set_error(
         WriteFaultPoint::AfterParquetWriteBeforeRegisterDataFile,
         "injected: after parquet write, before register_data_file",
@@ -589,7 +589,7 @@ async fn compaction_race_catalog_scan_sees_all_rows() {
 /// Verify multiple concurrent fail points don't interfere with each other.
 #[test]
 fn multiple_fail_points_independent() {
-    let injector = FaultInjector::new();
+    let injector = FaultInjector::instance();
 
     injector.set_error(WriteFaultPoint::BeforeSlateDbCommit, "error A");
     injector.set_error(
@@ -632,7 +632,7 @@ fn multiple_fail_points_independent() {
 /// Verify fault point pause action is stored correctly.
 #[test]
 fn fault_point_pause_action_stored() {
-    let injector = FaultInjector::new();
+    let injector = FaultInjector::instance();
 
     injector.set_pause(
         WriteFaultPoint::BeforeSlateDbCommit,

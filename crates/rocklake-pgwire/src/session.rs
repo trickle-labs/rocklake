@@ -16,11 +16,13 @@ pub enum BufferedOp {
         schema_name: String,
     },
     InsertTable {
+        table_id: Option<u64>,
         schema_id: u64,
         table_name: String,
         data_path: Option<String>,
     },
     InsertColumn {
+        column_id: Option<u64>,
         table_id: u64,
         column_name: String,
         data_type: String,

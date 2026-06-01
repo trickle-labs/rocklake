@@ -217,6 +217,115 @@ fn split_literal_values(values: &str) -> Vec<Option<String>> {
     parts
 }
 
+fn resolve_expr(expr: &sqlparser::ast::Expr, params: &ParamValues) -> Option<String> {
+    match expr {
+        sqlparser::ast::Expr::Value(val_with_span) => match &val_with_span.value {
+            sqlparser::ast::Value::Number(n, _) => Some(n.clone()),
+            sqlparser::ast::Value::SingleQuotedString(s)
+            | sqlparser::ast::Value::DoubleQuotedString(s) => Some(s.clone()),
+            sqlparser::ast::Value::Boolean(b) => Some(b.to_string()),
+            sqlparser::ast::Value::Null => None,
+            sqlparser::ast::Value::Placeholder(p) => {
+                let s = if p.starts_with('$') { &p[1..] } else { p.as_str() };
+                if let Ok(idx) = s.parse::<usize>() {
+                    if idx > 0 {
+                        return params.get_optional_string(idx - 1);
+                    }
+                }
+                None
+            }
+            _ => Some(val_with_span.value.to_string()),
+        },
+        sqlparser::ast::Expr::Cast { expr, .. } => resolve_expr(expr, params),
+        sqlparser::ast::Expr::Identifier(ident) => Some(ident.value.clone()),
+        _ => Some(expr.to_string()),
+    }
+}
+
+fn parse_insert_rows_map(
+    sql: &str,
+    params: &ParamValues,
+) -> Option<Vec<std::collections::HashMap<String, Option<String>>>> {
+    use sqlparser::ast::{Statement, SetExpr, Values};
+    let dialect = PostgreSqlDialect {};
+    let statements = Parser::parse_sql(&dialect, sql).ok()?;
+    let Statement::Insert(insert) = statements.first()? else {
+        return None;
+    };
+    
+    let table_name = match &insert.table {
+        sqlparser::ast::TableObject::TableName(name) => name.to_string().to_lowercase(),
+        _ => String::new(),
+    };
+    let table_name_normalized = table_name.trim_matches('"');
+    
+    let mut cols: Vec<String> = insert
+        .columns
+        .iter()
+        .map(|c| c.value.to_lowercase())
+        .collect();
+        
+    if cols.is_empty() {
+        if table_name_normalized.contains("ducklake_table") {
+            cols = vec![
+                "table_id".to_string(),
+                "table_uuid".to_string(),
+                "begin_snapshot".to_string(),
+                "end_snapshot".to_string(),
+                "schema_id".to_string(),
+                "table_name".to_string(),
+                "path".to_string(),
+                "path_is_relative".to_string(),
+            ];
+        } else if table_name_normalized.contains("ducklake_column") {
+            cols = vec![
+                "column_id".to_string(),
+                "begin_snapshot".to_string(),
+                "end_snapshot".to_string(),
+                "table_id".to_string(),
+                "column_order".to_string(),
+                "column_name".to_string(),
+                "column_type".to_string(),
+                "initial_default".to_string(),
+                "default_value".to_string(),
+                "nulls_allowed".to_string(),
+                "parent_column".to_string(),
+                "default_value_type".to_string(),
+                "default_value_dialect".to_string(),
+            ];
+        } else if table_name_normalized.contains("ducklake_schema") {
+            cols = vec![
+                "schema_id".to_string(),
+                "schema_uuid".to_string(),
+                "begin_snapshot".to_string(),
+                "end_snapshot".to_string(),
+                "schema_name".to_string(),
+                "path".to_string(),
+                "path_is_relative".to_string(),
+            ];
+        }
+    }
+    
+    let source = insert.source.as_ref()?;
+    let SetExpr::Values(Values { rows, .. }) = &*source.body else {
+        return None;
+    };
+    
+    let mut result_rows = Vec::new();
+    for row in rows {
+        let mut row_map = std::collections::HashMap::new();
+        for (i, expr) in row.iter().enumerate() {
+            if i < cols.len() {
+                let val = resolve_expr(expr, params);
+                row_map.insert(cols[i].clone(), val);
+            }
+        }
+        result_rows.push(row_map);
+    }
+    eprintln!("[DEBUG parse_insert_rows_map] table={} cols={:?} rows={:?}", table_name_normalized, cols, result_rows);
+    Some(result_rows)
+}
+
 fn normalize_literal(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.eq_ignore_ascii_case("null") {
@@ -284,6 +393,61 @@ fn literal_assignment_u64(sql: &str, column: &str) -> Option<u64> {
     let after_column = &sql[idx + column.len()..];
     let equals_idx = after_column.find('=')?;
     parse_leading_u64(&after_column[equals_idx + 1..])
+}
+
+fn literal_comparison_u64(sql: &str, column: &str) -> Option<u64> {
+    let lower = sql.to_ascii_lowercase();
+    let where_idx = lower.find("where")?;
+    let where_clause = &lower[where_idx..];
+    let column_lower = column.to_ascii_lowercase();
+    let idx = where_clause.find(&column_lower)?;
+    let after_column = &sql[where_idx + idx + column.len()..];
+    let comp_idx = after_column.find(|c| c == '=' || c == '<' || c == '>')?;
+    let mut op_len = 0;
+    for c in after_column[comp_idx..].chars() {
+        if c == '=' || c == '<' || c == '>' {
+            op_len += 1;
+        } else {
+            break;
+        }
+    }
+    parse_leading_u64(&after_column[comp_idx + op_len..])
+}
+
+fn placeholder_comparison_index(sql: &str, column: &str) -> Option<usize> {
+    let lower = sql.to_ascii_lowercase();
+    let where_idx = lower.find("where")?;
+    let where_clause = &lower[where_idx..];
+    let column_lower = column.to_ascii_lowercase();
+    let idx = where_clause.find(&column_lower)?;
+    let after_column = &sql[where_idx + idx + column.len()..];
+    let comp_idx = after_column.find(|c| c == '=' || c == '<' || c == '>')?;
+    let mut op_len = 0;
+    for c in after_column[comp_idx..].chars() {
+        if c == '=' || c == '<' || c == '>' {
+            op_len += 1;
+        } else {
+            break;
+        }
+    }
+    let rest = after_column[comp_idx + op_len..].trim_start();
+    if rest.starts_with('$') {
+        let digits: String = rest.chars().skip(1).take_while(|c| c.is_ascii_digit()).collect();
+        let idx = digits.parse::<usize>().ok()?;
+        if idx > 0 {
+            return Some(idx - 1);
+        }
+    }
+    None
+}
+
+fn resolve_comparison_u64(sql: &str, column: &str, params: &ParamValues) -> Option<u64> {
+    if let Some(idx) = placeholder_comparison_index(sql, column) {
+        if let Ok(val) = params.get_u64(idx) {
+            return Some(val);
+        }
+    }
+    literal_comparison_u64(sql, column)
 }
 
 fn parse_leading_u64(input: &str) -> Option<u64> {
@@ -513,8 +677,8 @@ async fn execute_classified<'a>(
             Ok(vec![make_schemas_response(schemas)])
         }
         StatementKind::SelectTables => {
-            let schema_id = params.get_u64(0).ok();
-            let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
+            let schema_id = resolve_comparison_u64(_sql, "schema_id", params);
+            let snap_id = resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
@@ -541,8 +705,8 @@ async fn execute_classified<'a>(
             Ok(vec![make_tables_response(raw_tables)])
         }
         StatementKind::SelectColumns => {
-            let table_id = params.get_u64(0).ok();
-            let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
+            let table_id = resolve_comparison_u64(_sql, "table_id", params);
+            let snap_id = resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
@@ -577,8 +741,8 @@ async fn execute_classified<'a>(
             Ok(vec![make_columns_response(columns)])
         }
         StatementKind::SelectDataFiles => {
-            let table_id = params.get_u64(0).ok();
-            let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
+            let table_id = resolve_comparison_u64(_sql, "table_id", params);
+            let snap_id = resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
             let reader = {
                 let s = store.lock().await;
                 s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
@@ -1002,7 +1166,7 @@ async fn execute_classified<'a>(
         }
 
         StatementKind::SelectInlinedData => {
-            let table_id = params.get_u64(0).ok();
+            let table_id = resolve_comparison_u64(_sql, "table_id", params);
             let reader = { store.lock().await.read_latest() };
             let rows = reader
                 .list_inlined_data_tables(table_id)
@@ -1025,10 +1189,11 @@ async fn execute_classified<'a>(
             else {
                 return Ok(vec![make_empty_response()]);
             };
-            let rows = reader
+            let raw_inserts = reader
                 .list_inlined_inserts(table_id)
                 .await
-                .map_err(RockLakeError::from)?
+                .map_err(RockLakeError::from)?;
+            let rows = raw_inserts
                 .into_iter()
                 .filter(|row| row.schema_version == schema_version)
                 .collect::<Vec<_>>();
@@ -1119,13 +1284,21 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertSchema => {
-            let literals = literal_insert_values(_sql);
-            let op = BufferedOp::InsertSchema {
-                schema_name: params
+            let mut schema_name = String::new();
+            if let Some(rows) = parse_insert_rows_map(_sql, params) {
+                if let Some(row) = rows.first() {
+                    schema_name = row.get("schema_name").and_then(|v| v.clone()).unwrap_or_default();
+                }
+            } else {
+                let literals = literal_insert_values(_sql);
+                schema_name = params
                     .get_string(0)
                     .ok()
                     .or_else(|| literal_string(&literals, 4))
-                    .unwrap_or_default(),
+                    .unwrap_or_default();
+            }
+            let op = BufferedOp::InsertSchema {
+                schema_name,
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -1135,21 +1308,40 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertTable => {
-            let literals = literal_insert_values(_sql);
-            let op = BufferedOp::InsertTable {
-                schema_id: params
+            let mut table_id = None;
+            let mut schema_id = 1;
+            let mut table_name = String::new();
+            let mut data_path = None;
+
+            if let Some(rows) = parse_insert_rows_map(_sql, params) {
+                if let Some(row) = rows.first() {
+                    table_id = row.get("table_id").and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()));
+                    schema_id = row.get("schema_id").and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok())).unwrap_or(1);
+                    table_name = row.get("table_name").and_then(|v| v.clone()).unwrap_or_default();
+                    data_path = row.get("path").and_then(|v| v.clone()).or_else(|| row.get("data_path").and_then(|v| v.clone()));
+                }
+            } else {
+                let literals = literal_insert_values(_sql);
+                schema_id = params
                     .get_u64(0)
                     .ok()
                     .or_else(|| literal_u64(&literals, 4))
-                    .unwrap_or(1),
-                table_name: params
+                    .unwrap_or(1);
+                table_name = params
                     .get_string(1)
                     .ok()
                     .or_else(|| literal_string(&literals, 5))
-                    .unwrap_or_default(),
-                data_path: params
+                    .unwrap_or_default();
+                data_path = params
                     .get_optional_string(2)
-                    .or_else(|| literal_string(&literals, 6)),
+                    .or_else(|| literal_string(&literals, 6));
+            }
+
+            let op = BufferedOp::InsertTable {
+                table_id,
+                schema_id,
+                table_name,
+                data_path,
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -1159,68 +1351,104 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertColumn => {
-            let literal_rows = literal_insert_rows(_sql);
-            let parameterized = params.get_u64(0).is_ok();
             let mut ops = Vec::new();
-            if parameterized || literal_rows.is_empty() {
-                let literals = literal_rows.into_iter().next().unwrap_or_default();
-                ops.push(BufferedOp::InsertColumn {
-                    table_id: params
-                        .get_u64(0)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 3))
-                        .unwrap_or(0),
-                    column_name: params
-                        .get_string(1)
-                        .ok()
-                        .or_else(|| literal_string(&literals, 5))
-                        .unwrap_or_default(),
-                    data_type: params
-                        .get_string(2)
-                        .ok()
-                        .or_else(|| literal_string(&literals, 6))
-                        .unwrap_or_default(),
-                    column_index: params
-                        .get_u64(3)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 4))
-                        .unwrap_or(0),
-                    is_nullable: params
-                        .get_bool(4)
-                        .ok()
-                        .or_else(|| literal_bool(&literals, 9))
-                        .unwrap_or(true),
-                    default_value: params
-                        .get_optional_string(5)
-                        .or_else(|| literal_string(&literals, 8)),
-                    initial_default: params
-                        .get_optional_string(6)
-                        .or_else(|| literal_string(&literals, 7)),
-                    default_value_type: params
-                        .get_optional_string(7)
-                        .or_else(|| literal_string(&literals, 11)),
-                    default_value_dialect: params
-                        .get_optional_string(8)
-                        .or_else(|| literal_string(&literals, 12)),
-                    parent_column: params
-                        .get_u64(9)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 10)),
-                });
-            } else {
-                for literals in literal_rows {
+            if let Some(rows) = parse_insert_rows_map(_sql, params) {
+                for row in rows {
+                    let column_id = row.get("column_id").and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()));
+                    let table_id = row.get("table_id").and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok())).unwrap_or(0);
+                    let column_name = row.get("column_name").and_then(|v| v.clone()).unwrap_or_default();
+                    let data_type = row.get("column_type").and_then(|v| v.clone()).or_else(|| row.get("data_type").and_then(|v| v.clone())).unwrap_or_default();
+                    let column_index = row.get("column_order").and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()))
+                        .or_else(|| row.get("column_index").and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok())))
+                        .unwrap_or(0);
+                    let is_nullable = row.get("nulls_allowed").and_then(|v| v.as_ref().and_then(|s| s.parse::<bool>().ok()))
+                        .or_else(|| row.get("is_nullable").and_then(|v| v.as_ref().and_then(|s| s.parse::<bool>().ok())))
+                        .unwrap_or(true);
+                    let default_value = row.get("default_value").and_then(|v| v.clone());
+                    let initial_default = row.get("initial_default").and_then(|v| v.clone());
+                    let default_value_type = row.get("default_value_type").and_then(|v| v.clone());
+                    let default_value_dialect = row.get("default_value_dialect").and_then(|v| v.clone());
+                    let parent_column = row.get("parent_column").and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()));
+
                     ops.push(BufferedOp::InsertColumn {
-                        table_id: literal_u64(&literals, 3).unwrap_or(0),
-                        column_name: literal_string(&literals, 5).unwrap_or_default(),
-                        data_type: literal_string(&literals, 6).unwrap_or_default(),
-                        column_index: literal_u64(&literals, 4).unwrap_or(0),
-                        is_nullable: literal_bool(&literals, 9).unwrap_or(true),
-                        default_value: literal_string(&literals, 8),
-                        initial_default: literal_string(&literals, 7),
-                        default_value_type: literal_string(&literals, 11),
-                        default_value_dialect: literal_string(&literals, 12),
-                        parent_column: literal_u64(&literals, 10),
+                        column_id,
+                        table_id,
+                        column_name,
+                        data_type,
+                        column_index,
+                        is_nullable,
+                        default_value,
+                        initial_default,
+                        default_value_type,
+                        default_value_dialect,
+                        parent_column,
                     });
+                }
+            } else {
+                let literal_rows = literal_insert_rows(_sql);
+                let parameterized = params.get_u64(0).is_ok();
+                if parameterized || literal_rows.is_empty() {
+                    let literals = literal_rows.into_iter().next().unwrap_or_default();
+                    ops.push(BufferedOp::InsertColumn {
+                        column_id: None,
+                        table_id: params
+                            .get_u64(0)
+                            .ok()
+                            .or_else(|| literal_u64(&literals, 3))
+                            .unwrap_or(0),
+                        column_name: params
+                            .get_string(1)
+                            .ok()
+                            .or_else(|| literal_string(&literals, 5))
+                            .unwrap_or_default(),
+                        data_type: params
+                            .get_string(2)
+                            .ok()
+                            .or_else(|| literal_string(&literals, 6))
+                            .unwrap_or_default(),
+                        column_index: params
+                            .get_u64(3)
+                            .ok()
+                            .or_else(|| literal_u64(&literals, 4))
+                            .unwrap_or(0),
+                        is_nullable: params
+                            .get_bool(4)
+                            .ok()
+                            .or_else(|| literal_bool(&literals, 9))
+                            .unwrap_or(true),
+                        default_value: params
+                            .get_optional_string(5)
+                            .or_else(|| literal_string(&literals, 8)),
+                        initial_default: params
+                            .get_optional_string(6)
+                            .or_else(|| literal_string(&literals, 7)),
+                        default_value_type: params
+                            .get_optional_string(7)
+                            .or_else(|| literal_string(&literals, 11)),
+                        default_value_dialect: params
+                            .get_optional_string(8)
+                            .or_else(|| literal_string(&literals, 12)),
+                        parent_column: params
+                            .get_u64(9)
+                            .ok()
+                            .or_else(|| literal_u64(&literals, 10)),
+                    });
+                } else {
+                    for literals in literal_rows {
+                        ops.push(BufferedOp::InsertColumn {
+                            column_id: None,
+                            table_id: literal_u64(&literals, 3).unwrap_or(0),
+                            column_name: literal_string(&literals, 5).unwrap_or_default(),
+                            data_type: literal_string(&literals, 6).unwrap_or_default(),
+                            column_index: literal_u64(&literals, 4).unwrap_or(0),
+                            is_nullable: literal_bool(&literals, 9).unwrap_or(true),
+                            default_value: literal_string(&literals, 8),
+                            initial_default: literal_string(&literals, 7),
+                            default_value_type: literal_string(&literals, 11),
+                            default_value_dialect: literal_string(&literals, 12),
+                            parent_column: literal_u64(&literals, 10),
+                        });
+                    }
                 }
             }
             let row_count = ops.len();

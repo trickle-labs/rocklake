@@ -112,17 +112,26 @@ pub(super) async fn execute_commit(
                     .map_err(RockLakeError::from)?;
             }
             BufferedOp::InsertTable {
+                table_id,
                 schema_id,
                 table_name,
                 data_path,
             } => {
                 needs_snapshot = true;
-                writer
-                    .create_table(schema_id, &table_name, data_path.as_deref())
-                    .await
-                    .map_err(RockLakeError::from)?;
+                if let Some(tid) = table_id {
+                    writer
+                        .create_table_with_id(schema_id, tid, &table_name, data_path.as_deref())
+                        .await
+                        .map_err(RockLakeError::from)?;
+                } else {
+                    writer
+                        .create_table(schema_id, &table_name, data_path.as_deref())
+                        .await
+                        .map_err(RockLakeError::from)?;
+                }
             }
             BufferedOp::InsertColumn {
+                column_id,
                 table_id,
                 column_name,
                 data_type,
@@ -135,21 +144,40 @@ pub(super) async fn execute_commit(
                 parent_column,
             } => {
                 needs_snapshot = true;
-                writer
-                    .add_column_with_opts(
-                        table_id,
-                        &column_name,
-                        &data_type,
-                        column_index,
-                        is_nullable,
-                        default_value.as_deref(),
-                        initial_default.as_deref(),
-                        default_value_type.as_deref(),
-                        default_value_dialect.as_deref(),
-                        parent_column,
-                    )
-                    .await
-                    .map_err(RockLakeError::from)?;
+                if let Some(cid) = column_id {
+                    writer
+                        .add_column_with_id(
+                            cid,
+                            table_id,
+                            &column_name,
+                            &data_type,
+                            column_index,
+                            is_nullable,
+                            default_value.as_deref(),
+                            initial_default.as_deref(),
+                            default_value_type.as_deref(),
+                            default_value_dialect.as_deref(),
+                            parent_column,
+                        )
+                        .await
+                        .map_err(RockLakeError::from)?;
+                } else {
+                    writer
+                        .add_column_with_opts(
+                            table_id,
+                            &column_name,
+                            &data_type,
+                            column_index,
+                            is_nullable,
+                            default_value.as_deref(),
+                            initial_default.as_deref(),
+                            default_value_type.as_deref(),
+                            default_value_dialect.as_deref(),
+                            parent_column,
+                        )
+                        .await
+                        .map_err(RockLakeError::from)?;
+                }
             }
             BufferedOp::InsertDataFile {
                 table_id,
@@ -722,6 +750,9 @@ pub(super) fn make_schemas_response(
             )
             .expect("pgwire field encoding is infallible");
         encoder
+            .encode_field_with_type_and_format(&s.schema_uuid, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
             .encode_field_with_type_and_format(
                 &Some(s.begin_snapshot as i64),
                 &Type::INT8,
@@ -731,9 +762,6 @@ pub(super) fn make_schemas_response(
         let end = s.end_snapshot.map(|e| e as i64);
         encoder
             .encode_field_with_type_and_format(&end, &Type::INT8, FieldFormat::Binary)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&s.schema_uuid, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
@@ -790,14 +818,14 @@ pub(super) fn make_tables_response(
             )
             .expect("pgwire field encoding is infallible");
         encoder
+            .encode_field_with_type_and_format(&t.table_uuid, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
             .encode_field_with_type_and_format(
                 &Some(t.table_name.clone()),
                 &Type::TEXT,
                 FieldFormat::Text,
             )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&t.table_uuid, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(&t.path, &Type::TEXT, FieldFormat::Text)

@@ -72,6 +72,20 @@ impl CounterCache {
         id
     }
 
+    /// Ensure the next catalog ID is at least `id + 1`.
+    pub fn ensure_catalog_id_at_least(&mut self, id: u64) {
+        if self.next_catalog_id <= id {
+            self.next_catalog_id = id + 1;
+        }
+    }
+
+    /// Ensure the next file ID is at least `id + 1`.
+    pub fn ensure_file_id_at_least(&mut self, id: u64) {
+        if self.next_file_id <= id {
+            self.next_file_id = id + 1;
+        }
+    }
+
     /// Get the current next snapshot ID without allocating.
     pub fn peek_snapshot_id(&self) -> u64 {
         self.next_snapshot_id

@@ -102,9 +102,9 @@ pub fn snapshot_changes_schema() -> Arc<Vec<FieldInfo>> {
 pub fn schema_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8b!("schema_id"),
+        uuid_col!("schema_uuid"),
         int8b!("begin_snapshot"),
         int8b!("end_snapshot"),
-        uuid_col!("schema_uuid"),
         text_col!("schema_name"),
         text_col!("path"),
         bool_col!("path_is_relative"),
@@ -121,8 +121,8 @@ pub fn table_schema() -> Arc<Vec<FieldInfo>> {
         int8b!("begin_snapshot"),
         int8b!("end_snapshot"),
         int8b!("schema_id"),
-        text_col!("table_name"),
         uuid_col!("table_uuid"),
+        text_col!("table_name"),
         text_col!("path"),
         bool_col!("path_is_relative"),
     ])

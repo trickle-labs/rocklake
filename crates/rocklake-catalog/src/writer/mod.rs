@@ -169,6 +169,38 @@ impl CatalogWriter {
         Ok(table_id)
     }
 
+    pub async fn create_table_with_id(
+        &mut self,
+        schema_id: u64,
+        table_id: u64,
+        table_name: &str,
+        data_path: Option<&str>,
+    ) -> CatalogResult<u64> {
+        self.counters.ensure_catalog_id_at_least(table_id);
+        let snapshot_id = self.counters.peek_snapshot_id();
+
+        let row = TableRow {
+            table_id,
+            schema_id,
+            table_name: table_name.to_string(),
+            begin_snapshot: snapshot_id,
+            end_snapshot: None,
+            path: data_path.map(|s| s.to_string()),
+            table_uuid: Some(uuid::Uuid::new_v4().to_string()),
+            path_is_relative: Some(true),
+        };
+
+        let key = keys::key_table(schema_id, table_id, snapshot_id);
+        self.stage(key, values::encode_value(&row));
+
+        // Secondary index: TAG_TABLE_BY_ID → schema_id for O(1) describe_table lookups.
+        let idx_key = keys::key_table_by_id(table_id);
+        self.stage(idx_key, values::encode_counter(schema_id));
+
+        self.mark_schema_changed();
+        Ok(table_id)
+    }
+
     /// Drop a table by marking its `end_snapshot`.
     ///
     /// The `schema_id` **must** be the correct owning schema; callers that
@@ -494,6 +526,45 @@ impl CatalogWriter {
         parent_column: Option<u64>,
     ) -> CatalogResult<u64> {
         let column_id = self.counters.alloc_catalog_id();
+        let snapshot_id = self.counters.peek_snapshot_id();
+
+        let row = ColumnRow {
+            column_id,
+            table_id,
+            column_name: column_name.to_string(),
+            data_type: data_type.to_string(),
+            column_index,
+            begin_snapshot: snapshot_id,
+            end_snapshot: None,
+            default_value: default_value.map(|s| s.to_string()),
+            is_nullable,
+            initial_default: initial_default.map(|s| s.to_string()),
+            default_value_type: default_value_type.map(|s| s.to_string()),
+            default_value_dialect: default_value_dialect.map(|s| s.to_string()),
+            parent_column,
+        };
+
+        let key = keys::key_column(table_id, column_id, snapshot_id);
+        self.stage(key, values::encode_value(&row));
+        self.mark_schema_changed();
+        Ok(column_id)
+    }
+
+    pub async fn add_column_with_id(
+        &mut self,
+        column_id: u64,
+        table_id: u64,
+        column_name: &str,
+        data_type: &str,
+        column_index: u64,
+        is_nullable: bool,
+        default_value: Option<&str>,
+        initial_default: Option<&str>,
+        default_value_type: Option<&str>,
+        default_value_dialect: Option<&str>,
+        parent_column: Option<u64>,
+    ) -> CatalogResult<u64> {
+        self.counters.ensure_catalog_id_at_least(column_id);
         let snapshot_id = self.counters.peek_snapshot_id();
 
         let row = ColumnRow {

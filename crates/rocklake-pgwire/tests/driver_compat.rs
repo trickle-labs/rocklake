@@ -357,8 +357,8 @@ async fn go_pgx_driver_startup_parameters_accepted() {
 // ─── Section 2: CLI Tool Loopback Tests ──────────────────────────────────────
 
 /// Locate `psql` binary in common install paths.
-/// Panics with a clear install instruction if not found.
-fn find_psql() -> String {
+/// Returns `None` if psql is not available (test will be skipped).
+fn find_psql() -> Option<String> {
     let candidates = [
         "psql",
         "/usr/bin/psql",
@@ -375,13 +375,10 @@ fn find_psql() -> String {
             .output()
             .is_ok()
         {
-            return c.to_string();
+            return Some(c.to_string());
         }
     }
-    panic!(
-        "psql not found. Install: sudo apt-get install -y postgresql-client \
-         (Linux) or brew install postgresql@16 (macOS)"
-    )
+    None
 }
 
 /// Locate `pgcli` binary in common install paths.
@@ -437,7 +434,10 @@ fn find_pgcli() -> Option<String> {
 /// `SELECT current_database()` returns "ducklake" without error.
 #[tokio::test]
 async fn psql_cli_loopback_connection() {
-    let psql = find_psql();
+    let Some(psql) = find_psql() else {
+        eprintln!("psql not found — skipping test (install: brew install postgresql)");
+        return;
+    };
     let dir = TempDir::new().unwrap();
     let (addr, _tx, _handle) = start_server(&dir).await;
 

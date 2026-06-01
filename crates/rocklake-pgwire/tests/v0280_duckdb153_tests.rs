@@ -520,8 +520,8 @@ async fn show_tables_after_create() {
          ATTACH 'ducklake:postgres:host=127.0.0.1 port={port} dbname=rocklake' AS lake \
              (DATA_PATH '{data_path}'); \
          USE lake; \
-         CREATE SCHEMA IF NOT EXISTS s; \
-         CREATE TABLE s.visible_tbl (x INTEGER); \
+         CREATE SCHEMA IF NOT EXISTS main; \
+         CREATE TABLE main.visible_tbl (x INTEGER); \
          SHOW TABLES;"
     );
 
