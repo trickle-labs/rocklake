@@ -556,8 +556,7 @@ async fn persistence_across_restarts() {
 
     // Phase 1: write.
     {
-        let (port, shutdown_tx, handle) =
-            start_server(make_catalog_opts(&catalog_dir)).await;
+        let (port, shutdown_tx, handle) = start_server(make_catalog_opts(&catalog_dir)).await;
 
         let sql = format!(
             "LOAD ducklake; \
@@ -577,8 +576,7 @@ async fn persistence_across_restarts() {
 
     // Phase 2: restart and read.
     {
-        let (port, shutdown_tx, handle) =
-            start_server(make_catalog_opts(&catalog_dir)).await;
+        let (port, shutdown_tx, handle) = start_server(make_catalog_opts(&catalog_dir)).await;
 
         let sql = format!(
             "LOAD ducklake; \

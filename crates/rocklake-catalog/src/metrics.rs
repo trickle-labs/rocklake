@@ -358,7 +358,9 @@ impl CatalogMetrics {
             self.active_sessions.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP rocklake_idle_sessions Current idle (connected, not querying) PG sessions.\n");
+        out.push_str(
+            "# HELP rocklake_idle_sessions Current idle (connected, not querying) PG sessions.\n",
+        );
         out.push_str("# TYPE rocklake_idle_sessions gauge\n");
         out.push_str(&format!(
             "rocklake_idle_sessions {}\n",
