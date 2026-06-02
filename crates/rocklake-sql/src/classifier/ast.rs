@@ -106,24 +106,32 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                     let naked = table_name.replace("\"", "").trim_matches('"').to_string();
                     let last_dot = table_name.rfind('.').map(|i| table_name[i+1..].to_string());
                     
-                    // Check all variations
-                    for check_name in &[
-                        table_name.clone(),
-                        naked.clone(),
-                        last_dot.clone().unwrap_or_default(),
-                    ] {
-                        if check_name.contains("ducklake_") {
-                            // This should be a DuckLake table
-                            if check_name.contains("inlined_data_") {
+                    // Check all variations to find the best match
+                    if let Some(dot_name) = &last_dot {
+                        if dot_name.contains("ducklake_") {
+                            // This should be a DuckLake table - use the part after the dot
+                            if dot_name.contains("inlined_data_") {
                                 return StatementKind::DeleteInlinedDataRows { 
-                                    table_name: check_name.clone()
+                                    table_name: dot_name.clone()
                                 };
                             }
                             // Otherwise it's a catalog table
                             return StatementKind::DeleteDuckLakeCatalogRows {
-                                table_name: table_name.clone(),
+                                table_name: dot_name.clone(),
                             };
                         }
+                    }
+                    
+                    if naked.contains("ducklake_") {
+                        // Check the unquoted version
+                        if naked.contains("inlined_data_") {
+                            return StatementKind::DeleteInlinedDataRows { 
+                                table_name: naked.clone()
+                            };
+                        }
+                        return StatementKind::DeleteDuckLakeCatalogRows {
+                            table_name: naked,
+                        };
                     }
                     
                     // Not a DuckLake table
