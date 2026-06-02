@@ -300,15 +300,9 @@ impl CatalogReader {
                 }
             }
             let row: DataFileRow = values::decode_value(&kv.value)?;
-            // v0.24: Implement full MVCC visibility: begin_snapshot ≤ snapshot_id
-            // and (end_snapshot IS NULL or end_snapshot > snapshot_id).
-            // If begin_snapshot is not set, treat as 0 (visible from beginning).
-            if let Some(begin) = row.begin_snapshot {
-                if begin > self.dl_snapshot_id.as_u64() {
-                    continue; // File not yet visible at this snapshot
-                }
-            }
             // v0.24: filter out rows retired at or before the requested snapshot.
+            // The index key already encodes begin_snapshot in the key range, so only
+            // end_snapshot filtering is needed here.
             if let Some(end) = row.end_snapshot {
                 if end <= self.dl_snapshot_id.as_u64() {
                     continue;
