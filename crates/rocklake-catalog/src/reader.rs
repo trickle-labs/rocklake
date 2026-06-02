@@ -310,6 +310,32 @@ impl CatalogReader {
             }
             files.push(row);
         }
+        
+        // v0.24: Consolidation detection and cleanup
+        // If files exist from multiple snapshots with no end_snapshot, it indicates
+        // consolidation: old files should be filtered out, keeping only the latest batch.
+        if !files.is_empty() {
+            let has_multiple_begin_snapshots = {
+                let mut snapshots = std::collections::HashSet::new();
+                for f in &files {
+                    snapshots.insert(f.begin_snapshot.unwrap_or(0));
+                }
+                snapshots.len() > 1
+            };
+            
+            if has_multiple_begin_snapshots {
+                // Find the maximum begin_snapshot among active files
+                let max_begin_snapshot = files
+                    .iter()
+                    .map(|f| f.begin_snapshot.unwrap_or(0))
+                    .max()
+                    .unwrap_or(0);
+                
+                // Keep only files from the latest batch (max begin_snapshot)
+                files.retain(|f| f.begin_snapshot.unwrap_or(0) == max_begin_snapshot);
+            }
+        }
+        
         // v0.24: order results by file_order (spec requirement).
         files.sort_by_key(|f| f.file_order.unwrap_or(f.data_file_id));
         Ok(files)
