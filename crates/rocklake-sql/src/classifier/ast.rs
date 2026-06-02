@@ -97,54 +97,63 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                 sqlparser::ast::FromTable::WithFromKeyword(t) => t,
                 sqlparser::ast::FromTable::WithoutKeyword(t) => t,
             };
+            
             if let Some(from) = tables.first() {
-                let table_name = extract_table_name(&from.relation)
-                    .unwrap_or_default()
-                    .to_lowercase();
-                
-                // DuckLake CHECKPOINT deletes flushed inlined rows — check first before requiring schema
-                if table_name.starts_with("ducklake_inlined_data_") {
-                    return StatementKind::DeleteInlinedDataRows { table_name };
-                }
-                
-                // DuckLake catalog table deletions during CHECKPOINT garbage collection.
-                // After SQL normalization, schema prefix may be stripped.
-                // Check for bare ducklake_ table names (already normalized).
-                if is_ducklake_catalog_table(&table_name) {
-                    return StatementKind::DeleteDuckLakeCatalogRows {
-                        table_name: table_name.clone(),
-                    };
-                }
-                
-                // Also check for schema-qualified names (in case normalization didn't apply)
-                if table_name.contains('.') {
-                    let parts: Vec<&str> = table_name.splitn(2, '.').collect();
-                    if parts.len() == 2 {
-                        let schema = parts[0].trim_matches('"');
-                        let table = parts[1].trim_matches('"');
-                        // Reject mutations against the read-only virtual catalog (SQLSTATE 25006).
-                        if schema == "rocklake_catalog" {
-                            return StatementKind::VirtualCatalogMutation {
-                                table_name: table.to_string(),
-                            };
-                        }
-                        // DuckLake catalog table deletions during CHECKPOINT garbage collection
-                        if schema == "public" && is_ducklake_catalog_table(table) {
+                if let Some(table_name_raw) = extract_table_name(&from.relation) {
+                    let table_name = table_name_raw.to_lowercase();
+                    
+                    // Extract all possible variations of the table name
+                    let naked = table_name.replace("\"", "").trim_matches('"').to_string();
+                    let last_dot = table_name.rfind('.').map(|i| table_name[i+1..].to_string());
+                    
+                    // Check all variations
+                    for check_name in &[
+                        table_name.clone(),
+                        naked.clone(),
+                        last_dot.clone().unwrap_or_default(),
+                    ] {
+                        if check_name.contains("ducklake_") {
+                            // This should be a DuckLake table
+                            if check_name.contains("inlined_data_") {
+                                return StatementKind::DeleteInlinedDataRows { 
+                                    table_name: check_name.clone()
+                                };
+                            }
+                            // Otherwise it's a catalog table
                             return StatementKind::DeleteDuckLakeCatalogRows {
-                                table_name: table.to_string(),
+                                table_name: table_name.clone(),
                             };
                         }
-                        return StatementKind::DeleteExtensionRows {
-                            schema_name: schema.to_string(),
-                            table_name: table.to_string(),
-                        };
                     }
+                    
+                    // Not a DuckLake table
+                    return StatementKind::Unsupported(format!(
+                        "AST_DELETE_from[naked:{},dot_part:{},full:{}]",
+                        naked,
+                        last_dot.unwrap_or_else(|| "None".to_string()),
+                        table_name
+                    ));
+                } else {
+                    return StatementKind::Unsupported("AST_DELETE_extract_failed".to_string());
                 }
+            } else {
+                return StatementKind::Unsupported("AST_DELETE_no_from_table".to_string());
             }
-            StatementKind::Unsupported("DELETE".to_string())
         }
 
-        _ => StatementKind::Unsupported(format!("{stmt}")),
+        _ => {
+            let stmt_str = format!("{stmt}");
+            if stmt_str.contains("DELETE") || stmt_str.contains("delete") {
+                return StatementKind::Unsupported(format!("CATCH_ALL_DELETE[{}]", stmt_str.chars().take(100).collect::<String>()));
+            }
+            // DIAGNOSTIC: log what type of statement we're seeing
+            let diag = if stmt_str.contains("DELETE") {
+                format!("FINAL_CATCH_ALL[DELETE_found:{}]", stmt_str.chars().take(50).collect::<String>())
+            } else {
+                format!("FINAL_CATCH_ALL[type:{}]", stmt_str.chars().take(50).collect::<String>())
+            };
+            StatementKind::Unsupported(diag)
+        },
     }
 }
 

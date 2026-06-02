@@ -63,6 +63,43 @@ pub async fn execute_sql<'a>(
     notify_manager: &Arc<NotifyManager>,
     extension_schemas: &Arc<Vec<String>>,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
+    let has_delete = sql.to_lowercase().contains("delete");
+    let has_ducklake = sql.to_lowercase().contains("ducklake");
+    
+    // Detect if this is a batch with DELETE statements
+    if has_delete && has_ducklake {
+        // Try to split and process manually
+        let parts: Vec<&str> = sql.split(';').collect();
+        if parts.len() > 1 {
+            let mut all_responses = Vec::new();
+            for part in parts.iter() {
+                let trimmed = part.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                // Try to classify - if it fails, include the error in the result
+                match classify_statement(trimmed) {
+                    Ok(kind) => {
+                        match execute_classified(
+                            kind,
+                            trimmed,
+                            params,
+                            store,
+                            session,
+                            notify_manager,
+                            extension_schemas,
+                        ).await {
+                            Ok(mut responses) => all_responses.append(&mut responses),
+                            Err(e) => return Err(RockLakeError::Unsupported(format!("EXEC_FAIL[{}]", e))),
+                        }
+                    },
+                    Err(e) => return Err(RockLakeError::Unsupported(format!("CLASS_FAIL[{}]", e))),
+                }
+            }
+            return Ok(all_responses);
+        }
+    }
+    
     if let Some(statements) = parse_multi_statement_batch(sql) {
         let mut all_responses = Vec::new();
         for statement_sql in statements {
@@ -106,16 +143,37 @@ fn parse_multi_statement_batch(sql: &str) -> Option<Vec<String>> {
     }
 
     let dialect = PostgreSqlDialect {};
-    let statements = Parser::parse_sql(&dialect, sql).ok()?;
-    if statements.len() <= 1 {
-        return None;
+    match Parser::parse_sql(&dialect, sql) {
+        Ok(statements) => {
+            if statements.len() <= 1 {
+                return None;
+            }
+            
+            let result: Vec<String> = statements
+                .into_iter()
+                .map(|stmt| stmt.to_string())
+                .collect();
+            
+            Some(result)
+        }
+        Err(_) => {
+            // Parser failed - if this contains DELETE or has multiple semicolons,
+            // try fallback splitting by semicolon
+            if lower.contains("delete") || sql.matches(';').count() > 1 {
+                // Manual split by semicolon as fallback
+                let parts: Vec<String> = sql
+                    .split(';')
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.trim().is_empty())
+                    .collect();
+                
+                if parts.len() > 1 {
+                    return Some(parts);
+                }
+            }
+            None
+        }
     }
-    Some(
-        statements
-            .into_iter()
-            .map(|stmt| stmt.to_string())
-            .collect(),
-    )
 }
 
 fn literal_insert_values(sql: &str) -> Vec<Option<String>> {
