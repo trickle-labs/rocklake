@@ -315,15 +315,19 @@ impl CatalogReader {
         // If files exist from multiple snapshots with no end_snapshot, it indicates
         // consolidation: old files should be filtered out, keeping only the latest batch.
         if !files.is_empty() {
-            let has_multiple_begin_snapshots = {
-                let mut snapshots = std::collections::HashSet::new();
-                for f in &files {
-                    snapshots.insert(f.begin_snapshot.unwrap_or(0));
-                }
-                snapshots.len() > 1
-            };
+            let mut snapshots_map: std::collections::HashMap<u64, Vec<&DataFileRow>> = std::collections::HashMap::new();
+            for f in &files {
+                let snap = f.begin_snapshot.unwrap_or(0);
+                snapshots_map.entry(snap).or_insert_with(Vec::new).push(f);
+            }
+            
+            let has_multiple_begin_snapshots = snapshots_map.len() > 1;
+            let num_files_before = files.len();
             
             if has_multiple_begin_snapshots {
+                eprintln!("[CONSOLIDATION DEBUG] table_id={}, snapshots={:?}, files_before={}", 
+                    table_id, snapshots_map.keys().collect::<Vec<_>>(), num_files_before);
+                
                 // Find the maximum begin_snapshot among active files
                 let max_begin_snapshot = files
                     .iter()
@@ -331,8 +335,12 @@ impl CatalogReader {
                     .max()
                     .unwrap_or(0);
                 
+                eprintln!("[CONSOLIDATION DEBUG] max_begin_snapshot={}, keeping files from this snapshot only", max_begin_snapshot);
+                
                 // Keep only files from the latest batch (max begin_snapshot)
                 files.retain(|f| f.begin_snapshot.unwrap_or(0) == max_begin_snapshot);
+                
+                eprintln!("[CONSOLIDATION DEBUG] files_after={}", files.len());
             }
         }
         
