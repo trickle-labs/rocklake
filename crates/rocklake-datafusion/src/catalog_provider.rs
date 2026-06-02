@@ -642,10 +642,21 @@ impl TableProvider for RockLakeTableProvider {
         let urls: Result<Vec<ListingTableUrl>, _> = parquet_files
             .iter()
             .map(|f| {
+                // Construct absolute path: combine root with file path
                 let abs = format!("{}/{}", root.trim_end_matches('/'), f.path);
-                // abs is an absolute OS path starting with '/'; prepend "file://"
-                // to get a valid file:// URL (three slashes total).
-                ListingTableUrl::parse(format!("file://{abs}"))
+                
+                // Handle different URL schemes:
+                // - If root starts with a scheme (s3://, az://, gs://, etc.), use as-is
+                // - Otherwise, assume it's a local path and prepend file://
+                let url_str = if root.contains("://") {
+                    // Already a URI with scheme
+                    abs
+                } else {
+                    // Local filesystem path - prepend file://
+                    format!("file://{abs}")
+                };
+                
+                ListingTableUrl::parse(url_str)
             })
             .collect();
         let urls = urls?;

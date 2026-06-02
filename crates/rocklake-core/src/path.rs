@@ -2,6 +2,16 @@
 //!
 //! Never use raw string concatenation for object-store paths anywhere.
 
+/// Determine if a path is relative (no scheme) or absolute (has scheme like `s3://`, `az://`).
+///
+/// Returns `true` if the path is relative (should use `path_is_relative = true`),
+/// `false` if it's absolute with a scheme.
+pub fn is_path_relative(path: &str) -> bool {
+    // Check if path contains a URI scheme (e.g., "s3://", "az://", "gs://", "file://")
+    // A scheme is identified by `scheme://` pattern
+    !path.contains("://")
+}
+
 /// Mode for data path storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataPathMode {
@@ -156,5 +166,19 @@ mod tests {
             DataPathMode::Absolute,
         );
         assert_eq!(cp.catalog_full_path(), "s3://mybucket/catalogs/main/");
+    }
+
+    #[test]
+    fn path_relativity_detection() {
+        // Relative paths (no scheme)
+        assert!(is_path_relative("table/file.parquet"));
+        assert!(is_path_relative("data/orders/part-00042.parquet"));
+        assert!(is_path_relative("../relative/path.parquet"));
+
+        // Absolute paths (with scheme)
+        assert!(!is_path_relative("s3://bucket/table/file.parquet"));
+        assert!(!is_path_relative("az://container/table/file.parquet"));
+        assert!(!is_path_relative("gs://bucket/data/file.parquet"));
+        assert!(!is_path_relative("file:///local/path/file.parquet"));
     }
 }

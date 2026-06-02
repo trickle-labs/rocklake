@@ -1554,6 +1554,9 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
     // Register data files under the default table
     let mut file_id = 1u64;
     for path in data_paths {
+        // Detect if path is relative (no scheme like s3://, az://) or absolute
+        let path_is_relative = rocklake_core::path::is_path_relative(&path);
+
         let row = DataFileRow {
             data_file_id: file_id,
             table_id,
@@ -1566,7 +1569,7 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
             begin_snapshot: Some(1),
             end_snapshot: None,
             file_order: None,
-            path_is_relative: Some(false),
+            path_is_relative: Some(path_is_relative),
             row_id_start: None,
             partition_id: None,
             mapping_id: None,

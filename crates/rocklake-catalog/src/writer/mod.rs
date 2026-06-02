@@ -726,6 +726,9 @@ impl CatalogWriter {
             }
         };
 
+        // Detect if path is relative (no scheme like s3://, az://) or absolute
+        let path_is_relative = rocklake_core::path::is_path_relative(path);
+
         let row = DataFileRow {
             data_file_id,
             table_id,
@@ -738,7 +741,7 @@ impl CatalogWriter {
             begin_snapshot: Some(snapshot_id),
             end_snapshot: None,
             file_order: Some(file_order),
-            path_is_relative: Some(false),
+            path_is_relative: Some(path_is_relative),
             row_id_start: Some(row_id_start),
             partition_id: None,
             mapping_id: None,
@@ -782,6 +785,9 @@ impl CatalogWriter {
             }
         };
 
+        // Detect if path is relative (no scheme like s3://, az://) or absolute
+        let path_is_relative = rocklake_core::path::is_path_relative(path);
+
         let row = DataFileRow {
             data_file_id,
             table_id,
@@ -794,7 +800,7 @@ impl CatalogWriter {
             begin_snapshot: Some(snapshot_id),
             end_snapshot: None,
             file_order: Some(file_order),
-            path_is_relative: Some(false),
+            path_is_relative: Some(path_is_relative),
             row_id_start: Some(row_id_start),
             partition_id: None,
             mapping_id: None,
@@ -842,6 +848,9 @@ impl CatalogWriter {
             }
         };
 
+        // Detect if path is relative (no scheme like s3://, az://) or absolute
+        let path_is_relative = rocklake_core::path::is_path_relative(path);
+
         let row = DataFileRow {
             data_file_id,
             table_id,
@@ -854,7 +863,7 @@ impl CatalogWriter {
             begin_snapshot: Some(snapshot_id),
             end_snapshot: None,
             file_order: Some(file_order),
-            path_is_relative: Some(false),
+            path_is_relative: Some(path_is_relative),
             row_id_start: Some(row_id_start),
             partition_id,
             mapping_id,
@@ -884,6 +893,9 @@ impl CatalogWriter {
         let delete_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
+        // Detect if path is relative (no scheme like s3://, az://) or absolute
+        let path_is_relative = rocklake_core::path::is_path_relative(path);
+
         let row = DeleteFileRow {
             delete_file_id,
             data_file_id,
@@ -894,7 +906,7 @@ impl CatalogWriter {
             table_id: None,
             begin_snapshot: Some(snapshot_id),
             end_snapshot: None,
-            path_is_relative: Some(false),
+            path_is_relative: Some(path_is_relative),
             format: Some("parquet".to_string()),
             footer_size,
             partial_max: partial_max.map(|s| s.to_string()),
@@ -915,6 +927,9 @@ impl CatalogWriter {
         let delete_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
+        // Detect if path is relative (no scheme like s3://, az://) or absolute
+        let path_is_relative = rocklake_core::path::is_path_relative(path);
+
         let row = DeleteFileRow {
             delete_file_id,
             data_file_id,
@@ -925,7 +940,7 @@ impl CatalogWriter {
             table_id: None,
             begin_snapshot: Some(snapshot_id),
             end_snapshot: None,
-            path_is_relative: Some(false),
+            path_is_relative: Some(path_is_relative),
             format: Some("parquet".to_string()),
             footer_size: None,
             partial_max: None,
