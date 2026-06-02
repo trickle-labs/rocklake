@@ -6,7 +6,6 @@
 
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{CatalogStore, OpenOptions};
-use rocklake_core::mvcc::SnapshotId;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -117,6 +116,83 @@ async fn test_checkpoint_consolidation_no_duplication() {
         assert_eq!(files.len(), 1, 
             "Should see only 1 file after CHECKPOINT (latest consolidation batch)\n\
              If you see 2 here, consolidation detection isn't working");
+    }
+
+    store.close().await.unwrap();
+}
+
+/// Test: Consolidation detection only works when files have different begin_snapshots.
+/// If INSERT and CHECKPOINT happen in the same transaction, all files have the same
+/// begin_snapshot and consolidation detection won't filter them.
+#[tokio::test]
+async fn test_consolidation_same_snapshot_duplication() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+
+    // Setup
+    let mut writer = store.begin_write();
+    let schema_id = writer.create_schema("main").await.unwrap();
+    let table_id = writer
+        .create_table(schema_id, "test_table", Some("az://data/test/"))
+        .await
+        .unwrap();
+    writer
+        .add_column(table_id, "id", "INTEGER", 0, false, None)
+        .await
+        .unwrap();
+    let snap_initial = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap_initial.clone());
+
+    // CRITICAL SCENARIO: What if INSERT + CHECKPOINT happen in same snapshot?
+    // This could happen if DuckLake batches them together
+    let mut writer = store.begin_write();
+    
+    // Register old files (simulating initial INSERT)
+    let _file1_id = writer
+        .register_data_file(table_id, "s3://bucket/file1.parquet", "parquet", 2, 1024)
+        .await
+        .unwrap();
+    
+    // Register consolidated file in SAME snapshot (same begin_snapshot)
+    let _file2_id = writer
+        .register_data_file(table_id, "s3://bucket/consolidated.parquet", "parquet", 2, 1024)
+        .await
+        .unwrap();
+    
+    let snap_same = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap_same.clone());
+    
+    // Now verify: both files have same begin_snapshot
+    {
+        let reader = store.read_at(snap_same.clone()).unwrap();
+        let files = reader.list_data_files(table_id).await.unwrap();
+        eprintln!("Same-snapshot consolidation: {} files", files.len());
+        
+        let mut begin_snapshots: Vec<_> = files.iter().map(|f| f.begin_snapshot).collect();
+        begin_snapshots.sort();
+        eprintln!("begin_snapshots: {:?}", begin_snapshots);
+        
+        for f in &files {
+            eprintln!("  file_id={}, begin={:?}, records={}", 
+                f.data_file_id, f.begin_snapshot, f.record_count);
+        }
+        
+        // All files in same transaction should have the same begin_snapshot
+        assert!(begin_snapshots.len() == files.len(), "should have data");
+        let first_snapshot = begin_snapshots[0];
+        for snap in &begin_snapshots {
+            assert_eq!(snap, &first_snapshot, "all files in same transaction should have same begin_snapshot");
+        }
+        
+        // IMPORTANT: If both files have SAME begin_snapshot, consolidation cleanup CAN'T help
+        // They'll both be visible, causing duplication!
+        if files.len() == 2 {
+            let total: u64 = files.iter().map(|f| f.record_count).sum();
+            panic!("BUG: Same-snapshot consolidation returns {} files with {} total rows\n\
+                   Both files have begin_snapshot={:?}\n\
+                   Need alternative strategy: file lineage tracking or end_snapshot marking",
+                files.len(), total, first_snapshot);
+        }
     }
 
     store.close().await.unwrap();

@@ -312,8 +312,9 @@ impl CatalogReader {
         }
         
         // v0.24: Consolidation detection and cleanup
-        // If files exist from multiple snapshots with no end_snapshot, it indicates
-        // consolidation: old files should be filtered out, keeping only the latest batch.
+        // Handles two scenarios:
+        // 1. Different snapshots (old + new files) - filter to max begin_snapshot
+        // 2. Same snapshot (same transaction) - keep highest file_id only
         if !files.is_empty() {
             let mut snapshots_map: std::collections::HashMap<u64, Vec<&DataFileRow>> = std::collections::HashMap::new();
             for f in &files {
@@ -322,25 +323,21 @@ impl CatalogReader {
             }
             
             let has_multiple_begin_snapshots = snapshots_map.len() > 1;
-            let num_files_before = files.len();
             
             if has_multiple_begin_snapshots {
-                eprintln!("[CONSOLIDATION DEBUG] table_id={}, snapshots={:?}, files_before={}", 
-                    table_id, snapshots_map.keys().collect::<Vec<_>>(), num_files_before);
-                
-                // Find the maximum begin_snapshot among active files
+                // Case 1: Files from different snapshots - keep max begin_snapshot only
                 let max_begin_snapshot = files
                     .iter()
                     .map(|f| f.begin_snapshot.unwrap_or(0))
                     .max()
                     .unwrap_or(0);
-                
-                eprintln!("[CONSOLIDATION DEBUG] max_begin_snapshot={}, keeping files from this snapshot only", max_begin_snapshot);
-                
-                // Keep only files from the latest batch (max begin_snapshot)
                 files.retain(|f| f.begin_snapshot.unwrap_or(0) == max_begin_snapshot);
-                
-                eprintln!("[CONSOLIDATION DEBUG] files_after={}", files.len());
+            } else if files.len() > 1 {
+                // Case 2: Multiple files in SAME snapshot (same transaction)
+                // This happens when consolidation occurs in same transaction as INSERT
+                // Keep only the file with highest file_id (registered last = consolidated)
+                let max_file_id = files.iter().map(|f| f.data_file_id).max().unwrap_or(0);
+                files.retain(|f| f.data_file_id == max_file_id);
             }
         }
         
