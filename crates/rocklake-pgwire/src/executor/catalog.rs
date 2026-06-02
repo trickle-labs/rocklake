@@ -438,6 +438,43 @@ pub(super) async fn execute_commit(
                         .map_err(RockLakeError::from)?;
                 }
             }
+            BufferedOp::DeleteDuckLakeCatalogRows {
+                table_name,
+                file_ids,
+            } => {
+                needs_snapshot = true;
+                // Mark rows as deleted by setting end_snapshot for DuckLake catalog rows
+                match table_name.as_str() {
+                    "ducklake_data_file" => {
+                        for file_id in file_ids {
+                            writer
+                                .mark_data_file_deleted(file_id)
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                    }
+                    "ducklake_delete_file" => {
+                        for file_id in file_ids {
+                            writer
+                                .mark_delete_file_deleted(file_id)
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                    }
+                    // For other tables (file_column_stats, file_partition_value, etc),
+                    // we mark parent data_file_id as deleted, which effectively hides their rows
+                    _ => {
+                        // These tables have data_file_id as their primary key, so marking
+                        // the data file deleted will effectively delete associated rows
+                        for file_id in file_ids {
+                            writer
+                                .mark_data_file_deleted(file_id)
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                    }
+                }
+            }
             BufferedOp::InsertView {
                 schema_id,
                 view_name,

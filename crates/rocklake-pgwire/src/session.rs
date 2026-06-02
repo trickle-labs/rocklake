@@ -115,6 +115,10 @@ pub enum BufferedOp {
         table_name: String,
         row_ids: Vec<u64>,
     },
+    DeleteDuckLakeCatalogRows {
+        table_name: String,
+        file_ids: Vec<u64>,
+    },
     InsertView {
         schema_id: u64,
         view_name: String,

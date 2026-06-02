@@ -116,6 +116,19 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                                 table_name: table.to_string(),
                             };
                         }
+                        // DuckLake catalog table deletions during CHECKPOINT garbage collection
+                        if schema == "public" && (
+                            table.starts_with("ducklake_data_file") ||
+                            table.starts_with("ducklake_file_column_stats") ||
+                            table.starts_with("ducklake_delete_file") ||
+                            table.starts_with("ducklake_file_partition_value") ||
+                            table.starts_with("ducklake_file_variant_stats") ||
+                            table.starts_with("ducklake_files_scheduled_for_deletion")
+                        ) {
+                            return StatementKind::DeleteDuckLakeCatalogRows {
+                                table_name: table.to_string(),
+                            };
+                        }
                         return StatementKind::DeleteExtensionRows {
                             schema_name: schema.to_string(),
                             table_name: table.to_string(),

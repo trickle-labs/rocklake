@@ -333,6 +333,11 @@ pub enum StatementKind {
     DeleteInlinedDataRows {
         table_name: String,
     },
+    /// `DELETE FROM "public".ducklake_data_file WHERE data_file_id IN (...)`
+    /// or similar for other DuckLake catalog tables during CHECKPOINT garbage collection.
+    DeleteDuckLakeCatalogRows {
+        table_name: String,
+    },
 
     // ─── COPY Protocol ─────────────────────────────────────────────────
     /// `COPY "public"."ducklake_*" FROM STDIN (FORMAT binary)`

@@ -148,6 +148,37 @@ fn row_ids_from_ctid_sql(sql: &str) -> Vec<u64> {
     ids
 }
 
+/// Extract file IDs from a DuckLake CHECKPOINT catalog DELETE:
+///   `DELETE FROM "public".ducklake_data_file WHERE data_file_id IN (1, 2);`
+/// Handles various DuckLake catalog tables that need garbage collection.
+fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
+    let mut ids = Vec::new();
+    let lower = sql.to_lowercase();
+
+    // Find the WHERE clause
+    let Some(where_idx) = lower.find(" where ") else {
+        return ids;
+    };
+    let after_where = &sql[where_idx + 7..];
+
+    // Look for pattern: data_file_id IN (id1, id2, ...)
+    if let Some(in_idx) = after_where.to_lowercase().find(" in (") {
+        let after_in = &after_where[in_idx + 5..];
+        if let Some(close_paren) = after_in.find(')') {
+            let id_list = &after_in[..close_paren];
+            // Split by comma and parse each ID
+            for part in id_list.split(',') {
+                let trimmed = part.trim();
+                if let Ok(id) = trimmed.parse::<u64>() {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+
+    ids
+}
+
 fn literal_insert_rows(sql: &str) -> Vec<Vec<Option<String>>> {
     let Some(values_idx) = sql.to_lowercase().find("values") else {
         return Vec::new();
@@ -1963,6 +1994,27 @@ async fn execute_classified<'a>(
                 let op = BufferedOp::DeleteInlinedRows {
                     table_name: table_name.clone(),
                     row_ids,
+                };
+                if session.in_transaction {
+                    session.pending_txn.push(op)?;
+                } else {
+                    execute_commit(vec![op], store, notify_manager).await?;
+                }
+            }
+            Ok(vec![Response::Execution(Tag::new(&format!(
+                "DELETE {row_count}"
+            )))])
+        }
+
+        // DELETE FROM "public".ducklake_data_file WHERE data_file_id IN (...) or similar
+        // Issued by DuckLake CHECKPOINT for garbage collection of old data files.
+        StatementKind::DeleteDuckLakeCatalogRows { ref table_name } => {
+            let file_ids = file_ids_from_where_sql(_sql);
+            let row_count = file_ids.len();
+            if !file_ids.is_empty() {
+                let op = BufferedOp::DeleteDuckLakeCatalogRows {
+                    table_name: table_name.clone(),
+                    file_ids,
                 };
                 if session.in_transaction {
                     session.pending_txn.push(op)?;

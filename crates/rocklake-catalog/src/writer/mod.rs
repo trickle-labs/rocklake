@@ -1065,6 +1065,60 @@ impl CatalogWriter {
         Ok(())
     }
 
+    /// Mark a data file as deleted (for CHECKPOINT garbage collection).
+    /// Scans all data files to find matching data_file_id and marks with end_snapshot.
+    pub async fn mark_data_file_deleted(&mut self, data_file_id: u64) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_DATA_FILE);
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let df_row: DataFileRow = values::decode_value(&kv.value)?;
+            if df_row.data_file_id == data_file_id && df_row.end_snapshot.is_none() {
+                let mut updated_row = df_row;
+                updated_row.end_snapshot = Some(snapshot_id);
+                self.stage(kv.key.to_vec(), values::encode_value(&updated_row));
+                break; // Only one data file per data_file_id
+            }
+        }
+        Ok(())
+    }
+
+    /// Mark a delete file as deleted (for CHECKPOINT garbage collection).
+    /// Scans all delete files to find matching delete_file_id and marks with end_snapshot.
+    pub async fn mark_delete_file_deleted(&mut self, delete_file_id: u64) -> CatalogResult<()> {
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_DELETE_FILE);
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let df_row: DeleteFileRow = values::decode_value(&kv.value)?;
+            if df_row.delete_file_id == delete_file_id && df_row.end_snapshot.is_none() {
+                let mut updated_row = df_row;
+                updated_row.end_snapshot = Some(snapshot_id);
+                self.stage(kv.key.to_vec(), values::encode_value(&updated_row));
+                break; // Only one delete file per delete_file_id
+            }
+        }
+        Ok(())
+    }
+
     // ─── Phase 6: Views ────────────────────────────────────────────────────
 
     pub async fn create_view(
