@@ -219,16 +219,39 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
     };
     let after_where = &sql[where_idx + 7..];
 
-    // Look for pattern: data_file_id IN (id1, id2, ...)
+    // Pattern 1: data_file_id IN (id1, id2, ...)
     if let Some(in_idx) = after_where.to_lowercase().find(" in (") {
         let after_in = &after_where[in_idx + 5..];
         if let Some(close_paren) = after_in.find(')') {
             let id_list = &after_in[..close_paren];
             // Split by comma and parse each ID
             for part in id_list.split(',') {
-                let trimmed = part.trim();
+                let trimmed = part.trim().trim_matches('\'').trim_matches('"');
                 if let Ok(id) = trimmed.parse::<u64>() {
                     ids.push(id);
+                }
+            }
+        }
+    }
+    
+    // Pattern 2: data_file_id = 123 (for single file deletion)
+    if ids.is_empty() {
+        let patterns = ["data_file_id", "delete_file_id"];
+        for pattern in &patterns {
+            if let Some(eq_idx) = after_where.to_lowercase().find(&format!("{} =", pattern)) {
+                let after_eq = &after_where[eq_idx + pattern.len() + 2..].trim_start();
+                // Extract until comma or WHERE or semicolon
+                let mut end = after_eq.len();
+                for (i, ch) in after_eq.chars().enumerate() {
+                    if ch == ',' || ch == ';' || ch == ')' {
+                        end = i;
+                        break;
+                    }
+                }
+                let id_str = &after_eq[..end].trim().trim_matches('\'').trim_matches('"');
+                if let Ok(id) = id_str.parse::<u64>() {
+                    ids.push(id);
+                    break; // Found single ID
                 }
             }
         }
