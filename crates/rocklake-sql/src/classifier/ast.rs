@@ -101,10 +101,22 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                 let table_name = extract_table_name(&from.relation)
                     .unwrap_or_default()
                     .to_lowercase();
+                
                 // DuckLake CHECKPOINT deletes flushed inlined rows — check first before requiring schema
                 if table_name.starts_with("ducklake_inlined_data_") {
                     return StatementKind::DeleteInlinedDataRows { table_name };
                 }
+                
+                // DuckLake catalog table deletions during CHECKPOINT garbage collection.
+                // After SQL normalization, schema prefix may be stripped.
+                // Check for bare ducklake_ table names (already normalized).
+                if is_ducklake_catalog_table(&table_name) {
+                    return StatementKind::DeleteDuckLakeCatalogRows {
+                        table_name: table_name.clone(),
+                    };
+                }
+                
+                // Also check for schema-qualified names (in case normalization didn't apply)
                 if table_name.contains('.') {
                     let parts: Vec<&str> = table_name.splitn(2, '.').collect();
                     if parts.len() == 2 {
@@ -117,14 +129,7 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                             };
                         }
                         // DuckLake catalog table deletions during CHECKPOINT garbage collection
-                        if schema == "public" && (
-                            table.starts_with("ducklake_data_file") ||
-                            table.starts_with("ducklake_file_column_stats") ||
-                            table.starts_with("ducklake_delete_file") ||
-                            table.starts_with("ducklake_file_partition_value") ||
-                            table.starts_with("ducklake_file_variant_stats") ||
-                            table.starts_with("ducklake_files_scheduled_for_deletion")
-                        ) {
+                        if schema == "public" && is_ducklake_catalog_table(table) {
                             return StatementKind::DeleteDuckLakeCatalogRows {
                                 table_name: table.to_string(),
                             };
@@ -649,4 +654,15 @@ pub(super) fn classify_release_snapshot_call(func: &sqlparser::ast::Function) ->
     }
 
     StatementKind::ReleaseSnapshot { consumer_id }
+}
+
+/// Check if a table name is a DuckLake catalog table (with or without schema prefix).
+/// Handles both normalized names (ducklake_*) and schema-qualified names.
+fn is_ducklake_catalog_table(table: &str) -> bool {
+    table.starts_with("ducklake_data_file") ||
+    table.starts_with("ducklake_file_column_stats") ||
+    table.starts_with("ducklake_delete_file") ||
+    table.starts_with("ducklake_file_partition_value") ||
+    table.starts_with("ducklake_file_variant_stats") ||
+    table.starts_with("ducklake_files_scheduled_for_deletion")
 }
