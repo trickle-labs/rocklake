@@ -359,15 +359,6 @@ pub enum StatementKind {
 
 /// Classify a SQL string into a `StatementKind`.
 pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> {
-    // DIAGNOSTIC: Check if this is a DELETE statement batch
-    let lower_sql = sql.to_lowercase();
-    if lower_sql.contains("delete") && lower_sql.contains("where") && lower_sql.contains("ducklake") {
-        // BYPASS ALL LOGIC - just return success for DELETE statements to see if that helps
-        return Ok(StatementKind::DeleteDuckLakeCatalogRows {
-            table_name: "ducklake_data_file".to_string(),
-        });
-    }
-    
     // Apply AST normalization first: strip schema prefixes etc.
     let sql_cow = normalize::normalize_sql(sql);
     let sql = sql_cow.as_ref();
@@ -376,13 +367,6 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
     // Pre-parse fast path for LISTEN/UNLISTEN.
     if let Some(result) = classify_listen_prefix(sql) {
         return result;
-    }
-
-    // DIAGNOSTIC: Check if we received a multi-statement batch
-    if lower.contains("insert") && lower.contains("delete") {
-        return Err(SqlDispatchError::ParseError(
-            format!("DIAGNOSTIC: Multi-statement batch received (INSERT + DELETE), should have been split by executor")
-        ));
     }
 
     if lower.contains("update") && lower.contains("ducklake_table_column_stats") {
@@ -394,7 +378,7 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
     }
 
     // Pre-parse fast path for DELETE statements on DuckLake catalog tables
-    if lower.contains("delete") && lower.contains("ducklake_") {
+    if lower.trim_start().starts_with("delete") && lower.contains("from") && lower.contains("ducklake_") {
         // Try to extract the first DELETE statement from the batch
         if let Some(first_delete_idx) = lower.find("delete") {
             // Extract from first DELETE onwards until we hit the next semicolon or end
