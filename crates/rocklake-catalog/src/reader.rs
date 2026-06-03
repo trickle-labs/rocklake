@@ -323,6 +323,18 @@ impl CatalogReader {
         //   - Old files get begin_snapshot = N
         //   - Consolidated file gets begin_snapshot = N+1 (different!)
         //   - Without cleanup: both visible, causing row duplication
+        //   - Solution: Keep only highest file_id
+        //
+        // Debug: Log what files are visible before consolidation cleanup
+        if files.len() > 1 {
+            eprintln!("[CONSOLIDATION] table_id={} snapshot={} found {} files:", 
+                table_id, self.dl_snapshot_id.as_u64(), files.len());
+            for f in &files {
+                eprintln!("  file_id={} begin={:?} end={:?} rows={} path={}", 
+                    f.data_file_id, f.begin_snapshot, f.end_snapshot, 
+                    f.record_count, f.path);
+            }
+        }
         //   - Pattern: Single file from latest snapshot with higher file_id than all earlier files
         //   - Solution: When we see this pattern, keep only the most recent file
         //
@@ -343,6 +355,7 @@ impl CatalogReader {
                     .map(|f| f.data_file_id)
                     .max()
                     .unwrap_or(0);
+                eprintln!("[CONSOLIDATION] Case 1 (same-snapshot): keeping file_id={}", max_file_id);
                 files.retain(|f| f.data_file_id == max_file_id);
             } else if by_snapshot.len() == 2 {
                 // Case 2: Cross-snapshot consolidation detection
@@ -359,6 +372,9 @@ impl CatalogReader {
                 let latest_files = &by_snapshot[&latest_snap];
                 let earlier_files = &by_snapshot[&earlier_snap];
                 
+                eprintln!("[CONSOLIDATION] Case 2 (cross-snapshot): snap{}({} files) → snap{}({} files)",
+                    earlier_snap, earlier_files.len(), latest_snap, latest_files.len());
+                
                 let should_consolidate = if latest_files.len() == 1 {
                     let latest_file_id = latest_files[0].data_file_id;
                     let max_earlier_id = earlier_files.iter()
@@ -370,25 +386,33 @@ impl CatalogReader {
                         // Check consolidation patterns:
                         if earlier_files.len() > 1 {
                             // Pattern A: Multiple earlier files consolidated into one
+                            eprintln!("[CONSOLIDATION]   Pattern A: {} old files → 1 new (consolidation)", earlier_files.len());
                             true
                         } else if earlier_files.len() == 1 {
                             // Pattern B: Single file consolidated - check if row counts match
-                            // (same row count indicates consolidation, not separate insert)
-                            earlier_files[0].record_count == latest_files[0].record_count
+                            let old_rows = earlier_files[0].record_count;
+                            let new_rows = latest_files[0].record_count;
+                            eprintln!("[CONSOLIDATION]   Pattern B: rows {} → {} (match: {})", old_rows, new_rows, old_rows == new_rows);
+                            old_rows == new_rows
                         } else {
                             false
                         }
                     } else {
+                        eprintln!("[CONSOLIDATION]   file_id not increasing: latest={} ≤ max_earlier={}", latest_file_id, max_earlier_id);
                         false
                     }
                 } else {
+                    eprintln!("[CONSOLIDATION]   not consolidation: latest has {} files (expected 1)", latest_files.len());
                     false
                 };
                 
                 if should_consolidate {
                     // Consolidation pattern detected: keep only the latest file
                     let latest_file_id = latest_files[0].data_file_id;
+                    eprintln!("[CONSOLIDATION]   ✓ CONSOLIDATION DETECTED: keeping file_id={}", latest_file_id);
                     files.retain(|f| f.data_file_id == latest_file_id);
+                } else {
+                    eprintln!("[CONSOLIDATION]   ✗ NOT CONSOLIDATION: keeping all files");
                 }
             }
             // Cross-snapshot case with more than 2 snapshots: Keep all files
