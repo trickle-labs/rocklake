@@ -1170,6 +1170,7 @@ impl CatalogWriter {
         Ok(mapping_id)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_name_mapping(
         &mut self,
         mapping_id: Option<u64>,
@@ -1673,6 +1674,7 @@ impl CatalogWriter {
     }
 
     /// Write a `ducklake_sort_expression` row directly.
+    #[allow(clippy::too_many_arguments)]
     pub async fn register_sort_expression(
         &mut self,
         sort_id: u64,

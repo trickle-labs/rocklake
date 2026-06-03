@@ -4,6 +4,8 @@
 //! These tests verify that when DuckLake consolidates files during CHECKPOINT,
 //! RockLake correctly filters to show only the latest consolidated version.
 
+#![allow(clippy::clone_on_copy)]
+
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use std::sync::Arc;

@@ -351,7 +351,7 @@ impl CatalogReader {
             for f in &files {
                 by_partition
                     .entry(f.partition_id)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(f);
             }
 

@@ -7,6 +7,8 @@
 //! 4. Run CHECKPOINT
 //! 5. Verify select still returns 2 rows (NOT duplicated)
 
+#![allow(clippy::clone_on_copy)]
+
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use std::sync::Arc;
