@@ -414,9 +414,22 @@ impl CatalogReader {
                 } else {
                     eprintln!("[CONSOLIDATION]   ✗ NOT CONSOLIDATION: keeping all files");
                 }
+            } else {
+                // Case 3: Multiple snapshots (3+) with scattered files
+                // Heuristic: Keep only files from the most recent snapshot
+                // This assumes all earlier snapshots' files have been consolidated into the latest snapshot
+                
+                let mut snapshots: Vec<_> = by_snapshot.keys().copied().collect();
+                snapshots.sort();
+                let latest_snap = snapshots[snapshots.len() - 1];
+                let latest_files = &by_snapshot[&latest_snap];
+                
+                eprintln!("[CONSOLIDATION] 3+ snapshots: keeping only {} files from latest snap={}", 
+                    latest_files.len(), latest_snap);
+                
+                let latest_file_ids: Vec<_> = latest_files.iter().map(|f| f.data_file_id).collect();
+                files.retain(|f| latest_file_ids.contains(&f.data_file_id));
             }
-            // Cross-snapshot case with more than 2 snapshots: Keep all files
-            // These are legitimate multi-batch inserts from multiple transactions
         }
         
         // v0.24: order results by file_order (spec requirement).
