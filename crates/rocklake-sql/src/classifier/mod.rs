@@ -406,13 +406,9 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
 
                 if table_name.contains("ducklake_") {
                     if table_name.contains("inlined_data_") {
-                        return Ok(StatementKind::DeleteInlinedDataRows {
-                            table_name,
-                        });
+                        return Ok(StatementKind::DeleteInlinedDataRows { table_name });
                     } else {
-                        return Ok(StatementKind::DeleteDuckLakeCatalogRows {
-                            table_name,
-                        });
+                        return Ok(StatementKind::DeleteDuckLakeCatalogRows { table_name });
                     }
                 } else {
                     return Err(SqlDispatchError::ParseError(format!(

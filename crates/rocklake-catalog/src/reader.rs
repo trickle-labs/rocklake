@@ -349,10 +349,7 @@ impl CatalogReader {
             let mut by_partition: std::collections::HashMap<Option<u64>, Vec<&DataFileRow>> =
                 std::collections::HashMap::new();
             for f in &files {
-                by_partition
-                    .entry(f.partition_id)
-                    .or_default()
-                    .push(f);
+                by_partition.entry(f.partition_id).or_default().push(f);
             }
 
             let mut resolved_file_ids = std::collections::HashSet::new();
