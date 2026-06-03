@@ -96,7 +96,10 @@ impl AzureEmulatorHarness {
             .with_container_name(container)
             .with_allow_http(true)
             // Override the emulator port if it's not the default 10000.
-            .with_endpoint(format!("http://127.0.0.1:{}/{}", self.blob_port, AZURITE_ACCOUNT))
+            .with_endpoint(format!(
+                "http://127.0.0.1:{}/{}",
+                self.blob_port, AZURITE_ACCOUNT
+            ))
             .build()
             .expect("failed to build Azure client for Azurite emulator");
         Arc::new(store)
@@ -144,10 +147,10 @@ impl AzureEmulatorHarness {
 
     /// Create a container (bucket) in Azurite.
     pub async fn create_container(&self, container: &str) -> Result<(), AzureHarnessError> {
-        use hmac::{Hmac, Mac};
-        use sha2::Sha256;
         use base64::prelude::*;
         use chrono::{Datelike, Timelike};
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
 
         let now = chrono::Utc::now();
         let day = match now.weekday() {
@@ -176,9 +179,15 @@ impl AzureEmulatorHarness {
         };
         let date_str = format!(
             "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
-            day, now.day(), month, now.year(), now.hour(), now.minute(), now.second()
+            day,
+            now.day(),
+            month,
+            now.year(),
+            now.hour(),
+            now.minute(),
+            now.second()
         );
-        
+
         let string_to_sign = format!(
             "PUT\n\n\n\n\n\n\n\n\n\n\n\nx-ms-date:{}\nx-ms-version:2020-04-08\n/{}/{}/{}\nrestype:container",
             date_str, AZURITE_ACCOUNT, AZURITE_ACCOUNT, container

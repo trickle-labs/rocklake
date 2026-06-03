@@ -101,30 +101,40 @@ impl CatalogWriter {
         let key = keys::key_table_stats(table_id);
         let mut row_id_start = 0;
         let mut existing_stats = None;
-        
+
         // 1. Check staging first
         if let Some((_, val)) = self.staged.iter().find(|(k, _)| k == &key) {
-            if let Ok(row) = rocklake_core::values::decode_value::<rocklake_core::rows::TableStatsRow>(val) {
+            if let Ok(row) =
+                rocklake_core::values::decode_value::<rocklake_core::rows::TableStatsRow>(val)
+            {
                 row_id_start = row.next_row_id.unwrap_or(0);
                 existing_stats = Some(row);
             }
         }
-        
+
         // 2. If not found in staging, check database
         if existing_stats.is_none() {
             if let Some(data) = self.db.get(&key).await? {
-                if let Ok(row) = rocklake_core::values::decode_value::<rocklake_core::rows::TableStatsRow>(&data) {
+                if let Ok(row) =
+                    rocklake_core::values::decode_value::<rocklake_core::rows::TableStatsRow>(&data)
+                {
                     row_id_start = row.next_row_id.unwrap_or(0);
                     existing_stats = Some(row);
                 }
             }
         }
-        
+
         // 3. Compute updated stats
         let prev_record_count = existing_stats.as_ref().map(|r| r.record_count).unwrap_or(0);
-        let prev_file_size_bytes = existing_stats.as_ref().map(|r| r.file_size_bytes).unwrap_or(0);
-        let prev_internal_file_count = existing_stats.as_ref().map(|r| r.internal_file_count).unwrap_or(0);
-        
+        let prev_file_size_bytes = existing_stats
+            .as_ref()
+            .map(|r| r.file_size_bytes)
+            .unwrap_or(0);
+        let prev_internal_file_count = existing_stats
+            .as_ref()
+            .map(|r| r.internal_file_count)
+            .unwrap_or(0);
+
         let updated_stats = rocklake_core::rows::TableStatsRow {
             table_id,
             record_count: prev_record_count.saturating_add(record_count),
@@ -132,12 +142,12 @@ impl CatalogWriter {
             file_size_bytes: prev_file_size_bytes.saturating_add(file_size_bytes),
             next_row_id: Some(row_id_start.saturating_add(record_count)),
         };
-        
+
         // 4. Update staging
         self.staged.retain(|(k, _)| k != &key);
         let encoded = values::encode_value(&updated_stats);
         self.stage(key, encoded);
-        
+
         Ok(row_id_start)
     }
 
@@ -537,7 +547,11 @@ impl CatalogWriter {
     }
 
     /// Find the begin_snapshot of a live table by table_id.
-    pub async fn find_table_begin_snapshot(&self, schema_id: u64, table_id: u64) -> CatalogResult<Option<u64>> {
+    pub async fn find_table_begin_snapshot(
+        &self,
+        schema_id: u64,
+        table_id: u64,
+    ) -> CatalogResult<Option<u64>> {
         let prefix = keys::prefix_tables_for_schema_table(schema_id, table_id);
         let mut iter = self
             .db
@@ -576,7 +590,11 @@ impl CatalogWriter {
     }
 
     /// Find the begin_snapshot of a live column by column_id.
-    pub async fn find_column_begin_snapshot(&self, table_id: u64, column_id: u64) -> CatalogResult<Option<u64>> {
+    pub async fn find_column_begin_snapshot(
+        &self,
+        table_id: u64,
+        column_id: u64,
+    ) -> CatalogResult<Option<u64>> {
         let prefix = keys::prefix_columns_for_table(table_id);
         let mut iter = self
             .db
@@ -842,7 +860,9 @@ impl CatalogWriter {
         // v0.24: assign file_order as monotonically increasing within table.
         let file_order = data_file_id;
         // v0.24: row_id_start from pre-increment of table next_row_id.
-        let row_id_start = self.allocate_row_id_start(table_id, record_count, file_size_bytes).await?;
+        let row_id_start = self
+            .allocate_row_id_start(table_id, record_count, file_size_bytes)
+            .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = rocklake_core::path::is_path_relative(path);
@@ -891,7 +911,9 @@ impl CatalogWriter {
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         let file_order = data_file_id;
-        let row_id_start = self.allocate_row_id_start(table_id, record_count, file_size_bytes).await?;
+        let row_id_start = self
+            .allocate_row_id_start(table_id, record_count, file_size_bytes)
+            .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = rocklake_core::path::is_path_relative(path);
@@ -944,7 +966,9 @@ impl CatalogWriter {
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         let file_order = data_file_id;
-        let row_id_start = self.allocate_row_id_start(table_id, record_count, file_size_bytes).await?;
+        let row_id_start = self
+            .allocate_row_id_start(table_id, record_count, file_size_bytes)
+            .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = rocklake_core::path::is_path_relative(path);
@@ -1236,11 +1260,11 @@ impl CatalogWriter {
                 let mut updated_row = df_row;
                 updated_row.end_snapshot = Some(snapshot_id);
                 let encoded = values::encode_value(&updated_row);
-                
+
                 // Update primary key
                 self.stage(kv.key.to_vec(), encoded.clone());
-                
-                // Also update secondary index (TAG_DATA_FILE_BY_SNAPSHOT) so list_data_files() 
+
+                // Also update secondary index (TAG_DATA_FILE_BY_SNAPSHOT) so list_data_files()
                 // sees the retirement via its secondary-index scan
                 let idx_key = keys::key_data_file_by_snapshot(
                     updated_row.table_id,

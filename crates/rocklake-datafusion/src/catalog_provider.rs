@@ -644,7 +644,7 @@ impl TableProvider for RockLakeTableProvider {
             .map(|f| {
                 // Construct absolute path: combine root with file path
                 let abs = format!("{}/{}", root.trim_end_matches('/'), f.path);
-                
+
                 // Handle different URL schemes:
                 // - If root starts with a scheme (s3://, az://, gs://, etc.), use as-is
                 // - Otherwise, assume it's a local path and prepend file://
@@ -655,7 +655,7 @@ impl TableProvider for RockLakeTableProvider {
                     // Local filesystem path - prepend file://
                     format!("file://{abs}")
                 };
-                
+
                 ListingTableUrl::parse(url_str)
             })
             .collect();

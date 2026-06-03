@@ -378,7 +378,11 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
     }
 
     // Pre-parse fast path for DELETE statements on DuckLake catalog tables
-    if lower.trim_start().starts_with("delete") && lower.contains("from") && lower.contains("ducklake_") && !lower.contains("rocklake_catalog.") {
+    if lower.trim_start().starts_with("delete")
+        && lower.contains("from")
+        && lower.contains("ducklake_")
+        && !lower.contains("rocklake_catalog.")
+    {
         // Try to extract the first DELETE statement from the batch
         if let Some(first_delete_idx) = lower.find("delete") {
             // Extract from first DELETE onwards until we hit the next semicolon or end
@@ -387,17 +391,19 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
             } else {
                 &sql[first_delete_idx..]
             };
-            
+
             // Simple approach: find "ducklake_" and extract the table name
             if let Some(ducklake_idx) = delete_stmt.to_lowercase().find("ducklake_") {
                 // Extract from "ducklake_" onwards until we hit whitespace, comma, or newline
                 let remaining = &delete_stmt[ducklake_idx..];
                 let table_name = remaining
-                    .split(|c: char| c.is_whitespace() || c == ',' || c == ')' || c == ';' || c == '"')
+                    .split(|c: char| {
+                        c.is_whitespace() || c == ',' || c == ')' || c == ';' || c == '"'
+                    })
                     .next()
                     .unwrap_or("")
                     .to_lowercase();
-                
+
                 if table_name.contains("ducklake_") {
                     if table_name.contains("inlined_data_") {
                         return Ok(StatementKind::DeleteInlinedDataRows {
@@ -409,13 +415,20 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
                         });
                     }
                 } else {
-                    return Err(SqlDispatchError::ParseError(format!("PREPARSE_DELETE: table_name did not match pattern: {}", table_name)));
+                    return Err(SqlDispatchError::ParseError(format!(
+                        "PREPARSE_DELETE: table_name did not match pattern: {}",
+                        table_name
+                    )));
                 }
             } else {
-                return Err(SqlDispatchError::ParseError("PREPARSE_DELETE: ducklake_ not found in delete_stmt".to_string()));
+                return Err(SqlDispatchError::ParseError(
+                    "PREPARSE_DELETE: ducklake_ not found in delete_stmt".to_string(),
+                ));
             }
         } else {
-            return Err(SqlDispatchError::ParseError("PREPARSE_DELETE: DELETE not found".to_string()));
+            return Err(SqlDispatchError::ParseError(
+                "PREPARSE_DELETE: DELETE not found".to_string(),
+            ));
         }
     }
 

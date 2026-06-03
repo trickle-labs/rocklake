@@ -1965,7 +1965,11 @@ pub(super) fn make_table_column_stats_response(
         encoder
             .encode_field_with_type_and_format(&value_count, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
-        let null_count = Some(if row.contains_null { "1".to_string() } else { "0".to_string() });
+        let null_count = Some(if row.contains_null {
+            "1".to_string()
+        } else {
+            "0".to_string()
+        });
         encoder
             .encode_field_with_type_and_format(&null_count, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
@@ -2056,7 +2060,11 @@ pub(super) fn make_files_scheduled_for_deletion_response(
             )
             .expect("pgwire field encoding is infallible");
         encoder
-            .encode_field_with_type_and_format(&Some(row.path.clone()), &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(
+                &Some(row.path.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
             .expect("pgwire field encoding is infallible");
         let path_is_relative = row.path_is_relative.map(|value| value.to_string());
         encoder
