@@ -378,7 +378,7 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
     }
 
     // Pre-parse fast path for DELETE statements on DuckLake catalog tables
-    if lower.trim_start().starts_with("delete") && lower.contains("from") && lower.contains("ducklake_") {
+    if lower.trim_start().starts_with("delete") && lower.contains("from") && lower.contains("ducklake_") && !lower.contains("rocklake_catalog.") {
         // Try to extract the first DELETE statement from the batch
         if let Some(first_delete_idx) = lower.find("delete") {
             // Extract from first DELETE onwards until we hit the next semicolon or end

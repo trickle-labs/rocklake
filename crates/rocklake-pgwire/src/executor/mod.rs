@@ -63,6 +63,7 @@ pub async fn execute_sql<'a>(
     notify_manager: &Arc<NotifyManager>,
     extension_schemas: &Arc<Vec<String>>,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
+    println!("[SQL] execute_sql: {}", sql);
     let has_delete = sql.to_lowercase().contains("delete");
     let has_ducklake = sql.to_lowercase().contains("ducklake");
     
@@ -533,6 +534,57 @@ fn literal_comparison_u64(sql: &str, column: &str) -> Option<u64> {
         }
     }
     parse_leading_u64(&after_column[comp_idx + op_len..])
+}
+
+#[derive(Debug, Clone)]
+struct WhereClauseId {
+    column: String,
+    value: u64,
+}
+
+fn extract_id_from_where_clause(sql: &str) -> Option<WhereClauseId> {
+    let lower = sql.to_ascii_lowercase();
+    let where_idx = lower.find("where")?;
+    let where_clause = &lower[where_idx..];
+    
+    // Look for identifiers: table_id, column_id, object_id, view_id, macro_id, schema_id
+    for ident in &["table_id", "column_id", "object_id", "view_id", "macro_id", "schema_id"] {
+        if let Some(idx) = where_clause.find(ident) {
+            let after_ident = &where_clause[idx + ident.len()..];
+            
+            // Check for IN (<num>) format
+            if let Some(in_idx) = after_ident.find("in") {
+                let rest = after_ident[in_idx + 2..].trim_start();
+                if rest.starts_with('(') {
+                    let digits: String = rest.chars()
+                        .skip(1)
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
+                    if let Ok(num) = digits.parse::<u64>() {
+                        return Some(WhereClauseId {
+                            column: ident.to_string(),
+                            value: num,
+                        });
+                    }
+                }
+            }
+            
+            // Check for = <num> format
+            if let Some(eq_idx) = after_ident.find('=') {
+                let rest = after_ident[eq_idx + 1..].trim_start();
+                let digits: String = rest.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(num) = digits.parse::<u64>() {
+                    return Some(WhereClauseId {
+                        column: ident.to_string(),
+                        value: num,
+                    });
+                }
+            }
+        }
+    }
+    None
 }
 
 fn placeholder_comparison_index(sql: &str, column: &str) -> Option<usize> {
@@ -1978,11 +2030,30 @@ async fn execute_classified<'a>(
         }
 
         StatementKind::UpdateEndSnapshot(ref table_name) => {
+            let mut entity_id = params.get_u64(1).unwrap_or(0);
+            let begin_snapshot = params.get_u64(2).unwrap_or(0);
+            let mut end_snapshot = params.get_u64(0).unwrap_or(0);
+            let mut where_column = None;
+
+            if let Some(extracted) = extract_id_from_where_clause(_sql) {
+                if entity_id == 0 {
+                    entity_id = extracted.value;
+                }
+                where_column = Some(extracted.column);
+            }
+
+            if end_snapshot == 0 {
+                if let Some(val) = literal_assignment_u64(_sql, "end_snapshot") {
+                    end_snapshot = val;
+                }
+            }
+
             let op = BufferedOp::UpdateEndSnapshot {
                 table_name: table_name.clone(),
-                entity_id: params.get_u64(1).unwrap_or(0),
-                begin_snapshot: params.get_u64(2).unwrap_or(0),
-                end_snapshot: params.get_u64(0).unwrap_or(0),
+                entity_id,
+                begin_snapshot,
+                end_snapshot,
+                where_column,
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -2075,7 +2146,21 @@ async fn execute_classified<'a>(
         // DELETE FROM "public".ducklake_inlined_data_<tid>_<sv> WHERE ctid IN (...)
         // Issued by DuckLake CHECKPOINT after flushing inlined rows to Parquet.
         StatementKind::DeleteInlinedDataRows { ref table_name } => {
-            let row_ids = row_ids_from_ctid_sql(_sql);
+            let mut row_ids = row_ids_from_ctid_sql(_sql);
+            if row_ids.is_empty() {
+                if let Some(snapshot_threshold) = resolve_comparison_u64(_sql, "begin_snapshot", params) {
+                    if let Some((table_id, _)) = parse_inlined_table_ids(table_name) {
+                        let reader = { store.lock().await.read_latest() };
+                        if let Ok(all_inlined) = reader.list_inlined_inserts(table_id).await {
+                            for row in all_inlined {
+                                if row.begin_snapshot <= snapshot_threshold {
+                                    row_ids.push(row.row_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let row_count = row_ids.len();
             if !row_ids.is_empty() {
                 let op = BufferedOp::DeleteInlinedRows {

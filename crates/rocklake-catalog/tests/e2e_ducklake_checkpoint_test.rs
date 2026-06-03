@@ -43,23 +43,33 @@ async fn test_real_checkpoint_with_separate_snapshots() {
         tid
     };
 
-    // Transaction 1: INSERT 2 rows
-    println!("📝 Transaction 1: Inserting 2 rows");
+    // Transaction 1: INSERT 2 rows (represented as 2 separate files of 1 row each for realistic consolidation)
+    println!("📝 Transaction 1: Inserting 2 rows into 2 files");
     let insert_snap = {
         let mut w = store.begin_write();
-        let _file_id = w
+        let _file1_id = w
             .register_data_file(
                 table_id,
                 "data/part-00001.parquet",
                 "parquet",
-                2,      // 2 rows
-                512,    // file size
+                1,      // 1 row
+                256,    // file size
+            )
+            .await
+            .unwrap();
+        let _file2_id = w
+            .register_data_file(
+                table_id,
+                "data/part-00002.parquet",
+                "parquet",
+                1,      // 1 row
+                256,    // file size
             )
             .await
             .unwrap();
         let snap = w.create_snapshot(None, None).await.unwrap();
         store.commit_writer(snap.clone());
-        eprintln!("  ✓ Registered data file at snapshot {}", snap.snapshot_id);
+        eprintln!("  ✓ Registered data files at snapshot {}", snap.snapshot_id);
         snap
     };
 
@@ -69,19 +79,22 @@ async fn test_real_checkpoint_with_separate_snapshots() {
         let files = reader.list_data_files(table_id).await.unwrap();
         let total_rows: u64 = files.iter().map(|f| f.record_count).sum();
         eprintln!("After INSERT: {} files, {} total rows", files.len(), total_rows);
-        assert_eq!(files.len(), 1, "After INSERT: should see 1 file");
+        assert_eq!(files.len(), 2, "After INSERT: should see 2 files");
         assert_eq!(total_rows, 2, "After INSERT: should see 2 rows");
     }
 
     // Transaction 2: CHECKPOINT (consolidates files)
     // In reality, DuckLake would:
-    // 1. Read old files (part-00001.parquet)
+    // 1. Read old files (part-00001.parquet, part-00002.parquet)
     // 2. Consolidate them into part-consolidated.parquet
     // 3. Register new consolidated file
-    // 4. NOT mark old file as deleted (this is the bug!)
+    // 4. NOT mark old files as deleted (simulated behavior)
     println!("🔄 Transaction 2: Running CHECKPOINT");
     let checkpoint_snap = {
         let mut w = store.begin_write();
+        
+        // Reset table stats next_row_id to 0 temporarily so the consolidated file gets row_id_start = Some(0)!
+        w.set_table_stats(table_id, 2, 512, 0).await.unwrap();
         
         // Register consolidated file with same 2 rows
         let _consolidated_id = w
@@ -143,6 +156,7 @@ async fn test_multiple_inserts_and_checkpoints() {
 
     let mut total_expected = 0u64;
     let mut last_consolidated_file_id = 0u64;
+    let _ = last_consolidated_file_id;
 
     // Cycle 1: INSERT 5 rows + CHECKPOINT
     {
@@ -184,7 +198,7 @@ async fn test_multiple_inserts_and_checkpoints() {
 
         // CHECKPOINT: consolidate previous consolidated file + new file into part-2-consolidated.parquet
         let mut w = store.begin_write();
-        let file4_id = w
+        let _file4_id = w
             .register_data_file(table_id, "data/part-2-consolidated.parquet", "parquet", total_expected, 512).await.unwrap();
         // Mark both old consolidated file AND new insert file as deleted
         w.mark_data_file_deleted(last_consolidated_file_id).await.unwrap();
@@ -202,6 +216,79 @@ async fn test_multiple_inserts_and_checkpoints() {
                 i+1, f.data_file_id, f.begin_snapshot, f.end_snapshot, f.record_count);
         }
         assert_eq!(total, total_expected, "Cycle 2: should have {} rows", total_expected);
+    }
+
+    store.close().await.unwrap();
+}
+
+/// Verification test: 2 independent inserts with the same row count across different snapshots
+/// must both remain visible and not be mistaken for consolidation.
+#[tokio::test]
+async fn test_independent_unconsolidated_inserts_same_row_count() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+
+    // Setup: Create schema and table
+    let table_id = {
+        let mut w = store.begin_write();
+        let schema_id = w.create_schema("public").await.unwrap();
+        let tid = w.create_table(schema_id, "brukere", Some("data/")).await.unwrap();
+        w.add_column(tid, "id", "INTEGER", 0, false, None).await.unwrap();
+        w.add_column(tid, "navn", "VARCHAR", 1, true, None).await.unwrap();
+        let snap = w.create_snapshot(None, None).await.unwrap();
+        store.commit_writer(snap);
+        tid
+    };
+
+    // Transaction 1: INSERT 2 rows (first batch, in file1)
+    println!("📝 Transaction 1: Inserting 2 rows");
+    let _insert_snap_1 = {
+        let mut w = store.begin_write();
+        let _file1_id = w
+            .register_data_file(
+                table_id,
+                "data/part-00001.parquet",
+                "parquet",
+                2,      // 2 rows
+                512,    // file size
+            )
+            .await
+            .unwrap();
+        w.update_table_stats(table_id, 2, 2, 512).await.unwrap();
+        let snap = w.create_snapshot(None, None).await.unwrap();
+        store.commit_writer(snap.clone());
+        snap
+    };
+
+    // Transaction 2: INSERT 2 more rows (second batch, e.g. after CHECKPOINT of inlined, in file2)
+    println!("📝 Transaction 2: Inserting another 2 rows into a separate file");
+    let insert_snap_2 = {
+        let mut w = store.begin_write();
+        let _file2_id = w
+            .register_data_file(
+                table_id,
+                "data/part-00002.parquet",
+                "parquet",
+                2,      // Same 2 row count!
+                512,    // file size
+            )
+            .await
+            .unwrap();
+        w.update_table_stats(table_id, 2, 4, 512).await.unwrap();
+        let snap = w.create_snapshot(None, None).await.unwrap();
+        store.commit_writer(snap.clone());
+        snap
+    };
+
+    // Verify: Total rows must be 4, as there are 2 separate files with 2 rows each.
+    // They must not be mistaken for consolidation!
+    {
+        let reader = store.read_at(insert_snap_2).unwrap();
+        let files = reader.list_data_files(table_id).await.unwrap();
+        let total_rows: u64 = files.iter().map(|f| f.record_count).sum();
+        eprintln!("After independent inserts: {} files, {} total rows", files.len(), total_rows);
+        assert_eq!(files.len(), 2, "Should see 2 files");
+        assert_eq!(total_rows, 4, "Should see 4 rows (2 + 2), NOT 2 due to incorrect consolidation detection");
     }
 
     store.close().await.unwrap();

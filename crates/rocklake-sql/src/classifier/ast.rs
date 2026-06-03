@@ -106,6 +106,15 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                     let naked = table_name.replace("\"", "").trim_matches('"').to_string();
                     let last_dot = table_name.rfind('.').map(|i| table_name[i+1..].to_string());
                     
+                    // Reject mutations against the read-only virtual catalog (SQLSTATE 25006).
+                    if naked.starts_with("rocklake_catalog.") {
+                        let tbl = naked
+                            .strip_prefix("rocklake_catalog.")
+                            .unwrap_or(&naked)
+                            .to_string();
+                        return StatementKind::VirtualCatalogMutation { table_name: tbl };
+                    }
+                    
                     // Check all variations to find the best match
                     if let Some(dot_name) = &last_dot {
                         if dot_name.contains("ducklake_") {
@@ -675,6 +684,7 @@ pub(super) fn classify_release_snapshot_call(func: &sqlparser::ast::Function) ->
 
 /// Check if a table name is a DuckLake catalog table (with or without schema prefix).
 /// Handles both normalized names (ducklake_*) and schema-qualified names.
+#[allow(dead_code)]
 fn is_ducklake_catalog_table(table: &str) -> bool {
     table.starts_with("ducklake_data_file") ||
     table.starts_with("ducklake_file_column_stats") ||

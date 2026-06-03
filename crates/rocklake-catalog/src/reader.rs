@@ -335,100 +335,104 @@ impl CatalogReader {
                     f.record_count, f.path);
             }
         }
-        //   - Pattern: Single file from latest snapshot with higher file_id than all earlier files
-        //   - Solution: When we see this pattern, keep only the most recent file
-        //
-        // Legitimate multi-batch inserts should have files distributed across snapshots
-        // without a clear "older files vs single newest file" pattern.
+        
+        // Advanced partition-level cross-snapshot consolidation filter:
+        // We group files by partition_id first.
+        // Within each partition, we check if multiple files from earlier snapshots
+        // have been merged into a single consolidated file in the latest snapshot.
         if files.len() > 1 {
-            let mut by_snapshot: std::collections::HashMap<u64, Vec<&DataFileRow>> = 
+            let mut by_partition: std::collections::HashMap<Option<u64>, Vec<&DataFileRow>> = 
                 std::collections::HashMap::new();
             for f in &files {
-                let snap = f.begin_snapshot.unwrap_or(0);
-                by_snapshot.entry(snap).or_insert_with(Vec::new).push(f);
+                by_partition.entry(f.partition_id).or_insert_with(Vec::new).push(f);
             }
             
-            if by_snapshot.len() == 1 {
-                // Case 1: Same snapshot - multiple files from one snapshot (same transaction)
-                // Keep only highest file_id (most recent consolidated file)
-                let max_file_id = files.iter()
-                    .map(|f| f.data_file_id)
-                    .max()
-                    .unwrap_or(0);
-                eprintln!("[CONSOLIDATION] Case 1 (same-snapshot): keeping file_id={}", max_file_id);
-                files.retain(|f| f.data_file_id == max_file_id);
-            } else if by_snapshot.len() == 2 {
-                // Case 2: Cross-snapshot consolidation detection
-                // Patterns:
-                // A) Multiple files from earlier snapshot + 1 from latest (consolidation of batch)
-                // B) Single file from earlier + single from latest with same row count (single-file consolidation)
-                
-                let mut snapshots: Vec<_> = by_snapshot.keys().copied().collect();
-                snapshots.sort();
-                
-                let latest_snap = snapshots[1];
-                let earlier_snap = snapshots[0];
-                
-                let latest_files = &by_snapshot[&latest_snap];
-                let earlier_files = &by_snapshot[&earlier_snap];
-                
-                eprintln!("[CONSOLIDATION] Case 2 (cross-snapshot): snap{}({} files) → snap{}({} files)",
-                    earlier_snap, earlier_files.len(), latest_snap, latest_files.len());
-                
-                let should_consolidate = if latest_files.len() == 1 {
-                    let latest_file_id = latest_files[0].data_file_id;
-                    let max_earlier_id = earlier_files.iter()
-                        .map(|f| f.data_file_id)
-                        .max()
-                        .unwrap_or(0);
-                    
-                    if latest_file_id > max_earlier_id {
-                        // Check consolidation patterns:
-                        if earlier_files.len() > 1 {
-                            // Pattern A: Multiple earlier files consolidated into one
-                            eprintln!("[CONSOLIDATION]   Pattern A: {} old files → 1 new (consolidation)", earlier_files.len());
-                            true
-                        } else if earlier_files.len() == 1 {
-                            // Pattern B: Single file consolidated - check if row counts match
-                            let old_rows = earlier_files[0].record_count;
-                            let new_rows = latest_files[0].record_count;
-                            eprintln!("[CONSOLIDATION]   Pattern B: rows {} → {} (match: {})", old_rows, new_rows, old_rows == new_rows);
-                            old_rows == new_rows
-                        } else {
-                            false
-                        }
-                    } else {
-                        eprintln!("[CONSOLIDATION]   file_id not increasing: latest={} ≤ max_earlier={}", latest_file_id, max_earlier_id);
-                        false
+            let mut resolved_file_ids = std::collections::HashSet::new();
+            let mut changed = false;
+            
+            for (part_id, part_files) in by_partition {
+                if part_files.len() <= 1 {
+                    for f in part_files {
+                        resolved_file_ids.insert(f.data_file_id);
                     }
-                } else {
-                    eprintln!("[CONSOLIDATION]   not consolidation: latest has {} files (expected 1)", latest_files.len());
-                    false
-                };
-                
-                if should_consolidate {
-                    // Consolidation pattern detected: keep only the latest file
-                    let latest_file_id = latest_files[0].data_file_id;
-                    eprintln!("[CONSOLIDATION]   ✓ CONSOLIDATION DETECTED: keeping file_id={}", latest_file_id);
-                    files.retain(|f| f.data_file_id == latest_file_id);
-                } else {
-                    eprintln!("[CONSOLIDATION]   ✗ NOT CONSOLIDATION: keeping all files");
+                    continue;
                 }
-            } else {
-                // Case 3: Multiple snapshots (3+) with scattered files
-                // Heuristic: Keep only files from the most recent snapshot
-                // This assumes all earlier snapshots' files have been consolidated into the latest snapshot
                 
-                let mut snapshots: Vec<_> = by_snapshot.keys().copied().collect();
-                snapshots.sort();
-                let latest_snap = snapshots[snapshots.len() - 1];
-                let latest_files = &by_snapshot[&latest_snap];
+                // Sort files in this partition by begin_snapshot (or data_file_id as a fallback) to process chronologically.
+                let mut sorted_files = part_files.clone();
+                sorted_files.sort_by(|a, b| {
+                    let a_snap = a.begin_snapshot.unwrap_or(0);
+                    let b_snap = b.begin_snapshot.unwrap_or(0);
+                    if a_snap != b_snap {
+                        a_snap.cmp(&b_snap)
+                    } else {
+                        a.data_file_id.cmp(&b.data_file_id)
+                    }
+                });
                 
-                eprintln!("[CONSOLIDATION] 3+ snapshots: keeping only {} files from latest snap={}", 
-                    latest_files.len(), latest_snap);
+                let mut obsolete_file_ids = std::collections::HashSet::new();
                 
-                let latest_file_ids: Vec<_> = latest_files.iter().map(|f| f.data_file_id).collect();
-                files.retain(|f| latest_file_ids.contains(&f.data_file_id));
+                for i in 0..sorted_files.len() {
+                    let f_older = sorted_files[i];
+                    
+                    // We only look for newer files (chronologically preceding/succeeding elements) to cover this file
+                    for j in (i + 1)..sorted_files.len() {
+                        let f_newer = sorted_files[j];
+                        
+                        // Check precise row ID range coverage
+                        if let (Some(old_start), Some(new_start)) = (f_older.row_id_start, f_newer.row_id_start) {
+                            let old_end = old_start + f_older.record_count;
+                            let new_end = new_start + f_newer.record_count;
+                            
+                            let old_snap = f_older.begin_snapshot.unwrap_or(0);
+                            let new_snap = f_newer.begin_snapshot.unwrap_or(0);
+                            
+                            let is_covered = if old_snap == new_snap {
+                                // Within the same snapshot/transaction, parallel data files do not consolidate each other.
+                                false
+                            } else {
+                                // For cross-snapshot check, any space containment is a valid consolidation.
+                                new_start <= old_start && new_end >= old_end
+                            };
+                            
+                            if is_covered {
+                                eprintln!("[CONSOLIDATION] Partition {:?}: Older file_id={} (range [{}, {})) is covered by newer file_id={} (range [{}, {}))",
+                                    part_id, f_older.data_file_id, old_start, old_end, f_newer.data_file_id, new_start, new_end);
+                                obsolete_file_ids.insert(f_older.data_file_id);
+                                changed = true;
+                                break; // Found a covering file; no need to check further for this older file
+                            }
+                        } else {
+                            // Fallback heuristic for legacy formats where row_id_start is missing:
+                            let old_snap = f_older.begin_snapshot.unwrap_or(0);
+                            let new_snap = f_newer.begin_snapshot.unwrap_or(0);
+                            if old_snap < new_snap {
+                                let total_older_rows: u64 = sorted_files.iter()
+                                    .filter(|f| f.begin_snapshot.unwrap_or(0) < new_snap)
+                                    .map(|f| f.record_count)
+                                    .sum();
+                                
+                                if f_newer.record_count == total_older_rows || f_newer.record_count == f_older.record_count {
+                                    eprintln!("[CONSOLIDATION] Partition {:?}: Legacy fallback. Obsoleting file_id={} in favor of newer file_id={}",
+                                        part_id, f_older.data_file_id, f_newer.data_file_id);
+                                    obsolete_file_ids.insert(f_older.data_file_id);
+                                    changed = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                for f in part_files {
+                    if !obsolete_file_ids.contains(&f.data_file_id) {
+                        resolved_file_ids.insert(f.data_file_id);
+                    }
+                }
+            }
+            
+            if changed {
+                files.retain(|f| resolved_file_ids.contains(&f.data_file_id));
             }
         }
         

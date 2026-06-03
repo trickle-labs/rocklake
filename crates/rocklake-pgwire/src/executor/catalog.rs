@@ -227,6 +227,7 @@ pub(super) async fn execute_commit(
                 entity_id,
                 begin_snapshot,
                 end_snapshot: _,
+                where_column,
             } => {
                 needs_snapshot = true;
                 match table_name.as_str() {
@@ -238,23 +239,50 @@ pub(super) async fn execute_commit(
                             .await
                             .map_err(RockLakeError::from)?
                             .unwrap_or(0);
+                        let mut resolved_begin = begin_snapshot;
+                        if resolved_begin == 0 {
+                            if let Some(live_begin) = writer
+                                .find_table_begin_snapshot(schema_id, entity_id)
+                                .await
+                                .map_err(RockLakeError::from)?
+                            {
+                                resolved_begin = live_begin;
+                            }
+                        }
                         writer
-                            .drop_table(schema_id, entity_id, begin_snapshot)
+                            .drop_table(schema_id, entity_id, resolved_begin)
                             .await
                             .map_err(RockLakeError::from)?;
                     }
                     "ducklake_column" => {
-                        // Resolve table_id by scanning for the live column row
-                        // (F-04: entity_id is column_id, not table_id).
-                        let table_id = writer
-                            .find_column_table_id(entity_id)
-                            .await
-                            .map_err(RockLakeError::from)?
-                            .unwrap_or(entity_id);
-                        writer
-                            .drop_column(table_id, entity_id, begin_snapshot)
-                            .await
-                            .map_err(RockLakeError::from)?;
+                        // If we are retiring by table_id, drop_table cascade already retired these columns.
+                        let is_table_id_scope = match &where_column {
+                            Some(col) => col == "table_id",
+                            None => false,
+                        };
+                        if !is_table_id_scope {
+                            // Resolve table_id by scanning for the live column row
+                            // (F-04: entity_id is column_id, not table_id).
+                            let table_id = writer
+                                .find_column_table_id(entity_id)
+                                .await
+                                .map_err(RockLakeError::from)?
+                                .unwrap_or(entity_id);
+                            let mut resolved_begin = begin_snapshot;
+                            if resolved_begin == 0 {
+                                if let Some(live_begin) = writer
+                                    .find_column_begin_snapshot(table_id, entity_id)
+                                    .await
+                                    .map_err(RockLakeError::from)?
+                                {
+                                    resolved_begin = live_begin;
+                                }
+                            }
+                            writer
+                                .drop_column(table_id, entity_id, resolved_begin)
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
                     }
                     _ => {
                         // Other end_snapshot updates accepted
