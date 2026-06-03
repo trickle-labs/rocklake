@@ -106,6 +106,7 @@ binding on every roadmap release below.
 | **v0.47.1 — DuckLake CHECKPOINT / DELETE Support** | `DELETE FROM ducklake_inlined_data_*` support; ctid WHERE-clause row-ID extraction; `CHECKPOINT` end-to-end; DuckLake inlined data flush to external Parquet files | Complete |
 | **v0.47.2 — DuckLake 1.0 Compliance Audit & Schema/Executor Alignment** | Phase 1-4: Schema registry fixes (partition_column, sort_expression, files_scheduled_for_deletion); response builders for file_variant_stats, column_mapping, name_mapping; 14 compliance unit tests + 3 E2E integration tests; identified all P1 gaps for Phase 5+ roadmap | Complete |
 | **v0.47.3 — DuckLake 1.0 Spec Gap Closure** | Expand simplified schemas (file_variant_stats 6→12, column_mapping, name_mapping); implement write-path/query support for partitions, sort expressions, variant stats; add transaction atomicity, MVCC visibility, cascading ops, concurrent writer tests; real DuckDB integration validation | Planning |
+| **v0.47.4 — DuckLake 1.0 Spec-Conformity Certification & Integration Tests** | Refactor schemas for perfect alignment (`key`/`value` renames, exact column order via loopback projections); add advanced `_data_file` and `_delete_file` fields; enforce Repeatable Read isolation/fencing (`SQLSTATE 40001`); cascade table drops; add nightly DuckDB v1.5.3/MinIO certification CI | Planning |
 | **v0.48.0 — Paginated Scans, Streaming & Observability Depth** | RFC-03: `list_data_files_paged()` with continuation token; `stream_data_files()` async Stream; PG-wire incremental `DataRow` streaming; proper histogram metrics via `prometheus` crate; per-query trace correlation and `trace_id` propagation; slow-query log; memory pressure and RSS metrics; SF100 catalog benchmark suite | Planning |
 | **v0.49.0 — Tiered NVMe Cache & Multi-Node Production Validation** | RFC-02: `TieredCache` L1/L2/L3 with local SSD spill; `--cache-dir` and `--cache-max-gb` CLI flags; L2 pre-population on cold start; wire up `slatedb_sst_count`/`slatedb_compaction_lag_ms` to real SlateDB stats; real 24h multi-node soak on AWS/GCP (not `InMemory`); GHCR container image with versioned tags; pod disruption budget + HPA documentation; v1.0 gating checklist completion | Planning |
 | **v0.70.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; blocked on upstream DuckDB community extension catalog API | Exploration |
@@ -129,7 +130,7 @@ Detailed sequence for v0.36–v0.45:
 Detailed sequence for v0.46–v0.49 (post-Assessment-2 hardening):
 
 * v0.46: Code hardening + DX (panic elimination, error types, Node.js IDs, CLI, Docker, docs)
-* v0.47: Read-only catalog path (RFC-01) + connection pooling + reader scale-out validation
+* v0.47: Read-only catalog path (RFC-01) + connection pooling + spec-conformity & multi-file integration certification
 * v0.48: Paginated scans (RFC-03) + streaming wire protocol + proper histogram metrics + SF100 benchmarks
 * v0.49: Tiered NVMe cache (RFC-02) + real multi-node soak + GHCR images + v1.0 gating checklist
 
@@ -4940,6 +4941,42 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 **Estimated Effort**: 32-48 hours (4-6 week sprint)
 
 **Target Outcome**: v0.47.3 unlocks v0.48.0 (paginated scans) and establishes RockLake as a fully DuckLake 1.0-compliant catalog backend. Production-ready for integration with real DuckLake workflows.
+
+---
+
+## v0.47.4 — DuckLake 1.0 Spec-Conformity Certification & Integration Tests
+
+> Secure perfect interoperability with DuckDB v1.5.3 and stable DuckLake 1.0 specifications by implementing exact SQL schemas, complete file-backed lifecycle metadata, multi-statement transaction state atomicity, cascading drops, and a scheduled nightly certification CI workflow.
+
+### Schema Facade & Registry Alignment
+
+- [ ] Rename `metadata_key` and `metadata_value` to `key` and `value` inside PostgreSQL metadata schemas.
+- [ ] Add missing schema definitions for `ducklake_file_variant_stats`, `ducklake_column_mapping`, and `ducklake_name_mapping` in `schema_registry.rs`.
+- [ ] Align the projection of columns in `ducklake_schema`, `ducklake_table`, and `ducklake_column` to perfectly match specified C++ table definitions via PG-Wire virtual schemas.
+- [ ] Refactor `describe_fields_for_sql` and QueryResponse encoders in `rocklake-pgwire` to serialize fields in exact spec-conformant orders.
+
+### File-Packed Metadata & MVCC Correctness
+
+- [ ] Add missing fields (`footer_size`, `partition_id`, `encryption_key`, `mapping_id`, `partial_max`, etc.) to `ducklake_data_file` and `ducklake_delete_file` table models.
+- [ ] Implement `file_order` tracking during Parquet data file registration.
+- [ ] Implement MVCC filtering on file-backed catalog queries to strictly enforce `begin_snapshot <= snapshot_id && (end_snapshot IS NULL || end_snapshot > snapshot_id)`.
+- [ ] Ensure list operations in `list_data_files` sort results in ascending order of `file_order` to avoid physical query mismatches in DuckDB's execution planner.
+
+### Multi-Statement Atomicity & Writer Concurrency
+
+- [ ] Group all statement changes in a single loopback execution transaction and write them atomically to the SlateDB KV store.
+- [ ] Consolidate stats adjustments (such as simultaneous `INSERT` and `DELETE` buffered batches) before updating `ducklake_table_stats`.
+- [ ] Fully enforce Repeatable Read isolation levels by fencing stale commits and returning standard PG SQLSTATE `40001` (serialization failure) to automatically trigger DuckLake's client-side transaction retries.
+
+### Advanced Catalog Objects (Views, Macros, Partitions, Mappings)
+
+- [ ] Support cascading tables drops: mark associated schema, columns, tags, files, and partitions as logically retired with `end_snapshot = current_snapshot` globally on drop.
+- [ ] Persist and query `ducklake_view`, `ducklake_macro`, `ducklake_macro_impl`, and `ducklake_macro_parameters` DDL entities directly.
+- [ ] Store and preserve sort directions (`sort_direction`, `null_order`) and partition transforms exactly inside metadata serialized models.
+
+### Continuous Integration & Verification
+
+- [ ] Establish a nightly CI job tracking conformance matrix compatibility specifically with **DuckDB v1.5.3** and the **stable DuckLake 1.0 Spec (Catalog Version 7)** on standard/large runners.
 
 ---
 
