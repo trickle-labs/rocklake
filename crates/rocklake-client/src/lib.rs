@@ -238,7 +238,9 @@ fn build_object_store(uri: &str) -> ClientResult<Arc<dyn object_store::ObjectSto
 
     if let Some(without_scheme) = uri
         .strip_prefix("az://")
+        .or_else(|| uri.strip_prefix("azure://"))
         .or_else(|| uri.strip_prefix("abfs://"))
+        .or_else(|| uri.strip_prefix("abfss://"))
     {
         let (container, _prefix) = split_bucket_prefix(without_scheme);
         let store = object_store::azure::MicrosoftAzureBuilder::from_env()
@@ -251,7 +253,7 @@ fn build_object_store(uri: &str) -> ClientResult<Arc<dyn object_store::ObjectSto
     // Unknown scheme or raw path → treat as local filesystem
     if uri.contains("://") {
         return Err(ClientError::Config(format!(
-            "unsupported URI scheme in '{uri}': supported schemes are file://, s3://, gs://, az://, abfs://"
+            "unsupported URI scheme in '{uri}': supported schemes are file://, s3://, gs://, az://, azure://, abfs://, abfss://"
         )));
     }
 

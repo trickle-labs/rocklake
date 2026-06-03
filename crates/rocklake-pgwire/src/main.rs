@@ -1629,6 +1629,7 @@ fn resolve_catalog_with_opts(
     } else if let Some(without_scheme) = url
         .strip_prefix("az://")
         .or_else(|| url.strip_prefix("azure://"))
+        .or_else(|| url.strip_prefix("abfs://"))
         .or_else(|| url.strip_prefix("abfss://"))
     {
         let (container, prefix) = match without_scheme.find('/') {

@@ -94,9 +94,9 @@ impl AzureEmulatorHarness {
             .with_account(AZURITE_ACCOUNT)
             .with_access_key(AZURITE_KEY)
             .with_container_name(container)
-            .with_use_emulator(true)
+            .with_allow_http(true)
             // Override the emulator port if it's not the default 10000.
-            .with_endpoint(format!("http://127.0.0.1:{}", self.blob_port))
+            .with_endpoint(format!("http://127.0.0.1:{}/{}", self.blob_port, AZURITE_ACCOUNT))
             .build()
             .expect("failed to build Azure client for Azurite emulator");
         Arc::new(store)
@@ -144,15 +144,67 @@ impl AzureEmulatorHarness {
 
     /// Create a container (bucket) in Azurite.
     pub async fn create_container(&self, container: &str) -> Result<(), AzureHarnessError> {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        use base64::prelude::*;
+        use chrono::{Datelike, Timelike};
+
+        let now = chrono::Utc::now();
+        let day = match now.weekday() {
+            chrono::Weekday::Mon => "Mon",
+            chrono::Weekday::Tue => "Tue",
+            chrono::Weekday::Wed => "Wed",
+            chrono::Weekday::Thu => "Thu",
+            chrono::Weekday::Fri => "Fri",
+            chrono::Weekday::Sat => "Sat",
+            chrono::Weekday::Sun => "Sun",
+        };
+        let month = match now.month() {
+            1 => "Jan",
+            2 => "Feb",
+            3 => "Mar",
+            4 => "Apr",
+            5 => "May",
+            6 => "Jun",
+            7 => "Jul",
+            8 => "Aug",
+            9 => "Sep",
+            10 => "Oct",
+            11 => "Nov",
+            12 => "Dec",
+            _ => unreachable!(),
+        };
+        let date_str = format!(
+            "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
+            day, now.day(), month, now.year(), now.hour(), now.minute(), now.second()
+        );
+        
+        let string_to_sign = format!(
+            "PUT\n\n\n\n\n\n\n\n\n\n\n\nx-ms-date:{}\nx-ms-version:2020-04-08\n/{}/{}/{}\nrestype:container",
+            date_str, AZURITE_ACCOUNT, AZURITE_ACCOUNT, container
+        );
+
+        let decoded_key = BASE64_STANDARD
+            .decode(AZURITE_KEY)
+            .map_err(|e| AzureHarnessError::ContainerCreate(format!("invalid AZURITE_KEY: {e}")))?;
+
+        let mut mac = Hmac::<Sha256>::new_from_slice(&decoded_key)
+            .map_err(|e| AzureHarnessError::ContainerCreate(format!("HMAC init failed: {e}")))?;
+        mac.update(string_to_sign.as_bytes());
+        let signature = BASE64_STANDARD.encode(mac.finalize().into_bytes());
+
+        let auth_header = format!("SharedKey {}:{}", AZURITE_ACCOUNT, signature);
+
         let client = reqwest::Client::new();
         let url = format!(
-            "http://127.0.0.1:{}/{AZURITE_ACCOUNT}/{container}?restype=container",
-            self.blob_port
+            "http://127.0.0.1:{}/{}/{container}?restype=container",
+            self.blob_port, AZURITE_ACCOUNT
         );
         let resp = client
             .put(&url)
-            .header("x-ms-date", chrono::Utc::now().to_rfc2822())
+            .header("x-ms-date", &date_str)
             .header("x-ms-version", "2020-04-08")
+            .header("Authorization", &auth_header)
             .send()
             .await
             .map_err(|e| AzureHarnessError::ContainerCreate(e.to_string()))?;
@@ -160,8 +212,9 @@ impl AzureEmulatorHarness {
             Ok(())
         } else {
             Err(AzureHarnessError::ContainerCreate(format!(
-                "unexpected status: {}",
-                resp.status()
+                "unexpected status: {}, body: {:?}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
             )))
         }
     }

@@ -58,18 +58,24 @@ mod gcs_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::GcsEmulatorHarness;
 
+    static HARNESS: tokio::sync::OnceCell<GcsEmulatorHarness> = tokio::sync::OnceCell::const_new();
+
     async fn gcs_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
-        let harness = match GcsEmulatorHarness::start().await {
-            Ok(h) => h,
-            Err(e) => {
-                panic!(
-                    "GCS emulator unavailable (requires Docker + fake-gcs-server): {e}. \
-                     Run: docker pull fsouza/fake-gcs-server:latest"
-                );
+        let harness = HARNESS.get_or_init(|| async {
+            match GcsEmulatorHarness::start().await {
+                Ok(h) => h,
+                Err(e) => {
+                    panic!(
+                        "GCS emulator unavailable (requires Docker + fake-gcs-server): {e}. \
+                         Run: docker pull fsouza/fake-gcs-server:latest"
+                    );
+                }
             }
-        };
-        harness.create_bucket("rocklake-test").await.ok();
-        harness.object_store("rocklake-test")
+        }).await;
+
+        let bucket_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
+        harness.create_bucket(&bucket_name).await.ok();
+        harness.object_store(&bucket_name)
     }
 
     catalog_backend_compat_test!(gcs, super::gcs_store().await);
@@ -82,18 +88,24 @@ mod azure_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::AzureEmulatorHarness;
 
+    static HARNESS: tokio::sync::OnceCell<AzureEmulatorHarness> = tokio::sync::OnceCell::const_new();
+
     async fn azure_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
-        let harness = match AzureEmulatorHarness::start().await {
-            Ok(h) => h,
-            Err(e) => {
-                panic!(
-                    "Azure emulator unavailable (requires Docker + Azurite): {e}. \
-                     Run: docker pull mcr.microsoft.com/azure-storage/azurite:latest"
-                );
+        let harness = HARNESS.get_or_init(|| async {
+            match AzureEmulatorHarness::start().await {
+                Ok(h) => h,
+                Err(e) => {
+                    panic!(
+                        "Azure emulator unavailable (requires Docker + Azurite): {e}. \
+                         Run: docker pull mcr.microsoft.com/azure-storage/azurite:latest"
+                    );
+                }
             }
-        };
-        harness.create_container("rocklake-test").await.ok();
-        harness.object_store("rocklake-test")
+        }).await;
+
+        let container_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
+        harness.create_container(&container_name).await.ok();
+        harness.object_store(&container_name)
     }
 
     catalog_backend_compat_test!(azure, super::azure_store().await);
