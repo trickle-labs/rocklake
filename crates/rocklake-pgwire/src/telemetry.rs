@@ -92,8 +92,9 @@ impl TelemetryConfig {
 ///
 /// Call this around blocking catalog operations when OTLP is active:
 ///
-/// ```ignore
-/// let _span = catalog_span("create_snapshot", &[("table", "my_table")]);
+/// ```
+/// use rocklake_pgwire::telemetry::catalog_span_event;
+/// catalog_span_event("create_snapshot", &[("table", "my_table")]);
 /// ```
 #[inline]
 pub fn catalog_span_event(op: &str, attrs: &[(&str, &str)]) {

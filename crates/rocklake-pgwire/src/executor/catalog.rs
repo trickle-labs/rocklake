@@ -1961,6 +1961,14 @@ pub(super) fn make_table_column_stats_response(
         encoder
             .encode_field_with_type_and_format(&row.extra_stats, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
+        let value_count: Option<String> = None;
+        encoder
+            .encode_field_with_type_and_format(&value_count, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        let null_count = Some(if row.contains_null { "1".to_string() } else { "0".to_string() });
+        encoder
+            .encode_field_with_type_and_format(&null_count, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
     let count = data_rows.len();
@@ -2024,6 +2032,42 @@ pub(super) fn make_delete_files_response(
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(&f.partial_max, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        data_rows.push(encoder.finish());
+    }
+    let count = data_rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
+pub(super) fn make_files_scheduled_for_deletion_response(
+    rows: Vec<rocklake_core::rows::FilesScheduledForDeletionRow>,
+) -> Response<'static> {
+    let schema = crate::schema_registry::files_scheduled_for_deletion_schema();
+    let mut data_rows = Vec::new();
+    for row in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(row.data_file_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&Some(row.path.clone()), &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        let path_is_relative = row.path_is_relative.map(|value| value.to_string());
+        encoder
+            .encode_field_with_type_and_format(&path_is_relative, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(row.schedule_start.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }

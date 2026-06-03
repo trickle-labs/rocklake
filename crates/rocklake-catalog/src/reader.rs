@@ -972,6 +972,38 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// List all `ducklake_column_mapping` rows.
+    pub async fn list_column_mappings(&self) -> CatalogResult<Vec<ColumnMappingRow>> {
+        let prefix = keys::prefix_for_tag(TAG_COLUMN_MAPPING);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ColumnMappingRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
+    /// List all `ducklake_name_mapping` rows.
+    pub async fn list_name_mappings(&self) -> CatalogResult<Vec<NameMappingRow>> {
+        let prefix = keys::prefix_for_tag(TAG_NAME_MAPPING);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: NameMappingRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
     /// List all `ducklake_partition_info` rows visible at this snapshot for a table.
     pub async fn list_partition_info(&self, table_id: u64) -> CatalogResult<Vec<PartitionInfoRow>> {
         let prefix = keys::prefix_for_tag(TAG_PARTITION_INFO);
@@ -1015,6 +1047,23 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// List all `ducklake_partition_column` rows visible at this snapshot.
+    pub async fn list_all_partition_columns(&self) -> CatalogResult<Vec<PartitionColumnRow>> {
+        let prefix = keys::prefix_for_tag(TAG_PARTITION_COLUMN);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: PartitionColumnRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        rows.sort_by_key(|r| (r.partition_id, r.partition_key_index));
+        Ok(rows)
+    }
+
     /// List all `ducklake_sort_expression` rows visible at this snapshot for a table.
     pub async fn list_sort_expressions(
         &self,
@@ -1035,6 +1084,23 @@ impl CatalogReader {
         }
         // Sort by sort_id
         rows.sort_by_key(|r| r.sort_id);
+        Ok(rows)
+    }
+
+    /// List all `ducklake_sort_expression` rows visible at this snapshot.
+    pub async fn list_all_sort_expressions(&self) -> CatalogResult<Vec<SortExpressionRow>> {
+        let prefix = keys::prefix_for_tag(TAG_SORT_EXPRESSION);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SortExpressionRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        rows.sort_by_key(|r| (r.table_id.unwrap_or(0), r.sort_id, r.sort_key_index));
         Ok(rows)
     }
 

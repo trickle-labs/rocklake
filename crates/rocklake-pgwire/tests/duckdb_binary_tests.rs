@@ -184,11 +184,16 @@ async fn duckdb_attach_full_lifecycle() {
          SELECT id, payload FROM analytics.events;"
     );
 
-    let output = Command::new("duckdb")
-        .arg("-c")
-        .arg(&sql)
-        .output()
-        .expect("duckdb process must start");
+    let output = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new("duckdb")
+            .arg("-c")
+            .arg(&sql)
+            .output(),
+    )
+    .await
+    .expect("duckdb ATTACH lifecycle timed out after 60s")
+    .expect("duckdb process must start");
 
     let _ = shutdown_tx.send(());
     let _ = handle.await;
