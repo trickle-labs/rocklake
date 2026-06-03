@@ -311,34 +311,88 @@ impl CatalogReader {
             files.push(row);
         }
         
-        // v0.24: Consolidation detection and cleanup
-        // Handles two scenarios:
-        // 1. Different snapshots (old + new files) - filter to max begin_snapshot
-        // 2. Same snapshot (same transaction) - keep highest file_id only
-        if !files.is_empty() {
-            let mut snapshots_map: std::collections::HashMap<u64, Vec<&DataFileRow>> = std::collections::HashMap::new();
+        // v0.24: Consolidation cleanup for same-snapshot and cross-snapshot cases
+        //
+        // Case 1: Same-snapshot consolidation (INSERT + CHECKPOINT in same transaction)
+        //   - Old files get begin_snapshot = N
+        //   - Consolidated file gets begin_snapshot = N (same!)
+        //   - Without cleanup: both visible, causing row duplication
+        //   - Solution: Keep only highest file_id
+        //
+        // Case 2: Cross-snapshot consolidation (INSERT in snapshot N, CHECKPOINT in snapshot N+1)
+        //   - Old files get begin_snapshot = N
+        //   - Consolidated file gets begin_snapshot = N+1 (different!)
+        //   - Without cleanup: both visible, causing row duplication
+        //   - Pattern: Single file from latest snapshot with higher file_id than all earlier files
+        //   - Solution: When we see this pattern, keep only the most recent file
+        //
+        // Legitimate multi-batch inserts should have files distributed across snapshots
+        // without a clear "older files vs single newest file" pattern.
+        if files.len() > 1 {
+            let mut by_snapshot: std::collections::HashMap<u64, Vec<&DataFileRow>> = 
+                std::collections::HashMap::new();
             for f in &files {
                 let snap = f.begin_snapshot.unwrap_or(0);
-                snapshots_map.entry(snap).or_insert_with(Vec::new).push(f);
+                by_snapshot.entry(snap).or_insert_with(Vec::new).push(f);
             }
             
-            let has_multiple_begin_snapshots = snapshots_map.len() > 1;
-            
-            if has_multiple_begin_snapshots {
-                // Case 1: Files from different snapshots - keep max begin_snapshot only
-                let max_begin_snapshot = files
-                    .iter()
-                    .map(|f| f.begin_snapshot.unwrap_or(0))
+            if by_snapshot.len() == 1 {
+                // Case 1: Same snapshot - multiple files from one snapshot (same transaction)
+                // Keep only highest file_id (most recent consolidated file)
+                let max_file_id = files.iter()
+                    .map(|f| f.data_file_id)
                     .max()
                     .unwrap_or(0);
-                files.retain(|f| f.begin_snapshot.unwrap_or(0) == max_begin_snapshot);
-            } else if files.len() > 1 {
-                // Case 2: Multiple files in SAME snapshot (same transaction)
-                // This happens when consolidation occurs in same transaction as INSERT
-                // Keep only the file with highest file_id (registered last = consolidated)
-                let max_file_id = files.iter().map(|f| f.data_file_id).max().unwrap_or(0);
                 files.retain(|f| f.data_file_id == max_file_id);
+            } else if by_snapshot.len() == 2 {
+                // Case 2: Cross-snapshot consolidation detection
+                // Patterns:
+                // A) Multiple files from earlier snapshot + 1 from latest (consolidation of batch)
+                // B) Single file from earlier + single from latest with same row count (single-file consolidation)
+                
+                let mut snapshots: Vec<_> = by_snapshot.keys().copied().collect();
+                snapshots.sort();
+                
+                let latest_snap = snapshots[1];
+                let earlier_snap = snapshots[0];
+                
+                let latest_files = &by_snapshot[&latest_snap];
+                let earlier_files = &by_snapshot[&earlier_snap];
+                
+                let should_consolidate = if latest_files.len() == 1 {
+                    let latest_file_id = latest_files[0].data_file_id;
+                    let max_earlier_id = earlier_files.iter()
+                        .map(|f| f.data_file_id)
+                        .max()
+                        .unwrap_or(0);
+                    
+                    if latest_file_id > max_earlier_id {
+                        // Check consolidation patterns:
+                        if earlier_files.len() > 1 {
+                            // Pattern A: Multiple earlier files consolidated into one
+                            true
+                        } else if earlier_files.len() == 1 {
+                            // Pattern B: Single file consolidated - check if row counts match
+                            // (same row count indicates consolidation, not separate insert)
+                            earlier_files[0].record_count == latest_files[0].record_count
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                
+                if should_consolidate {
+                    // Consolidation pattern detected: keep only the latest file
+                    let latest_file_id = latest_files[0].data_file_id;
+                    files.retain(|f| f.data_file_id == latest_file_id);
+                }
             }
+            // Cross-snapshot case with more than 2 snapshots: Keep all files
+            // These are legitimate multi-batch inserts from multiple transactions
         }
         
         // v0.24: order results by file_order (spec requirement).

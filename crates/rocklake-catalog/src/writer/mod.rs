@@ -1085,7 +1085,19 @@ impl CatalogWriter {
             if df_row.data_file_id == data_file_id && df_row.end_snapshot.is_none() {
                 let mut updated_row = df_row;
                 updated_row.end_snapshot = Some(snapshot_id);
-                self.stage(kv.key.to_vec(), values::encode_value(&updated_row));
+                let encoded = values::encode_value(&updated_row);
+                
+                // Update primary key
+                self.stage(kv.key.to_vec(), encoded.clone());
+                
+                // Also update secondary index (TAG_DATA_FILE_BY_SNAPSHOT) so list_data_files() 
+                // sees the retirement via its secondary-index scan
+                let idx_key = keys::key_data_file_by_snapshot(
+                    updated_row.table_id,
+                    updated_row.begin_snapshot.unwrap_or(0),
+                    updated_row.data_file_id,
+                );
+                self.stage(idx_key, encoded);
                 break; // Only one data file per data_file_id
             }
         }
