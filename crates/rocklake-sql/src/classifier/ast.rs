@@ -135,26 +135,26 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
 
                     if naked.contains("ducklake_") {
                         // Check the unquoted version
-                        if naked.contains("inlined_data_") {
-                            return StatementKind::DeleteInlinedDataRows {
+                        return match naked.contains("inlined_data_") {
+                            true => StatementKind::DeleteInlinedDataRows {
                                 table_name: naked.clone(),
-                            };
-                        }
-                        return StatementKind::DeleteDuckLakeCatalogRows { table_name: naked };
+                            },
+                            false => StatementKind::DeleteDuckLakeCatalogRows { table_name: naked },
+                        };
                     }
 
                     // Not a DuckLake table
-                    return StatementKind::Unsupported(format!(
+                    StatementKind::Unsupported(format!(
                         "AST_DELETE_from[naked:{},dot_part:{},full:{}]",
                         naked,
                         last_dot.unwrap_or_else(|| "None".to_string()),
                         table_name
-                    ));
+                    ))
                 } else {
-                    return StatementKind::Unsupported("AST_DELETE_extract_failed".to_string());
+                    StatementKind::Unsupported("AST_DELETE_extract_failed".to_string())
                 }
             } else {
-                return StatementKind::Unsupported("AST_DELETE_no_from_table".to_string());
+                StatementKind::Unsupported("AST_DELETE_no_from_table".to_string())
             }
         }
 
