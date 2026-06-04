@@ -51,13 +51,15 @@ impl PgWireHarness {
         catalog: Arc<Mutex<CatalogStore>>,
     ) -> Result<Self, PgWireHarnessError> {
         // Find an available port.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0")
             .await
             .map_err(|e| PgWireHarnessError::Setup(format!("bind failed: {e}")))?;
         let addr = listener
             .local_addr()
             .map_err(|e| PgWireHarnessError::Setup(format!("local_addr failed: {e}")))?;
         drop(listener);
+
+        let connect_addr = std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), addr.port());
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
@@ -75,10 +77,10 @@ impl PgWireHarness {
             }
         });
 
-        Self::wait_for_ready(addr, std::time::Duration::from_secs(5)).await?;
+        Self::wait_for_ready(connect_addr, std::time::Duration::from_secs(5)).await?;
 
         Ok(Self {
-            addr,
+            addr: connect_addr,
             shutdown_tx: Some(shutdown_tx),
             server_handle: Some(server_handle),
             catalog,
@@ -121,6 +123,14 @@ impl PgWireHarness {
         format!(
             "postgresql://{}:{}/rocklake",
             self.addr.ip(),
+            self.addr.port()
+        )
+    }
+
+    /// Hostname and port as seen from inside a Docker container.
+    pub fn container_connection_string(&self) -> String {
+        format!(
+            "host=host.docker.internal port={} dbname=rocklake",
             self.addr.port()
         )
     }

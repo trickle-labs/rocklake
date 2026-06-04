@@ -120,6 +120,8 @@ impl CopyHandler for RockLakeCopyHandler {
         };
         let row_count = rows.len();
 
+        eprintln!("[pgwire copy] table={table} rows={row_count}");
+
         {
             let mut session = self.session.lock().await;
             match table.as_str() {
