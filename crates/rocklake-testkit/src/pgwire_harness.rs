@@ -103,13 +103,11 @@ impl PgWireHarness {
     pub async fn connect(&self) -> Result<tokio_postgres::Client, PgWireHarnessError> {
         let connection_string = self.connection_string();
         let connect_future = tokio_postgres::connect(&connection_string, tokio_postgres::NoTls);
-        let (client, connection) = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            connect_future,
-        )
-        .await
-        .map_err(|_| PgWireHarnessError::Setup("PG-Wire connect timed out".to_string()))?
-        .map_err(|e| PgWireHarnessError::Setup(e.to_string()))?;
+        let (client, connection) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), connect_future)
+                .await
+                .map_err(|_| PgWireHarnessError::Setup("PG-Wire connect timed out".to_string()))?
+                .map_err(|e| PgWireHarnessError::Setup(e.to_string()))?;
 
         tokio::spawn(async move {
             let _ = connection.await;
@@ -147,7 +145,11 @@ impl PgWireHarness {
         timeout: std::time::Duration,
     ) -> Result<(), PgWireHarnessError> {
         let start = std::time::Instant::now();
-        let conn_str = format!("host={} port={} dbname=rocklake sslmode=disable", addr.ip(), addr.port());
+        let conn_str = format!(
+            "host={} port={} dbname=rocklake sslmode=disable",
+            addr.ip(),
+            addr.port()
+        );
         loop {
             if start.elapsed() > timeout {
                 return Err(PgWireHarnessError::Setup(
@@ -169,7 +171,9 @@ impl PgWireHarness {
                     });
                     return Ok(());
                 }
-                Ok(Err(_)) | Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+                Ok(Err(_)) | Err(_) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await
+                }
             }
         }
     }

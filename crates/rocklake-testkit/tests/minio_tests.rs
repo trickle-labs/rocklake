@@ -55,15 +55,25 @@ mod minio_tests {
         catalog.commit_writer(snapshot).await;
 
         let reader = catalog.reader_latest().await;
-        let schemas = reader.list_schemas().await.expect("list_schemas should succeed");
-        assert!(schemas.iter().any(|schema| schema.schema_name == "analytics"));
+        let schemas = reader
+            .list_schemas()
+            .await
+            .expect("list_schemas should succeed");
+        assert!(schemas
+            .iter()
+            .any(|schema| schema.schema_name == "analytics"));
 
         let reopened = CatalogHarness::on_minio(harness, "testkit/catalog_roundtrip")
             .await
             .expect("reopen should succeed");
         let reader = reopened.reader_latest().await;
-        let schemas = reader.list_schemas().await.expect("list_schemas should succeed");
-        assert!(schemas.iter().any(|schema| schema.schema_name == "analytics"));
+        let schemas = reader
+            .list_schemas()
+            .await
+            .expect("list_schemas should succeed");
+        assert!(schemas
+            .iter()
+            .any(|schema| schema.schema_name == "analytics"));
         let _ = schema_id;
     }
 
@@ -79,7 +89,10 @@ mod minio_tests {
         let catalogs = join_all(opens).await;
         for catalog in catalogs {
             let reader = catalog.reader_latest().await;
-            let _ = reader.list_schemas().await.expect("list_schemas should succeed");
+            let _ = reader
+                .list_schemas()
+                .await
+                .expect("list_schemas should succeed");
         }
     }
 }

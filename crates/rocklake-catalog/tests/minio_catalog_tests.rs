@@ -28,7 +28,10 @@ async fn catalog(prefix: &str) -> CatalogHarness {
 async fn catalog_open_and_initialize_on_minio() {
     let catalog = catalog("minio/open_and_initialize").await;
     let reader = catalog.reader_latest().await;
-    let _schemas = reader.list_schemas().await.expect("list_schemas should succeed");
+    let _schemas = reader
+        .list_schemas()
+        .await
+        .expect("list_schemas should succeed");
 }
 
 #[tokio::test]
@@ -36,7 +39,10 @@ async fn catalog_reopen_preserves_state_on_minio() {
     let catalog = catalog("minio/reopen_preserves_state").await;
 
     let mut writer = catalog.writer().await;
-    let schema_id = writer.create_schema("analytics").await.expect("create_schema should succeed");
+    let schema_id = writer
+        .create_schema("analytics")
+        .await
+        .expect("create_schema should succeed");
     let snapshot = writer
         .create_snapshot(Some("minio-tests"), Some("reopen"))
         .await
@@ -46,8 +52,13 @@ async fn catalog_reopen_preserves_state_on_minio() {
 
     catalog.reopen().await.expect("reopen should succeed");
     let reader = catalog.reader_latest().await;
-    let schemas = reader.list_schemas().await.expect("list_schemas should succeed");
-    assert!(schemas.iter().any(|schema| schema.schema_name == "analytics"));
+    let schemas = reader
+        .list_schemas()
+        .await
+        .expect("list_schemas should succeed");
+    assert!(schemas
+        .iter()
+        .any(|schema| schema.schema_name == "analytics"));
 }
 
 #[tokio::test]
@@ -75,12 +86,22 @@ async fn stale_writer_is_fenced_and_reopen_sees_takeover_commit_on_minio() {
         .create_snapshot(Some("minio-tests"), Some("stale"))
         .await;
 
-    first.reopen().await.expect("reopen should succeed after takeover");
+    first
+        .reopen()
+        .await
+        .expect("reopen should succeed after takeover");
     let reader = first.reader_latest().await;
-    let schemas = reader.list_schemas().await.expect("list_schemas should succeed");
-    assert!(schemas.iter().any(|schema| schema.schema_name == "winner_schema"));
+    let schemas = reader
+        .list_schemas()
+        .await
+        .expect("list_schemas should succeed");
+    assert!(schemas
+        .iter()
+        .any(|schema| schema.schema_name == "winner_schema"));
     assert!(
-        !schemas.iter().any(|schema| schema.schema_name == "stale_writer_schema"),
+        !schemas
+            .iter()
+            .any(|schema| schema.schema_name == "stale_writer_schema"),
         "stale uncommitted writes must not leak through after takeover"
     );
 }
@@ -102,7 +123,10 @@ async fn sequential_snapshot_ids_monotone_on_minio() {
             .expect("create_snapshot should succeed");
         catalog.commit_writer(snapshot).await;
         let current = snapshot.as_u64();
-        assert!(current > previous, "snapshot ids must increase monotonically");
+        assert!(
+            current > previous,
+            "snapshot ids must increase monotonically"
+        );
         previous = current;
     }
 }
@@ -125,15 +149,23 @@ async fn flush_visibility_barrier_on_minio() {
             .expect("create_snapshot should succeed");
         catalog.commit_writer(snapshot).await;
         let reader = catalog.reader_latest().await;
-        let schemas = reader.list_schemas().await.expect("list_schemas should succeed");
-        assert!(schemas.iter().any(|schema| schema.schema_name == format!("flush_{index}")));
+        let schemas = reader
+            .list_schemas()
+            .await
+            .expect("list_schemas should succeed");
+        assert!(schemas
+            .iter()
+            .any(|schema| schema.schema_name == format!("flush_{index}")));
         latencies_ms.push(start.elapsed().as_millis() as u64);
     }
 
     latencies_ms.sort_unstable();
     let p99_index = latencies_ms.len().saturating_sub(1);
     let p99 = latencies_ms[p99_index];
-    assert!(p99 < 1500, "flush visibility p99 latency {p99}ms exceeds 1500ms");
+    assert!(
+        p99 < 1500,
+        "flush visibility p99 latency {p99}ms exceeds 1500ms"
+    );
 }
 
 #[tokio::test]
@@ -141,14 +173,20 @@ async fn reader_snapshot_isolation_on_minio() {
     let catalog = catalog("minio/reader_snapshot_isolation").await;
 
     let mut writer = catalog.writer().await;
-    let schema_id = writer.create_schema("isolation").await.expect("create_schema should succeed");
+    let schema_id = writer
+        .create_schema("isolation")
+        .await
+        .expect("create_schema should succeed");
     let snapshot_a = writer
         .create_snapshot(Some("minio-tests"), Some("snapshot-a"))
         .await
         .expect("create_snapshot should succeed");
     catalog.commit_writer(snapshot_a).await;
 
-    let reader_at_a = catalog.reader_at(*snapshot_a).await.expect("reader_at should succeed");
+    let reader_at_a = catalog
+        .reader_at(*snapshot_a)
+        .await
+        .expect("reader_at should succeed");
 
     let mut writer = catalog.writer().await;
     writer
@@ -161,11 +199,20 @@ async fn reader_snapshot_isolation_on_minio() {
         .expect("create_snapshot should succeed");
     catalog.commit_writer(snapshot_b).await;
 
-    let tables_at_a = reader_at_a.list_tables(schema_id).await.expect("list_tables should succeed");
-    assert!(tables_at_a.is_empty(), "reader at the earlier snapshot should not see the later table");
+    let tables_at_a = reader_at_a
+        .list_tables(schema_id)
+        .await
+        .expect("list_tables should succeed");
+    assert!(
+        tables_at_a.is_empty(),
+        "reader at the earlier snapshot should not see the later table"
+    );
 
     let latest = catalog.reader_latest().await;
-    let tables = latest.list_tables(schema_id).await.expect("list_tables should succeed");
+    let tables = latest
+        .list_tables(schema_id)
+        .await
+        .expect("list_tables should succeed");
     assert!(tables.iter().any(|table| table.table_name == "events"));
 }
 
@@ -174,7 +221,10 @@ async fn large_file_registration_10k_files_on_minio() {
     let catalog = catalog("minio/large_file_registration").await;
 
     let mut writer = catalog.writer().await;
-    let schema_id = writer.create_schema("bulk").await.expect("create_schema should succeed");
+    let schema_id = writer
+        .create_schema("bulk")
+        .await
+        .expect("create_schema should succeed");
     let table_id = writer
         .create_table(schema_id, "events", None)
         .await
@@ -208,8 +258,14 @@ async fn large_file_registration_10k_files_on_minio() {
     }
 
     let reader = catalog.reader_latest().await;
-    let files = reader.list_data_files(table_id).await.expect("list_data_files should succeed");
-    assert!(files.len() >= 10_000, "expected at least 10k registered files");
+    let files = reader
+        .list_data_files(table_id)
+        .await
+        .expect("list_data_files should succeed");
+    assert!(
+        files.len() >= 10_000,
+        "expected at least 10k registered files"
+    );
 }
 
 #[tokio::test]
@@ -217,17 +273,32 @@ async fn prune_files_zone_map_on_minio() {
     let catalog = catalog("minio/prune_files").await;
 
     let mut writer = catalog.writer().await;
-    let schema_id = writer.create_schema("pruning").await.expect("create_schema should succeed");
+    let schema_id = writer
+        .create_schema("pruning")
+        .await
+        .expect("create_schema should succeed");
     let table_id = writer
         .create_table(schema_id, "metrics", None)
         .await
         .expect("create_table should succeed");
     let file_low = writer
-        .register_data_file(table_id, "s3://rocklake-test/low.parquet", "parquet", 100, 4096)
+        .register_data_file(
+            table_id,
+            "s3://rocklake-test/low.parquet",
+            "parquet",
+            100,
+            4096,
+        )
         .await
         .expect("register_data_file should succeed");
     let file_high = writer
-        .register_data_file(table_id, "s3://rocklake-test/high.parquet", "parquet", 100, 4096)
+        .register_data_file(
+            table_id,
+            "s3://rocklake-test/high.parquet",
+            "parquet",
+            100,
+            4096,
+        )
         .await
         .expect("register_data_file should succeed");
     writer

@@ -10,8 +10,8 @@ use object_store::path::Path as ObjectPath;
 use tokio::sync::Mutex;
 
 use rocklake_catalog::{CatalogError, CatalogStore, CommitResult, OpenOptions};
-use rocklake_core::rows::InlinedInsertRow;
 use rocklake_core::mvcc::SnapshotId;
+use rocklake_core::rows::InlinedInsertRow;
 
 #[cfg(feature = "minio-tests")]
 use crate::MinioHarness;

@@ -102,9 +102,9 @@ impl IvmWorkerHarness {
         expected_sql: &str,
     ) -> Result<(), IvmWorkerHarnessError> {
         let output_path = self.output_path(matview);
-        let actual = tokio::fs::read_to_string(&output_path)
-            .await
-            .map_err(|e| IvmWorkerHarnessError::Output(format!("{}: {e}", output_path.display())))?;
+        let actual = tokio::fs::read_to_string(&output_path).await.map_err(|e| {
+            IvmWorkerHarnessError::Output(format!("{}: {e}", output_path.display()))
+        })?;
         if actual.trim() == expected_sql.trim() {
             Ok(())
         } else {

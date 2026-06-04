@@ -54,12 +54,22 @@ async fn minio_pgwire_executes_queries_against_minio_catalog() {
     assert_eq!(current_schema, "public");
 
     client
-        .execute("INSERT INTO ducklake_schema (schema_name) VALUES ($1)", &[&"reporting"])
+        .execute(
+            "INSERT INTO ducklake_schema (schema_name) VALUES ($1)",
+            &[&"reporting"],
+        )
         .await
         .expect("INSERT INTO ducklake_schema should succeed over PG-Wire");
 
     let reader = catalog.reader_latest().await;
-    let schemas = reader.list_schemas().await.expect("list_schemas should succeed");
-    assert!(schemas.iter().any(|schema| schema.schema_name == "analytics"));
-    assert!(schemas.iter().any(|schema| schema.schema_name == "reporting"));
+    let schemas = reader
+        .list_schemas()
+        .await
+        .expect("list_schemas should succeed");
+    assert!(schemas
+        .iter()
+        .any(|schema| schema.schema_name == "analytics"));
+    assert!(schemas
+        .iter()
+        .any(|schema| schema.schema_name == "reporting"));
 }

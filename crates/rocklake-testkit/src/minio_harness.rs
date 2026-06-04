@@ -136,9 +136,8 @@ impl MinioHarness {
             .to_string();
         let payload_hash = format!("{:x}", Sha256::digest(b""));
 
-        let canonical_headers = format!(
-            "host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n"
-        );
+        let canonical_headers =
+            format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
         let signed_headers = "host;x-amz-content-sha256;x-amz-date";
         let canonical_request = format!(
             "PUT\n/{bucket}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}",
