@@ -13,6 +13,7 @@ use rocklake_catalog::{CatalogError, CatalogStore, CommitResult, OpenOptions};
 use rocklake_core::rows::InlinedInsertRow;
 use rocklake_core::mvcc::SnapshotId;
 
+#[cfg(feature = "minio-tests")]
 use crate::MinioHarness;
 
 /// Lightweight catalog harness for Tier 2+ integration tests.
@@ -59,6 +60,7 @@ impl CatalogHarness {
     }
 
     /// Create a harness backed by a MinIO test container.
+    #[cfg(feature = "minio-tests")]
     pub async fn on_minio(harness: &MinioHarness, prefix: &str) -> Result<Self, CatalogError> {
         Self::with_object_store(harness.object_store(), prefix, None).await
     }

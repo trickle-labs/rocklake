@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use tokio::process::Child;
 
+#[cfg(feature = "minio-tests")]
 use crate::MinioHarness;
 
 /// Harness for one or more IVM worker processes.
@@ -24,6 +25,7 @@ pub struct IvmWorkerHarness {
 
 impl IvmWorkerHarness {
     /// Start a single worker and return a harness that can supervise it.
+    #[cfg(feature = "minio-tests")]
     pub async fn start_worker(
         id: &str,
         shard_limit: u32,
@@ -39,6 +41,7 @@ impl IvmWorkerHarness {
     }
 
     /// Add a new worker process to an existing harness.
+    #[cfg(feature = "minio-tests")]
     pub async fn add_worker(
         &mut self,
         id: &str,

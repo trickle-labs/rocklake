@@ -28,8 +28,6 @@ pub mod backend_compat;
 pub mod catalog_harness;
 pub mod clock;
 pub mod duckdb_harness;
-pub mod ivm;
-pub mod minio_harness;
 pub mod pgwire_harness;
 pub mod soak_harness;
 
@@ -37,12 +35,14 @@ pub mod soak_harness;
 pub mod azure_emulator_harness;
 #[cfg(feature = "gcs-emulator")]
 pub mod gcs_emulator_harness;
+#[cfg(feature = "minio-tests")]
+pub mod ivm;
+#[cfg(feature = "minio-tests")]
+pub mod minio_harness;
 
 pub use catalog_harness::CatalogHarness;
 pub use clock::DeterministicClock;
 pub use duckdb_harness::DuckDbHarness;
-pub use ivm::IvmWorkerHarness;
-pub use minio_harness::MinioHarness;
 pub use pgwire_harness::PgWireHarness;
 pub use soak_harness::{SoakConfig, SoakHarness, SoakRunSummary};
 
@@ -50,3 +50,7 @@ pub use soak_harness::{SoakConfig, SoakHarness, SoakRunSummary};
 pub use azure_emulator_harness::AzureEmulatorHarness;
 #[cfg(feature = "gcs-emulator")]
 pub use gcs_emulator_harness::GcsEmulatorHarness;
+#[cfg(feature = "minio-tests")]
+pub use ivm::IvmWorkerHarness;
+#[cfg(feature = "minio-tests")]
+pub use minio_harness::MinioHarness;

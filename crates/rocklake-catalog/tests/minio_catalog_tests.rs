@@ -51,6 +51,41 @@ async fn catalog_reopen_preserves_state_on_minio() {
 }
 
 #[tokio::test]
+async fn stale_writer_is_fenced_and_reopen_sees_takeover_commit_on_minio() {
+    let first = catalog("minio/writer_fencing").await;
+    let mut first_writer = first.writer().await;
+    first_writer
+        .create_schema("stale_writer_schema")
+        .await
+        .expect("create_schema should succeed");
+
+    let second = catalog("minio/writer_fencing").await;
+    let mut second_writer = second.writer().await;
+    second_writer
+        .create_schema("winner_schema")
+        .await
+        .expect("create_schema should succeed");
+    let takeover_snapshot = second_writer
+        .create_snapshot(Some("minio-tests"), Some("takeover"))
+        .await
+        .expect("takeover snapshot should succeed");
+    second.commit_writer(takeover_snapshot).await;
+
+    let _stale_commit = first_writer
+        .create_snapshot(Some("minio-tests"), Some("stale"))
+        .await;
+
+    first.reopen().await.expect("reopen should succeed after takeover");
+    let reader = first.reader_latest().await;
+    let schemas = reader.list_schemas().await.expect("list_schemas should succeed");
+    assert!(schemas.iter().any(|schema| schema.schema_name == "winner_schema"));
+    assert!(
+        !schemas.iter().any(|schema| schema.schema_name == "stale_writer_schema"),
+        "stale uncommitted writes must not leak through after takeover"
+    );
+}
+
+#[tokio::test]
 async fn sequential_snapshot_ids_monotone_on_minio() {
     let catalog = catalog("minio/sequential_snapshot_ids").await;
     let mut previous = 0u64;
