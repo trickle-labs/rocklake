@@ -30,16 +30,17 @@ use catalog::{
     execute_commit, execute_next_rowid_range, execute_table_changes, make_column_mapping_response,
     make_column_tags_response, make_columns_response, make_data_files_response,
     make_delete_files_response, make_file_column_stats_response, make_file_ids_response,
-    make_file_variant_stats_response, make_global_table_stats_response,
-    make_inlined_data_tables_response, make_inlined_rows_response,
-    make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
-    make_macros_response, make_metadata_response, make_metadata_table_empty_response,
-    make_name_mapping_response, make_partition_columns_response, make_partition_info_response,
-    make_schema_version_response, make_schema_versions_response, make_schemas_response,
-    make_snapshot_changes_response, make_snapshot_row_response,
-    make_snapshot_stats_changes_response, make_sort_expressions_response, make_sort_info_response,
-    make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
-    make_tags_response, make_views_response, parse_inlined_table_ids,
+    make_file_variant_stats_response, make_files_scheduled_for_deletion_response,
+    make_global_table_stats_response, make_inlined_data_tables_response,
+    make_inlined_rows_response, make_latest_snapshot_info_response, make_macro_impls_response,
+    make_macro_parameters_response, make_macros_response, make_metadata_response,
+    make_metadata_table_empty_response, make_name_mapping_response,
+    make_partition_columns_response, make_partition_info_response, make_schema_version_response,
+    make_schema_versions_response, make_schemas_response, make_snapshot_changes_response,
+    make_snapshot_row_response, make_snapshot_stats_changes_response,
+    make_sort_expressions_response, make_sort_info_response, make_table_column_stats_response,
+    make_table_stats_rows_response_for_sql, make_tables_response, make_tags_response,
+    make_views_response, parse_inlined_table_ids,
 };
 use extension::{
     execute_create_extension_table, execute_delete_extension_rows, execute_insert_extension_row,
@@ -66,7 +67,7 @@ pub async fn execute_sql<'a>(
     println!("[SQL] execute_sql: {}", sql);
     let has_delete = sql.to_lowercase().contains("delete");
     let has_ducklake = sql.to_lowercase().contains("ducklake");
-    
+
     // Detect if this is a batch with DELETE statements
     if has_delete && has_ducklake {
         // Try to split and process manually
@@ -89,18 +90,22 @@ pub async fn execute_sql<'a>(
                             session,
                             notify_manager,
                             extension_schemas,
-                        ).await {
+                        )
+                        .await
+                        {
                             Ok(mut responses) => all_responses.append(&mut responses),
-                            Err(e) => return Err(RockLakeError::Unsupported(format!("EXEC_FAIL[{}]", e))),
+                            Err(e) => {
+                                return Err(RockLakeError::Unsupported(format!("EXEC_FAIL[{}]", e)))
+                            }
                         }
-                    },
+                    }
                     Err(e) => return Err(RockLakeError::Unsupported(format!("CLASS_FAIL[{}]", e))),
                 }
             }
             return Ok(all_responses);
         }
     }
-    
+
     if let Some(statements) = parse_multi_statement_batch(sql) {
         let mut all_responses = Vec::new();
         for statement_sql in statements {
@@ -149,12 +154,12 @@ fn parse_multi_statement_batch(sql: &str) -> Option<Vec<String>> {
             if statements.len() <= 1 {
                 return None;
             }
-            
+
             let result: Vec<String> = statements
                 .into_iter()
                 .map(|stmt| stmt.to_string())
                 .collect();
-            
+
             Some(result)
         }
         Err(_) => {
@@ -167,7 +172,7 @@ fn parse_multi_statement_batch(sql: &str) -> Option<Vec<String>> {
                     .map(|s| s.to_string())
                     .filter(|s| !s.trim().is_empty())
                     .collect();
-                
+
                 if parts.len() > 1 {
                     return Some(parts);
                 }
@@ -242,9 +247,14 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
             }
         }
     }
-    
+
     // Pattern 2: data_file_id = 123 (for single file deletion)
-    let eq_patterns = [" data_file_id =", "data_file_id =", " delete_file_id =", "delete_file_id ="];
+    let eq_patterns = [
+        " data_file_id =",
+        "data_file_id =",
+        " delete_file_id =",
+        "delete_file_id =",
+    ];
     for eq_pattern in &eq_patterns {
         if let Some(eq_idx) = lower_after.find(eq_pattern) {
             let after_eq = &after_where[eq_idx + eq_pattern.len()..].trim_start();
@@ -385,7 +395,33 @@ fn parse_insert_rows_map(
         .collect();
 
     if cols.is_empty() {
-        if table_name_normalized.contains("ducklake_table") {
+        if table_name_normalized == "ducklake_column_mapping" {
+            cols = vec!["table_id".to_string(), "mapping_type".to_string()];
+        } else if table_name_normalized == "ducklake_name_mapping" {
+            cols = vec!["column_id".to_string(), "name".to_string()];
+        } else if table_name_normalized == "ducklake_partition_info" {
+            cols = vec![
+                "partition_id".to_string(),
+                "table_id".to_string(),
+                "begin_snapshot".to_string(),
+                "end_snapshot".to_string(),
+            ];
+        } else if table_name_normalized == "ducklake_sort_info" {
+            cols = vec![
+                "sort_id".to_string(),
+                "table_id".to_string(),
+                "begin_snapshot".to_string(),
+                "end_snapshot".to_string(),
+            ];
+        } else if table_name_normalized == "ducklake_files_scheduled_for_deletion" {
+            cols = vec![
+                "data_file_id".to_string(),
+                "path".to_string(),
+                "path_is_relative".to_string(),
+                "schedule_start".to_string(),
+                "file_type".to_string(),
+            ];
+        } else if table_name_normalized.contains("ducklake_table") {
             cols = vec![
                 "table_id".to_string(),
                 "table_uuid".to_string(),
@@ -441,11 +477,34 @@ fn parse_insert_rows_map(
         }
         result_rows.push(row_map);
     }
-    eprintln!(
-        "[DEBUG parse_insert_rows_map] table={} cols={:?} rows={:?}",
-        table_name_normalized, cols, result_rows
-    );
     Some(result_rows)
+}
+
+fn row_map_string(
+    row: &std::collections::HashMap<String, Option<String>>,
+    key: &str,
+) -> Option<String> {
+    row.get(key).and_then(|value| value.clone())
+}
+
+fn row_map_u64(row: &std::collections::HashMap<String, Option<String>>, key: &str) -> Option<u64> {
+    row.get(key)
+        .and_then(|value| value.as_ref().and_then(|text| text.parse::<u64>().ok()))
+}
+
+fn row_map_bool(
+    row: &std::collections::HashMap<String, Option<String>>,
+    key: &str,
+) -> Option<bool> {
+    row.get(key).and_then(|value| {
+        value
+            .as_ref()
+            .and_then(|text| match text.to_ascii_lowercase().as_str() {
+                "true" | "t" | "1" => Some(true),
+                "false" | "f" | "0" => Some(false),
+                _ => None,
+            })
+    })
 }
 
 fn normalize_literal(value: &str) -> Option<String> {
@@ -546,17 +605,25 @@ fn extract_id_from_where_clause(sql: &str) -> Option<WhereClauseId> {
     let lower = sql.to_ascii_lowercase();
     let where_idx = lower.find("where")?;
     let where_clause = &lower[where_idx..];
-    
+
     // Look for identifiers: table_id, column_id, object_id, view_id, macro_id, schema_id
-    for ident in &["table_id", "column_id", "object_id", "view_id", "macro_id", "schema_id"] {
+    for ident in &[
+        "table_id",
+        "column_id",
+        "object_id",
+        "view_id",
+        "macro_id",
+        "schema_id",
+    ] {
         if let Some(idx) = where_clause.find(ident) {
             let after_ident = &where_clause[idx + ident.len()..];
-            
+
             // Check for IN (<num>) format
             if let Some(in_idx) = after_ident.find("in") {
                 let rest = after_ident[in_idx + 2..].trim_start();
                 if rest.starts_with('(') {
-                    let digits: String = rest.chars()
+                    let digits: String = rest
+                        .chars()
                         .skip(1)
                         .take_while(|c| c.is_ascii_digit())
                         .collect();
@@ -568,13 +635,11 @@ fn extract_id_from_where_clause(sql: &str) -> Option<WhereClauseId> {
                     }
                 }
             }
-            
+
             // Check for = <num> format
             if let Some(eq_idx) = after_ident.find('=') {
                 let rest = after_ident[eq_idx + 1..].trim_start();
-                let digits: String = rest.chars()
-                    .take_while(|c| c.is_ascii_digit())
-                    .collect();
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
                 if let Ok(num) = digits.parse::<u64>() {
                     return Some(WhereClauseId {
                         column: ident.to_string(),
@@ -642,7 +707,12 @@ fn ducklake_insert_table_name(sql: &str) -> Option<String> {
     let insert_idx = lower.find("insert into")?;
     let after_insert = sql[insert_idx + "insert into".len()..].trim_start();
     let values_idx = after_insert.to_ascii_lowercase().find(" values")?;
-    let table_ref = after_insert[..values_idx].trim();
+    let table_ref = after_insert[..values_idx]
+        .trim()
+        .split('(')
+        .next()
+        .unwrap_or(after_insert[..values_idx].trim())
+        .trim();
     Some(normalize_table_ref(table_ref))
 }
 
@@ -654,6 +724,283 @@ fn normalize_table_ref(table_ref: &str) -> String {
         .trim()
         .trim_matches('"')
         .to_string()
+}
+
+async fn execute_ducklake_column_mapping_insert(
+    sql: &str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<usize, RockLakeError> {
+    let Some(rows) = parse_insert_rows_map(sql, params) else {
+        return Ok(0);
+    };
+
+    let mut catalog = store.lock().await;
+    let mut writer = catalog.begin_write();
+    let mut row_count = 0usize;
+
+    for row in rows {
+        let table_id = row
+            .get("table_id")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()))
+            .unwrap_or(0);
+        let mapping_id = row
+            .get("mapping_id")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
+        let column_id = row
+            .get("column_id")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
+        let file_column_name = row
+            .get("file_column_name")
+            .and_then(|value| value.as_deref())
+            .or_else(|| row.get("column_name").and_then(|value| value.as_deref()));
+        let mapping_type = row
+            .get("mapping_type")
+            .and_then(|value| value.as_deref())
+            .or_else(|| row.get("type").and_then(|value| value.as_deref()));
+
+        writer
+            .add_column_mapping(
+                table_id,
+                mapping_id,
+                column_id,
+                file_column_name,
+                mapping_type,
+            )
+            .await
+            .map_err(RockLakeError::from)?;
+        row_count += 1;
+    }
+
+    Ok(row_count)
+}
+
+async fn execute_ducklake_name_mapping_insert(
+    sql: &str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<usize, RockLakeError> {
+    let Some(rows) = parse_insert_rows_map(sql, params) else {
+        return Ok(0);
+    };
+
+    let mut catalog = store.lock().await;
+    let mut writer = catalog.begin_write();
+    let mut row_count = 0usize;
+
+    for row in rows {
+        let column_id = row
+            .get("column_id")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()))
+            .unwrap_or(0);
+        let mapping_id = row
+            .get("mapping_id")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
+        let name = row
+            .get("name")
+            .and_then(|value| value.as_deref())
+            .or_else(|| row.get("source_name").and_then(|value| value.as_deref()))
+            .or_else(|| row.get("field_name").and_then(|value| value.as_deref()))
+            .unwrap_or_default();
+        let source_name_hash = row
+            .get("source_name_hash")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
+        let target_field_id = row
+            .get("target_field_id")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
+        let parent_column = row
+            .get("parent_column")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
+        let is_partition = row
+            .get("is_partition")
+            .and_then(|value| value.as_ref().and_then(|s| s.parse::<bool>().ok()));
+
+        writer
+            .add_name_mapping(
+                mapping_id,
+                column_id,
+                name,
+                source_name_hash,
+                target_field_id,
+                parent_column,
+                is_partition,
+            )
+            .await
+            .map_err(RockLakeError::from)?;
+        row_count += 1;
+    }
+
+    Ok(row_count)
+}
+
+async fn execute_ducklake_partition_info_insert(
+    sql: &str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<usize, RockLakeError> {
+    let Some(rows) = parse_insert_rows_map(sql, params) else {
+        return Ok(0);
+    };
+
+    let mut catalog = store.lock().await;
+    let mut writer = catalog.begin_write();
+    let mut row_count = 0usize;
+
+    for row in rows {
+        let table_id = row_map_u64(&row, "table_id").unwrap_or(0);
+        let partition_id = row_map_u64(&row, "partition_id");
+        writer
+            .register_partition_info(table_id, partition_id)
+            .await
+            .map_err(RockLakeError::from)?;
+        row_count += 1;
+    }
+
+    Ok(row_count)
+}
+
+async fn execute_ducklake_sort_info_insert(
+    sql: &str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<usize, RockLakeError> {
+    let Some(rows) = parse_insert_rows_map(sql, params) else {
+        return Ok(0);
+    };
+
+    let mut catalog = store.lock().await;
+    let mut writer = catalog.begin_write();
+    let mut row_count = 0usize;
+
+    for row in rows {
+        let table_id = row_map_u64(&row, "table_id").unwrap_or(0);
+        let sort_id = row_map_u64(&row, "sort_id");
+        writer
+            .register_sort_info(table_id, sort_id)
+            .await
+            .map_err(RockLakeError::from)?;
+        row_count += 1;
+    }
+
+    Ok(row_count)
+}
+
+async fn execute_ducklake_files_scheduled_for_deletion_insert(
+    sql: &str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<usize, RockLakeError> {
+    let Some(rows) = parse_insert_rows_map(sql, params) else {
+        return Ok(0);
+    };
+
+    let mut catalog = store.lock().await;
+    let mut writer = catalog.begin_write();
+    let mut row_count = 0usize;
+
+    for row in rows {
+        let data_file_id = row_map_u64(&row, "data_file_id").unwrap_or(0);
+        let path = row_map_string(&row, "path").unwrap_or_default();
+        let path_is_relative = row_map_bool(&row, "path_is_relative");
+        let schedule_start = row_map_u64(&row, "schedule_start")
+            .or_else(|| row_map_u64(&row, "deletion_scheduled_at"))
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            });
+        let file_type = row_map_string(&row, "file_type");
+        writer
+            .schedule_file_deletion_with_opts(
+                data_file_id,
+                &path,
+                file_type.as_deref(),
+                path_is_relative,
+                schedule_start,
+            )
+            .await
+            .map_err(RockLakeError::from)?;
+        row_count += 1;
+    }
+
+    Ok(row_count)
+}
+
+async fn execute_ducklake_partition_column_insert(
+    sql: &str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<usize, RockLakeError> {
+    let Some(rows) = parse_insert_rows_map(sql, params) else {
+        return Ok(0);
+    };
+
+    let mut catalog = store.lock().await;
+    let mut writer = catalog.begin_write();
+    let mut row_count = 0usize;
+
+    for row in rows {
+        let partition_id = row_map_u64(&row, "partition_id").unwrap_or(0);
+        let partition_key_index = row_map_u64(&row, "partition_key_index").unwrap_or(0);
+        let column_id = row_map_u64(&row, "column_id").unwrap_or(0);
+        let transform = row_map_string(&row, "transform");
+        let table_id = row_map_u64(&row, "table_id");
+        writer
+            .register_partition_column(
+                partition_id,
+                partition_key_index,
+                column_id,
+                transform.as_deref(),
+                table_id,
+            )
+            .await
+            .map_err(RockLakeError::from)?;
+        row_count += 1;
+    }
+
+    Ok(row_count)
+}
+
+async fn execute_ducklake_sort_expression_insert(
+    sql: &str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<usize, RockLakeError> {
+    let Some(rows) = parse_insert_rows_map(sql, params) else {
+        return Ok(0);
+    };
+
+    let mut catalog = store.lock().await;
+    let mut writer = catalog.begin_write();
+    let mut row_count = 0usize;
+
+    for row in rows {
+        let sort_id = row_map_u64(&row, "sort_id").unwrap_or(0);
+        let sort_key_index = row_map_u64(&row, "sort_key_index").unwrap_or(0);
+        let column_id = row_map_u64(&row, "column_id").unwrap_or(0);
+        let sort_direction = row_map_string(&row, "sort_direction");
+        let null_order = row_map_string(&row, "null_order");
+        let table_id = row_map_u64(&row, "table_id");
+        let expression = row_map_string(&row, "expression");
+        let dialect = row_map_string(&row, "dialect");
+        writer
+            .register_sort_expression(
+                sort_id,
+                sort_key_index,
+                column_id,
+                sort_direction.as_deref(),
+                null_order.as_deref(),
+                table_id,
+                expression.as_deref(),
+                dialect.as_deref(),
+            )
+            .await
+            .map_err(RockLakeError::from)?;
+        row_count += 1;
+    }
+
+    Ok(row_count)
 }
 
 fn inlined_table_name_from_sql(sql: &str) -> Option<String> {
@@ -1278,18 +1625,22 @@ async fn execute_classified<'a>(
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
             if table_name == "ducklake_column_mapping" =>
         {
-            let _reader = { store.lock().await.read_latest() };
-            // Return empty for now; column mappings are typically queried with WHERE clauses
-            let rows = Vec::new();
+            let reader = { store.lock().await.read_latest() };
+            let rows = reader
+                .list_column_mappings()
+                .await
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_column_mapping_response(rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
             if table_name == "ducklake_name_mapping" =>
         {
-            let _reader = { store.lock().await.read_latest() };
-            // Return empty for now; name mappings are typically queried with WHERE clauses
-            let rows = Vec::new();
+            let reader = { store.lock().await.read_latest() };
+            let rows = reader
+                .list_name_mappings()
+                .await
+                .map_err(RockLakeError::from)?;
             Ok(vec![make_name_mapping_response(rows)])
         }
 
@@ -1304,7 +1655,23 @@ async fn execute_classified<'a>(
                     .await
                     .map_err(RockLakeError::from)?
             } else {
-                Vec::new()
+                let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
+                let mut rows = Vec::new();
+                for schema in schemas {
+                    for table in reader
+                        .list_tables(schema.schema_id)
+                        .await
+                        .map_err(RockLakeError::from)?
+                    {
+                        rows.extend(
+                            reader
+                                .list_partition_info(table.table_id)
+                                .await
+                                .map_err(RockLakeError::from)?,
+                        );
+                    }
+                }
+                rows
             };
             Ok(vec![make_partition_info_response(rows)])
         }
@@ -1320,7 +1687,10 @@ async fn execute_classified<'a>(
                     .await
                     .map_err(RockLakeError::from)?
             } else {
-                Vec::new()
+                reader
+                    .list_all_partition_columns()
+                    .await
+                    .map_err(RockLakeError::from)?
             };
             Ok(vec![make_partition_columns_response(rows)])
         }
@@ -1336,9 +1706,23 @@ async fn execute_classified<'a>(
                     .await
                     .map_err(RockLakeError::from)?
             } else {
-                Vec::new()
+                reader
+                    .list_all_sort_expressions()
+                    .await
+                    .map_err(RockLakeError::from)?
             };
             Ok(vec![make_sort_expressions_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_files_scheduled_for_deletion" =>
+        {
+            let reader = { store.lock().await.read_latest() };
+            let rows = reader
+                .list_files_scheduled_for_deletion()
+                .await
+                .map_err(RockLakeError::from)?;
+            Ok(vec![make_files_scheduled_for_deletion_response(rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
@@ -2101,6 +2485,52 @@ async fn execute_classified<'a>(
         }
         StatementKind::InsertInlinedRow => {
             let table_name = ducklake_insert_table_name(_sql).unwrap_or_default();
+            if table_name == "ducklake_column_mapping" {
+                let row_count = execute_ducklake_column_mapping_insert(_sql, params, store).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
+            if table_name == "ducklake_name_mapping" {
+                let row_count = execute_ducklake_name_mapping_insert(_sql, params, store).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
+            if table_name == "ducklake_partition_info" {
+                let row_count = execute_ducklake_partition_info_insert(_sql, params, store).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
+            if table_name == "ducklake_sort_info" {
+                let row_count = execute_ducklake_sort_info_insert(_sql, params, store).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
+            if table_name == "ducklake_files_scheduled_for_deletion" {
+                let row_count =
+                    execute_ducklake_files_scheduled_for_deletion_insert(_sql, params, store)
+                        .await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
+            if table_name == "ducklake_partition_column" {
+                let row_count =
+                    execute_ducklake_partition_column_insert(_sql, params, store).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
+            if table_name == "ducklake_sort_expression" {
+                let row_count =
+                    execute_ducklake_sort_expression_insert(_sql, params, store).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
             let rows = literal_insert_rows(_sql);
             let row_count = rows.len();
             let op = BufferedOp::InsertInlinedRow { table_name, rows };
@@ -2148,7 +2578,9 @@ async fn execute_classified<'a>(
         StatementKind::DeleteInlinedDataRows { ref table_name } => {
             let mut row_ids = row_ids_from_ctid_sql(_sql);
             if row_ids.is_empty() {
-                if let Some(snapshot_threshold) = resolve_comparison_u64(_sql, "begin_snapshot", params) {
+                if let Some(snapshot_threshold) =
+                    resolve_comparison_u64(_sql, "begin_snapshot", params)
+                {
                     if let Some((table_id, _)) = parse_inlined_table_ids(table_name) {
                         let reader = { store.lock().await.read_latest() };
                         if let Ok(all_inlined) = reader.list_inlined_inserts(table_id).await {

@@ -683,10 +683,7 @@ async fn catalog_metadata_snapshot_stats() {
     );
 }
 
-/// Test mapping table operations.
-/// Note: Currently column_mapping doesn't return results on fresh catalogs
 #[tokio::test]
-#[ignore]
 async fn catalog_mapping_operations() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;

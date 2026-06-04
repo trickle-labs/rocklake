@@ -45,20 +45,23 @@ mod gcs_compat {
     /// If Docker is unavailable, the test is skipped gracefully via panic with
     /// a descriptive message.
     async fn gcs_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
-        let harness = HARNESS.get_or_init(|| async {
-            match GcsEmulatorHarness::start().await {
-                Ok(h) => h,
-                Err(e) => {
-                    panic!(
-                        "GCS emulator unavailable (skipping emulator tests): {e}. \
+        let harness = HARNESS
+            .get_or_init(|| async {
+                match GcsEmulatorHarness::start().await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        panic!(
+                            "GCS emulator unavailable (skipping emulator tests): {e}. \
                          Ensure Docker is installed and fake-gcs-server image is accessible."
-                    );
+                        );
+                    }
                 }
-            }
-        }).await;
+            })
+            .await;
 
         let bucket_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
-        harness.create_bucket(&bucket_name)
+        harness
+            .create_bucket(&bucket_name)
             .await
             .expect("failed to create GCS emulator bucket");
         harness.object_store(&bucket_name)
@@ -74,27 +77,31 @@ mod azure_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::AzureEmulatorHarness;
 
-    static HARNESS: tokio::sync::OnceCell<AzureEmulatorHarness> = tokio::sync::OnceCell::const_new();
+    static HARNESS: tokio::sync::OnceCell<AzureEmulatorHarness> =
+        tokio::sync::OnceCell::const_new();
 
     /// Run the Azurite emulator and return an `Arc<dyn ObjectStore>`.
     ///
     /// If Docker is unavailable, the test panics with a descriptive message.
     async fn azure_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
-        let harness = HARNESS.get_or_init(|| async {
-            match AzureEmulatorHarness::start().await {
-                Ok(h) => h,
-                Err(e) => {
-                    panic!(
-                        "Azure emulator unavailable (skipping emulator tests): {e}. \
+        let harness = HARNESS
+            .get_or_init(|| async {
+                match AzureEmulatorHarness::start().await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        panic!(
+                            "Azure emulator unavailable (skipping emulator tests): {e}. \
                          Ensure Docker is installed and Azurite image is accessible."
-                    );
+                        );
+                    }
                 }
-            }
-        }).await;
+            })
+            .await;
 
         // Container names in Azure must be lowercase, alphanumeric plus dash only
         let container_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
-        harness.create_container(&container_name)
+        harness
+            .create_container(&container_name)
             .await
             .expect("failed to create Azure emulator container");
         harness.object_store(&container_name)

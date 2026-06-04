@@ -97,15 +97,17 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                 sqlparser::ast::FromTable::WithFromKeyword(t) => t,
                 sqlparser::ast::FromTable::WithoutKeyword(t) => t,
             };
-            
+
             if let Some(from) = tables.first() {
                 if let Some(table_name_raw) = extract_table_name(&from.relation) {
                     let table_name = table_name_raw.to_lowercase();
-                    
+
                     // Extract all possible variations of the table name
                     let naked = table_name.replace("\"", "").trim_matches('"').to_string();
-                    let last_dot = table_name.rfind('.').map(|i| table_name[i+1..].to_string());
-                    
+                    let last_dot = table_name
+                        .rfind('.')
+                        .map(|i| table_name[i + 1..].to_string());
+
                     // Reject mutations against the read-only virtual catalog (SQLSTATE 25006).
                     if naked.starts_with("rocklake_catalog.") {
                         let tbl = naked
@@ -114,14 +116,14 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                             .to_string();
                         return StatementKind::VirtualCatalogMutation { table_name: tbl };
                     }
-                    
+
                     // Check all variations to find the best match
                     if let Some(dot_name) = &last_dot {
                         if dot_name.contains("ducklake_") {
                             // This should be a DuckLake table - use the part after the dot
                             if dot_name.contains("inlined_data_") {
-                                return StatementKind::DeleteInlinedDataRows { 
-                                    table_name: dot_name.clone()
+                                return StatementKind::DeleteInlinedDataRows {
+                                    table_name: dot_name.clone(),
                                 };
                             }
                             // Otherwise it's a catalog table
@@ -130,47 +132,54 @@ pub(super) fn classify_ast(stmt: &Statement) -> StatementKind {
                             };
                         }
                     }
-                    
+
                     if naked.contains("ducklake_") {
                         // Check the unquoted version
-                        if naked.contains("inlined_data_") {
-                            return StatementKind::DeleteInlinedDataRows { 
-                                table_name: naked.clone()
-                            };
-                        }
-                        return StatementKind::DeleteDuckLakeCatalogRows {
-                            table_name: naked,
+                        return match naked.contains("inlined_data_") {
+                            true => StatementKind::DeleteInlinedDataRows {
+                                table_name: naked.clone(),
+                            },
+                            false => StatementKind::DeleteDuckLakeCatalogRows { table_name: naked },
                         };
                     }
-                    
+
                     // Not a DuckLake table
-                    return StatementKind::Unsupported(format!(
+                    StatementKind::Unsupported(format!(
                         "AST_DELETE_from[naked:{},dot_part:{},full:{}]",
                         naked,
                         last_dot.unwrap_or_else(|| "None".to_string()),
                         table_name
-                    ));
+                    ))
                 } else {
-                    return StatementKind::Unsupported("AST_DELETE_extract_failed".to_string());
+                    StatementKind::Unsupported("AST_DELETE_extract_failed".to_string())
                 }
             } else {
-                return StatementKind::Unsupported("AST_DELETE_no_from_table".to_string());
+                StatementKind::Unsupported("AST_DELETE_no_from_table".to_string())
             }
         }
 
         _ => {
             let stmt_str = format!("{stmt}");
             if stmt_str.contains("DELETE") || stmt_str.contains("delete") {
-                return StatementKind::Unsupported(format!("CATCH_ALL_DELETE[{}]", stmt_str.chars().take(100).collect::<String>()));
+                return StatementKind::Unsupported(format!(
+                    "CATCH_ALL_DELETE[{}]",
+                    stmt_str.chars().take(100).collect::<String>()
+                ));
             }
             // DIAGNOSTIC: log what type of statement we're seeing
             let diag = if stmt_str.contains("DELETE") {
-                format!("FINAL_CATCH_ALL[DELETE_found:{}]", stmt_str.chars().take(50).collect::<String>())
+                format!(
+                    "FINAL_CATCH_ALL[DELETE_found:{}]",
+                    stmt_str.chars().take(50).collect::<String>()
+                )
             } else {
-                format!("FINAL_CATCH_ALL[type:{}]", stmt_str.chars().take(50).collect::<String>())
+                format!(
+                    "FINAL_CATCH_ALL[type:{}]",
+                    stmt_str.chars().take(50).collect::<String>()
+                )
             };
             StatementKind::Unsupported(diag)
-        },
+        }
     }
 }
 
@@ -686,10 +695,10 @@ pub(super) fn classify_release_snapshot_call(func: &sqlparser::ast::Function) ->
 /// Handles both normalized names (ducklake_*) and schema-qualified names.
 #[allow(dead_code)]
 fn is_ducklake_catalog_table(table: &str) -> bool {
-    table.starts_with("ducklake_data_file") ||
-    table.starts_with("ducklake_file_column_stats") ||
-    table.starts_with("ducklake_delete_file") ||
-    table.starts_with("ducklake_file_partition_value") ||
-    table.starts_with("ducklake_file_variant_stats") ||
-    table.starts_with("ducklake_files_scheduled_for_deletion")
+    table.starts_with("ducklake_data_file")
+        || table.starts_with("ducklake_file_column_stats")
+        || table.starts_with("ducklake_delete_file")
+        || table.starts_with("ducklake_file_partition_value")
+        || table.starts_with("ducklake_file_variant_stats")
+        || table.starts_with("ducklake_files_scheduled_for_deletion")
 }

@@ -214,7 +214,8 @@ pub fn table_stats_schema() -> Arc<Vec<FieldInfo>> {
 // ── ducklake_table_column_stats ───────────────────────────────────────────────
 
 /// `ducklake_table_column_stats(table_id, column_id, contains_null,
-/// contains_nan, min_value, max_value, extra_stats)` — DuckLake v1.0 spec.
+/// contains_nan, min_value, max_value, extra_stats, value_count, null_count)`
+/// — DuckLake v1.0 spec plus compatibility aliases for newer consumers.
 pub fn table_column_stats_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("table_id"),
@@ -224,6 +225,8 @@ pub fn table_column_stats_schema() -> Arc<Vec<FieldInfo>> {
         text_col!("min_value"),
         text_col!("max_value"),
         text_col!("extra_stats"),
+        int8t!("value_count"),
+        int8t!("null_count"),
     ])
 }
 

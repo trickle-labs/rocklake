@@ -101,30 +101,40 @@ impl CatalogWriter {
         let key = keys::key_table_stats(table_id);
         let mut row_id_start = 0;
         let mut existing_stats = None;
-        
+
         // 1. Check staging first
         if let Some((_, val)) = self.staged.iter().find(|(k, _)| k == &key) {
-            if let Ok(row) = rocklake_core::values::decode_value::<rocklake_core::rows::TableStatsRow>(val) {
+            if let Ok(row) =
+                rocklake_core::values::decode_value::<rocklake_core::rows::TableStatsRow>(val)
+            {
                 row_id_start = row.next_row_id.unwrap_or(0);
                 existing_stats = Some(row);
             }
         }
-        
+
         // 2. If not found in staging, check database
         if existing_stats.is_none() {
             if let Some(data) = self.db.get(&key).await? {
-                if let Ok(row) = rocklake_core::values::decode_value::<rocklake_core::rows::TableStatsRow>(&data) {
+                if let Ok(row) =
+                    rocklake_core::values::decode_value::<rocklake_core::rows::TableStatsRow>(&data)
+                {
                     row_id_start = row.next_row_id.unwrap_or(0);
                     existing_stats = Some(row);
                 }
             }
         }
-        
+
         // 3. Compute updated stats
         let prev_record_count = existing_stats.as_ref().map(|r| r.record_count).unwrap_or(0);
-        let prev_file_size_bytes = existing_stats.as_ref().map(|r| r.file_size_bytes).unwrap_or(0);
-        let prev_internal_file_count = existing_stats.as_ref().map(|r| r.internal_file_count).unwrap_or(0);
-        
+        let prev_file_size_bytes = existing_stats
+            .as_ref()
+            .map(|r| r.file_size_bytes)
+            .unwrap_or(0);
+        let prev_internal_file_count = existing_stats
+            .as_ref()
+            .map(|r| r.internal_file_count)
+            .unwrap_or(0);
+
         let updated_stats = rocklake_core::rows::TableStatsRow {
             table_id,
             record_count: prev_record_count.saturating_add(record_count),
@@ -132,12 +142,12 @@ impl CatalogWriter {
             file_size_bytes: prev_file_size_bytes.saturating_add(file_size_bytes),
             next_row_id: Some(row_id_start.saturating_add(record_count)),
         };
-        
+
         // 4. Update staging
         self.staged.retain(|(k, _)| k != &key);
         let encoded = values::encode_value(&updated_stats);
         self.stage(key, encoded);
-        
+
         Ok(row_id_start)
     }
 
@@ -537,7 +547,11 @@ impl CatalogWriter {
     }
 
     /// Find the begin_snapshot of a live table by table_id.
-    pub async fn find_table_begin_snapshot(&self, schema_id: u64, table_id: u64) -> CatalogResult<Option<u64>> {
+    pub async fn find_table_begin_snapshot(
+        &self,
+        schema_id: u64,
+        table_id: u64,
+    ) -> CatalogResult<Option<u64>> {
         let prefix = keys::prefix_tables_for_schema_table(schema_id, table_id);
         let mut iter = self
             .db
@@ -576,7 +590,11 @@ impl CatalogWriter {
     }
 
     /// Find the begin_snapshot of a live column by column_id.
-    pub async fn find_column_begin_snapshot(&self, table_id: u64, column_id: u64) -> CatalogResult<Option<u64>> {
+    pub async fn find_column_begin_snapshot(
+        &self,
+        table_id: u64,
+        column_id: u64,
+    ) -> CatalogResult<Option<u64>> {
         let prefix = keys::prefix_columns_for_table(table_id);
         let mut iter = self
             .db
@@ -842,7 +860,9 @@ impl CatalogWriter {
         // v0.24: assign file_order as monotonically increasing within table.
         let file_order = data_file_id;
         // v0.24: row_id_start from pre-increment of table next_row_id.
-        let row_id_start = self.allocate_row_id_start(table_id, record_count, file_size_bytes).await?;
+        let row_id_start = self
+            .allocate_row_id_start(table_id, record_count, file_size_bytes)
+            .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = rocklake_core::path::is_path_relative(path);
@@ -891,7 +911,9 @@ impl CatalogWriter {
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         let file_order = data_file_id;
-        let row_id_start = self.allocate_row_id_start(table_id, record_count, file_size_bytes).await?;
+        let row_id_start = self
+            .allocate_row_id_start(table_id, record_count, file_size_bytes)
+            .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = rocklake_core::path::is_path_relative(path);
@@ -944,7 +966,9 @@ impl CatalogWriter {
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         let file_order = data_file_id;
-        let row_id_start = self.allocate_row_id_start(table_id, record_count, file_size_bytes).await?;
+        let row_id_start = self
+            .allocate_row_id_start(table_id, record_count, file_size_bytes)
+            .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = rocklake_core::path::is_path_relative(path);
@@ -1122,6 +1146,59 @@ impl CatalogWriter {
         Ok(())
     }
 
+    pub async fn add_column_mapping(
+        &mut self,
+        table_id: u64,
+        mapping_id: Option<u64>,
+        column_id: Option<u64>,
+        file_column_name: Option<&str>,
+        mapping_type: Option<&str>,
+    ) -> CatalogResult<u64> {
+        let mapping_id = mapping_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
+        self.counters.ensure_catalog_id_at_least(mapping_id);
+
+        let row = ColumnMappingRow {
+            mapping_id,
+            table_id,
+            file_column_name: file_column_name.map(|s| s.to_string()),
+            column_id,
+            mapping_type: mapping_type.map(|s| s.to_string()),
+        };
+
+        let key = keys::key_column_mapping(table_id, mapping_id);
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(mapping_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_name_mapping(
+        &mut self,
+        mapping_id: Option<u64>,
+        column_id: u64,
+        name: &str,
+        source_name_hash: Option<u64>,
+        target_field_id: Option<u64>,
+        parent_column: Option<u64>,
+        is_partition: Option<bool>,
+    ) -> CatalogResult<u64> {
+        let mapping_id = mapping_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
+        self.counters.ensure_catalog_id_at_least(mapping_id);
+
+        let row = NameMappingRow {
+            mapping_id,
+            column_id,
+            name: name.to_string(),
+            source_name_hash,
+            target_field_id,
+            parent_column,
+            is_partition,
+        };
+
+        let key = keys::key_name_mapping(mapping_id, column_id, source_name_hash.unwrap_or(0));
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(mapping_id)
+    }
+
     pub async fn mark_inlined_insert_deleted(
         &mut self,
         table_id: u64,
@@ -1184,11 +1261,11 @@ impl CatalogWriter {
                 let mut updated_row = df_row;
                 updated_row.end_snapshot = Some(snapshot_id);
                 let encoded = values::encode_value(&updated_row);
-                
+
                 // Update primary key
                 self.stage(kv.key.to_vec(), encoded.clone());
-                
-                // Also update secondary index (TAG_DATA_FILE_BY_SNAPSHOT) so list_data_files() 
+
+                // Also update secondary index (TAG_DATA_FILE_BY_SNAPSHOT) so list_data_files()
                 // sees the retirement via its secondary-index scan
                 let idx_key = keys::key_data_file_by_snapshot(
                     updated_row.table_id,
@@ -1518,6 +1595,26 @@ impl CatalogWriter {
 
     // ─── v0.27: Sort Info ────────────────────────────────────────────────────
 
+    /// Write a `ducklake_partition_info` row directly.
+    pub async fn register_partition_info(
+        &mut self,
+        table_id: u64,
+        partition_id: Option<u64>,
+    ) -> CatalogResult<u64> {
+        let partition_id = partition_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
+        self.counters.ensure_catalog_id_at_least(partition_id);
+        let begin_snapshot = self.counters.peek_snapshot_id();
+        let row = PartitionInfoRow {
+            partition_id,
+            table_id,
+            begin_snapshot,
+            end_snapshot: None,
+        };
+        let key = keys::key_partition_info(table_id, partition_id, begin_snapshot);
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(partition_id)
+    }
+
     /// Write a `ducklake_sort_info` row for this table.
     ///
     /// Stores an individual MVCC entry under `key_sort_info`, which `list_all_sort_info`
@@ -1535,6 +1632,75 @@ impl CatalogWriter {
         Ok(())
     }
 
+    /// Write a `ducklake_sort_info` row directly.
+    pub async fn register_sort_info(
+        &mut self,
+        table_id: u64,
+        sort_id: Option<u64>,
+    ) -> CatalogResult<u64> {
+        let sort_id = sort_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
+        self.counters.ensure_catalog_id_at_least(sort_id);
+        let begin_snapshot = self.counters.peek_snapshot_id();
+        let row = SortInfoRow {
+            sort_id,
+            table_id,
+            begin_snapshot,
+            end_snapshot: None,
+        };
+        let key = keys::key_sort_info(table_id, sort_id, begin_snapshot);
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(sort_id)
+    }
+
+    /// Write a `ducklake_partition_column` row directly.
+    pub async fn register_partition_column(
+        &mut self,
+        partition_id: u64,
+        partition_key_index: u64,
+        column_id: u64,
+        transform: Option<&str>,
+        table_id: Option<u64>,
+    ) -> CatalogResult<()> {
+        let row = PartitionColumnRow {
+            partition_id,
+            partition_key_index,
+            column_id,
+            transform: transform.map(|value| value.to_string()),
+            table_id,
+        };
+        let key = keys::key_partition_column(partition_id, partition_key_index);
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(())
+    }
+
+    /// Write a `ducklake_sort_expression` row directly.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_sort_expression(
+        &mut self,
+        sort_id: u64,
+        sort_key_index: u64,
+        column_id: u64,
+        sort_direction: Option<&str>,
+        null_order: Option<&str>,
+        table_id: Option<u64>,
+        expression: Option<&str>,
+        dialect: Option<&str>,
+    ) -> CatalogResult<()> {
+        let row = SortExpressionRow {
+            sort_id,
+            sort_key_index,
+            column_id,
+            sort_direction: sort_direction.map(|value| value.to_string()),
+            null_order: null_order.map(|value| value.to_string()),
+            table_id,
+            expression: expression.map(|value| value.to_string()),
+            dialect: dialect.map(|value| value.to_string()),
+        };
+        let key = keys::key_sort_expression(sort_id, sort_key_index);
+        self.db.put(&key, values::encode_value(&row)).await?;
+        Ok(())
+    }
+
     // ─── Phase 6: Files Scheduled for Deletion ──────────────────────────────
 
     pub async fn schedule_file_deletion(
@@ -1547,17 +1713,35 @@ impl CatalogWriter {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        self.schedule_file_deletion_with_opts(
+            data_file_id,
+            path,
+            if file_type.is_empty() {
+                None
+            } else {
+                Some(file_type)
+            },
+            None,
+            schedule_start,
+        )
+        .await
+    }
 
+    /// Write a `ducklake_files_scheduled_for_deletion` row with explicit values.
+    pub async fn schedule_file_deletion_with_opts(
+        &mut self,
+        data_file_id: u64,
+        path: &str,
+        file_type: Option<&str>,
+        path_is_relative: Option<bool>,
+        schedule_start: u64,
+    ) -> CatalogResult<()> {
         let row = FilesScheduledForDeletionRow {
             data_file_id,
             schedule_start,
             path: path.to_string(),
-            file_type: if file_type.is_empty() {
-                None
-            } else {
-                Some(file_type.to_string())
-            },
-            path_is_relative: None,
+            file_type: file_type.map(|value| value.to_string()),
+            path_is_relative,
         };
 
         let key = keys::key_files_scheduled_for_deletion(schedule_start, data_file_id);

@@ -310,7 +310,7 @@ impl CatalogReader {
             }
             files.push(row);
         }
-        
+
         // v0.24: Consolidation cleanup for same-snapshot and cross-snapshot cases
         //
         // Case 1: Same-snapshot consolidation (INSERT + CHECKPOINT in same transaction)
@@ -327,29 +327,34 @@ impl CatalogReader {
         //
         // Debug: Log what files are visible before consolidation cleanup
         if files.len() > 1 {
-            eprintln!("[CONSOLIDATION] table_id={} snapshot={} found {} files:", 
-                table_id, self.dl_snapshot_id.as_u64(), files.len());
+            eprintln!(
+                "[CONSOLIDATION] table_id={} snapshot={} found {} files:",
+                table_id,
+                self.dl_snapshot_id.as_u64(),
+                files.len()
+            );
             for f in &files {
-                eprintln!("  file_id={} begin={:?} end={:?} rows={} path={}", 
-                    f.data_file_id, f.begin_snapshot, f.end_snapshot, 
-                    f.record_count, f.path);
+                eprintln!(
+                    "  file_id={} begin={:?} end={:?} rows={} path={}",
+                    f.data_file_id, f.begin_snapshot, f.end_snapshot, f.record_count, f.path
+                );
             }
         }
-        
+
         // Advanced partition-level cross-snapshot consolidation filter:
         // We group files by partition_id first.
         // Within each partition, we check if multiple files from earlier snapshots
         // have been merged into a single consolidated file in the latest snapshot.
         if files.len() > 1 {
-            let mut by_partition: std::collections::HashMap<Option<u64>, Vec<&DataFileRow>> = 
+            let mut by_partition: std::collections::HashMap<Option<u64>, Vec<&DataFileRow>> =
                 std::collections::HashMap::new();
             for f in &files {
-                by_partition.entry(f.partition_id).or_insert_with(Vec::new).push(f);
+                by_partition.entry(f.partition_id).or_default().push(f);
             }
-            
+
             let mut resolved_file_ids = std::collections::HashSet::new();
             let mut changed = false;
-            
+
             for (part_id, part_files) in by_partition {
                 if part_files.len() <= 1 {
                     for f in part_files {
@@ -357,7 +362,7 @@ impl CatalogReader {
                     }
                     continue;
                 }
-                
+
                 // Sort files in this partition by begin_snapshot (or data_file_id as a fallback) to process chronologically.
                 let mut sorted_files = part_files.clone();
                 sorted_files.sort_by(|a, b| {
@@ -369,24 +374,26 @@ impl CatalogReader {
                         a.data_file_id.cmp(&b.data_file_id)
                     }
                 });
-                
+
                 let mut obsolete_file_ids = std::collections::HashSet::new();
-                
+
                 for i in 0..sorted_files.len() {
                     let f_older = sorted_files[i];
-                    
+
                     // We only look for newer files (chronologically preceding/succeeding elements) to cover this file
                     for j in (i + 1)..sorted_files.len() {
                         let f_newer = sorted_files[j];
-                        
+
                         // Check precise row ID range coverage
-                        if let (Some(old_start), Some(new_start)) = (f_older.row_id_start, f_newer.row_id_start) {
+                        if let (Some(old_start), Some(new_start)) =
+                            (f_older.row_id_start, f_newer.row_id_start)
+                        {
                             let old_end = old_start + f_older.record_count;
                             let new_end = new_start + f_newer.record_count;
-                            
+
                             let old_snap = f_older.begin_snapshot.unwrap_or(0);
                             let new_snap = f_newer.begin_snapshot.unwrap_or(0);
-                            
+
                             let is_covered = if old_snap == new_snap {
                                 // Within the same snapshot/transaction, parallel data files do not consolidate each other.
                                 false
@@ -394,7 +401,7 @@ impl CatalogReader {
                                 // For cross-snapshot check, any space containment is a valid consolidation.
                                 new_start <= old_start && new_end >= old_end
                             };
-                            
+
                             if is_covered {
                                 eprintln!("[CONSOLIDATION] Partition {:?}: Older file_id={} (range [{}, {})) is covered by newer file_id={} (range [{}, {}))",
                                     part_id, f_older.data_file_id, old_start, old_end, f_newer.data_file_id, new_start, new_end);
@@ -407,12 +414,15 @@ impl CatalogReader {
                             let old_snap = f_older.begin_snapshot.unwrap_or(0);
                             let new_snap = f_newer.begin_snapshot.unwrap_or(0);
                             if old_snap < new_snap {
-                                let total_older_rows: u64 = sorted_files.iter()
+                                let total_older_rows: u64 = sorted_files
+                                    .iter()
                                     .filter(|f| f.begin_snapshot.unwrap_or(0) < new_snap)
                                     .map(|f| f.record_count)
                                     .sum();
-                                
-                                if f_newer.record_count == total_older_rows || f_newer.record_count == f_older.record_count {
+
+                                if f_newer.record_count == total_older_rows
+                                    || f_newer.record_count == f_older.record_count
+                                {
                                     eprintln!("[CONSOLIDATION] Partition {:?}: Legacy fallback. Obsoleting file_id={} in favor of newer file_id={}",
                                         part_id, f_older.data_file_id, f_newer.data_file_id);
                                     obsolete_file_ids.insert(f_older.data_file_id);
@@ -423,19 +433,19 @@ impl CatalogReader {
                         }
                     }
                 }
-                
+
                 for f in part_files {
                     if !obsolete_file_ids.contains(&f.data_file_id) {
                         resolved_file_ids.insert(f.data_file_id);
                     }
                 }
             }
-            
+
             if changed {
                 files.retain(|f| resolved_file_ids.contains(&f.data_file_id));
             }
         }
-        
+
         // v0.24: order results by file_order (spec requirement).
         files.sort_by_key(|f| f.file_order.unwrap_or(f.data_file_id));
         Ok(files)
@@ -972,6 +982,38 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// List all `ducklake_column_mapping` rows.
+    pub async fn list_column_mappings(&self) -> CatalogResult<Vec<ColumnMappingRow>> {
+        let prefix = keys::prefix_for_tag(TAG_COLUMN_MAPPING);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ColumnMappingRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
+    /// List all `ducklake_name_mapping` rows.
+    pub async fn list_name_mappings(&self) -> CatalogResult<Vec<NameMappingRow>> {
+        let prefix = keys::prefix_for_tag(TAG_NAME_MAPPING);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: NameMappingRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
     /// List all `ducklake_partition_info` rows visible at this snapshot for a table.
     pub async fn list_partition_info(&self, table_id: u64) -> CatalogResult<Vec<PartitionInfoRow>> {
         let prefix = keys::prefix_for_tag(TAG_PARTITION_INFO);
@@ -1015,6 +1057,23 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// List all `ducklake_partition_column` rows visible at this snapshot.
+    pub async fn list_all_partition_columns(&self) -> CatalogResult<Vec<PartitionColumnRow>> {
+        let prefix = keys::prefix_for_tag(TAG_PARTITION_COLUMN);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: PartitionColumnRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        rows.sort_by_key(|r| (r.partition_id, r.partition_key_index));
+        Ok(rows)
+    }
+
     /// List all `ducklake_sort_expression` rows visible at this snapshot for a table.
     pub async fn list_sort_expressions(
         &self,
@@ -1035,6 +1094,23 @@ impl CatalogReader {
         }
         // Sort by sort_id
         rows.sort_by_key(|r| r.sort_id);
+        Ok(rows)
+    }
+
+    /// List all `ducklake_sort_expression` rows visible at this snapshot.
+    pub async fn list_all_sort_expressions(&self) -> CatalogResult<Vec<SortExpressionRow>> {
+        let prefix = keys::prefix_for_tag(TAG_SORT_EXPRESSION);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SortExpressionRow = values::decode_value(&kv.value)?;
+            rows.push(row);
+        }
+        rows.sort_by_key(|r| (r.table_id.unwrap_or(0), r.sort_id, r.sort_key_index));
         Ok(rows)
     }
 
