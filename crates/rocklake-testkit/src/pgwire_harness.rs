@@ -59,7 +59,8 @@ impl PgWireHarness {
             .map_err(|e| PgWireHarnessError::Setup(format!("local_addr failed: {e}")))?;
         drop(listener);
 
-        let connect_addr = std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), addr.port());
+        let connect_addr =
+            std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), addr.port());
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 

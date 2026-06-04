@@ -52,7 +52,10 @@ fn attach_sql(pgwire: &PgWireHarness, data_path: &str, body: &str) -> String {
 
 async fn schema_id(catalog: &CatalogHarness, schema_name: &str) -> u64 {
     let reader = catalog.reader_latest().await;
-    let schemas = reader.list_schemas().await.expect("list_schemas should work");
+    let schemas = reader
+        .list_schemas()
+        .await
+        .expect("list_schemas should work");
     schemas
         .into_iter()
         .find(|schema| schema.schema_name == schema_name)
@@ -169,7 +172,10 @@ async fn duckdb_full_ducklake_tutorial_against_minio_container() {
         .await
         .expect("list_data_files should work after bootstrap");
 
-    assert!(!data_files.is_empty(), "bootstrap should create visible data files");
+    assert!(
+        !data_files.is_empty(),
+        "bootstrap should create visible data files"
+    );
     assert!(
         catalog_object_count(&prefix).await >= baseline_objects,
         "catalog objects should not disappear after bootstrap"
@@ -206,7 +212,10 @@ async fn duckdb_full_ducklake_tutorial_against_minio_container() {
 
     let mut visibility_writer = catalog.writer().await;
     let visibility_snapshot = visibility_writer
-        .create_snapshot(Some("duckdb-container"), Some("mutation visibility barrier"))
+        .create_snapshot(
+            Some("duckdb-container"),
+            Some("mutation visibility barrier"),
+        )
         .await
         .expect("mutation visibility barrier snapshot should succeed");
     catalog.commit_writer(visibility_snapshot).await;
@@ -237,7 +246,10 @@ async fn duckdb_full_ducklake_tutorial_against_minio_container() {
         .await
         .expect("cleanup phase should succeed");
 
-    catalog.assert_durable().await.expect("catalog should reopen cleanly after cleanup");
+    catalog
+        .assert_durable()
+        .await
+        .expect("catalog should reopen cleanly after cleanup");
 
     pgwire.stop().await;
 }
@@ -288,18 +300,17 @@ async fn duckdb_container_restart_and_reconnect_preserves_state() {
     let first_snapshot = catalog.reader_latest().await.snapshot_id();
 
     pgwire.stop().await;
-    catalog.reopen().await.expect("catalog should reopen cleanly before restart");
+    catalog
+        .reopen()
+        .await
+        .expect("catalog should reopen cleanly before restart");
     let pgwire = PgWireHarness::start_with_catalog(catalog.store.clone())
         .await
         .expect("PG-Wire server should restart");
 
     {
         let duckdb = start_duckdb(&data_dir).await;
-        let read_sql = attach_sql(
-            &pgwire,
-            duckdb.data_path(),
-            "SELECT 'ok' AS status;",
-        );
+        let read_sql = attach_sql(&pgwire, duckdb.data_path(), "SELECT 'ok' AS status;");
         let output = duckdb
             .run_sql(&read_sql)
             .await
@@ -325,7 +336,10 @@ async fn duckdb_container_restart_and_reconnect_preserves_state() {
         reader.snapshot_id().as_u64() >= first_snapshot.as_u64(),
         "restarted catalog should not move backwards"
     );
-    assert!(!files.is_empty(), "restarted catalog should still expose data files");
+    assert!(
+        !files.is_empty(),
+        "restarted catalog should still expose data files"
+    );
     assert!(
         catalog_object_count(&prefix).await >= objects_before_restart,
         "catalog objects should remain visible after restart"
@@ -371,8 +385,14 @@ async fn duckdb_container_commit_boundaries_match_catalog_state() {
         .await
         .expect("list_data_files should work after bootstrap");
 
-    assert!(bootstrap_snapshot.as_u64() > 0, "bootstrap should create a visible snapshot");
-    assert!(!bootstrap_files.is_empty(), "bootstrap should expose data files");
+    assert!(
+        bootstrap_snapshot.as_u64() > 0,
+        "bootstrap should create a visible snapshot"
+    );
+    assert!(
+        !bootstrap_files.is_empty(),
+        "bootstrap should expose data files"
+    );
     assert!(
         catalog_object_count(&prefix).await >= initial_objects,
         "bootstrap should not hide existing catalog objects"
@@ -400,7 +420,10 @@ async fn duckdb_container_commit_boundaries_match_catalog_state() {
     // barrier before reading the fresh catalog state back from SlateDB.
     let mut visibility_writer = catalog.writer().await;
     let visibility_snapshot = visibility_writer
-        .create_snapshot(Some("duckdb-container"), Some("mutation visibility barrier"))
+        .create_snapshot(
+            Some("duckdb-container"),
+            Some("mutation visibility barrier"),
+        )
         .await
         .expect("mutation visibility barrier snapshot should succeed");
     catalog.commit_writer(visibility_snapshot).await;
@@ -454,7 +477,10 @@ async fn duckdb_container_commit_boundaries_match_catalog_state() {
         .await
         .expect("cleanup phase should succeed");
 
-    catalog.assert_durable().await.expect("catalog should remain durable after the live loop");
+    catalog
+        .assert_durable()
+        .await
+        .expect("catalog should remain durable after the live loop");
 
     pgwire.stop().await;
 }

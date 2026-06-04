@@ -47,7 +47,9 @@ pub mod minio_harness;
 pub use catalog_harness::CatalogHarness;
 pub use clock::DeterministicClock;
 #[cfg(feature = "minio-tests")]
-pub use duckdb_container_harness::{DuckDbCommandOutput, DuckDbContainerError, DuckDbContainerHarness};
+pub use duckdb_container_harness::{
+    DuckDbCommandOutput, DuckDbContainerError, DuckDbContainerHarness,
+};
 pub use duckdb_harness::DuckDbHarness;
 pub use pgwire_harness::PgWireHarness;
 pub use soak_harness::{SoakConfig, SoakHarness, SoakRunSummary};
