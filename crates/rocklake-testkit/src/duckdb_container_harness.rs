@@ -8,7 +8,9 @@ use std::time::Duration;
 use futures::{Stream, StreamExt, TryStreamExt};
 use tempfile::TempDir;
 use testcontainers::bollard::{
-    container::{AttachContainerOptions, Config, CreateContainerOptions, LogOutput, StartContainerOptions},
+    container::{
+        AttachContainerOptions, Config, CreateContainerOptions, LogOutput, StartContainerOptions,
+    },
     errors::Error as DockerError,
     image::CreateImageOptions,
     models::HostConfig,
@@ -175,7 +177,8 @@ impl DuckDbContainerHarness {
     /// Execute SQL in the running DuckDB CLI and capture stdout/stderr.
     pub async fn run_sql(&self, sql: &str) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
         let original_sql = sql;
-        let had_ducklake_attach = sql.contains("ATTACH 'ducklake:postgres:") && sql.contains("USE my_lake;");
+        let had_ducklake_attach =
+            sql.contains("ATTACH 'ducklake:postgres:") && sql.contains("USE my_lake;");
         let attach_prelude = if had_ducklake_attach {
             extract_ducklake_attach_prelude(sql)
         } else {
@@ -455,15 +458,10 @@ impl DuckDbContainerHarness {
         })
     }
 
-    async fn drain_initial_output(
-        session: &mut DuckDbSession,
-    ) -> Result<(), DuckDbContainerError> {
+    async fn drain_initial_output(session: &mut DuckDbSession) -> Result<(), DuckDbContainerError> {
         loop {
-            let next_frame = tokio::time::timeout(
-                Duration::from_secs(1),
-                session.output.next(),
-            )
-            .await;
+            let next_frame =
+                tokio::time::timeout(Duration::from_secs(1), session.output.next()).await;
 
             match next_frame {
                 Ok(Some(Ok(_frame))) => continue,
@@ -492,7 +490,9 @@ impl Drop for DuckDbContainerHarness {
 }
 
 fn looks_like_error(output: &str) -> bool {
-    output.contains("Error:") || output.contains("Catalog Error:") || output.contains("Parser Error:")
+    output.contains("Error:")
+        || output.contains("Catalog Error:")
+        || output.contains("Parser Error:")
 }
 
 fn split_sql_statements(sql: &str) -> Vec<String> {
@@ -579,7 +579,6 @@ fn requires_explicit_transaction(statement: &str) -> bool {
 }
 
 fn extract_ducklake_attach_prelude(sql: &str) -> Option<String> {
-    sql.find("USE my_lake;").map(|position| {
-        sql[..position + "USE my_lake;".len()].to_string()
-    })
+    sql.find("USE my_lake;")
+        .map(|position| sql[..position + "USE my_lake;".len()].to_string())
 }
