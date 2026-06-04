@@ -54,10 +54,10 @@ fn default_extension_schemas() -> Arc<Vec<String>> {
 /// Exercises: CREATE schema → CREATE table → REGISTER data file → COMMIT snapshot
 ///            → SELECT catalog rows → SELECT snapshot history → time-travel read.
 ///
-/// Named `duckdb_full_ducklake_tutorial_against_minio` to match the v0.13
-/// roadmap Tier-5 acceptance criterion.
+/// Replay path for the DuckLake tutorial lifecycle. The live Testcontainers
+/// path lives in `duckdb_container_tests.rs`.
 #[tokio::test]
-async fn duckdb_full_ducklake_tutorial_against_minio() {
+async fn duckdb_full_ducklake_tutorial_against_minio_replay() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;
     let params = ParamValues::default();

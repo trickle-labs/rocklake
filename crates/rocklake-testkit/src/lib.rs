@@ -7,6 +7,8 @@
 //!   for SQL correctness assertions.
 //! - `minio_harness` — `MinioHarness`: manages a MinIO container for
 //!   object-store-backed integration tests (Tier 4+).
+//! - `duckdb_container_harness` — `DuckDbContainerHarness`: manages a real
+//!   DuckDB CLI container for live tutorial loops (Tier 5+).
 //! - `catalog_harness` — `CatalogHarness`: lightweight catalog write/read
 //!   helper for testing catalog round-trips without a full server.
 //! - `pgwire_harness` — `PgWireHarness`: spins up a PG-Wire server on a
@@ -27,6 +29,8 @@
 pub mod backend_compat;
 pub mod catalog_harness;
 pub mod clock;
+#[cfg(feature = "minio-tests")]
+pub mod duckdb_container_harness;
 pub mod duckdb_harness;
 pub mod pgwire_harness;
 pub mod soak_harness;
@@ -42,6 +46,8 @@ pub mod minio_harness;
 
 pub use catalog_harness::CatalogHarness;
 pub use clock::DeterministicClock;
+#[cfg(feature = "minio-tests")]
+pub use duckdb_container_harness::{DuckDbCommandOutput, DuckDbContainerError, DuckDbContainerHarness};
 pub use duckdb_harness::DuckDbHarness;
 pub use pgwire_harness::PgWireHarness;
 pub use soak_harness::{SoakConfig, SoakHarness, SoakRunSummary};

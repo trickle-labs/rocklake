@@ -665,6 +665,22 @@ jobs:
           cargo test -p rocklake-catalog --test minio_catalog_tests --features minio-tests -- --test-threads=1 --nocapture
           cargo test -p rocklake-pgwire --test minio_e2e_tests --features minio-tests -- --test-threads=1 --nocapture
 
+  # v0.47.6: Live DuckDB container loop.
+  # Validates the real DuckDB container path against MinIO-backed RockLake,
+  # including restart/reconnect coverage and catalog/object-store checkpoints.
+  duckdb-container-loop:
+    name: Live DuckDB Container Loop (v0.47.6)
+    runs-on: ubuntu-latest-8-core
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run live DuckDB container loop tests
+        run: |
+          cargo test -p rocklake-pgwire --test duckdb_container_tests --features minio-tests -- --test-threads=1 --nocapture
+
   # v0.36.0: TLS protocol-version gating tests.
   # Verifies: TLS 1.2 accepted, TLS 1.3 accepted, TLS 1.1 rejected (structurally),
   # SCRAM-SHA-256 + TLS 1.3 transport handshake, tls-required rejects plaintext.

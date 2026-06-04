@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.47.6] — 2026-06-04
+
+### Added
+
+- **Live DuckDB Container Loop**: Added Testcontainers-backed DuckDB container E2E tests covering the full DuckLake tutorial flow against MinIO-backed RockLake.
+- **Restart and Commit-Boundary Coverage**: The live suite now verifies restart/reconnect durability, catalog snapshot progression, and object-store visibility at each tutorial boundary.
+- **Dedicated CI Gate**: Added a large-runner GitHub Actions job for the live DuckDB container loop behind the `minio-tests` feature.
+
+### Changed
+
+- **Testkit Harnesses**: Added a shared DuckDB container harness and a container-facing PG-wire connection string for live tutorial tests.
+
 ## [0.47.5] — 2026-06-04
 
 ### Added

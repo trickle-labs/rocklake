@@ -439,16 +439,20 @@ pub(super) fn classify_no_from_select(select: &sqlparser::ast::Select) -> Statem
     StatementKind::Unsupported("SELECT without FROM".to_string())
 }
 
-/// Strip a `"public".` or `public.` schema prefix, and strip surrounding
+/// Strip a DuckLake metadata schema prefix, and strip surrounding
 /// double-quote delimiters from a bare single-identifier table name.
-/// DuckDB 1.5+ sends schema-qualified names (e.g. `"public"."ducklake_metadata"`);
-/// rocklake matches against unqualified names, so we normalize here.
+/// DuckDB 1.5+ can send schema-qualified names in either the public schema
+/// or the internal `__ducklake_metadata_*` schema; rocklake matches against
+/// unqualified names, so we normalize here.
 fn strip_public_schema(s: &str) -> &str {
-    if let Some(rest) = s.strip_prefix("\"public\".") {
-        rest.trim_matches('"')
-    } else if let Some(rest) = s.strip_prefix("public.") {
-        rest.trim_matches('"')
-    } else if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+    if let Some((schema, table)) = s.split_once('.') {
+        let schema = schema.trim_matches('"');
+        if schema == "public" || schema.starts_with("__ducklake_metadata_") {
+            return table.trim_matches('"');
+        }
+    }
+
+    if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
         // A single bare quoted identifier like `"ducklake_metadata"`.
         // Only strip quotes when there is no interior unescaped quote (which
         // would indicate a multi-part name such as `"My Schema".my_table`).

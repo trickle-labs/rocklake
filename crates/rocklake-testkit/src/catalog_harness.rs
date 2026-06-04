@@ -84,7 +84,14 @@ impl CatalogHarness {
 
     /// Read the latest snapshot.
     pub async fn reader_latest(&self) -> rocklake_catalog::CatalogReader {
-        self.store.lock().await.read_latest()
+        // Cross-process tests need to observe commits written by the PGWire
+        // server, so read the latest snapshot straight from SlateDB.
+        self.store
+            .lock()
+            .await
+            .read_fresh_latest()
+            .await
+            .expect("catalog should read the latest snapshot")
     }
 
     /// Read at a specific snapshot.

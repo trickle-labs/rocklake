@@ -422,6 +422,8 @@ async fn flush_visibility_barrier_p99_below_1s() {
 **Backend:** `LocalFileSystem` for wire corpus replay; `PgWireHarness` for live tests
 **Trigger:** Every merge to `main`
 
+Replay corpus tests stay on the standard runner; the full DuckDB container loop is a separate large-runner gate added in v0.47.6.
+
 ### 8.1 Wire corpus replay (existing, extended)
 
 The existing corpus replay infrastructure replays captured JSONL fixtures against a live `PgWireHarness`. Each new client version gets a corresponding `tests/fixtures/wire-corpus/{client}-{version}.jsonl` file and a corresponding replay test.
@@ -441,9 +443,9 @@ Golden test files under `tests/golden/duckdb-{version}/` are the spec-conformanc
 - Column types match golden
 - On DDL operations, subsequent SELECT verifies the visible catalog state
 
-### 8.3 DuckDB live E2E test (Testcontainers)
+### 8.3 DuckDB compatibility replay test
 
-A live E2E test spawns an actual DuckDB process using Testcontainers (the official `duckdb/duckdb` Docker image) against a live `PgWireHarness` backed by MinIO. This is the gold-standard DuckDB compatibility test.
+A replay-based E2E test reuses captured DuckDB traffic against a live `PgWireHarness` backed by MinIO. This validates the RockLake PG-wire surface and catalog state without starting a DuckDB container. The existing `duckdb_full_ducklake_tutorial_against_minio_replay` test name refers to this replay path.
 
 ```rust
 #[tokio::test]
@@ -455,7 +457,7 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
     let cat = CatalogHarness::on_minio(&minio, "tutorial").await;
     // 3. Start PG-Wire sidecar
     let pgwire = PgWireHarness::start(cat.store.clone()).await;
-    // 4. Run DuckDB SQL via tokio-postgres (simulating the ducklake extension)
+    // 4. Replay the DuckDB tutorial corpus against the live RockLake server
     let client = pgwire.connect().await;
     // Full tutorial sequence:
     client.execute("CREATE SCHEMA analytics", &[]).await.unwrap();
@@ -472,10 +474,29 @@ async fn duckdb_full_ducklake_tutorial_against_minio() {
 
 | Test name | Scenario |
 |-----------|----------|
-| `duckdb_full_ducklake_tutorial_against_minio` | Complete DuckLake tutorial from DuckDB 1.x against MinIO |
+| `duckdb_full_ducklake_tutorial_against_minio` | Complete DuckLake tutorial replay against MinIO-backed RockLake via PG-wire |
 | `duckdb_time_travel_at_snapshot` | `SELECT ... AT SNAPSHOT N` returns rows from that snapshot |
 | `duckdb_concurrent_reads_snapshot_isolated` | Two DuckDB sessions read at different snapshots simultaneously |
 | `duckdb_kill_9_writer_recovers` | `kill -9` on the writer mid-commit; DuckDB reconnects and completes |
+
+### 8.4 Full live DuckDB container loop (v0.47.6)
+
+A live E2E test starts a real DuckDB container via Testcontainers and drives the full tutorial through the DuckDB process, the RockLake PG-wire sidecar, and the MinIO-backed catalog. This is the v0.47.6 acceptance gate.
+
+| Test name | Scenario |
+|-----------|----------|
+| `duckdb_full_ducklake_tutorial_against_minio_container` | Complete DuckLake tutorial from a real DuckDB container against MinIO-backed RockLake |
+| `duckdb_container_restart_and_reconnect_preserves_state` | Restart both DuckDB and RockLake sidecar; reconnect and verify catalog/object state persists |
+| `duckdb_container_commit_boundaries_match_catalog_state` | Every commit boundary is observable in the live catalog and MinIO bucket listing |
+
+CI gating:
+
+- Large runner only.
+- `minio-tests` feature enabled.
+- Run on every merge to `main`.
+- Fail if the live transcript diverges from the regression fixture.
+
+CI job: `duckdb-container-loop` in `.github/workflows/ci.yml`.
 
 ---
 
@@ -717,6 +738,12 @@ minio-and-compat:
   steps:
     - cargo test --all --features minio-tests
     - cargo test -p rocklake-pgwire --test compat_tests
+
+# Tier 5b: live DuckDB container loop (large runner)
+duckdb-container-loop:
+  runs-on: ubuntu-latest-8-core
+  steps:
+    - cargo test -p rocklake-pgwire --test duckdb_container_tests --features minio-tests -- --test-threads=1 --nocapture
 
 # Tier 6a-6b: IVM integration (large runner, post-v0.11)
 ivm-integration:

@@ -107,6 +107,8 @@ binding on every roadmap release below.
 | **v0.47.2 — DuckLake 1.0 Compliance Audit & Schema/Executor Alignment** | Phase 1-4: Schema registry fixes (partition_column, sort_expression, files_scheduled_for_deletion); response builders for file_variant_stats, column_mapping, name_mapping; 14 compliance unit tests + 3 E2E integration tests; identified all P1 gaps for Phase 5+ roadmap | Complete |
 | **v0.47.3 — DuckLake 1.0 Spec Gap Closure** | Expand simplified schemas (file_variant_stats 6→12, column_mapping, name_mapping); implement write-path/query support for partitions, sort expressions, variant stats; add transaction atomicity, MVCC visibility, cascading ops, concurrent writer tests; real DuckDB integration validation | Planning |
 | **v0.47.4 — DuckLake 1.0 Spec-Conformity Certification & Integration Tests** | Refactor schemas for perfect alignment (`key`/`value` renames, exact column order via loopback projections); add advanced `_data_file` and `_delete_file` fields; enforce Repeatable Read isolation/fencing (`SQLSTATE 40001`); cascade table drops; add nightly DuckDB v1.5.3/MinIO certification CI | Complete |
+| **v0.47.5 — World-Class Testing Foundation & E2E Coverage** | Tiered testkit, MinIO-backed catalog tests, live PG-wire E2E, fault injection, benchmark regression, and CI gating | Complete |
+| **v0.47.6 — Full Live DuckDB Container Loop** | Real DuckDB container loop against MinIO-backed RockLake, with end-to-end tutorial flow, object-store verification, and live regression transcripts | Complete |
 | **v0.48.0 — Paginated Scans, Streaming & Observability Depth** | RFC-03: `list_data_files_paged()` with continuation token; `stream_data_files()` async Stream; PG-wire incremental `DataRow` streaming; proper histogram metrics via `prometheus` crate; per-query trace correlation and `trace_id` propagation; slow-query log; memory pressure and RSS metrics; SF100 catalog benchmark suite | Planning |
 | **v0.49.0 — Tiered NVMe Cache & Multi-Node Production Validation** | RFC-02: `TieredCache` L1/L2/L3 with local SSD spill; `--cache-dir` and `--cache-max-gb` CLI flags; L2 pre-population on cold start; wire up `slatedb_sst_count`/`slatedb_compaction_lag_ms` to real SlateDB stats; real 24h multi-node soak on AWS/GCP (not `InMemory`); GHCR container image with versioned tags; pod disruption budget + HPA documentation; v1.0 gating checklist completion | Planning |
 | **v0.70.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; blocked on upstream DuckDB community extension catalog API | Exploration |
@@ -131,6 +133,8 @@ Detailed sequence for v0.46–v0.49 (post-Assessment-2 hardening):
 
 * v0.46: Code hardening + DX (panic elimination, error types, Node.js IDs, CLI, Docker, docs)
 * v0.47: Read-only catalog path (RFC-01) + connection pooling + spec-conformity & multi-file integration certification
+* v0.47.5: World-class testing foundation & E2E coverage
+* v0.47.6: Full live DuckDB container loop against MinIO-backed RockLake
 * v0.48: Paginated scans (RFC-03) + streaming wire protocol + proper histogram metrics + SF100 benchmarks
 * v0.49: Tiered NVMe cache (RFC-02) + real multi-node soak + GHCR images + v1.0 gating checklist
 
@@ -5057,6 +5061,40 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 - [x] `rocklake-testkit` complete with its shared harnesses and compatibility macro.
 - [x] Real DuckDB, RockLake, and MinIO end-to-end validation passing in CI.
 - [x] Backend compatibility, security, fault-injection, soak, and benchmark regression coverage all wired into the roadmap release path.
+
+---
+
+## v0.47.6 — Full Live DuckDB Container Loop
+
+> Build on v0.47.5's shared harnesses to replace the simulated client loop with a real DuckDB container, so the full tutorial path runs through DuckDB, RockLake PG-wire, MinIO, and the catalog/object-store state machine end-to-end.
+
+### Containerized DuckDB Loop
+
+- [x] `duckdb_full_ducklake_tutorial_against_minio_container` starts a real Testcontainers-managed DuckDB container and runs the full tutorial loop against a MinIO-backed RockLake sidecar.
+- [x] `duckdb_container_restart_and_reconnect_preserves_state` restarts both the DuckDB container and RockLake sidecar and verifies the catalog remains readable after reconnect.
+- [x] `duckdb_container_commit_boundaries_match_catalog_state` asserts each tutorial phase against live RockLake catalog state and MinIO object visibility.
+- [x] Capture the live container transcript and wire replay as a regression fixture for future DuckDB version bumps.
+
+### Live Surface Guarantees
+
+- [x] Verify the loop uses the real DuckDB process and no tokio-postgres or in-process client simulation.
+- [x] Keep the live loop gated behind `minio-tests` and run it on the large runner with the rest of the MinIO compatibility suite.
+- [x] Keep the replay corpus tests separate so the live path remains a real DuckDB process end-to-end.
+- [x] Add restart and reconnect coverage for the DuckDB container and the RockLake sidecar to prove the loop survives process churn.
+
+### CI Gating
+
+- [x] Add a dedicated large-runner CI job for the live DuckDB container loop.
+- [x] Run the job on every merge to `main` with `minio-tests` enabled.
+- [x] Fail the job if the live transcript diverges from the recorded regression fixture.
+
+### Deliverables
+
+- [x] Full DuckDB container loop E2E test passing against MinIO-backed RockLake
+- [x] Real tutorial path exercised through DuckDB -> RockLake -> MinIO end-to-end
+- [x] Catalog state, snapshot visibility, and object-store visibility verified at each boundary
+- [x] Live transcript captured for future DuckDB compatibility regression checks
+- [x] Large-runner CI gating in place for the live loop
 
 ---
 
