@@ -75,8 +75,7 @@ impl PgWireHarness {
             }
         });
 
-        // Give the server a moment to bind.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        Self::wait_for_ready(addr, std::time::Duration::from_secs(5)).await?;
 
         Ok(Self {
             addr,
@@ -100,6 +99,23 @@ impl PgWireHarness {
         )
     }
 
+    /// Open a `tokio_postgres::Client` against the running server.
+    pub async fn connect(&self) -> Result<tokio_postgres::Client, PgWireHarnessError> {
+        let connection_string = self.connection_string();
+        let connect_future = tokio_postgres::connect(&connection_string, tokio_postgres::NoTls);
+        let (client, connection) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), connect_future)
+                .await
+                .map_err(|_| PgWireHarnessError::Setup("PG-Wire connect timed out".to_string()))?
+                .map_err(|e| PgWireHarnessError::Setup(e.to_string()))?;
+
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        Ok(client)
+    }
+
     /// Connection string as a URL (for libraries that prefer URL format).
     pub fn connection_url(&self) -> String {
         format!(
@@ -121,6 +137,44 @@ impl PgWireHarness {
         }
         if let Some(handle) = self.server_handle.take() {
             let _ = handle.await;
+        }
+    }
+
+    async fn wait_for_ready(
+        addr: SocketAddr,
+        timeout: std::time::Duration,
+    ) -> Result<(), PgWireHarnessError> {
+        let start = std::time::Instant::now();
+        let conn_str = format!(
+            "host={} port={} dbname=rocklake sslmode=disable",
+            addr.ip(),
+            addr.port()
+        );
+        loop {
+            if start.elapsed() > timeout {
+                return Err(PgWireHarnessError::Setup(
+                    "PG-Wire server did not become ready in time".to_string(),
+                ));
+            }
+
+            let connection_string = conn_str.clone();
+            let connect_future = tokio_postgres::connect(&connection_string, tokio_postgres::NoTls);
+            match tokio::time::timeout(std::time::Duration::from_secs(1), connect_future).await {
+                Ok(Ok((client, connection))) => {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        client.simple_query("SELECT 1"),
+                    )
+                    .await;
+                    tokio::spawn(async move {
+                        let _ = connection.await;
+                    });
+                    return Ok(());
+                }
+                Ok(Err(_)) | Err(_) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await
+                }
+            }
         }
     }
 }

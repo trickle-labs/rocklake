@@ -1,97 +1,77 @@
 //! MinioHarness: manages a MinIO container for object-store-backed tests.
 //!
-//! For Tier 4+ integration tests that need a real S3-compatible object store
-//! rather than the in-memory `object_store::memory::InMemory` backend.
-//!
-//! ## Prerequisites
-//! - Docker must be available in the test environment.
-//! - Tests using this harness should be gated behind `#[cfg(feature = "minio-tests")]`
-//!   or similar to avoid CI failure when Docker is unavailable.
-//!
-//! ## Usage
-//! ```ignore
-//! let minio = MinioHarness::start().await.unwrap();
-//! let store = minio.object_store();
-//! // Use `store` with CatalogStore::open(...)
-//! minio.stop().await;
-//! ```
+//! This harness uses the `testcontainers` ecosystem so that Tier 4+ tests run
+//! against a real S3-compatible container rather than a hand-rolled Docker
+//! wrapper. The harness starts one container per test suite and exposes a
+//! configured `object_store::ObjectStore` for catalog tests.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::TryStreamExt;
+use hmac::{Hmac, Mac};
 use object_store::aws::AmazonS3Builder;
+use object_store::path::Path as ObjectPath;
+use object_store::ObjectStore;
+use sha2::{Digest, Sha256};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::ContainerAsync;
+use testcontainers_modules::minio::MinIO;
 
 /// MinIO container harness for S3-compatible object store tests.
 pub struct MinioHarness {
-    container_id: String,
-    endpoint: String,
-    bucket: String,
+    container: ContainerAsync<MinIO>,
+    /// HTTP endpoint for the MinIO S3 API, e.g. `http://127.0.0.1:49382`.
+    pub endpoint: String,
+    /// Root access key used by the test container.
+    pub access_key: String,
+    /// Root secret key used by the test container.
+    pub secret_key: String,
+    /// Bucket assigned to this harness.
+    pub bucket: String,
 }
 
 /// Default MinIO credentials used in the test container.
 const MINIO_ACCESS_KEY: &str = "minioadmin";
 const MINIO_SECRET_KEY: &str = "minioadmin";
-const MINIO_BUCKET: &str = "rocklake-test";
-const MINIO_IMAGE: &str = "minio/minio:latest";
 
 impl MinioHarness {
     /// Start a MinIO container and create the test bucket.
-    ///
-    /// Returns `Err` if Docker is not available or the container fails to start.
-    pub async fn start() -> Result<Self, MinioHarnessError> {
-        let port = find_available_port().await?;
-        let endpoint = format!("http://127.0.0.1:{port}");
-
-        // Start the MinIO container.
-        let output = tokio::process::Command::new("docker")
-            .args([
-                "run",
-                "-d",
-                "--rm",
-                "-p",
-                &format!("{port}:9000"),
-                "-e",
-                &format!("MINIO_ROOT_USER={MINIO_ACCESS_KEY}"),
-                "-e",
-                &format!("MINIO_ROOT_PASSWORD={MINIO_SECRET_KEY}"),
-                MINIO_IMAGE,
-                "server",
-                "/data",
-            ])
-            .output()
+    pub async fn start(bucket: &str) -> Result<Self, MinioHarnessError> {
+        let container = MinIO::default()
+            .start()
             .await
-            .map_err(|e| MinioHarnessError::Docker(format!("failed to run docker: {e}")))?;
+            .map_err(|e| MinioHarnessError::Docker(format!("failed to start container: {e}")))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(MinioHarnessError::Docker(format!(
-                "docker run failed: {stderr}"
-            )));
-        }
+        let port = container
+            .get_host_port_ipv4(9000)
+            .await
+            .map_err(|e| MinioHarnessError::Docker(format!("failed to resolve port: {e}")))?;
+        let host = container
+            .get_host()
+            .await
+            .map_err(|e| MinioHarnessError::Docker(format!("failed to resolve host: {e}")))?;
 
-        let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-        // Wait for MinIO to become ready.
         let harness = Self {
-            container_id,
-            endpoint: endpoint.clone(),
-            bucket: MINIO_BUCKET.to_string(),
+            container,
+            endpoint: format!("http://{host}:{port}"),
+            access_key: MINIO_ACCESS_KEY.to_string(),
+            secret_key: MINIO_SECRET_KEY.to_string(),
+            bucket: bucket.to_string(),
         };
+
         harness.wait_for_ready(Duration::from_secs(30)).await?;
-
-        // Create the test bucket using mc or the S3 API.
         harness.create_bucket().await?;
-
         Ok(harness)
     }
 
-    /// Get an `object_store::ObjectStore` instance configured for this MinIO.
-    pub fn object_store(&self) -> Arc<dyn object_store::ObjectStore> {
+    /// Build an object-store client bound to the harness bucket.
+    pub fn object_store(&self) -> Arc<dyn ObjectStore> {
         let s3 = AmazonS3Builder::new()
             .with_endpoint(&self.endpoint)
             .with_bucket_name(&self.bucket)
-            .with_access_key_id(MINIO_ACCESS_KEY)
-            .with_secret_access_key(MINIO_SECRET_KEY)
+            .with_access_key_id(&self.access_key)
+            .with_secret_access_key(&self.secret_key)
             .with_region("us-east-1")
             .with_allow_http(true)
             .build()
@@ -99,22 +79,103 @@ impl MinioHarness {
         Arc::new(s3)
     }
 
-    /// The S3 endpoint URL.
-    pub fn endpoint(&self) -> &str {
-        &self.endpoint
+    /// Open options for the harness bucket and the given object-store prefix.
+    pub fn open_options(&self, prefix: &str) -> rocklake_catalog::OpenOptions {
+        rocklake_catalog::OpenOptions {
+            object_store: self.object_store(),
+            path: ObjectPath::from(prefix),
+            encryption: None,
+        }
     }
 
-    /// The bucket name.
-    pub fn bucket(&self) -> &str {
-        &self.bucket
+    /// Put a raw object into the harness bucket.
+    pub async fn put_object(&self, key: &str, data: &[u8]) -> Result<(), MinioHarnessError> {
+        let store = self.object_store();
+        let payload: object_store::PutPayload = data.to_vec().into();
+        store
+            .put(&ObjectPath::from(key), payload)
+            .await
+            .map_err(|e| MinioHarnessError::ObjectStore(e.to_string()))?;
+        Ok(())
     }
 
-    /// Stop and remove the MinIO container.
-    pub async fn stop(&self) {
-        let _ = tokio::process::Command::new("docker")
-            .args(["kill", &self.container_id])
-            .output()
-            .await;
+    /// List object keys under a prefix.
+    pub async fn list_objects(&self, prefix: &str) -> Result<Vec<String>, MinioHarnessError> {
+        let store = self.object_store();
+        let object_prefix = ObjectPath::from(prefix);
+        let objects = store
+            .list(Some(&object_prefix))
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| MinioHarnessError::ObjectStore(e.to_string()))?;
+        Ok(objects
+            .into_iter()
+            .map(|object| object.location.to_string())
+            .collect())
+    }
+
+    /// Delete an object from the harness bucket.
+    pub async fn delete_object(&self, key: &str) -> Result<(), MinioHarnessError> {
+        let store = self.object_store();
+        store
+            .delete(&ObjectPath::from(key))
+            .await
+            .map_err(|e| MinioHarnessError::ObjectStore(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Create the test bucket via a signed S3 `PUT Bucket` request.
+    pub async fn create_bucket(&self) -> Result<(), MinioHarnessError> {
+        let now = chrono::Utc::now();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let date_stamp = now.format("%Y%m%d").to_string();
+        let host = self
+            .endpoint
+            .strip_prefix("http://")
+            .unwrap_or(&self.endpoint)
+            .to_string();
+        let payload_hash = format!("{:x}", Sha256::digest(b""));
+
+        let canonical_headers =
+            format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
+        let signed_headers = "host;x-amz-content-sha256;x-amz-date";
+        let canonical_request = format!(
+            "PUT\n/{bucket}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}",
+            bucket = self.bucket,
+        );
+        let scope = format!("{date_stamp}/us-east-1/s3/aws4_request");
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{:x}",
+            Sha256::digest(canonical_request.as_bytes())
+        );
+        let signing_key = derive_signing_key(&self.secret_key, &date_stamp)?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(&signing_key)
+            .map_err(|e| MinioHarnessError::BucketCreate(format!("hmac init failed: {e}")))?;
+        mac.update(string_to_sign.as_bytes());
+        let signature = format!("{:x}", mac.finalize().into_bytes());
+        let authorization = format!(
+            "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}",
+            self.access_key,
+        );
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .put(format!("{}/{}", self.endpoint, self.bucket))
+            .header("x-amz-date", amz_date)
+            .header("x-amz-content-sha256", payload_hash)
+            .header("Authorization", authorization)
+            .send()
+            .await
+            .map_err(|e| MinioHarnessError::BucketCreate(e.to_string()))?;
+
+        if resp.status().is_success() || resp.status().as_u16() == 409 {
+            Ok(())
+        } else {
+            Err(MinioHarnessError::BucketCreate(format!(
+                "unexpected status: {}",
+                resp.status()
+            )))
+        }
     }
 
     /// Wait until MinIO's health endpoint responds.
@@ -137,38 +198,11 @@ impl MinioHarness {
             }
         }
     }
-
-    /// Create the test bucket via the S3 API.
-    async fn create_bucket(&self) -> Result<(), MinioHarnessError> {
-        let client = reqwest::Client::new();
-        // MinIO supports bucket creation via PUT on the bucket path.
-        let resp = client
-            .put(format!("{}/{}", self.endpoint, self.bucket))
-            .send()
-            .await
-            .map_err(|e| MinioHarnessError::BucketCreate(e.to_string()))?;
-
-        // 200 or 409 (already exists) are both fine.
-        if resp.status().is_success() || resp.status().as_u16() == 409 {
-            Ok(())
-        } else {
-            Err(MinioHarnessError::BucketCreate(format!(
-                "unexpected status: {}",
-                resp.status()
-            )))
-        }
-    }
 }
 
 impl Drop for MinioHarness {
     fn drop(&mut self) {
-        // Best-effort cleanup: spawn a blocking task to kill the container.
-        let id = self.container_id.clone();
-        std::thread::spawn(move || {
-            let _ = std::process::Command::new("docker")
-                .args(["kill", &id])
-                .output();
-        });
+        let _ = &self.container;
     }
 }
 
@@ -181,19 +215,28 @@ pub enum MinioHarnessError {
     Timeout(String),
     #[error("bucket creation failed: {0}")]
     BucketCreate(String),
-    #[error("port allocation failed: {0}")]
-    PortAllocation(String),
+    #[error("object store operation failed: {0}")]
+    ObjectStore(String),
 }
 
-/// Find an available TCP port by binding to port 0.
-async fn find_available_port() -> Result<u16, MinioHarnessError> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| MinioHarnessError::PortAllocation(e.to_string()))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| MinioHarnessError::PortAllocation(e.to_string()))?
-        .port();
-    drop(listener);
-    Ok(port)
+fn derive_signing_key(secret_key: &str, date_stamp: &str) -> Result<Vec<u8>, MinioHarnessError> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(format!("AWS4{secret_key}").as_bytes())
+        .map_err(|e| MinioHarnessError::BucketCreate(format!("hmac init failed: {e}")))?;
+    mac.update(date_stamp.as_bytes());
+    let date_key = mac.finalize().into_bytes().to_vec();
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(&date_key)
+        .map_err(|e| MinioHarnessError::BucketCreate(format!("hmac init failed: {e}")))?;
+    mac.update(b"us-east-1");
+    let region_key = mac.finalize().into_bytes().to_vec();
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(&region_key)
+        .map_err(|e| MinioHarnessError::BucketCreate(format!("hmac init failed: {e}")))?;
+    mac.update(b"s3");
+    let service_key = mac.finalize().into_bytes().to_vec();
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(&service_key)
+        .map_err(|e| MinioHarnessError::BucketCreate(format!("hmac init failed: {e}")))?;
+    mac.update(b"aws4_request");
+    Ok(mac.finalize().into_bytes().to_vec())
 }

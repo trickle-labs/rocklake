@@ -269,6 +269,18 @@ cargo test -- --include-ignored
 | `TEST_S3_BUCKET` | S3 bucket for integration tests | `s3://my-test-bucket/ci/` |
 | `ROCKLAKE_TEST_MINIO` | Enable MinIO integration tests | `1` |
 
+### MinIO-Backed Integration Suites
+
+Run the MinIO-backed suites with the `minio-tests` feature:
+
+```bash
+cargo test -p rocklake-testkit --test minio_tests --features minio-tests -- --test-threads=1 --nocapture
+cargo test -p rocklake-catalog --test minio_catalog_tests --features minio-tests -- --test-threads=1 --nocapture
+cargo test -p rocklake-pgwire --test minio_e2e_tests --features minio-tests -- --test-threads=1 --nocapture
+```
+
+These tests require Docker and a local MinIO container. The suite exercises the shared MinIO harness, catalog durability/reopen behavior, and live PG-wire queries against a MinIO-backed catalog.
+
 ### CI Test Matrix
 
 The CI pipeline runs:
@@ -278,6 +290,8 @@ The CI pipeline runs:
 - Property-based tests with 1024 cases (vs. 256 locally)
 - Clippy with `-D warnings` (treat warnings as errors)
 - Format check with `cargo fmt -- --check`
+- PRs run the fast tiers plus the local backend compatibility suites.
+- Pushes to `main` additionally run the MinIO-backed integration suites.
 
 ## Writing Effective Tests
 

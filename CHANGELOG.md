@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.47.5] — 2026-06-04
+
+### Added
+
+- **Shared Testkit Harnesses**: `rocklake-testkit` now provides the shared MinIO-backed catalog and PG-wire harnesses used by the integration suites.
+- **MinIO Testcontainers Support**: The MinIO harness now runs on `testcontainers`, replacing the ad hoc container wrapper.
+- **MinIO Integration Suites**: Added MinIO-backed catalog and live PG-wire E2E tests, gated behind the `minio-tests` feature.
+
+### Changed
+
+- **Testing Docs and CI Wiring**: Updated the test runner documentation and CI workflow to describe and exercise the MinIO-backed suites.
+
 ## [0.47.0] — 2026-05-31
 
 ### Added
