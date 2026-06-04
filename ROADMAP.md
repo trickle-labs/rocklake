@@ -4978,6 +4978,86 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 - [x] Establish a nightly CI job tracking conformance matrix compatibility specifically with **DuckDB v1.5.3** and the **stable DuckLake 1.0 Spec (Catalog Version 7)** on standard/large runners.
 
+## v0.47.5 — World-Class Testing Foundation & E2E Coverage
+
+> Implement the full integration and end-to-end test program from [plans/e2e-integration-tests.md](plans/e2e-integration-tests.md): tiered unit-to-soak coverage, shared harnesses, real object-store backends, real client compatibility, fault injection, benchmark regression, and CI gating.
+
+### Shared Test Infrastructure
+
+- [ ] Add `rocklake-testkit` as the canonical shared test crate for all integration and E2E suites.
+- [ ] Ship `CatalogHarness`, `MinioHarness`, `PgWireHarness`, `DuckDbHarness`, `DeterministicClock`, and `IvmWorkerHarness` from `rocklake-testkit`.
+- [ ] Add `GcsEmulatorHarness` and `AzureEmulatorHarness` behind feature flags for emulator-backed backend compatibility tests.
+- [ ] Add the shared `catalog_backend_compat_test!()` macro covering open/create, snapshot commit, read-after-write, prefix listing, writer fencing, and crash/reopen recovery.
+- [ ] Use `testcontainers` for real services where the seam requires them, and keep `tempfile` only for pure filesystem tests.
+
+### Tier 1 — Unit & Property Tests
+
+- [ ] Keep and extend the unit/property coverage in `rocklake-core` for key encoding, MVCC visibility, value encoding, and monotonic counter behavior.
+- [ ] Maintain deterministic time-dependent tests with `tokio::time::pause()` and `tokio::time::advance()`.
+
+### Tier 2 — Catalog Integration Tests
+
+- [ ] Keep the `LocalFileSystem` catalog integration suite in `crates/rocklake-catalog/tests/` as the fast path for pure catalog logic.
+- [ ] Add/retain tests for schema/table creation, reopen persistence, column description, data-file registration, inlined inserts/deletes, schema-version increments, and snapshot visibility.
+
+### Tier 3 — PG-Wire Integration Tests
+
+- [ ] Keep the loopback PG-wire executor suite in `crates/rocklake-pgwire/tests/integration_tests.rs` as the protocol and executor correctness layer.
+- [ ] Cover `SELECT version()`, `current_schema()`, `current_database()`, `pg_catalog.pg_type` probes, `SET`/`SHOW`, `BEGIN`/`COMMIT`/`ROLLBACK`, transaction buffering, and unsupported-statement handling.
+
+### Tier 4 — Object Store Integration Tests (MinIO)
+
+- [ ] Add MinIO-backed catalog integration tests using `MinioHarness` and `CatalogHarness::on_minio`.
+- [ ] Verify open/init, reopen persistence, durable snapshot commit, concurrent initialization convergence, flush visibility, monotonic snapshot IDs, snapshot isolation, large-file registration, zone-map pruning, stale writer fencing, and takeover recovery.
+- [ ] Gate these tests behind `minio-tests` and run them on the large runner on every merge to `main`.
+
+### Tier 5 — Client Compatibility Tests (DuckDB, Spark, Trino)
+
+- [ ] Add wire-corpus replay tests for DuckDB, Spark, Trino, and pg-tide-relay against a live `PgWireHarness`.
+- [ ] Keep golden fixture checks for row counts, column names, column types, SQLSTATEs, and final catalog state.
+- [ ] Add a live DuckDB end-to-end path against MinIO-backed RockLake, exercising the full tutorial flow with a real DuckDB process.
+
+### Tier 6 — IVM Integration Tests
+
+- [ ] Add MinIO-backed IVM integration coverage for single-shard correctness, multi-shard scale-out, joins, and operational hardening.
+- [ ] Add the worker lifecycle harness tests for lease acquire/renew/release, checkpoint lag, restart recovery, resharding, and output consistency.
+- [ ] Add the operational hardening and fault-injection suites for restart, repair, stale leases, and output compaction.
+
+### Tier 7 — Fault Injection Tests
+
+- [ ] Add catalog and IVM fault-injection coverage using `fail` points for snapshot commit, CAS conflicts, worker crashes, orphaned output, and source retries.
+- [ ] Add toxiproxy-based MinIO fault tests for S3 503s, truncated reads, catalog heartbeat partitions, and slow storage.
+
+### Tier 8 — Scale & Soak Tests
+
+- [ ] Add workspace-level scale and soak tests against real S3 Standard or large-runner MinIO.
+- [ ] Add TPC-H catalog latency benchmarks, 24-hour soak coverage, and 16-shard scale-out coverage with explicit throughput and lag SLOs.
+
+### Tier 9 — Security Tests
+
+- [ ] Add credential-isolation tests for MinIO catalog/data roles and confirm `SQLSTATE 42501` on forbidden writes.
+- [ ] Keep TLS and authentication coverage, and extend it for expired certs, CA validation, MD5, SCRAM-SHA-256, and brute-force throttling.
+- [ ] Add SQL-injection guard tests for parser rejection, verbatim storage, and feature-not-supported handling.
+
+### Tier 10 — Benchmark Regression Tests
+
+- [ ] Extend catalog benchmarks to cover both `LocalFileSystem` and MinIO and record JSON baselines.
+- [ ] Add benchmark gates for `get_current_snapshot`, `list_data_files`, `prune_files`, `create_snapshot`, and `describe_table` at large scale.
+- [ ] Add the weekly regression job that compares against `benchmarks/phase-2-baseline.json` and fails on material regressions.
+
+### CI Matrix & Gating
+
+- [ ] Add CI jobs that map Tier 1–3 to every PR, Tier 4–5 to every merge to `main`, Tier 6–9 to pre-release gates, and Tier 10 to weekly scheduled regression runs.
+- [ ] Wire `minio-tests`, `fault-injection`, `local-only`, and `scale-tests` feature flags to the correct suites.
+- [ ] Publish a complete test inventory and tier-by-tier CI mapping in `docs/contributing/testing.md`.
+
+### Deliverables
+
+- [ ] All 10 test tiers from [plans/e2e-integration-tests.md](plans/e2e-integration-tests.md) implemented and green.
+- [ ] `rocklake-testkit` complete with its shared harnesses and compatibility macro.
+- [ ] Real DuckDB, RockLake, and MinIO end-to-end validation passing in CI.
+- [ ] Backend compatibility, security, fault-injection, soak, and benchmark regression coverage all wired into the roadmap release path.
+
 ---
 
 ## v0.48.0 — Paginated Scans, Streaming & Observability Depth
