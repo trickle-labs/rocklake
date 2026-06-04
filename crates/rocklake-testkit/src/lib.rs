@@ -11,6 +11,8 @@
 //!   helper for testing catalog round-trips without a full server.
 //! - `pgwire_harness` — `PgWireHarness`: spins up a PG-Wire server on a
 //!   random port for client compatibility tests (Tier 5+).
+//! - `ivm` — `IvmWorkerHarness`: launches and supervises worker processes for
+//!   incremental-view-maintenance integration tests.
 //! - `gcs_emulator_harness` — `GcsEmulatorHarness`: manages a fake-gcs-server
 //!   container for GCS-backed integration tests (requires `gcs-emulator` feature).
 //! - `azure_emulator_harness` — `AzureEmulatorHarness`: manages an Azurite
@@ -26,6 +28,7 @@ pub mod backend_compat;
 pub mod catalog_harness;
 pub mod clock;
 pub mod duckdb_harness;
+pub mod ivm;
 pub mod minio_harness;
 pub mod pgwire_harness;
 pub mod soak_harness;
@@ -38,6 +41,7 @@ pub mod gcs_emulator_harness;
 pub use catalog_harness::CatalogHarness;
 pub use clock::DeterministicClock;
 pub use duckdb_harness::DuckDbHarness;
+pub use ivm::IvmWorkerHarness;
 pub use minio_harness::MinioHarness;
 pub use pgwire_harness::PgWireHarness;
 pub use soak_harness::{SoakConfig, SoakHarness, SoakRunSummary};

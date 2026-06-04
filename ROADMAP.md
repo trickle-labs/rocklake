@@ -4984,11 +4984,11 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Shared Test Infrastructure
 
-- [ ] Add `rocklake-testkit` as the canonical shared test crate for all integration and E2E suites.
+- [x] Add `rocklake-testkit` as the canonical shared test crate for all integration and E2E suites.
 - [ ] Ship `CatalogHarness`, `MinioHarness`, `PgWireHarness`, `DuckDbHarness`, `DeterministicClock`, and `IvmWorkerHarness` from `rocklake-testkit`.
 - [ ] Add `GcsEmulatorHarness` and `AzureEmulatorHarness` behind feature flags for emulator-backed backend compatibility tests.
 - [ ] Add the shared `catalog_backend_compat_test!()` macro covering open/create, snapshot commit, read-after-write, prefix listing, writer fencing, and crash/reopen recovery.
-- [ ] Use `testcontainers` for real services where the seam requires them, and keep `tempfile` only for pure filesystem tests.
+- [x] Use `testcontainers` for real services where the seam requires them, and keep `tempfile` only for pure filesystem tests.
 
 ### Tier 1 — Unit & Property Tests
 
@@ -5007,7 +5007,7 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Tier 4 — Object Store Integration Tests (MinIO)
 
-- [ ] Add MinIO-backed catalog integration tests using `MinioHarness` and `CatalogHarness::on_minio`.
+- [x] Add MinIO-backed catalog integration tests using `MinioHarness` and `CatalogHarness::on_minio`.
 - [ ] Verify open/init, reopen persistence, durable snapshot commit, concurrent initialization convergence, flush visibility, monotonic snapshot IDs, snapshot isolation, large-file registration, zone-map pruning, stale writer fencing, and takeover recovery.
 - [ ] Gate these tests behind `minio-tests` and run them on the large runner on every merge to `main`.
 
@@ -5049,7 +5049,7 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 - [ ] Add CI jobs that map Tier 1–3 to every PR, Tier 4–5 to every merge to `main`, Tier 6–9 to pre-release gates, and Tier 10 to weekly scheduled regression runs.
 - [ ] Wire `minio-tests`, `fault-injection`, `local-only`, and `scale-tests` feature flags to the correct suites.
-- [ ] Publish a complete test inventory and tier-by-tier CI mapping in `docs/contributing/testing.md`.
+- [x] Publish a complete test inventory and tier-by-tier CI mapping in `docs/contributing/testing.md`.
 
 ### Deliverables
 

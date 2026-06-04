@@ -49,3 +49,7 @@ parquet = { version = "54", features = ["arrow"] }
 arrow = { version = "54" }
 rocklake-testkit = { path = "../rocklake-testkit" }
 futures = { workspace = true }
+
+[features]
+## Enable MinIO-backed end-to-end test paths.
+minio-tests = ["rocklake-testkit/minio-tests"]

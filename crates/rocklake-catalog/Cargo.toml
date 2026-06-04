@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+## Enable MinIO-backed integration tests (requires Docker + Testcontainers).
+minio-tests = ["rocklake-testkit/minio-tests"]
 ## Enable GCS emulator integration tests (requires Docker with fake-gcs-server).
 gcs-emulator = ["rocklake-testkit/gcs-emulator"]
 ## Enable Azure Blob Storage emulator integration tests (requires Docker with Azurite).

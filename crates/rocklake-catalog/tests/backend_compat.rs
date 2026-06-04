@@ -21,6 +21,9 @@
 //!
 //! # Azure emulator (requires Docker)
 //! cargo test -p rocklake-catalog --test backend_compat --features azure-emulator
+
+//! # MinIO backend (requires Docker + Testcontainers)
+//! cargo test -p rocklake-catalog --test backend_compat --features minio-tests
 //!
 //! # All emulators
 //! cargo test -p rocklake-catalog --test backend_compat \
@@ -114,4 +117,34 @@ mod azure_compat {
     }
 
     catalog_backend_compat_test!(azure, super::azure_store().await);
+}
+
+// ── MinIO backend (requires --features minio-tests + Docker + Testcontainers) ─
+
+#[cfg(feature = "minio-tests")]
+mod minio_compat {
+    use rocklake_testkit::catalog_backend_compat_test;
+    use rocklake_testkit::MinioHarness;
+
+    static HARNESS: tokio::sync::OnceCell<MinioHarness> = tokio::sync::OnceCell::const_new();
+
+    async fn minio_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
+        let harness = HARNESS
+            .get_or_init(|| async {
+                match MinioHarness::start("rocklake-test").await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        panic!(
+                            "MinIO harness unavailable (requires Docker + Testcontainers): {e}. \
+                         Run: cargo test -p rocklake-catalog --test backend_compat --features minio-tests"
+                        );
+                    }
+                }
+            })
+            .await;
+
+        harness.object_store()
+    }
+
+    catalog_backend_compat_test!(minio, super::minio_store().await);
 }

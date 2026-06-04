@@ -1,48 +1,49 @@
 //! CatalogHarness: lightweight catalog write/read helper for integration tests.
 //!
-//! Provides a thin wrapper around `CatalogStore` for tests that need to verify
-//! catalog round-trips (write → read) without spinning up a full IVM worker.
-//!
-//! ## Usage
-//! ```ignore
-//! let harness = CatalogHarness::in_memory().await;
-//! let table_id = harness.create_table("orders", &["id", "amount"]).await;
-//! harness.insert_rows(table_id, vec![row!{"id" => 1, "amount" => 100}]).await;
-//! let rows = harness.read_all(table_id).await;
-//! assert_eq!(rows.len(), 1);
-//! ```
+//! The harness keeps the `CatalogStore` behind a shared mutex so tests can
+//! hand out owned writers and readers without cloning setup code or reopening
+//! the backing object store repeatedly.
 
 use std::sync::Arc;
 
-use object_store::memory::InMemory;
 use object_store::path::Path as ObjectPath;
+use tokio::sync::Mutex;
 
-use rocklake_catalog::{CatalogError, CatalogStore, OpenOptions};
+use rocklake_catalog::{CatalogError, CatalogStore, CommitResult, OpenOptions};
 use rocklake_core::rows::InlinedInsertRow;
+use rocklake_core::mvcc::SnapshotId;
+
+use crate::MinioHarness;
 
 /// Lightweight catalog harness for Tier 2+ integration tests.
 pub struct CatalogHarness {
-    pub store: CatalogStore,
+    pub store: Arc<Mutex<CatalogStore>>,
+    _dir: Option<tempfile::TempDir>,
     opts: OpenOptions,
 }
 
 impl CatalogHarness {
-    /// Create a harness backed by an in-memory object store.
-    pub async fn in_memory() -> Result<Self, CatalogError> {
-        let object_store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
-        let opts = OpenOptions {
-            object_store,
-            path: ObjectPath::from("test-catalog"),
-            encryption: None,
-        };
-        let store = CatalogStore::open(opts.clone()).await?;
-        Ok(Self { store, opts })
+    /// Create a harness backed by the local filesystem.
+    pub async fn local() -> Result<Self, CatalogError> {
+        let dir = tempfile::TempDir::new()
+            .map_err(|e| CatalogError::Internal(format!("tempdir failed: {e}")))?;
+        let object_store: Arc<dyn object_store::ObjectStore> = Arc::new(
+            object_store::local::LocalFileSystem::new_with_prefix(dir.path())
+                .map_err(|e| CatalogError::Internal(format!("local fs init failed: {e}")))?,
+        );
+        Self::with_object_store(object_store, "test-catalog", Some(dir)).await
     }
 
-    /// Create a harness backed by a specific object store (e.g., MinIO).
+    /// Backwards-compatible alias for callers that still use the old name.
+    pub async fn in_memory() -> Result<Self, CatalogError> {
+        Self::local().await
+    }
+
+    /// Create a harness backed by a specific object store.
     pub async fn with_object_store(
         object_store: Arc<dyn object_store::ObjectStore>,
         path: &str,
+        dir: Option<tempfile::TempDir>,
     ) -> Result<Self, CatalogError> {
         let opts = OpenOptions {
             object_store,
@@ -50,23 +51,46 @@ impl CatalogHarness {
             encryption: None,
         };
         let store = CatalogStore::open(opts.clone()).await?;
-        Ok(Self { store, opts })
+        Ok(Self {
+            store: Arc::new(Mutex::new(store)),
+            _dir: dir,
+            opts,
+        })
+    }
+
+    /// Create a harness backed by a MinIO test container.
+    pub async fn on_minio(harness: &MinioHarness, prefix: &str) -> Result<Self, CatalogError> {
+        Self::with_object_store(harness.object_store(), prefix, None).await
     }
 
     /// Reopen the catalog (simulates process restart).
-    pub async fn reopen(&mut self) -> Result<(), CatalogError> {
-        self.store = CatalogStore::open(self.opts.clone()).await?;
+    pub async fn reopen(&self) -> Result<(), CatalogError> {
+        let store = CatalogStore::open(self.opts.clone()).await?;
+        *self.store.lock().await = store;
         Ok(())
     }
 
-    /// Get a reference to the underlying CatalogStore.
-    pub fn store(&self) -> &CatalogStore {
-        &self.store
+    /// Begin a write session and return the owned writer.
+    pub async fn writer(&self) -> rocklake_catalog::CatalogWriter {
+        self.store.lock().await.begin_write()
     }
 
-    /// Get a mutable reference to the underlying CatalogStore.
-    pub fn store_mut(&mut self) -> &mut CatalogStore {
-        &mut self.store
+    /// Commit a writer result back into the catalog store.
+    pub async fn commit_writer(&self, result: CommitResult) {
+        self.store.lock().await.commit_writer(result);
+    }
+
+    /// Read the latest snapshot.
+    pub async fn reader_latest(&self) -> rocklake_catalog::CatalogReader {
+        self.store.lock().await.read_latest()
+    }
+
+    /// Read at a specific snapshot.
+    pub async fn reader_at(
+        &self,
+        snapshot: SnapshotId,
+    ) -> Result<rocklake_catalog::CatalogReader, CatalogError> {
+        self.store.lock().await.read_at(snapshot)
     }
 
     /// Read back all inline inserts for a given table.
@@ -74,7 +98,7 @@ impl CatalogHarness {
         &self,
         table_id: u64,
     ) -> Result<Vec<InlinedInsertRow>, CatalogError> {
-        let reader = self.store.read_latest();
+        let reader = self.reader_latest().await;
         reader.list_inlined_inserts(table_id).await
     }
 
