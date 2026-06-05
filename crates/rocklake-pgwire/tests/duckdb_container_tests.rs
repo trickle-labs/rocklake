@@ -236,8 +236,7 @@ async fn assert_registry_query_columns(
 fn extract_schema_version_hint(version_text: &str) -> Option<i64> {
     version_text
         .split(|character: char| !character.is_ascii_digit())
-        .filter(|segment| !segment.is_empty())
-        .last()
+        .rfind(|segment| !segment.is_empty())
         .and_then(|segment| segment.parse::<i64>().ok())
 }
 
@@ -378,7 +377,7 @@ async fn duckdb_full_ducklake_tutorial_against_minio_container() {
         .await
         .expect("bootstrap phase should succeed");
 
-    let bootstrap_read_sql = attach_sql(
+    let _bootstrap_read_sql = attach_sql(
         &pgwire,
         duckdb.data_path(),
         "SELECT id, payload FROM analytics.events WHERE id IN (2, 11, 12) ORDER BY id;",
@@ -811,7 +810,7 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
         .await
         .expect("list_all_metadata should work");
     let latest_snapshot_id = reader.snapshot_id().as_u64() as i64;
-    let table_stats = reader
+    let _table_stats = reader
         .get_table_stats(table_id)
         .await
         .expect("get_table_stats should work")
@@ -1126,7 +1125,7 @@ async fn duckdb_container_schema_evolution_and_object_store_integrity() {
     let duckdb = start_duckdb(&data_dir).await;
     let fixture = load_live_surface_fixture();
 
-    let (analytics_schema_id, table_id) = bootstrap_analytics_events(
+    let (_analytics_schema_id, table_id) = bootstrap_analytics_events(
         &catalog,
         &pgwire,
         &duckdb,
@@ -1346,11 +1345,11 @@ async fn duckdb_container_schema_evolution_and_object_store_integrity() {
 
     drop(client);
 
-    let views = reader
+    let _views = reader
         .list_all_views()
         .await
         .expect("list_all_views should work");
-    let macros = reader
+    let _macros = reader
         .list_all_macros()
         .await
         .expect("list_all_macros should work");
@@ -1386,7 +1385,7 @@ async fn duckdb_container_reader_isolation_and_restart_recovery() {
     bootstrap_writer.stop().await;
 
     let before_recovery_snapshot = catalog.reader_latest().await.snapshot_id().as_u64();
-    let mut writer = start_duckdb(&data_dir).await;
+    let writer = start_duckdb(&data_dir).await;
     let reader = start_duckdb(&data_dir).await;
     let reader_count_sql = fixture["recovery"]["reader_count_sql"]
         .as_str()
@@ -1425,7 +1424,7 @@ async fn duckdb_container_reader_isolation_and_restart_recovery() {
 
     writer.stop().await;
 
-    let mut recovered_writer = start_duckdb(&data_dir).await;
+    let recovered_writer = start_duckdb(&data_dir).await;
     let _recovered_output = recovered_writer
         .run_sql(&attach_sql(
             &pgwire,
