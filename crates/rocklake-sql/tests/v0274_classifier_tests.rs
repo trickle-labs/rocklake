@@ -419,5 +419,8 @@ WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL;
 "#;
 
     let kind = classify_statement(sql).unwrap();
-    assert_eq!(kind, StatementKind::UpdateEndSnapshot("ducklake_column".to_string()));
+    assert_eq!(
+        kind,
+        StatementKind::UpdateEndSnapshot("ducklake_column".to_string())
+    );
 }

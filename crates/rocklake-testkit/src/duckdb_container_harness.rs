@@ -192,7 +192,10 @@ impl DuckDbContainerHarness {
     }
 
     /// Execute a single raw SQL statement without auto-wrapping the batch.
-    pub async fn execute_raw(&self, sql: &str) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
+    pub async fn execute_raw(
+        &self,
+        sql: &str,
+    ) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
         let statement = sql.trim().trim_end_matches(';');
         let statement = if self.attached.load(Ordering::Relaxed)
             && !statement
@@ -242,9 +245,7 @@ impl DuckDbContainerHarness {
             false
         };
 
-        if had_ducklake_attach
-            && self.attached.load(Ordering::Relaxed)
-            && !attach_batch_has_writes
+        if had_ducklake_attach && self.attached.load(Ordering::Relaxed) && !attach_batch_has_writes
         {
             let mut session = self.session.lock().await;
             let body_sql = attach_prelude
@@ -285,9 +286,7 @@ impl DuckDbContainerHarness {
             });
         }
 
-        if had_ducklake_attach
-            && !self.attached.load(Ordering::Relaxed)
-            && !attach_batch_has_writes
+        if had_ducklake_attach && !self.attached.load(Ordering::Relaxed) && !attach_batch_has_writes
         {
             let mut session = self.session.lock().await;
             let readonly_sql = original_sql
@@ -413,8 +412,7 @@ impl DuckDbContainerHarness {
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
 
-            if requires_checkpoint(statement)
-                && (!statement_is_attach || !attach_batch_has_writes)
+            if requires_checkpoint(statement) && (!statement_is_attach || !attach_batch_has_writes)
             {
                 if began_transaction {
                     checkpoint_after_commit = true;
@@ -634,8 +632,7 @@ impl DuckDbContainerHarness {
 }
 
 impl Drop for DuckDbContainerHarness {
-    fn drop(&mut self) {
-    }
+    fn drop(&mut self) {}
 }
 
 fn looks_like_error(output: &str) -> bool {
@@ -687,9 +684,7 @@ fn is_duckdb_attach_handshake_statement(statement: &str) -> bool {
     let trimmed = statement.trim_start();
     let upper = trimmed.to_ascii_uppercase();
 
-    upper.starts_with("LOAD DUCKLAKE")
-        || upper.starts_with("ATTACH ")
-        || upper.eq("USE MY_LAKE")
+    upper.starts_with("LOAD DUCKLAKE") || upper.starts_with("ATTACH ") || upper.eq("USE MY_LAKE")
 }
 
 fn requires_checkpoint(statement: &str) -> bool {

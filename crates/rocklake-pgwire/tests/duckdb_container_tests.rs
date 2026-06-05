@@ -10,8 +10,8 @@ use tempfile::TempDir;
 use tokio::sync::OnceCell;
 
 use rocklake_core::rows::{DataFileRow, DeleteFileRow, FilesScheduledForDeletionRow};
-use rocklake_testkit::{CatalogHarness, DuckDbContainerHarness, MinioHarness, PgWireHarness};
 use rocklake_pgwire::schema_registry;
+use rocklake_testkit::{CatalogHarness, DuckDbContainerHarness, MinioHarness, PgWireHarness};
 
 static MINIO: OnceCell<MinioHarness> = OnceCell::const_new();
 
@@ -171,9 +171,14 @@ fn live_surface_fixture_path() -> PathBuf {
 
 fn load_live_surface_fixture() -> Value {
     let path = live_surface_fixture_path();
-    let content = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read live surface fixture at {}: {e}", path.display()));
-    serde_json::from_str(&content).unwrap_or_else(|e| panic!("failed to parse live surface fixture JSON: {e}"))
+    let content = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read live surface fixture at {}: {e}",
+            path.display()
+        )
+    });
+    serde_json::from_str(&content)
+        .unwrap_or_else(|e| panic!("failed to parse live surface fixture JSON: {e}"))
 }
 
 async fn commit_visibility_barrier(catalog: &CatalogHarness, author: &str, message: &str) {
@@ -188,7 +193,10 @@ async fn commit_visibility_barrier(catalog: &CatalogHarness, author: &str, messa
 fn registry_column_names(table_name: &str) -> Vec<String> {
     let fields = schema_registry::fields_for_table(table_name)
         .unwrap_or_else(|| panic!("registry must define {table_name}"));
-    fields.iter().map(|field| field.name().to_lowercase()).collect()
+    fields
+        .iter()
+        .map(|field| field.name().to_lowercase())
+        .collect()
 }
 
 async fn assert_query_columns(
@@ -207,8 +215,7 @@ async fn assert_query_columns(
         .collect::<Vec<_>>();
     let expected_columns = expected_columns.to_vec();
     assert_eq!(
-        actual_columns,
-        expected_columns,
+        actual_columns, expected_columns,
         "row description mismatch for `{sql}`"
     );
     client
@@ -272,11 +279,7 @@ fn catalog_parquet_base_names(
         .iter()
         .map(|row| file_base_name(&row.path))
         .chain(delete_files.iter().map(|row| file_base_name(&row.path)))
-        .chain(
-            scheduled_files
-                .iter()
-                .map(|row| file_base_name(&row.path)),
-        )
+        .chain(scheduled_files.iter().map(|row| file_base_name(&row.path)))
         .collect()
 }
 
@@ -737,7 +740,10 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
         bootstrap_analytics_events(&catalog, &pgwire, &duckdb, "live surface bootstrap barrier")
             .await;
     let initial_objects = catalog_object_count(&prefix).await;
-    let client = pgwire.connect().await.expect("PG-Wire client should connect");
+    let client = pgwire
+        .connect()
+        .await
+        .expect("PG-Wire client should connect");
 
     duckdb.stop().await;
 
@@ -923,18 +929,24 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
             assert_eq!(row_count, 1, "latest snapshot query should return one row");
             continue;
         }
-        let expected_columns = if let Some(columns) = entry.get("columns").and_then(|value| value.as_array()) {
-            columns
-                .iter()
-                .map(|value| value.as_str().expect("column names must be strings").to_lowercase())
-                .collect::<Vec<_>>()
-        } else {
-            registry_column_names(
-                entry["table"]
-                    .as_str()
-                    .expect("metadata query should include table"),
-            )
-        };
+        let expected_columns =
+            if let Some(columns) = entry.get("columns").and_then(|value| value.as_array()) {
+                columns
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .expect("column names must be strings")
+                            .to_lowercase()
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                registry_column_names(
+                    entry["table"]
+                        .as_str()
+                        .expect("metadata query should include table"),
+                )
+            };
 
         let rows = assert_query_columns(&client, sql, &expected_columns).await;
 
@@ -1010,7 +1022,10 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
                 );
             }
             "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro_impl" => {
-                let macro_rows = reader.list_all_macros().await.expect("list_all_macros should work");
+                let macro_rows = reader
+                    .list_all_macros()
+                    .await
+                    .expect("list_all_macros should work");
                 let macro_impls = if let Some(first_macro) = macro_rows.first() {
                     reader
                         .list_macro_impls(first_macro.macro_id)
@@ -1027,7 +1042,10 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
                 );
             }
             "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro_parameters" => {
-                let macro_rows = reader.list_all_macros().await.expect("list_all_macros should work");
+                let macro_rows = reader
+                    .list_all_macros()
+                    .await
+                    .expect("list_all_macros should work");
                 let macro_impls = if let Some(first_macro) = macro_rows.first() {
                     reader
                         .list_macro_impls(first_macro.macro_id)
@@ -1108,10 +1126,17 @@ async fn duckdb_container_schema_evolution_and_object_store_integrity() {
     let duckdb = start_duckdb(&data_dir).await;
     let fixture = load_live_surface_fixture();
 
-    let (analytics_schema_id, table_id) =
-        bootstrap_analytics_events(&catalog, &pgwire, &duckdb, "schema evolution bootstrap barrier")
-            .await;
-    let client = pgwire.connect().await.expect("PG-Wire client should connect");
+    let (analytics_schema_id, table_id) = bootstrap_analytics_events(
+        &catalog,
+        &pgwire,
+        &duckdb,
+        "schema evolution bootstrap barrier",
+    )
+    .await;
+    let client = pgwire
+        .connect()
+        .await
+        .expect("PG-Wire client should connect");
 
     let initial_columns = describe_table_column_names(&catalog, table_id).await;
     assert_eq!(
@@ -1219,7 +1244,10 @@ async fn duckdb_container_schema_evolution_and_object_store_integrity() {
         .as_str()
         .expect("live surface fixture should define delete_sql");
     duckdb
-        .run_sql(&format!("{}; SELECT COUNT(*) AS total FROM analytics.events;", drop_row_sql))
+        .run_sql(&format!(
+            "{}; SELECT COUNT(*) AS total FROM analytics.events;",
+            drop_row_sql
+        ))
         .await
         .expect("delete mutation should succeed");
     commit_visibility_barrier(
@@ -1249,10 +1277,28 @@ async fn duckdb_container_schema_evolution_and_object_store_integrity() {
     .await;
 
     let reader = catalog.reader_latest().await;
-    let view_rows = assert_registry_query_columns(&client, "SELECT * FROM ducklake_view", "ducklake_view").await;
-    assert_eq!(view_rows.len(), reader.list_all_views().await.expect("list_all_views should work").len());
-    let macro_rows = assert_registry_query_columns(&client, "SELECT * FROM ducklake_macro", "ducklake_macro").await;
-    assert_eq!(macro_rows.len(), reader.list_all_macros().await.expect("list_all_macros should work").len());
+    let view_rows =
+        assert_registry_query_columns(&client, "SELECT * FROM ducklake_view", "ducklake_view")
+            .await;
+    assert_eq!(
+        view_rows.len(),
+        reader
+            .list_all_views()
+            .await
+            .expect("list_all_views should work")
+            .len()
+    );
+    let macro_rows =
+        assert_registry_query_columns(&client, "SELECT * FROM ducklake_macro", "ducklake_macro")
+            .await;
+    assert_eq!(
+        macro_rows.len(),
+        reader
+            .list_all_macros()
+            .await
+            .expect("list_all_macros should work")
+            .len()
+    );
 
     let macro_rows = reader
         .list_all_macros()
@@ -1266,14 +1312,15 @@ async fn duckdb_container_schema_evolution_and_object_store_integrity() {
     } else {
         Vec::new()
     };
-    let macro_parameters = if let (Some(first_macro), Some(first_impl)) = (macro_rows.first(), macro_impls.first()) {
-        reader
-            .list_macro_parameters(first_macro.macro_id, first_impl.impl_id)
-            .await
-            .expect("list_macro_parameters should work")
-    } else {
-        Vec::new()
-    };
+    let macro_parameters =
+        if let (Some(first_macro), Some(first_impl)) = (macro_rows.first(), macro_impls.first()) {
+            reader
+                .list_macro_parameters(first_macro.macro_id, first_impl.impl_id)
+                .await
+                .expect("list_macro_parameters should work")
+        } else {
+            Vec::new()
+        };
     assert_eq!(
         assert_query_columns(
             &client,
@@ -1351,11 +1398,7 @@ async fn duckdb_container_reader_isolation_and_restart_recovery() {
         .expect("writer should attach before opening the raw transaction");
 
     let _reader_output = reader
-        .run_sql(&attach_sql(
-            &pgwire,
-            reader.data_path(),
-            reader_count_sql,
-        ))
+        .run_sql(&attach_sql(&pgwire, reader.data_path(), reader_count_sql))
         .await
         .expect("reader should be able to see the committed rows");
 
@@ -1376,11 +1419,7 @@ async fn duckdb_container_reader_isolation_and_restart_recovery() {
         .expect("writer INSERT should stay inside the open transaction");
 
     let _reader_output = reader
-        .run_sql(&attach_sql(
-            &pgwire,
-            reader.data_path(),
-            reader_count_sql,
-        ))
+        .run_sql(&attach_sql(&pgwire, reader.data_path(), reader_count_sql))
         .await
         .expect("reader should remain isolated from the uncommitted insert");
 
@@ -1405,19 +1444,10 @@ async fn duckdb_container_reader_isolation_and_restart_recovery() {
         .await
         .expect("recovered writer write phase should succeed");
 
-    commit_visibility_barrier(
-        &catalog,
-        "duckdb-container",
-        "recovery visibility barrier",
-    )
-    .await;
+    commit_visibility_barrier(&catalog, "duckdb-container", "recovery visibility barrier").await;
 
     let _reader_output = reader
-        .run_sql(&attach_sql(
-            &pgwire,
-            reader.data_path(),
-            reader_count_sql,
-        ))
+        .run_sql(&attach_sql(&pgwire, reader.data_path(), reader_count_sql))
         .await
         .expect("reader should pick up the committed recovery snapshot");
 
