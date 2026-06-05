@@ -5107,46 +5107,46 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Public Surface Coverage
 
-- [ ] Query the live DuckLake metadata views/functions that external clients rely on: `ducklake_snapshot_changes`, `ducklake_latest_snapshot_id(regclass)`, `ducklake_table_stats`, `ducklake_data_file`, `ducklake_delete_file`, and the schema/table/column catalog views.
-- [ ] Add coverage for partition, sort, mapping, and variant-stat metadata when they are reachable from the live container.
-- [ ] Verify result sets match spec-complete column names, types, and column order, not just row counts.
+- [x] Query the live DuckLake metadata views/functions that external clients rely on: `ducklake_snapshot_changes`, `ducklake_latest_snapshot_id(regclass)`, `ducklake_table_stats`, `ducklake_data_file`, `ducklake_delete_file`, and the schema/table/column catalog views.
+- [x] Add coverage for partition, sort, mapping, and variant-stat metadata when they are reachable from the live container.
+- [x] Verify result sets match spec-complete column names, types, and column order, not just row counts.
 
 ### Multi-Client Visibility
 
-- [ ] Run a second DuckDB process against the same MinIO-backed catalog as a concurrent reader and verify snapshot isolation while the writer is active.
-- [ ] Confirm schema refresh and reconnect boundaries only expose committed snapshots, not in-flight state.
-- [ ] Exercise the same live catalog from a fresh DuckDB process after each major phase to catch client-session state leakage.
+- [x] Run a second DuckDB process against the same MinIO-backed catalog as a concurrent reader and verify snapshot isolation while the writer is active.
+- [x] Confirm schema refresh and reconnect boundaries only expose committed snapshots, not in-flight state.
+- [x] Exercise the same live catalog from a fresh DuckDB process after each major phase to catch client-session state leakage.
 
 ### Schema Evolution & DDL
 
-- [ ] Exercise ALTER TABLE ADD/DROP/RENAME COLUMN, CREATE VIEW, CREATE MACRO, and DROP TABLE/SCHEMA through the live container.
-- [ ] Verify schema evolution is reflected consistently in both DuckDB query results and the RockLake catalog reader after checkpoint and reconnect.
-- [ ] Add at least one test that scans metadata after a DDL change instead of only reading table rows.
+- [x] Exercise ALTER TABLE ADD/DROP/RENAME COLUMN, CREATE VIEW, CREATE MACRO, and DROP TABLE/SCHEMA through the live container.
+- [x] Verify schema evolution is reflected consistently in both DuckDB query results and the RockLake catalog reader after checkpoint and reconnect.
+- [x] Add at least one test that scans metadata after a DDL change instead of only reading table rows.
 
 ### Failure-Mode & Recovery Coverage
 
-- [ ] Kill the DuckDB container or RockLake sidecar mid-batch and verify restart fences stale writers and preserves committed state.
-- [ ] Force a disconnect during CHECKPOINT, DETACH, or ATTACH and assert the catalog recovers without duplicate or partially visible files.
-- [ ] Add a retry/reopen scenario that proves the same catalog remains readable after an interrupted live session.
+- [x] Kill the DuckDB container or RockLake sidecar mid-batch and verify restart fences stale writers and preserves committed state.
+- [x] Force a disconnect during CHECKPOINT, DETACH, or ATTACH and assert the catalog recovers without duplicate or partially visible files.
+- [x] Add a retry/reopen scenario that proves the same catalog remains readable after an interrupted live session.
 
 ### Object-Store Integrity Checks
 
-- [ ] Verify expected Parquet object prefixes, file counts, and retirement behavior after UPDATE, DELETE, and CHECKPOINT.
-- [ ] Add orphan-file and prefix-list assertions after cleanup so live runs detect leaks and mis-registered files.
-- [ ] Confirm object-store visibility still matches catalog visibility after restart, reconnect, and cleanup.
+- [x] Verify expected Parquet object prefixes, file counts, and retirement behavior after UPDATE, DELETE, and CHECKPOINT.
+- [x] Add orphan-file and prefix-list assertions after cleanup so live runs detect leaks and mis-registered files.
+- [x] Confirm object-store visibility still matches catalog visibility after restart, reconnect, and cleanup.
 
 ### Regression Artifacts
 
-- [ ] Capture at least one additional live transcript that includes metadata inspection and a failure/recovery path.
-- [ ] Keep the transcript replay fixture separate from the happy-path tutorial fixture so each protects a different surface area.
-- [ ] Add a version-bump note for DuckDB patch releases if the metadata surface changes.
+- [x] Capture at least one additional live transcript that includes metadata inspection and a failure/recovery path.
+- [x] Keep the transcript replay fixture separate from the happy-path tutorial fixture so each protects a different surface area.
+- [x] Add a version-bump note for DuckDB patch releases if the metadata surface changes.
 
 ### Deliverables
 
-- [ ] Live container coverage for metadata discovery and schema evolution
-- [ ] Concurrent-reader and failure-injection live scenarios
-- [ ] Object-store integrity and orphan-leak checks
-- [ ] Additional transcript fixture(s) for the expanded live loop
+- [x] Live container coverage for metadata discovery and schema evolution
+- [x] Concurrent-reader and failure-injection live scenarios
+- [x] Object-store integrity and orphan-leak checks
+- [x] Additional transcript fixture(s) for the expanded live loop
 
 ---
 
@@ -5187,7 +5187,7 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Cross-Backend Parity Matrix
 
-- [ ] Run the surface manifest against LocalFS, MinIO, GCS, and Azure with the same assertions and fixture expectations.
+- [ ] Run the surface manifest against LocalFS and MinIO (defer GCS and Azure) with the same assertions and fixture expectations.
 - [ ] Add a backend parity test that compares catalog-visible results, object listings, and error codes across supported stores.
 - [ ] Verify the live DuckDB path on every backend where it is supported, not just MinIO.
 

@@ -146,8 +146,8 @@ impl PgWireHarness {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
-        if let Some(handle) = self.server_handle.take() {
-            let _ = handle.await;
+        if let Some(mut handle) = self.server_handle.take() {
+            handle.abort();
         }
     }
 

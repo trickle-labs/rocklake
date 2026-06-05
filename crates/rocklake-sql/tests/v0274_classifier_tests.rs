@@ -405,3 +405,19 @@ WHERE row_id=deleted_row_id AND end_snapshot IS NULL AND begin_snapshot != 7;
     let kind = classify_statement(sql).unwrap();
     assert_eq!(kind, StatementKind::UpdateInlinedRowEndSnapshot);
 }
+
+#[test]
+fn classify_ducklake_column_rename_update() {
+    let sql = r#"
+WITH dropped_cols(tid, cid) AS (
+VALUES (3, 4)
+)
+UPDATE "public".ducklake_column
+SET end_snapshot = 8
+FROM dropped_cols
+WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL;
+"#;
+
+    let kind = classify_statement(sql).unwrap();
+    assert_eq!(kind, StatementKind::UpdateEndSnapshot("ducklake_column".to_string()));
+}
