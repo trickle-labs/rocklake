@@ -60,6 +60,7 @@ pub enum BufferedOp {
     UpdateEndSnapshot {
         table_name: String,
         entity_id: u64,
+        table_id: Option<u64>,
         begin_snapshot: u64,
         end_snapshot: u64,
         where_column: Option<String>,

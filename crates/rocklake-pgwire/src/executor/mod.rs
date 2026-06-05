@@ -652,6 +652,23 @@ fn extract_id_from_where_clause(sql: &str) -> Option<WhereClauseId> {
     None
 }
 
+fn ducklake_column_rename_entity_id(sql: &str) -> Option<u64> {
+    let lower = sql.to_ascii_lowercase();
+    let with_idx = lower.find("with dropped_cols")?;
+    let values_idx = lower[with_idx..].find("values")? + with_idx;
+    let after_values = &lower[values_idx + "values".len()..];
+    let open_idx = after_values.find('(')?;
+    let tuple = &after_values[open_idx + 1..];
+
+    let mut numbers = tuple
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u64>().ok());
+
+    let _table_id = numbers.next()?;
+    numbers.next()
+}
+
 fn placeholder_comparison_index(sql: &str, column: &str) -> Option<usize> {
     let lower = sql.to_ascii_lowercase();
     let where_idx = lower.find("where")?;
@@ -2419,11 +2436,36 @@ async fn execute_classified<'a>(
             let mut end_snapshot = params.get_u64(0).unwrap_or(0);
             let mut where_column = None;
 
-            if let Some(extracted) = extract_id_from_where_clause(_sql) {
-                if entity_id == 0 {
-                    entity_id = extracted.value;
+            if table_name == "ducklake_column" {
+                if let Some(rename_entity_id) = ducklake_column_rename_entity_id(_sql) {
+                    entity_id = rename_entity_id;
+                    where_column = Some("column_id".to_string());
                 }
-                where_column = Some(extracted.column);
+            }
+
+            if entity_id == 0 {
+                if let Some(extracted) = extract_id_from_where_clause(_sql) {
+                    entity_id = extracted.value;
+                    where_column = Some(extracted.column);
+                }
+            } else if where_column.is_none() {
+                if let Some(extracted) = extract_id_from_where_clause(_sql) {
+                    where_column = Some(extracted.column);
+                }
+            }
+
+            if entity_id == 0 {
+                let where_key = if table_name == "ducklake_column" {
+                    "column_id"
+                } else {
+                    "table_id"
+                };
+                if let Some(resolved) = resolve_comparison_u64(_sql, where_key, params) {
+                    entity_id = resolved;
+                    if where_column.is_none() {
+                        where_column = Some(where_key.to_string());
+                    }
+                }
             }
 
             if end_snapshot == 0 {
@@ -2435,6 +2477,7 @@ async fn execute_classified<'a>(
             let op = BufferedOp::UpdateEndSnapshot {
                 table_name: table_name.clone(),
                 entity_id,
+                table_id: resolve_comparison_u64(_sql, "table_id", params),
                 begin_snapshot,
                 end_snapshot,
                 where_column,

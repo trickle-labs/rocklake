@@ -194,8 +194,18 @@ impl DuckDbContainerHarness {
     /// Execute a single raw SQL statement without auto-wrapping the batch.
     pub async fn execute_raw(&self, sql: &str) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
         let statement = sql.trim().trim_end_matches(';');
+        let statement = if self.attached.load(Ordering::Relaxed)
+            && !statement
+                .trim_start()
+                .to_ascii_uppercase()
+                .starts_with("USE ")
+        {
+            format!("USE my_lake; {statement}")
+        } else {
+            statement.to_string()
+        };
         let mut session = self.session.lock().await;
-        Self::run_statement(&mut session, statement).await
+        Self::run_statement(&mut session, &statement).await
     }
 
     /// Execute SQL in the running DuckDB CLI and capture stdout/stderr.

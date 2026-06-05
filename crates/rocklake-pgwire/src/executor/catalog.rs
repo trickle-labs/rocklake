@@ -225,6 +225,7 @@ pub(super) async fn execute_commit(
             BufferedOp::UpdateEndSnapshot {
                 table_name,
                 entity_id,
+                table_id,
                 begin_snapshot,
                 end_snapshot: _,
                 where_column,
