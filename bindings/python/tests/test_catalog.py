@@ -25,6 +25,12 @@ def test_open_close(tmp_path):
     cat.close()
 
 
+def test_open_rejects_empty_path():
+    rl = import_rocklake()
+    with pytest.raises(RuntimeError):
+        rl.RockLakeCatalog.open("")
+
+
 def test_snapshot_id_fresh_catalog(tmp_path):
     rl = import_rocklake()
     cat = rl.RockLakeCatalog.open(str(tmp_path))

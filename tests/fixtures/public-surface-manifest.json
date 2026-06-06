@@ -1,8 +1,50 @@
 {
-  "release": "v0.47.9",
+  "release": "v0.47.10",
   "duckdb_version": "1.5.3",
   "ducklake_version": "1.0",
   "catalog_version": 7,
+  "compatibility_snapshots": [
+    {
+      "release": "v0.47.9",
+      "duckdb_version": "1.5.3",
+      "ducklake_version": "1.0",
+      "catalog_version": 7,
+      "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
+    },
+    {
+      "release": "v0.47.10",
+      "duckdb_version": "1.5.3",
+      "ducklake_version": "1.0",
+      "catalog_version": 7,
+      "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
+    }
+  ],
+  "negative_probes": [
+    {
+      "surface": "cli",
+      "name": "invalid subcommand rejection",
+      "test_file": "crates/rocklake-pgwire/tests/v046_cli_tests.rs",
+      "test_name": "invalid_subcommand_exits_nonzero"
+    },
+    {
+      "surface": "ffi",
+      "name": "null uri rejection",
+      "test_file": "crates/rocklake-ffi/tests/c_abi_smoke.rs",
+      "test_name": "null_uri_returns_null_handle"
+    },
+    {
+      "surface": "pgwire",
+      "name": "unsupported statement rejection",
+      "test_file": "crates/rocklake-pgwire/tests/dialect_fuzz.rs",
+      "test_name": "dialect_fuzz_unsupported_returns_0a000_or_ok"
+    },
+    {
+      "surface": "sqlstate",
+      "name": "sqlstate mapping",
+      "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs",
+      "test_name": "test_error_sqlstate_mapping"
+    }
+  ],
   "surfaces": [
     {
       "kind": "metadata_tables",
@@ -116,6 +158,37 @@
       "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
     },
     {
+      "kind": "bindings",
+      "name": "Language binding smoke surfaces",
+      "status": "supported",
+      "languages": [
+        {
+          "language": "go",
+          "test_file": "bindings/go/rocklake_test.go",
+          "test_name": "TestOpenClose",
+          "negative_test_name": "TestOpenRejectsEmptyPath"
+        },
+        {
+          "language": "python",
+          "test_file": "bindings/python/tests/test_catalog.py",
+          "test_name": "test_open_close",
+          "negative_test_name": "test_open_rejects_empty_path"
+        },
+        {
+          "language": "nodejs",
+          "test_file": "bindings/nodejs/test/test_catalog.js",
+          "test_name": "open and close",
+          "negative_test_name": "open rejects empty path"
+        },
+        {
+          "language": "java",
+          "test_file": "bindings/java/src/test/java/io/trickle/rocklake/RockLakeCatalogTest.java",
+          "test_name": "openCloseSmoke",
+          "negative_test_name": "openRejectsEmptyPath"
+        }
+      ]
+    },
+    {
       "kind": "fixture_actions",
       "name": "DuckDB live fixture actions",
       "status": "supported",
@@ -150,13 +223,24 @@
     },
     {
       "kind": "cli",
-      "name": "RockLake CLI help and completion surface",
+      "name": "RockLake CLI help, admin, and completion surface",
       "status": "supported",
       "commands": [
         { "command": "rocklake --help", "test_name": "help_top_level" },
         { "command": "rocklake serve --help", "test_name": "help_serve" },
+        { "command": "rocklake gc plan --help", "test_name": "help_gc_plan" },
+        { "command": "rocklake gc apply --help", "test_name": "help_gc_apply" },
+        { "command": "rocklake excise plan --help", "test_name": "help_excise_plan" },
+        { "command": "rocklake checkpoint create --help", "test_name": "help_checkpoint_create" },
+        { "command": "rocklake checkpoint list --help", "test_name": "help_checkpoint_list" },
+        { "command": "rocklake checkpoint restore --help", "test_name": "help_checkpoint_restore" },
         { "command": "rocklake export --help", "test_name": "help_export" },
+        { "command": "rocklake import --help", "test_name": "help_import" },
+        { "command": "rocklake rebuild --help", "test_name": "help_rebuild" },
+        { "command": "rocklake diagnose --help", "test_name": "help_diagnose" },
+        { "command": "rocklake sweep-orphans --help", "test_name": "help_sweep_orphans" },
         { "command": "rocklake migrate-from-ducklake --help", "test_name": "help_migrate_from_ducklake" },
+        { "command": "rocklake export-catalog --help", "test_name": "help_export_catalog" },
         { "command": "rocklake completions bash", "test_name": "completions_bash" }
       ],
       "test_file": "crates/rocklake-pgwire/tests/v046_cli_tests.rs",

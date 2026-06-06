@@ -17,3 +17,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
 pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38"] }
+
+[workspace]
