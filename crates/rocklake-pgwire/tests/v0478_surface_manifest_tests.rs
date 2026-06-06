@@ -109,7 +109,9 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
         );
     }
     assert!(
-        snapshot_releases.iter().any(|release| release == "v0.47.10"),
+        snapshot_releases
+            .iter()
+            .any(|release| release == "v0.47.10"),
         "compatibility snapshots must include the current release"
     );
     assert!(
@@ -120,7 +122,10 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
     let negative_probes = manifest["negative_probes"]
         .as_array()
         .unwrap_or_else(|| panic!("negative_probes must be an array"));
-    assert!(!negative_probes.is_empty(), "negative_probes must not be empty");
+    assert!(
+        !negative_probes.is_empty(),
+        "negative_probes must not be empty"
+    );
     for probe in negative_probes {
         let surface = probe["surface"]
             .as_str()
@@ -131,7 +136,10 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
         let test_name = probe["test_name"]
             .as_str()
             .unwrap_or_else(|| panic!("negative probe must include test_name: {probe}"));
-        assert!(!surface.is_empty(), "negative probe surface must not be empty");
+        assert!(
+            !surface.is_empty(),
+            "negative probe surface must not be empty"
+        );
         assert_test_reference(&root, test_file, test_name);
     }
 
@@ -295,9 +303,10 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
                     let test_name = language["test_name"].as_str().unwrap_or_else(|| {
                         panic!("binding entry must include test_name: {language}")
                     });
-                    let negative_test_name = language["negative_test_name"].as_str().unwrap_or_else(|| {
-                        panic!("binding entry must include negative_test_name: {language}")
-                    });
+                    let negative_test_name =
+                        language["negative_test_name"].as_str().unwrap_or_else(|| {
+                            panic!("binding entry must include negative_test_name: {language}")
+                        });
                     assert_test_reference(&root, test_file, test_name);
                     assert_test_reference(&root, test_file, negative_test_name);
                 }
