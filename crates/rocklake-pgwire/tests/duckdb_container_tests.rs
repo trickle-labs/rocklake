@@ -4,7 +4,12 @@ use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use futures::TryStreamExt;
+use object_store::local::LocalFileSystem;
+use object_store::path::Path as ObjectPath;
+use object_store::ObjectStore;
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::OnceCell;
@@ -89,6 +94,235 @@ async fn catalog_object_count(prefix: &str) -> usize {
         .await
         .expect("list_objects should work")
         .len()
+}
+
+async fn local_catalog(prefix: &str) -> CatalogHarness {
+    let dir = TempDir::new().expect("local catalog tempdir should be created");
+    let store = Arc::new(LocalFileSystem::new_with_prefix(dir.path()).expect("local fs init"));
+    CatalogHarness::with_object_store(store, prefix, Some(dir))
+        .await
+        .expect("local catalog should open")
+}
+
+async fn catalog_object_locations(catalog: &CatalogHarness, prefix: &str) -> Vec<String> {
+    let store = {
+        let guard = catalog.store.lock().await;
+        guard.object_store()
+    };
+
+    let object_prefix = ObjectPath::from(prefix);
+    let objects = store
+        .list(Some(&object_prefix))
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("object listing should work");
+
+    let mut normalized = objects
+        .into_iter()
+        .map(|object| normalize_object_location(&object.location.to_string(), prefix))
+        .collect::<Vec<_>>();
+    normalized.sort_unstable();
+    normalized
+}
+
+fn normalize_object_location(location: &str, prefix: &str) -> String {
+    if let Some(index) = location.rfind(prefix) {
+        return location[index..].trim_start_matches('/').to_string();
+    }
+
+    Path::new(location)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(location)
+        .to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BackendParityState {
+    snapshot_id: u64,
+    schema_id: u64,
+    table_id: u64,
+    schemas: Vec<String>,
+    tables: Vec<String>,
+    columns: Vec<String>,
+    data_files: Vec<String>,
+    objects: Vec<String>,
+}
+
+async fn capture_backend_state(catalog: &CatalogHarness, prefix: &str) -> BackendParityState {
+    let reader = catalog.reader_latest().await;
+    let snapshot_id = reader.snapshot_id().as_u64();
+
+    let schemas = reader
+        .list_schemas()
+        .await
+        .expect("list_schemas should work")
+        .into_iter()
+        .map(|schema| schema.schema_name)
+        .collect::<Vec<_>>();
+    let mut schemas = schemas;
+    schemas.sort_unstable();
+
+    let schema_id = schema_id(catalog, "analytics").await;
+    let tables = reader
+        .list_tables(schema_id)
+        .await
+        .expect("list_tables should work")
+        .into_iter()
+        .map(|table| table.table_name)
+        .collect::<Vec<_>>();
+    let mut tables = tables;
+    tables.sort_unstable();
+
+    let table_id = table_id(catalog, schema_id, "events").await;
+    let mut columns = describe_table_column_names(catalog, table_id).await;
+    columns.sort_unstable();
+
+    let data_files = reader
+        .list_data_files(table_id)
+        .await
+        .expect("list_data_files should work")
+        .into_iter()
+        .map(|row| row.path)
+        .collect::<Vec<_>>();
+    let mut data_files = data_files;
+    data_files.sort_unstable();
+
+    let objects = catalog_object_locations(catalog, prefix).await;
+
+    BackendParityState {
+        snapshot_id,
+        schema_id,
+        table_id,
+        schemas,
+        tables,
+        columns,
+        data_files,
+        objects,
+    }
+}
+
+async fn populate_catalog_parity_state(catalog: &CatalogHarness, prefix: &str) -> BackendParityState {
+    let mut writer = catalog.writer().await;
+    let schema_id = writer
+        .create_schema("analytics")
+        .await
+        .expect("analytics schema should be created");
+    let table_id = writer
+        .create_table(schema_id, "events", None)
+        .await
+        .expect("events table should be created");
+
+    for file_index in 0..3u64 {
+        writer
+            .register_data_file(
+                table_id,
+                &format!("{prefix}/data/file-{file_index}.parquet"),
+                "parquet",
+                12 + file_index,
+                4_096 + file_index,
+            )
+            .await
+            .expect("register_data_file should succeed");
+    }
+
+    let snapshot = writer
+        .create_snapshot(Some("backend-parity"), Some("seed"))
+        .await
+        .expect("seed snapshot should succeed");
+    catalog.commit_writer(snapshot).await;
+
+    capture_backend_state(catalog, prefix).await
+}
+
+async fn run_backend_parity_roundtrip(
+    catalog: &CatalogHarness,
+    pgwire: &PgWireHarness,
+    duckdb: &DuckDbContainerHarness,
+    prefix: &str,
+) -> BackendParityState {
+    eprintln!("backend parity: bootstrap");
+    let _ = bootstrap_analytics_events(catalog, pgwire, duckdb, "backend parity barrier").await;
+
+    eprintln!("backend parity: mutation");
+    let mutation_sql = attach_sql(
+        pgwire,
+        duckdb.data_path(),
+        "UPDATE analytics.events SET payload = 'row-2-updated' WHERE id = 2; \
+         DELETE FROM analytics.events WHERE id = 1;",
+    );
+    duckdb
+        .run_sql(&mutation_sql)
+        .await
+        .expect("mutation write phase should succeed");
+
+    let mutation_read_sql = attach_sql(
+        pgwire,
+        duckdb.data_path(),
+        "SELECT id, payload FROM analytics.events WHERE id IN (2, 12) ORDER BY id; \
+         SELECT CASE WHEN COUNT(*) = 0 THEN 'deleted' ELSE 'unexpected' END AS deleted_1 \
+         FROM analytics.events WHERE id = 1;",
+    );
+    let mutation_output = duckdb
+        .run_sql(&mutation_read_sql)
+        .await
+        .expect("mutation readback should succeed");
+    let delete_result = output_after_statement(
+        &mutation_output.stdout,
+        "SELECT CASE WHEN COUNT(*) = 0 THEN 'deleted' ELSE 'unexpected' END AS deleted_1 FROM analytics.events WHERE id = 1;",
+    );
+    assert!(
+        delete_result.contains("deleted"),
+        "mutation output should prove the deleted row is gone\nstdout: {}\nstderr: {}",
+        mutation_output.stdout,
+        mutation_output.stderr
+    );
+
+    let mut visibility_writer = catalog.writer().await;
+    let visibility_snapshot = visibility_writer
+        .create_snapshot(
+            Some("duckdb-container"),
+            Some("mutation visibility barrier"),
+        )
+        .await
+        .expect("mutation visibility barrier snapshot should succeed");
+    catalog.commit_writer(visibility_snapshot).await;
+
+    eprintln!("backend parity: capture");
+    capture_backend_state(catalog, prefix).await
+}
+
+async fn assert_writer_epoch_mismatch(catalog: &CatalogHarness) {
+    let mut first_writer = catalog.writer().await;
+    first_writer
+        .create_schema("fencing_schema")
+        .await
+        .expect("first writer should create schema");
+
+    let mut second_writer = catalog.writer().await;
+    second_writer
+        .create_schema("winner_schema")
+        .await
+        .expect("second writer should create schema");
+
+    let second_snapshot = second_writer
+        .create_snapshot(Some("backend-parity"), Some("winner"))
+        .await
+        .expect("second writer should create snapshot");
+    catalog.commit_writer(second_snapshot).await;
+
+    let stale_result = first_writer
+        .create_snapshot(Some("backend-parity"), Some("stale"))
+        .await;
+    let stale_error = stale_result.expect_err("stale writer should be fenced");
+    assert!(
+        matches!(stale_error, rocklake_catalog::CatalogError::WriterEpochMismatch),
+        "expected writer fencing error, got: {stale_error}"
+    );
+    assert!(
+        stale_error.to_string().contains("SQLSTATE 57P04"),
+        "expected SQLSTATE 57P04 in writer fencing error, got: {stale_error}"
+    );
 }
 
 fn normalize_whitespace(text: &str) -> String {
@@ -622,6 +856,37 @@ async fn duckdb_container_restart_and_reconnect_preserves_state() {
     );
 
     pgwire.stop().await;
+}
+
+#[tokio::test]
+async fn catalog_backend_parity_across_localfs_and_minio() {
+    let prefix = test_prefix("backend_parity");
+
+    eprintln!("backend parity: localfs start");
+    let local_catalog = local_catalog(&prefix).await;
+    let local_state = populate_catalog_parity_state(&local_catalog, &prefix).await;
+    eprintln!("backend parity: localfs done");
+
+    eprintln!("backend parity: minio start");
+    let minio_catalog = CatalogHarness::on_minio(minio().await, &prefix)
+        .await
+        .expect("minio catalog should open");
+    let minio_state = populate_catalog_parity_state(&minio_catalog, &prefix).await;
+    eprintln!("backend parity: minio done");
+
+    assert_eq!(
+        local_state, minio_state,
+        "LocalFS and MinIO should expose the same catalog-visible state"
+    );
+}
+
+#[tokio::test]
+async fn catalog_backend_parity_reports_writer_fencing_error_code() {
+    let local_catalog = local_catalog(&test_prefix("backend_parity_fencing_localfs")).await;
+    assert_writer_epoch_mismatch(&local_catalog).await;
+
+    let (minio_catalog, _pgwire) = setup_catalog("backend_parity_fencing_minio").await;
+    assert_writer_epoch_mismatch(&minio_catalog).await;
 }
 
 #[tokio::test]
