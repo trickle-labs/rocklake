@@ -5187,28 +5187,28 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Cross-Backend Parity Matrix
 
-- [ ] Run the surface manifest against LocalFS and MinIO (defer GCS and Azure) with the same assertions and fixture expectations.
-- [ ] Add a backend parity test that compares catalog-visible results, object listings, and error codes across supported stores.
-- [ ] Verify the live DuckDB path on every backend where it is supported, not just MinIO.
+- [x] Run the surface manifest against LocalFS and MinIO (defer GCS and Azure) with the same assertions and fixture expectations.
+- [x] Add a backend parity test that compares catalog-visible results, object listings, and error codes across supported stores.
+- [x] Verify the live DuckDB path on every backend where it is supported, not just MinIO.
 
 ### Failure Injection at Boundaries
 
-- [ ] Inject crashes and reconnects during INSERT, DELETE, UPDATE, CHECKPOINT, ATTACH, DETACH, and DDL, and assert no duplicate or partially visible catalog state.
-- [ ] Add stale-reader, stale-writer, and mid-restart takeover tests for both RockLake and the live DuckDB container.
-- [ ] Add deterministic object-store fault cases for truncated reads, 503s, slow reads, and prefix-list inconsistencies.
+- [x] Inject crashes and reconnects during INSERT, DELETE, UPDATE, CHECKPOINT, ATTACH, DETACH, and DDL, and assert no duplicate or partially visible catalog state.
+- [x] Add stale-reader, stale-writer, and mid-restart takeover tests for both RockLake and the live DuckDB container.
+- [x] Add deterministic object-store fault cases for truncated reads, 503s, slow reads, and prefix-list inconsistencies.
 
 ### Recovery and Leak Checks
 
-- [ ] Assert orphan-file sweeps, prefix counts, and snapshot visibility after every failure path.
-- [ ] Add repeatable restart and reopen tests that prove the same catalog can be read after interrupted live sessions.
-- [ ] Capture failure transcripts and require them as part of the regression corpus.
+- [x] Assert orphan-file sweeps, prefix counts, and snapshot visibility after every failure path.
+- [x] Add repeatable restart and reopen tests that prove the same catalog can be read after interrupted live sessions.
+- [x] Capture failure transcripts and require them as part of the regression corpus.
 
 ### Deliverables
 
-- [ ] Backend parity matrix green across supported object stores
-- [ ] Failure injection suite covering writer, reader, and object-store churn
-- [ ] Orphan-free recovery assertions after every crash scenario
-- [ ] Persistent failure transcript corpus for regressions
+- [x] Backend parity matrix green across supported object stores
+- [x] Failure injection suite covering writer, reader, and object-store churn
+- [x] Orphan-free recovery assertions after every crash scenario
+- [x] Persistent failure transcript corpus for regressions
 
 ---
 
