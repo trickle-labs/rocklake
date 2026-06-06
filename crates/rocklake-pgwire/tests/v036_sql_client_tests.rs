@@ -622,6 +622,7 @@ async fn pgcli_transaction_begin_commit() {
             "-d",
             "ducklake",
             "--no-password",
+            "--single-connection",
         ])
         .env("XDG_CONFIG_HOME", pgcli_cfg.path())
         .stdin(std::process::Stdio::piped())
