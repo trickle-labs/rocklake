@@ -119,7 +119,7 @@ async fn catalog_object_locations(catalog: &CatalogHarness, prefix: &str) -> Vec
 
     let mut normalized = objects
         .into_iter()
-        .map(|object| normalize_object_location(&object.location.to_string(), prefix))
+        .map(|object| normalize_object_location(object.location.as_ref(), prefix))
         .collect::<Vec<_>>();
     normalized.sort_unstable();
     normalized
@@ -235,63 +235,6 @@ async fn populate_catalog_parity_state(
         .expect("seed snapshot should succeed");
     catalog.commit_writer(snapshot).await;
 
-    capture_backend_state(catalog, prefix).await
-}
-
-async fn run_backend_parity_roundtrip(
-    catalog: &CatalogHarness,
-    pgwire: &PgWireHarness,
-    duckdb: &DuckDbContainerHarness,
-    prefix: &str,
-) -> BackendParityState {
-    eprintln!("backend parity: bootstrap");
-    let _ = bootstrap_analytics_events(catalog, pgwire, duckdb, "backend parity barrier").await;
-
-    eprintln!("backend parity: mutation");
-    let mutation_sql = attach_sql(
-        pgwire,
-        duckdb.data_path(),
-        "UPDATE analytics.events SET payload = 'row-2-updated' WHERE id = 2; \
-         DELETE FROM analytics.events WHERE id = 1;",
-    );
-    duckdb
-        .run_sql(&mutation_sql)
-        .await
-        .expect("mutation write phase should succeed");
-
-    let mutation_read_sql = attach_sql(
-        pgwire,
-        duckdb.data_path(),
-        "SELECT id, payload FROM analytics.events WHERE id IN (2, 12) ORDER BY id; \
-         SELECT CASE WHEN COUNT(*) = 0 THEN 'deleted' ELSE 'unexpected' END AS deleted_1 \
-         FROM analytics.events WHERE id = 1;",
-    );
-    let mutation_output = duckdb
-        .run_sql(&mutation_read_sql)
-        .await
-        .expect("mutation readback should succeed");
-    let delete_result = output_after_statement(
-        &mutation_output.stdout,
-        "SELECT CASE WHEN COUNT(*) = 0 THEN 'deleted' ELSE 'unexpected' END AS deleted_1 FROM analytics.events WHERE id = 1;",
-    );
-    assert!(
-        delete_result.contains("deleted"),
-        "mutation output should prove the deleted row is gone\nstdout: {}\nstderr: {}",
-        mutation_output.stdout,
-        mutation_output.stderr
-    );
-
-    let mut visibility_writer = catalog.writer().await;
-    let visibility_snapshot = visibility_writer
-        .create_snapshot(
-            Some("duckdb-container"),
-            Some("mutation visibility barrier"),
-        )
-        .await
-        .expect("mutation visibility barrier snapshot should succeed");
-    catalog.commit_writer(visibility_snapshot).await;
-
-    eprintln!("backend parity: capture");
     capture_backend_state(catalog, prefix).await
 }
 
