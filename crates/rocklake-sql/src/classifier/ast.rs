@@ -221,6 +221,8 @@ pub(super) fn classify_query(query: &sqlparser::ast::Query) -> StatementKind {
 
             StatementKind::Unsupported("unrecognized SELECT".to_string())
         }
+        SetExpr::Query(inner_query) => classify_query(inner_query),
+        SetExpr::Insert(stmt) | SetExpr::Update(stmt) => classify_ast(stmt),
         _ => StatementKind::Unsupported("non-SELECT query body".to_string()),
     }
 }

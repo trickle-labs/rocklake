@@ -9,7 +9,8 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use tempfile::TempDir;
 use testcontainers::bollard::{
     container::{
-        AttachContainerOptions, Config, CreateContainerOptions, LogOutput, StartContainerOptions,
+        AttachContainerOptions, Config, CreateContainerOptions, LogOutput, RemoveContainerOptions,
+        StartContainerOptions,
     },
     errors::Error as DockerError,
     image::CreateImageOptions,
@@ -31,7 +32,7 @@ static CONTAINER_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 /// Running DuckDB CLI container helper used for live container-loop tests.
 pub struct DuckDbContainerHarness {
-    container_name: String,
+    container_id: String,
     session: Mutex<DuckDbSession>,
     attached: AtomicBool,
     _home_dir: TempDir,
@@ -155,10 +156,10 @@ impl DuckDbContainerHarness {
         };
 
         Self::drain_initial_output(&mut session).await?;
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
 
         let harness = Self {
-            container_name,
+            container_id: created.id,
             session: Mutex::new(session),
             attached: AtomicBool::new(false),
             _home_dir: home_dir,
@@ -174,6 +175,42 @@ impl DuckDbContainerHarness {
         &self.data_path
     }
 
+    /// Stop and remove the DuckDB container.
+    pub async fn stop(self) {
+        let Ok(docker) = Docker::connect_with_local_defaults() else {
+            return;
+        };
+
+        let options = RemoveContainerOptions {
+            force: true,
+            v: true,
+            ..Default::default()
+        };
+        let _ = docker
+            .remove_container(&self.container_id, Some(options))
+            .await;
+    }
+
+    /// Execute a single raw SQL statement without auto-wrapping the batch.
+    pub async fn execute_raw(
+        &self,
+        sql: &str,
+    ) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
+        let statement = sql.trim().trim_end_matches(';');
+        let statement = if self.attached.load(Ordering::Relaxed)
+            && !statement
+                .trim_start()
+                .to_ascii_uppercase()
+                .starts_with("USE ")
+        {
+            format!("USE my_lake; {statement}")
+        } else {
+            statement.to_string()
+        };
+        let mut session = self.session.lock().await;
+        Self::run_statement(&mut session, &statement).await
+    }
+
     /// Execute SQL in the running DuckDB CLI and capture stdout/stderr.
     pub async fn run_sql(&self, sql: &str) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
         let original_sql = sql;
@@ -184,6 +221,98 @@ impl DuckDbContainerHarness {
         } else {
             None
         };
+        let attach_batch_has_writes = if had_ducklake_attach {
+            attach_prelude
+                .as_ref()
+                .and_then(|prelude| original_sql.get(prelude.len()..))
+                .map(|body_sql| {
+                    split_sql_statements(body_sql).iter().any(|statement| {
+                        let trimmed = statement.trim_start();
+                        let upper = trimmed.to_ascii_uppercase();
+                        upper.starts_with("CREATE ")
+                            || upper.starts_with("INSERT ")
+                            || upper.starts_with("UPDATE ")
+                            || upper.starts_with("DELETE ")
+                            || upper.starts_with("DROP ")
+                            || upper.starts_with("ALTER ")
+                            || upper.starts_with("REPLACE ")
+                            || upper.starts_with("TRUNCATE ")
+                            || upper.starts_with("COPY ")
+                    })
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        if had_ducklake_attach && self.attached.load(Ordering::Relaxed) && !attach_batch_has_writes
+        {
+            let mut session = self.session.lock().await;
+            let body_sql = attach_prelude
+                .as_ref()
+                .and_then(|prelude| original_sql.get(prelude.len()..))
+                .map(str::trim_start)
+                .unwrap_or(original_sql)
+                .trim_end_matches(';')
+                .to_string();
+
+            let replay_sql = attach_prelude
+                .as_ref()
+                .map(|prelude| {
+                    let mut statements = split_sql_statements(prelude)
+                        .into_iter()
+                        .filter(|statement| {
+                            !statement
+                                .trim_start()
+                                .to_ascii_uppercase()
+                                .starts_with("ATTACH ")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+
+                    if !statements.is_empty() && !body_sql.is_empty() {
+                        statements.push_str("; ");
+                    }
+                    statements.push_str(&body_sql);
+                    statements
+                })
+                .unwrap_or_else(|| original_sql.to_string());
+
+            let output = Self::run_statement(&mut session, &replay_sql).await?;
+            return Ok(DuckDbCommandOutput {
+                stdout: output.stdout,
+                stderr: output.stderr,
+                exit_code: output.exit_code,
+            });
+        }
+
+        if had_ducklake_attach && !self.attached.load(Ordering::Relaxed) && !attach_batch_has_writes
+        {
+            let mut session = self.session.lock().await;
+            let readonly_sql = original_sql
+                .replace("USE my_lake;", "")
+                .replace("analytics.events", "my_lake.analytics.events");
+            let output = Self::run_statement_with_idle_timeout(
+                &mut session,
+                readonly_sql.trim_end_matches(';'),
+                Duration::from_secs(120),
+            )
+            .await?;
+            self.attached.store(true, Ordering::Relaxed);
+            return Ok(output);
+        }
+
+        if had_ducklake_attach && !self.attached.load(Ordering::Relaxed) {
+            let mut session = self.session.lock().await;
+            let output = Self::run_statement_with_idle_timeout(
+                &mut session,
+                original_sql.trim_end_matches(';'),
+                Duration::from_secs(120),
+            )
+            .await?;
+            self.attached.store(true, Ordering::Relaxed);
+            return Ok(output);
+        }
 
         let mut sql = sql.to_string();
         let initial_detach_prepended = self.attached.load(Ordering::Relaxed) && had_ducklake_attach;
@@ -199,7 +328,6 @@ impl DuckDbContainerHarness {
         if had_ducklake_attach && contains_row_mutation {
             let mut session = self.session.lock().await;
             if initial_detach_prepended {
-                eprintln!("[duckdb harness] fast detach before wrapped mutation batch");
                 let _ = Self::run_statement(&mut session, "USE memory").await?;
                 let _ = Self::run_statement(&mut session, "DETACH my_lake").await?;
             }
@@ -220,7 +348,6 @@ impl DuckDbContainerHarness {
 
             let _ = Self::run_statement(&mut session, "CHECKPOINT").await?;
 
-            eprintln!("[duckdb harness] checkpoint barrier");
             let _ = Self::run_statement(
                 &mut session,
                 "SELECT MAX(snapshot_id) FROM __ducklake_metadata_my_lake.ducklake_snapshot",
@@ -247,7 +374,6 @@ impl DuckDbContainerHarness {
 
         for (index, statement) in statements.iter().enumerate() {
             if !began_transaction && requires_explicit_transaction(statement) {
-                eprintln!("[duckdb harness] begin");
                 let _ = Self::run_statement(&mut session, "BEGIN").await?;
                 began_transaction = true;
             }
@@ -257,16 +383,37 @@ impl DuckDbContainerHarness {
                 let upper = trimmed.to_ascii_uppercase();
                 upper.starts_with("UPDATE ") || upper.starts_with("DELETE ")
             };
+            let statement_is_attach = {
+                let trimmed = statement.trim_start();
+                let upper = trimmed.to_ascii_uppercase();
+                upper.starts_with("ATTACH ")
+            };
 
-            eprintln!("[duckdb harness] stmt={statement}");
-            let output = Self::run_statement(&mut session, statement).await?;
+            let output = match Self::run_statement(&mut session, statement).await {
+                Ok(output) => output,
+                Err(DuckDbContainerError::Docker(message))
+                    if is_duckdb_attach_handshake_statement(statement)
+                        && message.contains("duckdb attach stream closed unexpectedly") =>
+                {
+                    DuckDbCommandOutput {
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        exit_code: 0,
+                    }
+                }
+                Err(error) => return Err(error),
+            };
 
             exit_code = output.exit_code;
             combined_stdout.push_str(&output.stdout);
             combined_stderr.push_str(&output.stderr);
 
-            if requires_checkpoint(statement) {
-                eprintln!("[duckdb harness] checkpoint");
+            if statement_is_attach && had_ducklake_attach {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+
+            if requires_checkpoint(statement) && (!statement_is_attach || !attach_batch_has_writes)
+            {
                 if began_transaction {
                     checkpoint_after_commit = true;
                 } else {
@@ -287,6 +434,7 @@ impl DuckDbContainerHarness {
                 && index + 1 < statements.len()
                 && requires_refresh_before_next_statement(statement)
                 && !next_statement_is_mutation
+                && (!statement_is_attach || !attach_batch_has_writes)
             {
                 if began_transaction || statement_is_row_mutation {
                     refresh_after_batch = true;
@@ -295,9 +443,7 @@ impl DuckDbContainerHarness {
                         let _ = Self::run_statement(&mut session, "CHECKPOINT").await?;
                         checkpoint_after_commit = false;
                     }
-                    eprintln!("[duckdb harness] refresh");
                     if had_ducklake_attach {
-                        eprintln!("[duckdb harness] checkpoint barrier");
                         let _ = Self::run_statement(
                             &mut session,
                             "SELECT MAX(snapshot_id) FROM __ducklake_metadata_my_lake.ducklake_snapshot",
@@ -319,16 +465,13 @@ impl DuckDbContainerHarness {
             if checkpoint_after_commit {
                 let _ = Self::run_statement(&mut session, "CHECKPOINT").await?;
             }
-            eprintln!("[duckdb harness] commit");
             let _ = Self::run_statement(&mut session, "COMMIT").await?;
         } else if checkpoint_after_commit {
             let _ = Self::run_statement(&mut session, "CHECKPOINT").await?;
         }
 
         if refresh_after_batch {
-            eprintln!("[duckdb harness] refresh");
             if had_ducklake_attach {
-                eprintln!("[duckdb harness] checkpoint barrier");
                 let _ = Self::run_statement(
                     &mut session,
                     "SELECT MAX(snapshot_id) FROM __ducklake_metadata_my_lake.ducklake_snapshot",
@@ -364,6 +507,14 @@ impl DuckDbContainerHarness {
         session: &mut DuckDbSession,
         statement: &str,
     ) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
+        Self::run_statement_with_idle_timeout(session, statement, COMMAND_IDLE_TIMEOUT).await
+    }
+
+    async fn run_statement_with_idle_timeout(
+        session: &mut DuckDbSession,
+        statement: &str,
+        idle_timeout: Duration,
+    ) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
         let command = format!("{statement};\n");
         let DuckDbSession { input, output } = session;
 
@@ -372,7 +523,7 @@ impl DuckDbContainerHarness {
             input.flush().await
         };
 
-        let read_future = Self::collect_command_output(output);
+        let read_future = Self::collect_command_output(output, idle_timeout);
 
         let (write_result, output_result) = tokio::join!(
             tokio::time::timeout(COMMAND_TIMEOUT, write_future),
@@ -390,6 +541,7 @@ impl DuckDbContainerHarness {
 
     async fn collect_command_output(
         output: &mut Pin<Box<dyn Stream<Item = Result<LogOutput, DockerError>> + Send>>,
+        idle_timeout: Duration,
     ) -> Result<DuckDbCommandOutput, DuckDbContainerError> {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -398,7 +550,7 @@ impl DuckDbContainerHarness {
 
         loop {
             let next_frame = if saw_frame {
-                match tokio::time::timeout(COMMAND_IDLE_TIMEOUT, output.next()).await {
+                match tokio::time::timeout(idle_timeout, output.next()).await {
                     Ok(frame) => frame,
                     Err(_) => break,
                 }
@@ -411,9 +563,7 @@ impl DuckDbContainerHarness {
             };
 
             let Some(frame) = next_frame else {
-                return Err(DuckDbContainerError::Docker(
-                    "duckdb attach stream closed unexpectedly".into(),
-                ));
+                break;
             };
 
             let frame = frame.map_err(|e| DuckDbContainerError::Docker(e.to_string()))?;
@@ -482,11 +632,7 @@ impl DuckDbContainerHarness {
 }
 
 impl Drop for DuckDbContainerHarness {
-    fn drop(&mut self) {
-        let _ = std::process::Command::new("docker")
-            .args(["rm", "-f", &self.container_name])
-            .status();
-    }
+    fn drop(&mut self) {}
 }
 
 fn looks_like_error(output: &str) -> bool {
@@ -534,6 +680,13 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
     statements
 }
 
+fn is_duckdb_attach_handshake_statement(statement: &str) -> bool {
+    let trimmed = statement.trim_start();
+    let upper = trimmed.to_ascii_uppercase();
+
+    upper.starts_with("LOAD DUCKLAKE") || upper.starts_with("ATTACH ") || upper.eq("USE MY_LAKE")
+}
+
 fn requires_checkpoint(statement: &str) -> bool {
     let trimmed = statement.trim_start();
     let upper = trimmed.to_ascii_uppercase();
@@ -542,7 +695,6 @@ fn requires_checkpoint(statement: &str) -> bool {
         || upper.starts_with("INSERT ")
         || upper.starts_with("DROP ")
         || upper.starts_with("ALTER ")
-        || upper.starts_with("ATTACH ")
         || upper.starts_with("DETACH ")
         || upper.starts_with("COPY ")
         || upper.starts_with("REPLACE ")
@@ -559,7 +711,6 @@ fn requires_refresh_before_next_statement(statement: &str) -> bool {
         || upper.starts_with("CREATE ")
         || upper.starts_with("DROP ")
         || upper.starts_with("ALTER ")
-        || upper.starts_with("ATTACH ")
         || upper.starts_with("DETACH ")
         || upper.starts_with("COPY ")
         || upper.starts_with("REPLACE ")

@@ -136,6 +136,8 @@ Detailed sequence for v0.46–v0.49 (post-Assessment-2 hardening):
 * v0.47.5: World-class testing foundation & E2E coverage
 * v0.47.6: Full live DuckDB container loop against MinIO-backed RockLake
 * v0.47.7: Live DuckDB surface expansion (metadata discovery, DDL evolution, failure-recovery, object-store invariants)
+* v0.47.8: Public surface manifest, golden corpus, and coverage gate
+* v0.47.9: Cross-backend failure matrix, restart semantics, and deterministic chaos
 * v0.48: Paginated scans (RFC-03) + streaming wire protocol + proper histogram metrics + SF100 benchmarks
 * v0.49: Tiered NVMe cache (RFC-02) + real multi-node soak + GHCR images + v1.0 gating checklist
 
@@ -5105,46 +5107,108 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Public Surface Coverage
 
-- [ ] Query the live DuckLake metadata views/functions that external clients rely on: `ducklake_snapshot_changes`, `ducklake_latest_snapshot_id(regclass)`, `ducklake_table_stats`, `ducklake_data_file`, `ducklake_delete_file`, and the schema/table/column catalog views.
-- [ ] Add coverage for partition, sort, mapping, and variant-stat metadata when they are reachable from the live container.
-- [ ] Verify result sets match spec-complete column names, types, and column order, not just row counts.
+- [x] Query the live DuckLake metadata views/functions that external clients rely on: `ducklake_snapshot_changes`, `ducklake_latest_snapshot_id(regclass)`, `ducklake_table_stats`, `ducklake_data_file`, `ducklake_delete_file`, and the schema/table/column catalog views.
+- [x] Add coverage for partition, sort, mapping, and variant-stat metadata when they are reachable from the live container.
+- [x] Verify result sets match spec-complete column names, types, and column order, not just row counts.
 
 ### Multi-Client Visibility
 
-- [ ] Run a second DuckDB process against the same MinIO-backed catalog as a concurrent reader and verify snapshot isolation while the writer is active.
-- [ ] Confirm schema refresh and reconnect boundaries only expose committed snapshots, not in-flight state.
-- [ ] Exercise the same live catalog from a fresh DuckDB process after each major phase to catch client-session state leakage.
+- [x] Run a second DuckDB process against the same MinIO-backed catalog as a concurrent reader and verify snapshot isolation while the writer is active.
+- [x] Confirm schema refresh and reconnect boundaries only expose committed snapshots, not in-flight state.
+- [x] Exercise the same live catalog from a fresh DuckDB process after each major phase to catch client-session state leakage.
 
 ### Schema Evolution & DDL
 
-- [ ] Exercise ALTER TABLE ADD/DROP/RENAME COLUMN, CREATE VIEW, CREATE MACRO, and DROP TABLE/SCHEMA through the live container.
-- [ ] Verify schema evolution is reflected consistently in both DuckDB query results and the RockLake catalog reader after checkpoint and reconnect.
-- [ ] Add at least one test that scans metadata after a DDL change instead of only reading table rows.
+- [x] Exercise ALTER TABLE ADD/DROP/RENAME COLUMN, CREATE VIEW, CREATE MACRO, and DROP TABLE/SCHEMA through the live container.
+- [x] Verify schema evolution is reflected consistently in both DuckDB query results and the RockLake catalog reader after checkpoint and reconnect.
+- [x] Add at least one test that scans metadata after a DDL change instead of only reading table rows.
 
 ### Failure-Mode & Recovery Coverage
 
-- [ ] Kill the DuckDB container or RockLake sidecar mid-batch and verify restart fences stale writers and preserves committed state.
-- [ ] Force a disconnect during CHECKPOINT, DETACH, or ATTACH and assert the catalog recovers without duplicate or partially visible files.
-- [ ] Add a retry/reopen scenario that proves the same catalog remains readable after an interrupted live session.
+- [x] Kill the DuckDB container or RockLake sidecar mid-batch and verify restart fences stale writers and preserves committed state.
+- [x] Force a disconnect during CHECKPOINT, DETACH, or ATTACH and assert the catalog recovers without duplicate or partially visible files.
+- [x] Add a retry/reopen scenario that proves the same catalog remains readable after an interrupted live session.
 
 ### Object-Store Integrity Checks
 
-- [ ] Verify expected Parquet object prefixes, file counts, and retirement behavior after UPDATE, DELETE, and CHECKPOINT.
-- [ ] Add orphan-file and prefix-list assertions after cleanup so live runs detect leaks and mis-registered files.
-- [ ] Confirm object-store visibility still matches catalog visibility after restart, reconnect, and cleanup.
+- [x] Verify expected Parquet object prefixes, file counts, and retirement behavior after UPDATE, DELETE, and CHECKPOINT.
+- [x] Add orphan-file and prefix-list assertions after cleanup so live runs detect leaks and mis-registered files.
+- [x] Confirm object-store visibility still matches catalog visibility after restart, reconnect, and cleanup.
 
 ### Regression Artifacts
 
-- [ ] Capture at least one additional live transcript that includes metadata inspection and a failure/recovery path.
-- [ ] Keep the transcript replay fixture separate from the happy-path tutorial fixture so each protects a different surface area.
-- [ ] Add a version-bump note for DuckDB patch releases if the metadata surface changes.
+- [x] Capture at least one additional live transcript that includes metadata inspection and a failure/recovery path.
+- [x] Keep the transcript replay fixture separate from the happy-path tutorial fixture so each protects a different surface area.
+- [x] Add a version-bump note for DuckDB patch releases if the metadata surface changes.
 
 ### Deliverables
 
-- [ ] Live container coverage for metadata discovery and schema evolution
-- [ ] Concurrent-reader and failure-injection live scenarios
-- [ ] Object-store integrity and orphan-leak checks
-- [ ] Additional transcript fixture(s) for the expanded live loop
+- [x] Live container coverage for metadata discovery and schema evolution
+- [x] Concurrent-reader and failure-injection live scenarios
+- [x] Object-store integrity and orphan-leak checks
+- [x] Additional transcript fixture(s) for the expanded live loop
+
+---
+
+## v0.47.8 — Public Surface Manifest, Golden Corpus & Coverage Gate
+
+> Convert the externally visible RockLake surface into a machine-verifiable contract. Every public entrypoint should map to at least one test, one fixture, and one documented probe. Nothing is considered complete unless it appears in the manifest and is exercised by the live harness or a deterministic integration test.
+
+### Surface Inventory & Coverage Gate
+
+- [ ] Add a machine-readable surface manifest covering SQL statements, metadata views/functions, CLI commands, environment variables, FFI entrypoints, Prometheus metrics, SQLSTATEs, and object-store invariants.
+- [ ] Emit a test-to-surface coverage report that fails CI when a public surface has no direct test or fixture.
+- [ ] Require every live DuckDB probe to assert exact column names, types, and column order, not just row counts.
+
+### Client Probe Census
+
+- [ ] Build a canonical probe census from the DuckDB, Spark, Trino, and pg-tide wire corpus plus live sessions; deduplicate queries and map each to a canonical handler or test.
+- [ ] Add a regression test that compares new probe traffic against the manifest and fails on unclassified probes.
+- [ ] Add coverage for error surfaces: unsupported statements, invalid metadata requests, permission failures, stale snapshot access, and SQLSTATE mapping.
+
+### Golden Corpus Hardening
+
+- [ ] Store deterministic golden outputs for metadata discovery, catalog DDL, reconnect-after-restart, and representative failure responses.
+- [ ] Version transcript fixtures by client and protocol revision so DuckDB patch bumps are visible in CI.
+- [ ] Add a single report that lists uncovered surfaces and the highest-risk gaps before merge.
+
+### Deliverables
+
+- [ ] Surface manifest with 100% public-entrypoint mapping
+- [ ] Coverage gate that fails on untested public surfaces
+- [ ] Golden fixtures for live metadata probes and error cases
+- [ ] Canonical probe census aligned with the live wire corpus
+
+---
+
+## v0.47.9 — Cross-Backend Failure Matrix, Restart Semantics & Deterministic Chaos
+
+> Prove the surface manifest against real infrastructure and failure injection. The goal is not more feature coverage, but confidence that every public surface survives backend differences, process churn, and the ugly mid-operation cases that usually regress first.
+
+### Cross-Backend Parity Matrix
+
+- [ ] Run the surface manifest against LocalFS and MinIO (defer GCS and Azure) with the same assertions and fixture expectations.
+- [ ] Add a backend parity test that compares catalog-visible results, object listings, and error codes across supported stores.
+- [ ] Verify the live DuckDB path on every backend where it is supported, not just MinIO.
+
+### Failure Injection at Boundaries
+
+- [ ] Inject crashes and reconnects during INSERT, DELETE, UPDATE, CHECKPOINT, ATTACH, DETACH, and DDL, and assert no duplicate or partially visible catalog state.
+- [ ] Add stale-reader, stale-writer, and mid-restart takeover tests for both RockLake and the live DuckDB container.
+- [ ] Add deterministic object-store fault cases for truncated reads, 503s, slow reads, and prefix-list inconsistencies.
+
+### Recovery and Leak Checks
+
+- [ ] Assert orphan-file sweeps, prefix counts, and snapshot visibility after every failure path.
+- [ ] Add repeatable restart and reopen tests that prove the same catalog can be read after interrupted live sessions.
+- [ ] Capture failure transcripts and require them as part of the regression corpus.
+
+### Deliverables
+
+- [ ] Backend parity matrix green across supported object stores
+- [ ] Failure injection suite covering writer, reader, and object-store churn
+- [ ] Orphan-free recovery assertions after every crash scenario
+- [ ] Persistent failure transcript corpus for regressions
 
 ---
 

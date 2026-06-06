@@ -1,0 +1,84 @@
+{
+  "duckdb_version": "1.5.3",
+  "ducklake_version": "1.0",
+  "catalog_version": 7,
+  "metadata_queries": [
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_snapshot_changes",
+      "table": "ducklake_snapshot_changes",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_metadata",
+      "table": "ducklake_metadata",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_schema_versions",
+      "table": "ducklake_schema_versions",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_view",
+      "table": "ducklake_view",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro",
+      "table": "ducklake_macro",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro_impl",
+      "table": "ducklake_macro_impl",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro_parameters",
+      "table": "ducklake_macro_parameters",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_table_stats",
+      "table": "ducklake_table_stats",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_table_column_stats",
+      "table": "ducklake_table_column_stats",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_delete_file",
+      "table": "ducklake_delete_file",
+      "min_rows": 1
+    },
+    {
+      "sql": "SELECT ducklake_latest_snapshot_id('analytics.events'::regclass)",
+      "columns": ["ducklake_latest_snapshot_id"],
+      "min_rows": 1
+    }
+  ],
+  "ddl": {
+    "add_column_sql": "ALTER TABLE analytics.events ADD COLUMN status VARCHAR DEFAULT 'new'",
+    "rename_column_sql": "ALTER TABLE analytics.events RENAME COLUMN status TO event_status",
+    "drop_column_sql": "ALTER TABLE analytics.events DROP COLUMN event_status",
+    "create_view_sql": "CREATE VIEW analytics.event_summary AS SELECT COUNT(*) AS event_count FROM analytics.events",
+    "create_macro_sql": "CREATE MACRO analytics.add_one(x) AS (x + 1)",
+    "drop_view_sql": "DROP VIEW analytics.event_summary",
+    "drop_table_sql": "DROP TABLE analytics.events",
+    "drop_schema_sql": "DROP SCHEMA analytics"
+  },
+  "recovery": {
+    "begin_sql": "BEGIN",
+    "insert_sql": "INSERT INTO analytics.events VALUES (13, TIMESTAMP '2026-06-04 00:00:00', 'row-13')",
+    "commit_sql": "COMMIT",
+    "reader_count_sql": "SELECT COUNT(*) AS total FROM analytics.events",
+    "expected_rows_before_commit": 12,
+    "expected_rows_after_commit": 13
+  },
+  "retirement": {
+    "update_sql": "UPDATE analytics.events SET payload = 'row-2-updated' WHERE id = 2",
+    "delete_sql": "DELETE FROM analytics.events WHERE id = 1"
+  }
+}
