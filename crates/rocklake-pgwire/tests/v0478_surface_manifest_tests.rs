@@ -66,9 +66,8 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
 
     let root = repo_root();
     let schema_fixture = root.join("tests/fixtures/ducklake-v1.0-schema.toml");
-    let live_fixture = root.join(
-        "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
-    );
+    let live_fixture =
+        root.join("tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json");
     assert_path_exists(&schema_fixture);
     assert_path_exists(&live_fixture);
 
@@ -121,20 +120,26 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
 
         match kind {
             "metadata_tables" => {
-                let tables = surface["tables"]
-                    .as_array()
-                    .unwrap_or_else(|| panic!("metadata table surface must include tables: {surface}"));
-                assert!(!tables.is_empty(), "metadata_tables surface must not be empty");
+                let tables = surface["tables"].as_array().unwrap_or_else(|| {
+                    panic!("metadata table surface must include tables: {surface}")
+                });
+                assert!(
+                    !tables.is_empty(),
+                    "metadata_tables surface must not be empty"
+                );
                 assert!(
                     tables.len() >= 20,
                     "metadata_tables surface should inventory the public DuckLake table set"
                 );
             }
             "live_queries" => {
-                let queries = surface["queries"]
-                    .as_array()
-                    .unwrap_or_else(|| panic!("live_queries surface must include queries: {surface}"));
-                assert!(!queries.is_empty(), "live_queries surface must not be empty");
+                let queries = surface["queries"].as_array().unwrap_or_else(|| {
+                    panic!("live_queries surface must include queries: {surface}")
+                });
+                assert!(
+                    !queries.is_empty(),
+                    "live_queries surface must not be empty"
+                );
                 for query in queries {
                     let sql = query["sql"]
                         .as_str()
@@ -155,7 +160,10 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
                         .map(array_strings)
                         .unwrap_or_default();
                     if !expected_columns.is_empty() {
-                        assert!(!expected_types.is_empty(), "expected_types missing for {sql}");
+                        assert!(
+                            !expected_types.is_empty(),
+                            "expected_types missing for {sql}"
+                        );
                         assert_eq!(
                             expected_columns.len(),
                             expected_types.len(),
@@ -165,10 +173,13 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
                 }
             }
             "fixture_actions" => {
-                let actions = surface["actions"]
-                    .as_array()
-                    .unwrap_or_else(|| panic!("fixture_actions surface must include actions: {surface}"));
-                assert!(!actions.is_empty(), "fixture_actions surface must not be empty");
+                let actions = surface["actions"].as_array().unwrap_or_else(|| {
+                    panic!("fixture_actions surface must include actions: {surface}")
+                });
+                assert!(
+                    !actions.is_empty(),
+                    "fixture_actions surface must not be empty"
+                );
                 for action in actions {
                     let section = action["fixture_section"]
                         .as_str()
@@ -178,9 +189,14 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
                         .unwrap_or_else(|| panic!("action must include fixture_key: {action}"));
                     let section_value = &live_fixture_json[section];
                     let actual = section_value[key].as_str().unwrap_or_else(|| {
-                        panic!("fixture {section}.{key} must be a string in the live surface corpus")
+                        panic!(
+                            "fixture {section}.{key} must be a string in the live surface corpus"
+                        )
                     });
-                    assert!(!actual.is_empty(), "fixture {section}.{key} must not be empty");
+                    assert!(
+                        !actual.is_empty(),
+                        "fixture {section}.{key} must not be empty"
+                    );
                 }
             }
             "sqlstate" => {
@@ -214,10 +230,13 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
                 assert!(!probes.is_empty(), "metrics surface must not be empty");
             }
             "object_store_invariants" => {
-                let invariants = surface["invariants"]
-                    .as_array()
-                    .unwrap_or_else(|| panic!("object_store_invariants surface must include invariants: {surface}"));
-                assert!(!invariants.is_empty(), "object_store_invariants surface must not be empty");
+                let invariants = surface["invariants"].as_array().unwrap_or_else(|| {
+                    panic!("object_store_invariants surface must include invariants: {surface}")
+                });
+                assert!(
+                    !invariants.is_empty(),
+                    "object_store_invariants surface must not be empty"
+                );
             }
             other => panic!("unexpected surface kind: {other}"),
         }
