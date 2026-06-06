@@ -737,6 +737,20 @@ jobs:
       - name: Validate compatibility manifest
         run: python scripts/validate_compatibility_manifest.py
 
+  # v0.47.8: Public surface manifest and coverage gate.
+  public-surface-manifest:
+    name: Public Surface Manifest Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run v0.47.8 surface manifest tests
+        run: |
+          cargo test -p rocklake-pgwire --test v0478_surface_manifest_tests \
+            -- --test-threads=1 --nocapture
+
   # v0.38.0: Windows x86-64 unit + integration tests (separate job from the main
   # check matrix so Windows failures are clearly identified in the CI summary).
   check-windows:

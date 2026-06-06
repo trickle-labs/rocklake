@@ -277,6 +277,7 @@ Run the MinIO-backed suites with the `minio-tests` feature:
 cargo test -p rocklake-testkit --test minio_tests --features minio-tests -- --test-threads=1 --nocapture
 cargo test -p rocklake-catalog --test minio_catalog_tests --features minio-tests -- --test-threads=1 --nocapture
 cargo test -p rocklake-pgwire --test minio_e2e_tests --features minio-tests -- --test-threads=1 --nocapture
+cargo test -p rocklake-pgwire --test v0478_surface_manifest_tests -- --test-threads=1 --nocapture
 ```
 
 These tests require Docker and a local MinIO container. The suite exercises the shared MinIO harness, catalog durability/reopen behavior, and live PG-wire queries against a MinIO-backed catalog.
