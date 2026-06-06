@@ -224,13 +224,57 @@ async fn assert_query_columns(
         .unwrap_or_else(|e| panic!("query execution failed for `{sql}`: {e}"))
 }
 
+async fn assert_query_columns_and_types(
+    client: &tokio_postgres::Client,
+    sql: &str,
+    expected_columns: &[String],
+    expected_types: &[String],
+) -> Vec<tokio_postgres::Row> {
+    let statement = client
+        .prepare(sql)
+        .await
+        .unwrap_or_else(|e| panic!("prepare failed for `{sql}`: {e}"));
+    let actual_columns = statement
+        .columns()
+        .iter()
+        .map(|column| column.name().to_lowercase())
+        .collect::<Vec<_>>();
+    let actual_types = statement
+        .columns()
+        .iter()
+        .map(|column| column.type_().name().to_lowercase())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual_columns, expected_columns,
+        "row description column mismatch for `{sql}`"
+    );
+    assert_eq!(
+        actual_types, expected_types,
+        "row description type mismatch for `{sql}`"
+    );
+
+    client
+        .query(&statement, &[])
+        .await
+        .unwrap_or_else(|e| panic!("query execution failed for `{sql}`: {e}"))
+}
+
 async fn assert_registry_query_columns(
     client: &tokio_postgres::Client,
     sql: &str,
     table_name: &str,
 ) -> Vec<tokio_postgres::Row> {
-    let expected_columns = registry_column_names(table_name);
-    assert_query_columns(client, sql, &expected_columns).await
+    let fields = schema_registry::fields_for_table(table_name)
+        .unwrap_or_else(|| panic!("registry must define {table_name}"));
+    let expected_columns = fields
+        .iter()
+        .map(|field| field.name().to_lowercase())
+        .collect::<Vec<_>>();
+    let expected_types = fields
+        .iter()
+        .map(|field| field.datatype().name().to_lowercase())
+        .collect::<Vec<_>>();
+    assert_query_columns_and_types(client, sql, &expected_columns, &expected_types).await
 }
 
 fn extract_schema_version_hint(version_text: &str) -> Option<i64> {
@@ -907,22 +951,52 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
             .as_str()
             .expect("metadata query should include sql");
         if sql == "SELECT ducklake_latest_snapshot_id('analytics.events'::regclass)" {
-            let messages = client
-                .simple_query(sql)
+            let statement = client
+                .prepare(sql)
                 .await
-                .unwrap_or_else(|e| panic!("simple query failed for `{sql}`: {e}"));
+                .unwrap_or_else(|e| panic!("prepare failed for `{sql}`: {e}"));
+            let actual_columns = statement
+                .columns()
+                .iter()
+                .map(|column| column.name().to_lowercase())
+                .collect::<Vec<_>>();
+            let actual_types = statement
+                .columns()
+                .iter()
+                .map(|column| column.type_().name().to_lowercase())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_columns,
+                vec!["ducklake_latest_snapshot_id".to_string()],
+                "latest snapshot query should expose a single named column"
+            );
+            assert_eq!(
+                actual_types,
+                vec!["int8".to_string()],
+                "latest snapshot query should expose an int8 result"
+            );
+
+            let messages = client
+                .query(&statement, &[])
+                .await
+                .unwrap_or_else(|e| panic!("query failed for `{sql}`: {e}"));
 
             let mut row_count = 0;
-            for message in messages {
-                if let tokio_postgres::SimpleQueryMessage::Row(row) = message {
-                    row_count += 1;
-                    let value_text = row.get(0).unwrap_or_else(|| {
-                        panic!("latest snapshot query should return a single value")
-                    });
-                    latest_snapshot_value = Some(decode_latest_snapshot_value(value_text).unwrap_or_else(
-                        || panic!("latest snapshot query should return an integer snapshot id: {value_text:?}"),
-                    ));
-                }
+            for row in messages {
+                row_count += 1;
+                let value_text: Option<String> = row.try_get(0).unwrap_or_else(|e| {
+                    panic!("latest snapshot query should return a single value: {e}")
+                });
+                let value_text = value_text.unwrap_or_else(|| {
+                    panic!("latest snapshot query should return a non-null snapshot id")
+                });
+                latest_snapshot_value = Some(
+                    decode_latest_snapshot_value(&value_text).unwrap_or_else(|| {
+                        panic!(
+                            "latest snapshot query should return an integer snapshot id: {value_text:?}"
+                        )
+                    }),
+                );
             }
 
             assert_eq!(row_count, 1, "latest snapshot query should return one row");

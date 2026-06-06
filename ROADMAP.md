@@ -5156,28 +5156,28 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Surface Inventory & Coverage Gate
 
-- [ ] Add a machine-readable surface manifest covering SQL statements, metadata views/functions, CLI commands, environment variables, FFI entrypoints, Prometheus metrics, SQLSTATEs, and object-store invariants.
-- [ ] Emit a test-to-surface coverage report that fails CI when a public surface has no direct test or fixture.
-- [ ] Require every live DuckDB probe to assert exact column names, types, and column order, not just row counts.
+- [x] Add a machine-readable surface manifest covering SQL statements, metadata views/functions, CLI commands, environment variables, FFI entrypoints, Prometheus metrics, SQLSTATEs, and object-store invariants.
+- [x] Emit a test-to-surface coverage report that fails CI when a public surface has no direct test or fixture.
+- [x] Require every live DuckDB probe to assert exact column names, types, and column order, not just row counts.
 
 ### Client Probe Census
 
-- [ ] Build a canonical probe census from the DuckDB, Spark, Trino, and pg-tide wire corpus plus live sessions; deduplicate queries and map each to a canonical handler or test.
-- [ ] Add a regression test that compares new probe traffic against the manifest and fails on unclassified probes.
-- [ ] Add coverage for error surfaces: unsupported statements, invalid metadata requests, permission failures, stale snapshot access, and SQLSTATE mapping.
+- [x] Build a canonical probe census from the DuckDB, Spark, Trino, and pg-tide wire corpus plus live sessions; deduplicate queries and map each to a canonical handler or test.
+- [x] Add a regression test that compares new probe traffic against the manifest and fails on unclassified probes.
+- [x] Add coverage for error surfaces: unsupported statements, invalid metadata requests, permission failures, stale snapshot access, and SQLSTATE mapping.
 
 ### Golden Corpus Hardening
 
-- [ ] Store deterministic golden outputs for metadata discovery, catalog DDL, reconnect-after-restart, and representative failure responses.
-- [ ] Version transcript fixtures by client and protocol revision so DuckDB patch bumps are visible in CI.
-- [ ] Add a single report that lists uncovered surfaces and the highest-risk gaps before merge.
+- [x] Store deterministic golden outputs for metadata discovery, catalog DDL, reconnect-after-restart, and representative failure responses.
+- [x] Version transcript fixtures by client and protocol revision so DuckDB patch bumps are visible in CI.
+- [x] Add a single report that lists uncovered surfaces and the highest-risk gaps before merge.
 
 ### Deliverables
 
-- [ ] Surface manifest with 100% public-entrypoint mapping
-- [ ] Coverage gate that fails on untested public surfaces
-- [ ] Golden fixtures for live metadata probes and error cases
-- [ ] Canonical probe census aligned with the live wire corpus
+- [x] Surface manifest with 100% public-entrypoint mapping
+- [x] Coverage gate that fails on untested public surfaces
+- [x] Golden fixtures for live metadata probes and error cases
+- [x] Canonical probe census aligned with the live wire corpus
 
 ---
 
