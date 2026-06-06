@@ -109,6 +109,8 @@ binding on every roadmap release below.
 | **v0.47.4 — DuckLake 1.0 Spec-Conformity Certification & Integration Tests** | Refactor schemas for perfect alignment (`key`/`value` renames, exact column order via loopback projections); add advanced `_data_file` and `_delete_file` fields; enforce Repeatable Read isolation/fencing (`SQLSTATE 40001`); cascade table drops; add nightly DuckDB v1.5.3/MinIO certification CI | Complete |
 | **v0.47.5 — World-Class Testing Foundation & E2E Coverage** | Tiered testkit, MinIO-backed catalog tests, live PG-wire E2E, fault injection, benchmark regression, and CI gating | Complete |
 | **v0.47.6 — Full Live DuckDB Container Loop** | Real DuckDB container loop against MinIO-backed RockLake, with end-to-end tutorial flow, object-store verification, and live regression transcripts | Complete |
+| **v0.47.10 — Public Surface Manifest & Contract Freeze** | Canonical surface manifest for SQL, PG-wire, CLI, bindings, object-store, and admin/maintenance entry points; every surface mapped to happy-path and negative tests; golden request/response fixtures; manifest coverage gate; versioned compatibility snapshots | Complete |
+| **v0.47.11 — Surface Completeness Matrix & Negative Testing** | Exhaustive matrix across clients, backends, restarts, concurrency, and emulator targets; deterministic crash/recovery and object-store fault injection; property/fuzz coverage for SQL classification, schema discovery, and snapshot visibility; release gate on zero uncovered export surfaces and zero unclassified protocol errors | Planning |
 | **v0.48.0 — Paginated Scans, Streaming & Observability Depth** | RFC-03: `list_data_files_paged()` with continuation token; `stream_data_files()` async Stream; PG-wire incremental `DataRow` streaming; proper histogram metrics via `prometheus` crate; per-query trace correlation and `trace_id` propagation; slow-query log; memory pressure and RSS metrics; SF100 catalog benchmark suite | Planning |
 | **v0.49.0 — Tiered NVMe Cache & Multi-Node Production Validation** | RFC-02: `TieredCache` L1/L2/L3 with local SSD spill; `--cache-dir` and `--cache-max-gb` CLI flags; L2 pre-population on cold start; wire up `slatedb_sst_count`/`slatedb_compaction_lag_ms` to real SlateDB stats; real 24h multi-node soak on AWS/GCP (not `InMemory`); GHCR container image with versioned tags; pod disruption budget + HPA documentation; v1.0 gating checklist completion | Planning |
 | **v0.70.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; blocked on upstream DuckDB community extension catalog API | Exploration |
@@ -138,6 +140,8 @@ Detailed sequence for v0.46–v0.49 (post-Assessment-2 hardening):
 * v0.47.7: Live DuckDB surface expansion (metadata discovery, DDL evolution, failure-recovery, object-store invariants)
 * v0.47.8: Public surface manifest, golden corpus, and coverage gate
 * v0.47.9: Cross-backend failure matrix, restart semantics, and deterministic chaos
+* v0.47.10: Public surface manifest and contract freeze
+* v0.47.11: Surface completeness matrix and negative testing
 * v0.48: Paginated scans (RFC-03) + streaming wire protocol + proper histogram metrics + SF100 benchmarks
 * v0.49: Tiered NVMe cache (RFC-02) + real multi-node soak + GHCR images + v1.0 gating checklist
 

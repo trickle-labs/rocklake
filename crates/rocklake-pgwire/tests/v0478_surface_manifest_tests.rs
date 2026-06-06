@@ -37,6 +37,12 @@ fn assert_file_contains(path: &Path, needle: &str) {
     );
 }
 
+fn assert_test_reference(root: &Path, test_file: &str, test_name: &str) {
+    let test_path = root.join(test_file);
+    assert_path_exists(&test_path);
+    assert_file_contains(&test_path, test_name);
+}
+
 fn array_strings(values: &[Value]) -> Vec<String> {
     values
         .iter()
@@ -54,7 +60,7 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
     assert_path_exists(&manifest_path);
 
     let manifest = load_json(&manifest_path);
-    assert_eq!(manifest["release"], "v0.47.9");
+    assert_eq!(manifest["release"], "v0.47.10");
     assert_eq!(manifest["duckdb_version"], "1.5.3");
     assert_eq!(manifest["ducklake_version"], "1.0");
     assert_eq!(manifest["catalog_version"], 7);
@@ -70,6 +76,64 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
         root.join("tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json");
     assert_path_exists(&schema_fixture);
     assert_path_exists(&live_fixture);
+
+    let compatibility_snapshots = manifest["compatibility_snapshots"]
+        .as_array()
+        .unwrap_or_else(|| panic!("compatibility_snapshots must be an array"));
+    assert!(
+        compatibility_snapshots.len() >= 2,
+        "compatibility_snapshots must include at least the previous and current release"
+    );
+    let mut snapshot_releases = Vec::new();
+    for snapshot in compatibility_snapshots {
+        let release = snapshot["release"]
+            .as_str()
+            .unwrap_or_else(|| panic!("snapshot must include release: {snapshot}"));
+        snapshot_releases.push(release.to_string());
+        assert!(
+            snapshot["fixture_path"].as_str().is_some(),
+            "snapshot must include fixture_path: {snapshot}"
+        );
+        if let Some(test_file) = snapshot["test_file"].as_str() {
+            let test_name = snapshot["test_name"].as_str().unwrap_or_else(|| {
+                panic!("compatibility snapshot must include test_name when test_file is set: {snapshot}")
+            });
+            assert_test_reference(&root, test_file, test_name);
+        }
+        assert_path_exists(
+            &root.join(
+                snapshot["fixture_path"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("snapshot must include fixture_path: {snapshot}")),
+            ),
+        );
+    }
+    assert!(
+        snapshot_releases.iter().any(|release| release == "v0.47.10"),
+        "compatibility snapshots must include the current release"
+    );
+    assert!(
+        snapshot_releases.iter().any(|release| release == "v0.47.9"),
+        "compatibility snapshots must include the previous release"
+    );
+
+    let negative_probes = manifest["negative_probes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("negative_probes must be an array"));
+    assert!(!negative_probes.is_empty(), "negative_probes must not be empty");
+    for probe in negative_probes {
+        let surface = probe["surface"]
+            .as_str()
+            .unwrap_or_else(|| panic!("negative probe must include surface: {probe}"));
+        let test_file = probe["test_file"]
+            .as_str()
+            .unwrap_or_else(|| panic!("negative probe must include test_file: {probe}"));
+        let test_name = probe["test_name"]
+            .as_str()
+            .unwrap_or_else(|| panic!("negative probe must include test_name: {probe}"));
+        assert!(!surface.is_empty(), "negative probe surface must not be empty");
+        assert_test_reference(&root, test_file, test_name);
+    }
 
     let live_fixture_json = load_json(&live_fixture);
 
@@ -113,7 +177,9 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
 
         if status == "supported" {
             assert!(
-                surface.get("test_file").is_some() || surface.get("fixture_path").is_some(),
+                surface.get("test_file").is_some()
+                    || surface.get("fixture_path").is_some()
+                    || kind == "bindings",
                 "supported surface {name:?} must have direct test or fixture evidence"
             );
         }
@@ -216,6 +282,25 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
                     .as_array()
                     .unwrap_or_else(|| panic!("cli surface must include commands: {surface}"));
                 assert!(!commands.is_empty(), "cli surface must not be empty");
+            }
+            "bindings" => {
+                let languages = surface["languages"].as_array().unwrap_or_else(|| {
+                    panic!("bindings surface must include languages: {surface}")
+                });
+                assert!(!languages.is_empty(), "bindings surface must not be empty");
+                for language in languages {
+                    let test_file = language["test_file"].as_str().unwrap_or_else(|| {
+                        panic!("binding entry must include test_file: {language}")
+                    });
+                    let test_name = language["test_name"].as_str().unwrap_or_else(|| {
+                        panic!("binding entry must include test_name: {language}")
+                    });
+                    let negative_test_name = language["negative_test_name"].as_str().unwrap_or_else(|| {
+                        panic!("binding entry must include negative_test_name: {language}")
+                    });
+                    assert_test_reference(&root, test_file, test_name);
+                    assert_test_reference(&root, test_file, negative_test_name);
+                }
             }
             "ffi" => {
                 let functions = surface["functions"]

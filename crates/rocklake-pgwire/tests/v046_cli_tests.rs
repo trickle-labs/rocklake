@@ -36,6 +36,25 @@ fn help_exits_zero(args: &[&str]) {
     );
 }
 
+fn command_exits_nonzero(args: &[&str]) {
+    let bin = rocklake_bin();
+    if !bin.exists() {
+        eprintln!("skipping {args:?}: binary not found at {bin:?}");
+        return;
+    }
+    let output = Command::new(&bin)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run {:?} with args {args:?}: {e}", bin));
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "rocklake {args:?} unexpectedly exited with code 0\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 #[test]
 fn help_top_level() {
     help_exits_zero(&["--help"]);
@@ -137,4 +156,9 @@ fn completions_bash() {
         stdout.contains("rocklake"),
         "bash completion output should mention 'rocklake'"
     );
+}
+
+#[test]
+fn invalid_subcommand_exits_nonzero() {
+    command_exits_nonzero(&["frobnicate"]);
 }

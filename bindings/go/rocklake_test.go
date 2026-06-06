@@ -33,6 +33,12 @@ func TestOpenClose(t *testing.T) {
 	cat.Close()
 }
 
+func TestOpenRejectsEmptyPath(t *testing.T) {
+	if _, err := rocklake.Open(""); err == nil {
+		t.Fatalf("Open(\"\") must fail")
+	}
+}
+
 func TestSnapshotIDFreshCatalog(t *testing.T) {
 	dir := tempDir(t)
 	cat, err := rocklake.Open(dir)

@@ -11,21 +11,30 @@ group = "io.trickle"
 version = "0.44.0"
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(17)
 }
 
 repositories {
     mavenCentral()
 }
 
+sourceSets {
+    main {
+        java {
+            exclude("io/trickle/rocklake/examples/**")
+        }
+    }
+}
+
 dependencies {
     // Core Java dependencies
     implementation("org.slf4j:slf4j-api:2.0.11")
+    implementation("net.java.dev.jna:jna:5.14.0")
     
     // Kotlin coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
@@ -52,9 +61,9 @@ tasks.register<Exec>("buildNativeLibrary") {
         
         val releaseDir = File(cargoDir, "target/release")
         listOf(
-            "librocklake.so" to "rocklake-linux-x86_64.so",
-            "librocklake.dylib" to "rocklake-macos-arm64.dylib",
-            "rocklake.dll" to "rocklake-windows-x86_64.dll"
+            "librocklake_ffi.so" to "rocklake-linux-x86_64.so",
+            "librocklake_ffi.dylib" to "rocklake-macos-arm64.dylib",
+            "rocklake_ffi.dll" to "rocklake-windows-x86_64.dll"
         ).forEach { (src, dst) ->
             val srcFile = File(releaseDir, src)
             if (srcFile.exists()) {

@@ -27,6 +27,10 @@ test('open and close', () => {
   cat.close();
 });
 
+test('open rejects empty path', () => {
+  assert.throws(() => Catalog.open(''), /.+/);
+});
+
 test('snapshotId returns 0 for fresh catalog', () => {
   const dir = tmpDir();
   const cat = Catalog.open(dir);

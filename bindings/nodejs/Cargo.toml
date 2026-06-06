@@ -9,9 +9,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rocklake-client = { path = "../../crates/rocklake-client" }
-napi = { version = "2.16", features = ["napi4", "async"] }
+napi = { version = "2.16", features = ["napi6", "async"] }
 napi-derive = "2.16"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [build-dependencies]
 napi-build = "2"
+
+[workspace]
