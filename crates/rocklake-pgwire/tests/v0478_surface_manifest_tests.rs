@@ -37,7 +37,7 @@ fn assert_file_contains(path: &Path, needle: &str) {
     );
 }
 
-fn array_strings(values: &Vec<Value>) -> Vec<String> {
+fn array_strings(values: &[Value]) -> Vec<String> {
     values
         .iter()
         .map(|item| {
@@ -153,11 +153,11 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
                         .get("expected_columns")
                         .or_else(|| query.get("columns"))
                         .and_then(|value| value.as_array())
-                        .map(array_strings)
+                        .map(|values| array_strings(values.as_slice()))
                         .unwrap_or_default();
                     let expected_types = query["expected_types"]
                         .as_array()
-                        .map(array_strings)
+                        .map(|values| array_strings(values.as_slice()))
                         .unwrap_or_default();
                     if !expected_columns.is_empty() {
                         assert!(
