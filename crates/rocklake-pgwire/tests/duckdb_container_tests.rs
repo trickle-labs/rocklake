@@ -202,7 +202,10 @@ async fn capture_backend_state(catalog: &CatalogHarness, prefix: &str) -> Backen
     }
 }
 
-async fn populate_catalog_parity_state(catalog: &CatalogHarness, prefix: &str) -> BackendParityState {
+async fn populate_catalog_parity_state(
+    catalog: &CatalogHarness,
+    prefix: &str,
+) -> BackendParityState {
     let mut writer = catalog.writer().await;
     let schema_id = writer
         .create_schema("analytics")
@@ -316,7 +319,10 @@ async fn assert_writer_epoch_mismatch(catalog: &CatalogHarness) {
         .await;
     let stale_error = stale_result.expect_err("stale writer should be fenced");
     assert!(
-        matches!(stale_error, rocklake_catalog::CatalogError::WriterEpochMismatch),
+        matches!(
+            stale_error,
+            rocklake_catalog::CatalogError::WriterEpochMismatch
+        ),
         "expected writer fencing error, got: {stale_error}"
     );
     assert!(
