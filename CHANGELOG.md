@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.47.11] — 2026-06-25
+
+### Added
+
+- **Surface Completeness Matrix**: Exhaustive coverage matrix across clients (PG-wire, FFI, CLI, Python, Go, Node.js, Java), backends (local, MinIO, GCS emulator, Azure emulator), and scenario categories (happy-path, restart, concurrency, crash/recovery, fault injection).
+- **Crash/Recovery Deterministic Sequences**: Defined and tested seven-step crash-recovery sequence (open → begin → write → commit → reopen → verify linearity → verify no phantoms); snapshot IDs remain strictly monotonic and no uncommitted rows are visible post-recovery.
+- **Object-Store Fault Injection Matrix**: Five fault kinds (connection refused, timeout, partial write, read corruption, permission denied) mapped to SQLSTATE codes; coverage matrix requires at least two backends per fault.
+- **SQL Classifier Fuzz Corpus**: Deterministic 16-entry fuzz corpus covering catalog SELECTs, schema-qualified names, DDL, empty/whitespace, NUL bytes, very long identifiers, multi-statement batches, DISCARD ALL, BEGIN/COMMIT, and SET/SHOW; DDL must never classify as a specific table.
+- **Schema Discovery Coverage**: Property test asserting all 26 DuckLake metadata tables are listed, deduplicated, and carry the `ducklake_` prefix.
+- **MVCC Snapshot Visibility Properties**: Five property tests (basic invariant, end-snapshot hiding, zero-end-snapshot live rows, time-travel exclusion of future rows, contiguous history exactly-one-visible).
+- **Release Gates**: `release_gate_zero_uncovered_export_surfaces` (≥ 8 export surfaces, all with test evidence) and `release_gate_zero_unclassified_protocol_errors` (≥ 8 SQLSTATE codes classified, all 5-character, no success code).
+
+### Changed
+
+- **Surface Manifest**: Bumped manifest `release` to `v0.47.11`; added seven new surface kinds (`completeness_matrix`, `crash_recovery`, `fault_injection`, `sql_classifier_coverage`, `schema_discovery`, `snapshot_visibility`, `release_gate`); added four new negative probes.
+- **Compatibility Snapshots**: Updated to `[v0.47.10, v0.47.11]`; test file reference added to the current snapshot.
+
 ## [0.47.6] — 2026-06-04
 
 ### Added

@@ -1,291 +1,666 @@
 {
-  "release": "v0.47.10",
-  "duckdb_version": "1.5.3",
-  "ducklake_version": "1.0",
-  "catalog_version": 7,
-  "compatibility_snapshots": [
-    {
-      "release": "v0.47.9",
-      "duckdb_version": "1.5.3",
-      "ducklake_version": "1.0",
-      "catalog_version": 7,
-      "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
-    },
-    {
-      "release": "v0.47.10",
-      "duckdb_version": "1.5.3",
-      "ducklake_version": "1.0",
-      "catalog_version": 7,
-      "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
-    }
-  ],
-  "negative_probes": [
-    {
-      "surface": "cli",
-      "name": "invalid subcommand rejection",
-      "test_file": "crates/rocklake-pgwire/tests/v046_cli_tests.rs",
-      "test_name": "invalid_subcommand_exits_nonzero"
-    },
-    {
-      "surface": "ffi",
-      "name": "null uri rejection",
-      "test_file": "crates/rocklake-ffi/tests/c_abi_smoke.rs",
-      "test_name": "null_uri_returns_null_handle"
-    },
-    {
-      "surface": "pgwire",
-      "name": "unsupported statement rejection",
-      "test_file": "crates/rocklake-pgwire/tests/dialect_fuzz.rs",
-      "test_name": "dialect_fuzz_unsupported_returns_0a000_or_ok"
-    },
-    {
-      "surface": "sqlstate",
-      "name": "sqlstate mapping",
-      "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs",
-      "test_name": "test_error_sqlstate_mapping"
-    }
-  ],
-  "surfaces": [
-    {
-      "kind": "metadata_tables",
-      "name": "DuckLake metadata table inventory",
-      "status": "supported",
-      "tables": [
-        "ducklake_snapshot",
-        "ducklake_snapshot_changes",
-        "ducklake_schema",
-        "ducklake_table",
-        "ducklake_column",
-        "ducklake_data_file",
-        "ducklake_delete_file",
-        "ducklake_table_stats",
-        "ducklake_table_column_stats",
-        "ducklake_file_column_stats",
-        "ducklake_metadata",
-        "ducklake_view",
-        "ducklake_macro",
-        "ducklake_macro_impl",
-        "ducklake_macro_parameters",
-        "ducklake_tag",
-        "ducklake_column_tag",
-        "ducklake_partition_info",
-        "ducklake_partition_column",
-        "ducklake_sort_info",
-        "ducklake_sort_expression",
-        "ducklake_files_scheduled_for_deletion",
-        "ducklake_inlined_data_tables",
-        "ducklake_schema_versions",
-        "ducklake_column_mapping",
-        "ducklake_name_mapping"
-      ],
-      "test_file": "crates/rocklake-pgwire/tests/v0277_schema_registry_tests.rs",
-      "test_name": "registry_covers_all_32_tables",
-      "fixture_path": "tests/fixtures/ducklake-v1.0-schema.toml"
-    },
-    {
-      "kind": "live_queries",
-      "name": "DuckDB live metadata probes",
-      "status": "supported",
-      "queries": [
+    "release": "v0.47.11",
+    "duckdb_version": "1.5.3",
+    "ducklake_version": "1.0",
+    "catalog_version": 7,
+    "compatibility_snapshots": [
         {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_snapshot_changes",
-          "table": "ducklake_snapshot_changes",
-          "expected_columns": ["snapshot_id", "changes_made", "author", "commit_message", "commit_extra_info"],
-          "expected_types": ["int8", "text", "text", "text", "text"]
+            "release": "v0.47.10",
+            "duckdb_version": "1.5.3",
+            "ducklake_version": "1.0",
+            "catalog_version": 7,
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
         },
         {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_metadata",
-          "table": "ducklake_metadata",
-          "expected_columns": ["key", "value", "scope", "scope_id"],
-          "expected_types": ["text", "text", "text", "int8"]
-        },
-        {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_schema_versions",
-          "table": "ducklake_schema_versions",
-          "expected_columns": ["schema_version", "schema_version_info"],
-          "expected_types": ["int8", "text"]
-        },
-        {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_view",
-          "table": "ducklake_view",
-          "expected_columns": ["view_id", "begin_snapshot", "end_snapshot", "schema_id", "view_name", "view_uuid", "sql", "dialect", "column_aliases"],
-          "expected_types": ["int8", "int8", "int8", "int8", "text", "uuid", "text", "text", "text"]
-        },
-        {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro",
-          "table": "ducklake_macro",
-          "expected_columns": ["macro_id", "begin_snapshot", "end_snapshot", "schema_id", "macro_name", "macro_uuid"],
-          "expected_types": ["int8", "int8", "int8", "int8", "text", "text"]
-        },
-        {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro_impl",
-          "table": "ducklake_macro_impl",
-          "expected_columns": ["macro_id", "impl_id", "dialect", "sql", "type"],
-          "expected_types": ["int8", "int8", "text", "text", "text"]
-        },
-        {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro_parameters",
-          "table": "ducklake_macro_parameters",
-          "expected_columns": ["macro_id", "impl_id", "column_id", "parameter_name", "parameter_type", "default_value", "default_value_type"],
-          "expected_types": ["int8", "int8", "int8", "text", "text", "text", "text"]
-        },
-        {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_table_stats",
-          "table": "ducklake_table_stats",
-          "expected_columns": ["table_id", "record_count", "next_row_id", "file_size_bytes"],
-          "expected_types": ["int8", "int8", "int8", "int8"]
-        },
-        {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_table_column_stats",
-          "table": "ducklake_table_column_stats",
-          "expected_columns": ["table_id", "column_id", "contains_null", "contains_nan", "min_value", "max_value", "extra_stats", "value_count", "null_count"],
-          "expected_types": ["int8", "int8", "bool", "bool", "text", "text", "text", "int8", "int8"]
-        },
-        {
-          "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_delete_file",
-          "table": "ducklake_delete_file",
-          "expected_columns": ["delete_file_id", "table_id", "path", "delete_count", "file_size_bytes", "begin_snapshot", "end_snapshot", "footer_size", "partial_max"],
-          "expected_types": ["int8", "int8", "text", "int8", "int8", "int8", "int8", "int8", "text"]
-        },
-        {
-          "sql": "SELECT ducklake_latest_snapshot_id('analytics.events'::regclass)",
-          "columns": ["ducklake_latest_snapshot_id"],
-          "expected_types": ["int8"]
+            "release": "v0.47.11",
+            "duckdb_version": "1.5.3",
+            "ducklake_version": "1.0",
+            "catalog_version": 7,
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "completeness_matrix_client_surfaces_are_exhaustive"
         }
-      ],
-      "test_file": "crates/rocklake-pgwire/tests/duckdb_container_tests.rs",
-      "test_name": "duckdb_container_schema_evolution_and_object_store_integrity",
-      "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
-    },
-    {
-      "kind": "bindings",
-      "name": "Language binding smoke surfaces",
-      "status": "supported",
-      "languages": [
+    ],
+    "negative_probes": [
         {
-          "language": "go",
-          "test_file": "bindings/go/rocklake_test.go",
-          "test_name": "TestOpenClose",
-          "negative_test_name": "TestOpenRejectsEmptyPath"
+            "surface": "cli",
+            "name": "invalid subcommand rejection",
+            "test_file": "crates/rocklake-pgwire/tests/v046_cli_tests.rs",
+            "test_name": "invalid_subcommand_exits_nonzero"
         },
         {
-          "language": "python",
-          "test_file": "bindings/python/tests/test_catalog.py",
-          "test_name": "test_open_close",
-          "negative_test_name": "test_open_rejects_empty_path"
+            "surface": "ffi",
+            "name": "null uri rejection",
+            "test_file": "crates/rocklake-ffi/tests/c_abi_smoke.rs",
+            "test_name": "null_uri_returns_null_handle"
         },
         {
-          "language": "nodejs",
-          "test_file": "bindings/nodejs/test/test_catalog.js",
-          "test_name": "open and close",
-          "negative_test_name": "open rejects empty path"
+            "surface": "pgwire",
+            "name": "unsupported statement rejection",
+            "test_file": "crates/rocklake-pgwire/tests/dialect_fuzz.rs",
+            "test_name": "dialect_fuzz_unsupported_returns_0a000_or_ok"
         },
         {
-          "language": "java",
-          "test_file": "bindings/java/src/test/java/io/trickle/rocklake/RockLakeCatalogTest.java",
-          "test_name": "openCloseSmoke",
-          "negative_test_name": "openRejectsEmptyPath"
+            "surface": "sqlstate",
+            "name": "sqlstate mapping",
+            "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs",
+            "test_name": "test_error_sqlstate_mapping"
+        },
+        {
+            "surface": "crash_recovery",
+            "name": "deterministic crash-recovery sequence",
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "crash_recovery_sequence_is_deterministic"
+        },
+        {
+            "surface": "fault_injection",
+            "name": "object-store fault coverage matrix",
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "fault_injection_coverage_matrix_is_complete"
+        },
+        {
+            "surface": "sql_classifier",
+            "name": "DDL statement must not classify as table",
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "sql_classifier_fuzz_no_corpus_entry_expects_success_for_ddl"
+        },
+        {
+            "surface": "snapshot_visibility",
+            "name": "uncommitted snapshot not visible after crash",
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "crash_recovery_snapshot_linearity_invariant"
         }
-      ]
-    },
-    {
-      "kind": "fixture_actions",
-      "name": "DuckDB live fixture actions",
-      "status": "supported",
-      "actions": [
-        { "fixture_section": "ddl", "fixture_key": "add_column_sql" },
-        { "fixture_section": "ddl", "fixture_key": "rename_column_sql" },
-        { "fixture_section": "ddl", "fixture_key": "drop_column_sql" },
-        { "fixture_section": "ddl", "fixture_key": "create_view_sql" },
-        { "fixture_section": "ddl", "fixture_key": "create_macro_sql" },
-        { "fixture_section": "recovery", "fixture_key": "reader_count_sql" },
-        { "fixture_section": "recovery", "fixture_key": "begin_sql" },
-        { "fixture_section": "recovery", "fixture_key": "insert_sql" },
-        { "fixture_section": "retirement", "fixture_key": "update_sql" },
-        { "fixture_section": "retirement", "fixture_key": "delete_sql" }
-      ],
-      "test_file": "crates/rocklake-pgwire/tests/duckdb_container_tests.rs",
-      "test_name": "duckdb_container_schema_evolution_and_object_store_integrity",
-      "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
-    },
-    {
-      "kind": "sqlstate",
-      "name": "SQLSTATE mappings and rejection gates",
-      "status": "supported",
-      "codes": [
-        { "code": "0A000", "test_file": "crates/rocklake-pgwire/tests/dialect_fuzz.rs", "test_name": "dialect_fuzz_unsupported_returns_0a000_or_ok" },
-        { "code": "40001", "test_file": "crates/rocklake-pgwire/tests/v02714_security_protocol_tests.rs", "test_name": "writer_fencing_returns_sqlstate_40001_on_conflict" },
-        { "code": "25006", "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs", "test_name": "test_error_sqlstate_mapping" },
-        { "code": "22023", "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs", "test_name": "test_error_sqlstate_mapping" }
-      ],
-      "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs",
-      "test_name": "test_error_sqlstate_mapping"
-    },
-    {
-      "kind": "cli",
-      "name": "RockLake CLI help, admin, and completion surface",
-      "status": "supported",
-      "commands": [
-        { "command": "rocklake --help", "test_name": "help_top_level" },
-        { "command": "rocklake serve --help", "test_name": "help_serve" },
-        { "command": "rocklake gc plan --help", "test_name": "help_gc_plan" },
-        { "command": "rocklake gc apply --help", "test_name": "help_gc_apply" },
-        { "command": "rocklake excise plan --help", "test_name": "help_excise_plan" },
-        { "command": "rocklake checkpoint create --help", "test_name": "help_checkpoint_create" },
-        { "command": "rocklake checkpoint list --help", "test_name": "help_checkpoint_list" },
-        { "command": "rocklake checkpoint restore --help", "test_name": "help_checkpoint_restore" },
-        { "command": "rocklake export --help", "test_name": "help_export" },
-        { "command": "rocklake import --help", "test_name": "help_import" },
-        { "command": "rocklake rebuild --help", "test_name": "help_rebuild" },
-        { "command": "rocklake diagnose --help", "test_name": "help_diagnose" },
-        { "command": "rocklake sweep-orphans --help", "test_name": "help_sweep_orphans" },
-        { "command": "rocklake migrate-from-ducklake --help", "test_name": "help_migrate_from_ducklake" },
-        { "command": "rocklake export-catalog --help", "test_name": "help_export_catalog" },
-        { "command": "rocklake completions bash", "test_name": "completions_bash" }
-      ],
-      "test_file": "crates/rocklake-pgwire/tests/v046_cli_tests.rs",
-      "test_name": "help_exits_zero"
-    },
-    {
-      "kind": "ffi",
-      "name": "RockLake C ABI smoke surface",
-      "status": "supported",
-      "functions": [
-        "rocklake_abi_version",
-        "rocklake_open",
-        "rocklake_open_readonly",
-        "rocklake_close",
-        "rocklake_list_schemas"
-      ],
-      "test_file": "crates/rocklake-ffi/tests/c_abi_smoke.rs",
-      "test_name": "open_list_close_lifecycle",
-      "fixture_path": "crates/rocklake-ffi/tests/ffi_smoke.c"
-    },
-    {
-      "kind": "metrics",
-      "name": "Prometheus and observability surface",
-      "status": "supported",
-      "probes": [
-        "rocklake_catalog_op_duration_seconds",
-        "rocklake_pgwire_errors_total",
-        "rocklake_gc_retain_from_snapshot",
-        "rocklake_slatedb_sst_count"
-      ],
-      "test_file": "crates/rocklake-pgwire/tests/v039_observability_tests.rs",
-      "test_name": "test_metrics_render_includes_v039_fields"
-    },
-    {
-      "kind": "object_store_invariants",
-      "name": "MinIO-backed live surface durability and object accounting",
-      "status": "supported",
-      "invariants": [
-        "catalog objects remain visible after the live surface transcript",
-        "catalog remains durable after schema evolution and recovery",
-        "local parquet files remain accounted for by catalog metadata"
-      ],
-      "test_file": "crates/rocklake-pgwire/tests/duckdb_container_tests.rs",
-      "test_name": "duckdb_container_schema_evolution_and_object_store_integrity",
-      "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
-    }
-  ]
+    ],
+    "surfaces": [
+        {
+            "kind": "metadata_tables",
+            "name": "DuckLake metadata table inventory",
+            "status": "supported",
+            "tables": [
+                "ducklake_snapshot",
+                "ducklake_snapshot_changes",
+                "ducklake_schema",
+                "ducklake_table",
+                "ducklake_column",
+                "ducklake_data_file",
+                "ducklake_delete_file",
+                "ducklake_table_stats",
+                "ducklake_table_column_stats",
+                "ducklake_file_column_stats",
+                "ducklake_metadata",
+                "ducklake_view",
+                "ducklake_macro",
+                "ducklake_macro_impl",
+                "ducklake_macro_parameters",
+                "ducklake_tag",
+                "ducklake_column_tag",
+                "ducklake_partition_info",
+                "ducklake_partition_column",
+                "ducklake_sort_info",
+                "ducklake_sort_expression",
+                "ducklake_files_scheduled_for_deletion",
+                "ducklake_inlined_data_tables",
+                "ducklake_schema_versions",
+                "ducklake_column_mapping",
+                "ducklake_name_mapping"
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/v0277_schema_registry_tests.rs",
+            "test_name": "registry_covers_all_32_tables",
+            "fixture_path": "tests/fixtures/ducklake-v1.0-schema.toml"
+        },
+        {
+            "kind": "live_queries",
+            "name": "DuckDB live metadata probes",
+            "status": "supported",
+            "queries": [
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_snapshot_changes",
+                    "table": "ducklake_snapshot_changes",
+                    "expected_columns": [
+                        "snapshot_id",
+                        "changes_made",
+                        "author",
+                        "commit_message",
+                        "commit_extra_info"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "text",
+                        "text",
+                        "text",
+                        "text"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_metadata",
+                    "table": "ducklake_metadata",
+                    "expected_columns": [
+                        "key",
+                        "value",
+                        "scope",
+                        "scope_id"
+                    ],
+                    "expected_types": [
+                        "text",
+                        "text",
+                        "text",
+                        "int8"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_schema_versions",
+                    "table": "ducklake_schema_versions",
+                    "expected_columns": [
+                        "schema_version",
+                        "schema_version_info"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "text"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_view",
+                    "table": "ducklake_view",
+                    "expected_columns": [
+                        "view_id",
+                        "begin_snapshot",
+                        "end_snapshot",
+                        "schema_id",
+                        "view_name",
+                        "view_uuid",
+                        "sql",
+                        "dialect",
+                        "column_aliases"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "int8",
+                        "int8",
+                        "int8",
+                        "text",
+                        "uuid",
+                        "text",
+                        "text",
+                        "text"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro",
+                    "table": "ducklake_macro",
+                    "expected_columns": [
+                        "macro_id",
+                        "begin_snapshot",
+                        "end_snapshot",
+                        "schema_id",
+                        "macro_name",
+                        "macro_uuid"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "int8",
+                        "int8",
+                        "int8",
+                        "text",
+                        "text"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro_impl",
+                    "table": "ducklake_macro_impl",
+                    "expected_columns": [
+                        "macro_id",
+                        "impl_id",
+                        "dialect",
+                        "sql",
+                        "type"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "int8",
+                        "text",
+                        "text",
+                        "text"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_macro_parameters",
+                    "table": "ducklake_macro_parameters",
+                    "expected_columns": [
+                        "macro_id",
+                        "impl_id",
+                        "column_id",
+                        "parameter_name",
+                        "parameter_type",
+                        "default_value",
+                        "default_value_type"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "int8",
+                        "int8",
+                        "text",
+                        "text",
+                        "text",
+                        "text"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_table_stats",
+                    "table": "ducklake_table_stats",
+                    "expected_columns": [
+                        "table_id",
+                        "record_count",
+                        "next_row_id",
+                        "file_size_bytes"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "int8",
+                        "int8",
+                        "int8"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_table_column_stats",
+                    "table": "ducklake_table_column_stats",
+                    "expected_columns": [
+                        "table_id",
+                        "column_id",
+                        "contains_null",
+                        "contains_nan",
+                        "min_value",
+                        "max_value",
+                        "extra_stats",
+                        "value_count",
+                        "null_count"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "int8",
+                        "bool",
+                        "bool",
+                        "text",
+                        "text",
+                        "text",
+                        "int8",
+                        "int8"
+                    ]
+                },
+                {
+                    "sql": "SELECT * FROM __ducklake_metadata_my_lake.ducklake_delete_file",
+                    "table": "ducklake_delete_file",
+                    "expected_columns": [
+                        "delete_file_id",
+                        "table_id",
+                        "path",
+                        "delete_count",
+                        "file_size_bytes",
+                        "begin_snapshot",
+                        "end_snapshot",
+                        "footer_size",
+                        "partial_max"
+                    ],
+                    "expected_types": [
+                        "int8",
+                        "int8",
+                        "text",
+                        "int8",
+                        "int8",
+                        "int8",
+                        "int8",
+                        "int8",
+                        "text"
+                    ]
+                },
+                {
+                    "sql": "SELECT ducklake_latest_snapshot_id('analytics.events'::regclass)",
+                    "columns": [
+                        "ducklake_latest_snapshot_id"
+                    ],
+                    "expected_types": [
+                        "int8"
+                    ]
+                }
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/duckdb_container_tests.rs",
+            "test_name": "duckdb_container_schema_evolution_and_object_store_integrity",
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
+        },
+        {
+            "kind": "bindings",
+            "name": "Language binding smoke surfaces",
+            "status": "supported",
+            "languages": [
+                {
+                    "language": "go",
+                    "test_file": "bindings/go/rocklake_test.go",
+                    "test_name": "TestOpenClose",
+                    "negative_test_name": "TestOpenRejectsEmptyPath"
+                },
+                {
+                    "language": "python",
+                    "test_file": "bindings/python/tests/test_catalog.py",
+                    "test_name": "test_open_close",
+                    "negative_test_name": "test_open_rejects_empty_path"
+                },
+                {
+                    "language": "nodejs",
+                    "test_file": "bindings/nodejs/test/test_catalog.js",
+                    "test_name": "open and close",
+                    "negative_test_name": "open rejects empty path"
+                },
+                {
+                    "language": "java",
+                    "test_file": "bindings/java/src/test/java/io/trickle/rocklake/RockLakeCatalogTest.java",
+                    "test_name": "openCloseSmoke",
+                    "negative_test_name": "openRejectsEmptyPath"
+                }
+            ]
+        },
+        {
+            "kind": "fixture_actions",
+            "name": "DuckDB live fixture actions",
+            "status": "supported",
+            "actions": [
+                {
+                    "fixture_section": "ddl",
+                    "fixture_key": "add_column_sql"
+                },
+                {
+                    "fixture_section": "ddl",
+                    "fixture_key": "rename_column_sql"
+                },
+                {
+                    "fixture_section": "ddl",
+                    "fixture_key": "drop_column_sql"
+                },
+                {
+                    "fixture_section": "ddl",
+                    "fixture_key": "create_view_sql"
+                },
+                {
+                    "fixture_section": "ddl",
+                    "fixture_key": "create_macro_sql"
+                },
+                {
+                    "fixture_section": "recovery",
+                    "fixture_key": "reader_count_sql"
+                },
+                {
+                    "fixture_section": "recovery",
+                    "fixture_key": "begin_sql"
+                },
+                {
+                    "fixture_section": "recovery",
+                    "fixture_key": "insert_sql"
+                },
+                {
+                    "fixture_section": "retirement",
+                    "fixture_key": "update_sql"
+                },
+                {
+                    "fixture_section": "retirement",
+                    "fixture_key": "delete_sql"
+                }
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/duckdb_container_tests.rs",
+            "test_name": "duckdb_container_schema_evolution_and_object_store_integrity",
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
+        },
+        {
+            "kind": "sqlstate",
+            "name": "SQLSTATE mappings and rejection gates",
+            "status": "supported",
+            "codes": [
+                {
+                    "code": "0A000",
+                    "test_file": "crates/rocklake-pgwire/tests/dialect_fuzz.rs",
+                    "test_name": "dialect_fuzz_unsupported_returns_0a000_or_ok"
+                },
+                {
+                    "code": "40001",
+                    "test_file": "crates/rocklake-pgwire/tests/v02714_security_protocol_tests.rs",
+                    "test_name": "writer_fencing_returns_sqlstate_40001_on_conflict"
+                },
+                {
+                    "code": "25006",
+                    "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs",
+                    "test_name": "test_error_sqlstate_mapping"
+                },
+                {
+                    "code": "22023",
+                    "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs",
+                    "test_name": "test_error_sqlstate_mapping"
+                }
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs",
+            "test_name": "test_error_sqlstate_mapping"
+        },
+        {
+            "kind": "cli",
+            "name": "RockLake CLI help, admin, and completion surface",
+            "status": "supported",
+            "commands": [
+                {
+                    "command": "rocklake --help",
+                    "test_name": "help_top_level"
+                },
+                {
+                    "command": "rocklake serve --help",
+                    "test_name": "help_serve"
+                },
+                {
+                    "command": "rocklake gc plan --help",
+                    "test_name": "help_gc_plan"
+                },
+                {
+                    "command": "rocklake gc apply --help",
+                    "test_name": "help_gc_apply"
+                },
+                {
+                    "command": "rocklake excise plan --help",
+                    "test_name": "help_excise_plan"
+                },
+                {
+                    "command": "rocklake checkpoint create --help",
+                    "test_name": "help_checkpoint_create"
+                },
+                {
+                    "command": "rocklake checkpoint list --help",
+                    "test_name": "help_checkpoint_list"
+                },
+                {
+                    "command": "rocklake checkpoint restore --help",
+                    "test_name": "help_checkpoint_restore"
+                },
+                {
+                    "command": "rocklake export --help",
+                    "test_name": "help_export"
+                },
+                {
+                    "command": "rocklake import --help",
+                    "test_name": "help_import"
+                },
+                {
+                    "command": "rocklake rebuild --help",
+                    "test_name": "help_rebuild"
+                },
+                {
+                    "command": "rocklake diagnose --help",
+                    "test_name": "help_diagnose"
+                },
+                {
+                    "command": "rocklake sweep-orphans --help",
+                    "test_name": "help_sweep_orphans"
+                },
+                {
+                    "command": "rocklake migrate-from-ducklake --help",
+                    "test_name": "help_migrate_from_ducklake"
+                },
+                {
+                    "command": "rocklake export-catalog --help",
+                    "test_name": "help_export_catalog"
+                },
+                {
+                    "command": "rocklake completions bash",
+                    "test_name": "completions_bash"
+                }
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/v046_cli_tests.rs",
+            "test_name": "help_exits_zero"
+        },
+        {
+            "kind": "ffi",
+            "name": "RockLake C ABI smoke surface",
+            "status": "supported",
+            "functions": [
+                "rocklake_abi_version",
+                "rocklake_open",
+                "rocklake_open_readonly",
+                "rocklake_close",
+                "rocklake_list_schemas"
+            ],
+            "test_file": "crates/rocklake-ffi/tests/c_abi_smoke.rs",
+            "test_name": "open_list_close_lifecycle",
+            "fixture_path": "crates/rocklake-ffi/tests/ffi_smoke.c"
+        },
+        {
+            "kind": "metrics",
+            "name": "Prometheus and observability surface",
+            "status": "supported",
+            "probes": [
+                "rocklake_catalog_op_duration_seconds",
+                "rocklake_pgwire_errors_total",
+                "rocklake_gc_retain_from_snapshot",
+                "rocklake_slatedb_sst_count"
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/v039_observability_tests.rs",
+            "test_name": "test_metrics_render_includes_v039_fields"
+        },
+        {
+            "kind": "object_store_invariants",
+            "name": "MinIO-backed live surface durability and object accounting",
+            "status": "supported",
+            "invariants": [
+                "catalog objects remain visible after the live surface transcript",
+                "catalog remains durable after schema evolution and recovery",
+                "local parquet files remain accounted for by catalog metadata"
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/duckdb_container_tests.rs",
+            "test_name": "duckdb_container_schema_evolution_and_object_store_integrity",
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json"
+        },
+        {
+            "kind": "completeness_matrix",
+            "name": "Surface completeness matrix across clients, backends, scenarios",
+            "status": "supported",
+            "dimensions": {
+                "clients": [
+                    "pgwire",
+                    "ffi",
+                    "cli",
+                    "python",
+                    "go",
+                    "nodejs",
+                    "java"
+                ],
+                "backends": [
+                    "local",
+                    "minio",
+                    "gcs_emulator",
+                    "azure_emulator"
+                ],
+                "scenarios": [
+                    "happy_path",
+                    "restart",
+                    "concurrency",
+                    "crash_recovery",
+                    "fault_injection"
+                ]
+            },
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "completeness_matrix_scenario_categories_are_exhaustive"
+        },
+        {
+            "kind": "crash_recovery",
+            "name": "Deterministic crash/recovery sequence and snapshot linearity",
+            "status": "supported",
+            "sequences": [
+                "open_catalog",
+                "begin_transaction",
+                "write_snapshot_metadata",
+                "commit_snapshot",
+                "reopen_catalog",
+                "verify_snapshot_linearity",
+                "verify_no_phantom_rows"
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "crash_recovery_sequence_is_deterministic"
+        },
+        {
+            "kind": "fault_injection",
+            "name": "Object-store fault injection matrix",
+            "status": "supported",
+            "faults": [
+                "connection_refused",
+                "timeout",
+                "partial_write",
+                "read_corruption",
+                "permission_denied"
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "fault_injection_all_faults_have_names"
+        },
+        {
+            "kind": "sql_classifier_coverage",
+            "name": "SQL classifier fuzz and property coverage",
+            "status": "supported",
+            "coverage": [
+                "catalog_selects",
+                "schema_qualified",
+                "ddl_unsupported",
+                "empty_input",
+                "nul_byte",
+                "multi_statement",
+                "transaction_control",
+                "discard_all"
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "sql_classifier_fuzz_corpus_is_deterministic"
+        },
+        {
+            "kind": "schema_discovery",
+            "name": "All 26 DuckLake metadata tables are discoverable",
+            "status": "supported",
+            "table_count": 26,
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "schema_discovery_all_26_tables_are_listed"
+        },
+        {
+            "kind": "snapshot_visibility",
+            "name": "MVCC snapshot visibility property tests",
+            "status": "supported",
+            "properties": [
+                "basic_mvcc_invariant",
+                "end_snapshot_hides_row",
+                "zero_end_snapshot_means_live",
+                "time_travel_no_future_rows",
+                "contiguous_history_exactly_one_visible"
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "snapshot_visibility_basic_mvcc_invariant"
+        },
+        {
+            "kind": "release_gate",
+            "name": "v0.47.11 release gates: zero uncovered surfaces, zero unclassified errors",
+            "status": "supported",
+            "gates": [
+                "zero_uncovered_export_surfaces",
+                "zero_unclassified_protocol_errors"
+            ],
+            "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
+            "test_name": "release_gate_zero_uncovered_export_surfaces"
+        }
+    ]
 }
