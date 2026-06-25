@@ -7,9 +7,20 @@ use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values::{decode_value, encode_value};
 
+fn property_proptest_config() -> proptest::test_runner::Config {
+    let mut config = proptest::test_runner::Config::default();
+    #[cfg(miri)]
+    {
+        // Miri isolation disallows getcwd(); disable persistence that probes cwd.
+        config.failure_persistence = None;
+    }
+    config
+}
+
 // ─── Round-Trip Tests ──────────────────────────────────────────────────────
 
 proptest! {
+    #![proptest_config(property_proptest_config())]
     #[test]
     fn round_trip_snapshot_row(
         snapshot_id in 1u64..u64::MAX,
@@ -209,6 +220,7 @@ proptest! {
 // ─── Key Ordering Tests ───────────────────────────────────────────────────
 
 proptest! {
+    #![proptest_config(property_proptest_config())]
     #[test]
     fn key_ordering_snapshot(a in 1u64..u64::MAX - 1) {
         let k1 = key_snapshot(a);
@@ -259,6 +271,7 @@ proptest! {
 // ─── Prefix Isolation Tests ───────────────────────────────────────────────
 
 proptest! {
+    #![proptest_config(property_proptest_config())]
     #[test]
     fn prefix_isolation_different_tags(
         id1 in 1u64..u64::MAX,
@@ -295,6 +308,7 @@ proptest! {
 // ─── MVCC Visibility Tests ────────────────────────────────────────────────
 
 proptest! {
+    #![proptest_config(property_proptest_config())]
     #[test]
     fn mvcc_visible_at_begin(begin in 1u64..u64::MAX) {
         prop_assert!(is_visible(begin, None, SnapshotId(begin)));
@@ -433,6 +447,7 @@ fn distinct_extension_key_triples_no_collision() {
 }
 
 proptest! {
+    #![proptest_config(property_proptest_config())]
     #[test]
     fn lease_key_roundtrip_no_collision(
         a in "[a-zA-Z0-9_\\-]{1,64}",
