@@ -7,11 +7,10 @@
 //! # Usage
 //!
 //! ```rust
-//! use rocklake_core::clock::{Clock, SystemClock};
+//! use rocklake_core::clock::{Clock, MockClock};
 //!
-//! let clock = SystemClock;
-//! let now = clock.now_secs();
-//! assert!(now > 0, "epoch seconds must be positive");
+//! let clock = MockClock::new(1_700_000_000);
+//! assert!(clock.now_secs() > 0, "epoch seconds must be positive");
 //! ```
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -71,6 +70,7 @@ impl Clock for MockClock {
 mod tests {
     use super::*;
 
+    #[cfg_attr(miri, ignore = "SystemTime::now() is unsupported under Miri")]
     #[test]
     fn system_clock_returns_positive() {
         let clock = SystemClock;
