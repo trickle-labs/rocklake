@@ -587,7 +587,7 @@ fn snapshot_visibility_contiguous_history_property() {
         end_snapshot: u64,
     }
 
-    let versions = vec![
+    let versions = [
         RowVersion {
             begin_snapshot: 1,
             end_snapshot: 4,
