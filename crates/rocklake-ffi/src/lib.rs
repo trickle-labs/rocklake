@@ -180,10 +180,21 @@ pub extern "C" fn rocklake_error_message(err: *const RockLakeError) -> *const c_
 const CATALOG_MAGIC: u32 = 0x4455_434B;
 
 /// Opaque handle for a CatalogStore.
+///
+/// The `store` and `runtime` fields are wrapped in `Option` to implement the
+/// tombstone pattern: `rocklake_close` takes the inner state (dropping it) but
+/// does **not** free the outer `Box`. This keeps the allocation live at magic=0
+/// so that post-close operations safely return `InvalidHandle` and double-close
+/// is a harmless no-op — both without reading freed memory.
+///
+/// The outer allocation (this struct) is intentionally not freed on close; it
+/// is freed only when the last language-binding caller drops its pointer
+/// (typically at process exit). The leaked size is `sizeof(RockLakeCatalog)`
+/// which is small and bounded by the number of catalog open/close cycles.
 pub struct RockLakeCatalog {
     magic: u32,
-    store: CatalogStore,
-    runtime: Arc<tokio::runtime::Runtime>,
+    store: Option<CatalogStore>,
+    runtime: Option<Arc<tokio::runtime::Runtime>>,
 }
 
 /// Validate a catalog handle and run a function with scoped mutable access.
@@ -360,8 +371,8 @@ pub extern "C" fn rocklake_open(
             write_error(err, RockLakeError::ok());
             Box::into_raw(Box::new(RockLakeCatalog {
                 magic: CATALOG_MAGIC,
-                store,
-                runtime,
+                store: Some(store),
+                runtime: Some(runtime),
             }))
         }
         Err(e) => {
@@ -440,8 +451,8 @@ pub extern "C" fn rocklake_open_readonly(
             write_error(err, RockLakeError::ok());
             Box::into_raw(Box::new(RockLakeCatalog {
                 magic: CATALOG_MAGIC,
-                store,
-                runtime,
+                store: Some(store),
+                runtime: Some(runtime),
             }))
         }
         Err(e) => {
@@ -451,28 +462,41 @@ pub extern "C" fn rocklake_open_readonly(
     }
 }
 
-/// Close and free a catalog handle. Safe to call with null or already-closed handles.
+/// Close a catalog handle. Safe to call with null, already-closed, or double-closed handles.
+///
+/// This function uses the **tombstone pattern**: the inner `CatalogStore` and
+/// `Runtime` are dropped (closing the store and releasing resources), but the
+/// outer `Box<RockLakeCatalog>` allocation is intentionally not freed. The
+/// handle remains a live "tombstone" (magic = 0) so that:
+///
+/// * **Double-close** is a safe no-op (magic ≠ CATALOG_MAGIC → return early).
+/// * **Use-after-close** returns `InvalidHandle` instead of reading freed memory.
+///
+/// The tombstone allocation (`sizeof(RockLakeCatalog)`) is small (≈ 48 bytes)
+/// and bounded by the number of open/close cycles, making the intentional leak
+/// acceptable for a per-process database handle.
 #[no_mangle]
 pub extern "C" fn rocklake_close(catalog: *mut RockLakeCatalog) {
     if catalog.is_null() {
         return;
     }
-    // Check and zeroize magic atomically to prevent double-close.
-    // SAFETY: `catalog` is non-null (checked above). We read the magic field
-    // and zeroize it before dropping to prevent double-close. The caller must
-    // ensure no other thread is concurrently using or closing the same handle.
-    let magic = unsafe { (*catalog).magic };
-    if magic != CATALOG_MAGIC {
+    // SAFETY: `catalog` is non-null (checked above). We access the magic field
+    // through a mutable reference bounded to this function scope.
+    let cat = unsafe { &mut *catalog };
+    if cat.magic != CATALOG_MAGIC {
         return;
     }
-    // SAFETY: zeroing magic before drop ensures a second call sees magic == 0
-    // and returns early, preventing a double-free of the allocation.
-    unsafe { (*catalog).magic = 0 };
-    // SAFETY: `catalog` is a valid, non-null allocation created by
-    // `rocklake_open()` via `Box::into_raw`. We reconstruct the Box to
-    // trigger the destructor. After this point, `catalog` is dangling.
-    let cat = unsafe { Box::from_raw(catalog) };
-    let _ = cat.runtime.block_on(cat.store.close());
+    // Zero magic BEFORE taking the inner state so that any concurrent caller
+    // (racing in the same thread or another) sees magic == 0 and returns early.
+    cat.magic = 0;
+    // Take the inner state out of the Options.  Dropping `store` closes the
+    // underlying SlateDB; dropping `runtime` shuts down the Tokio executor.
+    let store = cat.store.take();
+    let runtime = cat.runtime.take();
+    if let (Some(store), Some(runtime)) = (store, runtime) {
+        let _ = runtime.block_on(store.close());
+    }
+    // The outer Box is intentionally not freed here (tombstone pattern, see above).
 }
 
 // ─── Read Operations ───────────────────────────────────────────────────────
@@ -484,10 +508,11 @@ pub extern "C" fn rocklake_get_current_snapshot(
     err: *mut RockLakeError,
 ) -> RockLakeSnapshot {
     let inner = with_catalog(catalog, |cat| {
-        let reader = cat.store.read_latest();
+        // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
+        let reader = cat.store.as_ref().unwrap().read_latest();
         // SAFETY: `block_on` drives the future to completion synchronously.
         // The future borrows `reader` which is scoped to this closure frame.
-        cat.runtime.block_on(reader.get_snapshot())
+        cat.runtime.as_ref().unwrap().block_on(reader.get_snapshot())
     });
     match inner {
         None => {
@@ -531,9 +556,10 @@ pub extern "C" fn rocklake_list_schemas(
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
-            let reader = cat.store.read_at(SnapshotId::new(snapshot_id))?;
+            // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
+            let reader = cat.store.as_ref().unwrap().read_at(SnapshotId::new(snapshot_id))?;
             // SAFETY: future is driven to completion; reader is scoped to this closure.
-            cat.runtime.block_on(reader.list_schemas())
+            cat.runtime.as_ref().unwrap().block_on(reader.list_schemas())
         },
     );
     match inner {
@@ -583,9 +609,10 @@ pub extern "C" fn rocklake_list_tables(
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
-            let reader = cat.store.read_at(SnapshotId::new(snapshot_id))?;
+            // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
+            let reader = cat.store.as_ref().unwrap().read_at(SnapshotId::new(snapshot_id))?;
             // SAFETY: future is driven to completion; reader is scoped to this closure.
-            cat.runtime.block_on(reader.list_tables(schema_id))
+            cat.runtime.as_ref().unwrap().block_on(reader.list_tables(schema_id))
         },
     );
     match inner {
@@ -636,9 +663,10 @@ pub extern "C" fn rocklake_describe_table(
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
-            let reader = cat.store.read_at(SnapshotId::new(snapshot_id))?;
+            // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
+            let reader = cat.store.as_ref().unwrap().read_at(SnapshotId::new(snapshot_id))?;
             // SAFETY: future is driven to completion; reader is scoped to this closure.
-            cat.runtime.block_on(reader.describe_table(table_id))
+            cat.runtime.as_ref().unwrap().block_on(reader.describe_table(table_id))
         },
     );
     match inner {
@@ -704,9 +732,10 @@ pub extern "C" fn rocklake_list_data_files(
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
-            let reader = cat.store.read_at(SnapshotId::new(snapshot_id))?;
+            // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
+            let reader = cat.store.as_ref().unwrap().read_at(SnapshotId::new(snapshot_id))?;
             // SAFETY: future is driven to completion; reader is scoped to this closure.
-            cat.runtime.block_on(reader.list_data_files(table_id))
+            cat.runtime.as_ref().unwrap().block_on(reader.list_data_files(table_id))
         },
     );
     match inner {
