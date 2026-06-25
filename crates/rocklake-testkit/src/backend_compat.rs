@@ -48,6 +48,8 @@ macro_rules! catalog_backend_compat_test {
             use rocklake_catalog::{CatalogStore, OpenOptions};
             use std::sync::Arc;
 
+            static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
             fn make_opts(store: Arc<dyn object_store::ObjectStore>) -> OpenOptions {
                 OpenOptions {
                     object_store: store,
@@ -60,6 +62,7 @@ macro_rules! catalog_backend_compat_test {
 
             #[tokio::test]
             async fn open_create() {
+                let _guard = TEST_LOCK.lock().await;
                 let store: Arc<dyn object_store::ObjectStore> = $store_expr;
                 let mut cat = CatalogStore::open(make_opts(Arc::clone(&store)))
                     .await
@@ -77,6 +80,7 @@ macro_rules! catalog_backend_compat_test {
 
             #[tokio::test]
             async fn snapshot_commit() {
+                let _guard = TEST_LOCK.lock().await;
                 let store: Arc<dyn object_store::ObjectStore> = $store_expr;
                 let opts = make_opts(Arc::clone(&store));
 
@@ -116,6 +120,7 @@ macro_rules! catalog_backend_compat_test {
 
             #[tokio::test]
             async fn read_after_write() {
+                let _guard = TEST_LOCK.lock().await;
                 let store: Arc<dyn object_store::ObjectStore> = $store_expr;
                 let mut cat = CatalogStore::open(make_opts(store))
                     .await
@@ -147,6 +152,7 @@ macro_rules! catalog_backend_compat_test {
 
             #[tokio::test]
             async fn prefix_listing() {
+                let _guard = TEST_LOCK.lock().await;
                 let store: Arc<dyn object_store::ObjectStore> = $store_expr;
                 let mut cat = CatalogStore::open(make_opts(store))
                     .await
@@ -184,6 +190,7 @@ macro_rules! catalog_backend_compat_test {
 
             #[tokio::test]
             async fn writer_fencing() {
+                let _guard = TEST_LOCK.lock().await;
                 use rocklake_catalog::CatalogError;
 
                 let store: Arc<dyn object_store::ObjectStore> = $store_expr;
@@ -242,6 +249,7 @@ macro_rules! catalog_backend_compat_test {
 
             #[tokio::test]
             async fn post_crash_recovery() {
+                let _guard = TEST_LOCK.lock().await;
                 let store: Arc<dyn object_store::ObjectStore> = $store_expr;
                 let opts = make_opts(Arc::clone(&store));
 
