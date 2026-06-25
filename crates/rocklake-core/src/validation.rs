@@ -19,6 +19,7 @@ mod tests {
 
     /// Gate 1: Atomic multi-key writes via WriteBatch.
     /// Verify that WriteBatch is all-or-none across crash/reopen.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_atomic_multi_key_writes() {
         let dir = TempDir::new().unwrap();
@@ -49,6 +50,7 @@ mod tests {
     }
 
     /// Gate 2: Conditional initialization via DbTransaction insert-if-absent.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_conditional_initialization() {
         let dir = TempDir::new().unwrap();
@@ -81,6 +83,7 @@ mod tests {
 
     /// Gate 3: Serializable counter allocation.
     /// Two concurrent transactions on the same counter: one wins, loser gets conflict.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_serializable_counter_allocation() {
         let dir = TempDir::new().unwrap();
@@ -137,6 +140,7 @@ mod tests {
 
     /// Gate 4: Concurrent initialization convergence.
     /// Two processes calling open_or_create produce exactly one coherent result.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_concurrent_initialization_convergence() {
         let dir = TempDir::new().unwrap();
@@ -191,6 +195,7 @@ mod tests {
     }
 
     /// Gate 5: Durable commit options - flush() survives reopen.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_durable_commit() {
         let dir = TempDir::new().unwrap();
@@ -213,6 +218,7 @@ mod tests {
     }
 
     /// Gate 6: flush() reader visibility - write -> flush() -> fresh DbReader sees the key.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_flush_reader_visibility() {
         let dir = TempDir::new().unwrap();
@@ -236,6 +242,7 @@ mod tests {
     }
 
     /// Gate 7: Visibility-barrier latency measurement.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_visibility_barrier_latency() {
         let dir = TempDir::new().unwrap();
@@ -269,6 +276,7 @@ mod tests {
     }
 
     /// Gate 8: Writer fencing - force two writers; confirm distinguishable error.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_writer_fencing() {
         let dir = TempDir::new().unwrap();
@@ -300,6 +308,7 @@ mod tests {
     }
 
     /// Gate 9: WriteBatch logical size - determine if SlateDB imposes limits.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_write_batch_logical_size() {
         let dir = TempDir::new().unwrap();
@@ -329,6 +338,7 @@ mod tests {
     }
 
     /// Gate 10: Prefix-scan latest-value semantics.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn gate_prefix_scan_latest_value() {
         let dir = TempDir::new().unwrap();
@@ -370,6 +380,7 @@ mod tests {
     }
 
     /// Smoke test: open SlateDB, put/get, scan prefix, transaction, checkpoint.
+    #[cfg_attr(miri, ignore = "TempDir and LocalFileSystem are unsupported under Miri")]
     #[tokio::test]
     async fn smoke_test_hello_world() {
         let dir = TempDir::new().unwrap();
