@@ -1730,6 +1730,16 @@ async fn test_datafusion_pg_wire_mode_e2e() {
     };
     let catalog = Arc::new(Mutex::new(CatalogStore::open(opts).await.unwrap()));
 
+    {
+        let mut catalog_guard = catalog.lock().await;
+        let mut writer = catalog_guard.begin_write();
+        let snap = writer
+            .create_snapshot(Some("datafusion-pg-wire"), Some("bootstrap"))
+            .await
+            .unwrap();
+        catalog_guard.commit_writer(snap);
+    }
+
     // Primary server (standard port).
     let primary_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let primary_addr = primary_listener.local_addr().unwrap();

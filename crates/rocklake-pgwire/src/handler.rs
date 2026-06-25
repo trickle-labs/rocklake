@@ -1233,6 +1233,13 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
                 vec![]
             }
         }
+        rocklake_sql::StatementKind::VirtualCatalogScan { ref table_name } => {
+            if let Some(schema) = crate::schema_registry::fields_for_table(table_name) {
+                project_described_fields(sql, (*schema).clone())
+            } else {
+                vec![]
+            }
+        }
         _ => vec![],
     }
 }
