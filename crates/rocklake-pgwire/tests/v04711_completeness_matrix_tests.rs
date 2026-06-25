@@ -47,7 +47,10 @@ const SCENARIO_CATEGORIES: &[&str] = &[
 #[test]
 fn completeness_matrix_client_surfaces_are_exhaustive() {
     // All defined client surface kinds must be non-empty.
-    assert!(!CLIENT_SURFACES.is_empty(), "client surface list must not be empty");
+    assert!(
+        !CLIENT_SURFACES.is_empty(),
+        "client surface list must not be empty"
+    );
 
     // No duplicate surface names.
     let deduped: HashSet<&str> = CLIENT_SURFACES.iter().copied().collect();
@@ -65,7 +68,10 @@ fn completeness_matrix_client_surfaces_are_exhaustive() {
 
 #[test]
 fn completeness_matrix_backend_variants_are_exhaustive() {
-    assert!(!BACKEND_VARIANTS.is_empty(), "backend variant list must not be empty");
+    assert!(
+        !BACKEND_VARIANTS.is_empty(),
+        "backend variant list must not be empty"
+    );
 
     let deduped: HashSet<&str> = BACKEND_VARIANTS.iter().copied().collect();
     assert_eq!(
@@ -148,8 +154,7 @@ fn crash_recovery_sequence_is_deterministic() {
     let steps = crash_recovery_sequence();
 
     // There must be at least one crash point.
-    let crash_points: Vec<&CrashRecoveryStep> =
-        steps.iter().filter(|s| s.is_crash_point).collect();
+    let crash_points: Vec<&CrashRecoveryStep> = steps.iter().filter(|s| s.is_crash_point).collect();
     assert!(
         !crash_points.is_empty(),
         "crash/recovery sequence must define at least one crash point"
@@ -264,7 +269,10 @@ fn fault_injection_all_faults_have_names() {
     let faults = FaultKind::all();
     assert!(!faults.is_empty(), "fault kind list must not be empty");
     for fault in faults {
-        assert!(!fault.name().is_empty(), "fault kind must have a non-empty name");
+        assert!(
+            !fault.name().is_empty(),
+            "fault kind must have a non-empty name"
+        );
     }
 }
 
@@ -272,9 +280,17 @@ fn fault_injection_all_faults_have_names() {
 fn fault_injection_all_faults_map_to_sqlstate() {
     for fault in FaultKind::all() {
         let state = fault.expected_sqlstate();
-        assert_eq!(state.len(), 5, "SQLSTATE must be 5 characters for fault {:?}", fault);
+        assert_eq!(
+            state.len(),
+            5,
+            "SQLSTATE must be 5 characters for fault {:?}",
+            fault
+        );
         // SQLSTATE codes for errors must not be "00000" (success).
-        assert_ne!(state, "00000", "fault kind must not map to success SQLSTATE");
+        assert_ne!(
+            state, "00000",
+            "fault kind must not map to success SQLSTATE"
+        );
     }
 }
 
@@ -407,21 +423,20 @@ fn sql_classifier_fuzz_corpus_is_deterministic() {
 #[test]
 fn sql_classifier_fuzz_covers_all_statement_types() {
     // Every statement type in the corpus must be represented.
-    let has_select = SQL_FUZZ_CORPUS.iter().any(|(sql, _)| {
-        sql.trim()
-            .to_ascii_uppercase()
-            .starts_with("SELECT")
-    });
-    let has_ddl = SQL_FUZZ_CORPUS.iter().any(|(sql, _)| {
-        sql.trim()
-            .to_ascii_uppercase()
-            .starts_with("CREATE")
-    });
+    let has_select = SQL_FUZZ_CORPUS
+        .iter()
+        .any(|(sql, _)| sql.trim().to_ascii_uppercase().starts_with("SELECT"));
+    let has_ddl = SQL_FUZZ_CORPUS
+        .iter()
+        .any(|(sql, _)| sql.trim().to_ascii_uppercase().starts_with("CREATE"));
     let has_empty = SQL_FUZZ_CORPUS.iter().any(|(sql, _)| sql.trim().is_empty());
 
     assert!(has_select, "fuzz corpus must include SELECT statements");
     assert!(has_ddl, "fuzz corpus must include DDL statements");
-    assert!(has_empty, "fuzz corpus must include empty/whitespace inputs");
+    assert!(
+        has_empty,
+        "fuzz corpus must include empty/whitespace inputs"
+    );
 }
 
 #[test]
@@ -429,10 +444,7 @@ fn sql_classifier_fuzz_no_corpus_entry_expects_success_for_ddl() {
     // DDL statements must not be expected to classify as a specific table.
     for (sql, class) in SQL_FUZZ_CORPUS {
         let upper = sql.trim().to_ascii_uppercase();
-        if upper.starts_with("CREATE")
-            || upper.starts_with("DROP")
-            || upper.starts_with("ALTER")
-        {
+        if upper.starts_with("CREATE") || upper.starts_with("DROP") || upper.starts_with("ALTER") {
             assert!(
                 class.is_none(),
                 "DDL statement must not be expected to classify as a specific table: {sql:?}"
@@ -525,13 +537,8 @@ fn schema_discovery_core_tables_are_present() {
 
 /// Property: A snapshot with ID `s` is visible to a reader opened at
 /// `begin_snapshot <= s && (end_snapshot == 0 || end_snapshot > s)`.
-fn is_visible(
-    begin_snapshot: u64,
-    end_snapshot: u64,
-    reader_snapshot: u64,
-) -> bool {
-    reader_snapshot >= begin_snapshot
-        && (end_snapshot == 0 || reader_snapshot < end_snapshot)
+fn is_visible(begin_snapshot: u64, end_snapshot: u64, reader_snapshot: u64) -> bool {
+    reader_snapshot >= begin_snapshot && (end_snapshot == 0 || reader_snapshot < end_snapshot)
 }
 
 #[test]
@@ -581,9 +588,18 @@ fn snapshot_visibility_contiguous_history_property() {
     }
 
     let versions = vec![
-        RowVersion { begin_snapshot: 1, end_snapshot: 4 },
-        RowVersion { begin_snapshot: 4, end_snapshot: 7 },
-        RowVersion { begin_snapshot: 7, end_snapshot: 0 },
+        RowVersion {
+            begin_snapshot: 1,
+            end_snapshot: 4,
+        },
+        RowVersion {
+            begin_snapshot: 4,
+            end_snapshot: 7,
+        },
+        RowVersion {
+            begin_snapshot: 7,
+            end_snapshot: 0,
+        },
     ];
 
     for reader_snapshot in 1..=10u64 {

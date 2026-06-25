@@ -115,7 +115,9 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
         "compatibility snapshots must include the current release"
     );
     assert!(
-        snapshot_releases.iter().any(|release| release == "v0.47.10"),
+        snapshot_releases
+            .iter()
+            .any(|release| release == "v0.47.10"),
         "compatibility snapshots must include the previous release"
     );
 
@@ -341,37 +343,55 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
                 let scenarios = dimensions["scenarios"].as_array().unwrap_or_else(|| {
                     panic!("completeness_matrix dimensions must include scenarios: {surface}")
                 });
-                assert!(!scenarios.is_empty(), "completeness_matrix scenarios must not be empty");
+                assert!(
+                    !scenarios.is_empty(),
+                    "completeness_matrix scenarios must not be empty"
+                );
             }
             "crash_recovery" => {
                 let sequences = surface["sequences"].as_array().unwrap_or_else(|| {
                     panic!("crash_recovery surface must include sequences: {surface}")
                 });
-                assert!(!sequences.is_empty(), "crash_recovery sequences must not be empty");
+                assert!(
+                    !sequences.is_empty(),
+                    "crash_recovery sequences must not be empty"
+                );
             }
             "fault_injection" => {
                 let faults = surface["faults"].as_array().unwrap_or_else(|| {
                     panic!("fault_injection surface must include faults: {surface}")
                 });
-                assert!(!faults.is_empty(), "fault_injection faults must not be empty");
+                assert!(
+                    !faults.is_empty(),
+                    "fault_injection faults must not be empty"
+                );
             }
             "sql_classifier_coverage" => {
                 let coverage = surface["coverage"].as_array().unwrap_or_else(|| {
                     panic!("sql_classifier_coverage surface must include coverage: {surface}")
                 });
-                assert!(!coverage.is_empty(), "sql_classifier_coverage must not be empty");
+                assert!(
+                    !coverage.is_empty(),
+                    "sql_classifier_coverage must not be empty"
+                );
             }
             "schema_discovery" => {
-                let count = surface["table_count"]
-                    .as_u64()
-                    .unwrap_or_else(|| panic!("schema_discovery surface must include table_count: {surface}"));
-                assert!(count >= 26, "schema_discovery must cover at least 26 tables");
+                let count = surface["table_count"].as_u64().unwrap_or_else(|| {
+                    panic!("schema_discovery surface must include table_count: {surface}")
+                });
+                assert!(
+                    count >= 26,
+                    "schema_discovery must cover at least 26 tables"
+                );
             }
             "snapshot_visibility" => {
                 let properties = surface["properties"].as_array().unwrap_or_else(|| {
                     panic!("snapshot_visibility surface must include properties: {surface}")
                 });
-                assert!(!properties.is_empty(), "snapshot_visibility properties must not be empty");
+                assert!(
+                    !properties.is_empty(),
+                    "snapshot_visibility properties must not be empty"
+                );
             }
             "release_gate" => {
                 let gates = surface["gates"].as_array().unwrap_or_else(|| {

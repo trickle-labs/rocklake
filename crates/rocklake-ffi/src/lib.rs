@@ -512,7 +512,10 @@ pub extern "C" fn rocklake_get_current_snapshot(
         let reader = cat.store.as_ref().unwrap().read_latest();
         // SAFETY: `block_on` drives the future to completion synchronously.
         // The future borrows `reader` which is scoped to this closure frame.
-        cat.runtime.as_ref().unwrap().block_on(reader.get_snapshot())
+        cat.runtime
+            .as_ref()
+            .unwrap()
+            .block_on(reader.get_snapshot())
     });
     match inner {
         None => {
@@ -557,9 +560,16 @@ pub extern "C" fn rocklake_list_schemas(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
             // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-            let reader = cat.store.as_ref().unwrap().read_at(SnapshotId::new(snapshot_id))?;
+            let reader = cat
+                .store
+                .as_ref()
+                .unwrap()
+                .read_at(SnapshotId::new(snapshot_id))?;
             // SAFETY: future is driven to completion; reader is scoped to this closure.
-            cat.runtime.as_ref().unwrap().block_on(reader.list_schemas())
+            cat.runtime
+                .as_ref()
+                .unwrap()
+                .block_on(reader.list_schemas())
         },
     );
     match inner {
@@ -610,9 +620,16 @@ pub extern "C" fn rocklake_list_tables(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
             // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-            let reader = cat.store.as_ref().unwrap().read_at(SnapshotId::new(snapshot_id))?;
+            let reader = cat
+                .store
+                .as_ref()
+                .unwrap()
+                .read_at(SnapshotId::new(snapshot_id))?;
             // SAFETY: future is driven to completion; reader is scoped to this closure.
-            cat.runtime.as_ref().unwrap().block_on(reader.list_tables(schema_id))
+            cat.runtime
+                .as_ref()
+                .unwrap()
+                .block_on(reader.list_tables(schema_id))
         },
     );
     match inner {
@@ -664,9 +681,16 @@ pub extern "C" fn rocklake_describe_table(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
             // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-            let reader = cat.store.as_ref().unwrap().read_at(SnapshotId::new(snapshot_id))?;
+            let reader = cat
+                .store
+                .as_ref()
+                .unwrap()
+                .read_at(SnapshotId::new(snapshot_id))?;
             // SAFETY: future is driven to completion; reader is scoped to this closure.
-            cat.runtime.as_ref().unwrap().block_on(reader.describe_table(table_id))
+            cat.runtime
+                .as_ref()
+                .unwrap()
+                .block_on(reader.describe_table(table_id))
         },
     );
     match inner {
@@ -733,9 +757,16 @@ pub extern "C" fn rocklake_list_data_files(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
             // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-            let reader = cat.store.as_ref().unwrap().read_at(SnapshotId::new(snapshot_id))?;
+            let reader = cat
+                .store
+                .as_ref()
+                .unwrap()
+                .read_at(SnapshotId::new(snapshot_id))?;
             // SAFETY: future is driven to completion; reader is scoped to this closure.
-            cat.runtime.as_ref().unwrap().block_on(reader.list_data_files(table_id))
+            cat.runtime
+                .as_ref()
+                .unwrap()
+                .block_on(reader.list_data_files(table_id))
         },
     );
     match inner {
