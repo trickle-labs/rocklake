@@ -554,6 +554,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.21"
+          cache: false
 
       - name: Build rocklake-ffi static library
         run: cargo build -p rocklake-ffi
