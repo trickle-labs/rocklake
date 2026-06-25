@@ -1126,6 +1126,7 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
 
     match kind {
         rocklake_sql::StatementKind::SelectVersion => vec![text_col!("version")],
+        rocklake_sql::StatementKind::SelectOne => vec![int8_col!("?column?")],
         rocklake_sql::StatementKind::SelectCurrentSchema => vec![text_col!("current_schema")],
         rocklake_sql::StatementKind::SelectCurrentDatabase => {
             vec![text_col!("current_database")]
