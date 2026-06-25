@@ -24,7 +24,7 @@ jobs:
         run: cargo test -p rocklake-ffi --target x86_64-unknown-linux-gnu
       - name: Run with UBSAN
         env:
-          RUSTFLAGS: "-Z sanitizer=undefined"
+          RUSTFLAGS: "-Z ub-checks=yes"
         run: cargo test -p rocklake-ffi --target x86_64-unknown-linux-gnu
 
   miri:

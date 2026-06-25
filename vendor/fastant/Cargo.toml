@@ -1,0 +1,29 @@
+[package]
+edition = "2021"
+name = "fastant"
+version = "0.1.11"
+description = "A drop-in replacement for std::time::Instant that measures time with high performance and high accuracy powered by Time Stamp Counter (TSC)."
+license = "MIT"
+repository = "https://github.com/fast/fastant"
+
+[features]
+atomic = []
+fallback-coarse = ["coarsetime"]
+
+[lib]
+name = "fastant"
+path = "src/lib.rs"
+
+[dependencies]
+small_ctor = "0.1.2"
+web-time = "1.1.0"
+coarsetime = { version = "0.1", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+quanta = "0.12.5"
+rand = "0.9.0"
+wasm-bindgen-test = "0.3.50"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }

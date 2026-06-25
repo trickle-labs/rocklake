@@ -63,3 +63,6 @@ datafusion = "45"
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+
+[patch.crates-io]
+fastant = { path = "vendor/fastant" }
