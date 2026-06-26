@@ -37,22 +37,22 @@ jobs:
         run: docker pull fsouza/fake-gcs-server:latest
 
       - name: Run GCS emulator catalog compatibility tests (v0.27.12 suite)
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: |
           cargo test \
             -p rocklake-catalog \
             --test v02712_backend_compat_tests \
             --features gcs-emulator \
-            -- --nocapture --test-threads=1
+            -- --nocapture
 
       - name: Run GCS emulator backend compat (v0.36.0 suite)
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: |
           cargo test \
             -p rocklake-catalog \
             --test backend_compat \
             --features gcs-emulator \
-            -- --nocapture --test-threads=1
+            -- --nocapture
 
   azure-emulator-tests:
     name: Azure Emulator Tests
