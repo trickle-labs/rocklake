@@ -63,8 +63,7 @@ mod gcs_compat {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    static HARNESS: tokio::sync::Mutex<Option<Arc<GcsEmulatorHarness>>> = 
-        tokio::sync::Mutex::const_new(None);
+    static HARNESS: Mutex<Option<Arc<GcsEmulatorHarness>>> = Mutex::const_new(None);
 
     async fn gcs_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
         let mut harness_lock = HARNESS.lock().await;
@@ -95,8 +94,7 @@ mod azure_compat {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    static HARNESS: tokio::sync::Mutex<Option<Arc<AzureEmulatorHarness>>> = 
-        tokio::sync::Mutex::const_new(None);
+    static HARNESS: Mutex<Option<Arc<AzureEmulatorHarness>>> = Mutex::const_new(None);
 
     async fn azure_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
         let mut harness_lock = HARNESS.lock().await;
