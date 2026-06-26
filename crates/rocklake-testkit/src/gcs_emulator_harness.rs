@@ -89,16 +89,24 @@ impl GcsEmulatorHarness {
 
     /// Get an `ObjectStore` instance configured to use the GCS emulator.
     ///
-    /// The `STORAGE_EMULATOR_HOST` environment variable is set to the emulator
-    /// endpoint before building the client.
+    /// Uses a fake service account key with `disable_oauth: true` and
+    /// `gcs_base_url` pointing at the local emulator, so object_store never
+    /// tries to fetch credentials from the GCE instance-metadata service
+    /// (which hangs on non-GCE machines such as GitHub Actions runners).
+    /// fake-gcs-server does not validate the bearer token.
     pub fn object_store(&self, bucket: &str) -> Arc<dyn ObjectStore> {
-        // fake-gcs-server respects STORAGE_EMULATOR_HOST for endpoint override.
-        // We set it per-harness.  Tests using this harness should run serially
-        // to avoid environment variable conflicts.
-        std::env::set_var("STORAGE_EMULATOR_HOST", &self.endpoint);
+        // Build a minimal service-account JSON that:
+        //  - routes storage requests to the local fake-gcs-server via gcs_base_url
+        //  - sets disable_oauth=true so object_store uses a static empty bearer
+        //    token instead of fetching one from metadata.google.internal
+        let sa_key = format!(
+            r#"{{"type":"service_account","project_id":"test","private_key_id":"fake","private_key":"fake","client_email":"fake@test.iam.gserviceaccount.com","gcs_base_url":"{}","disable_oauth":true}}"#,
+            self.endpoint
+        );
 
-        let store = GoogleCloudStorageBuilder::from_env()
+        let store = GoogleCloudStorageBuilder::new()
             .with_bucket_name(bucket)
+            .with_service_account_key(&sa_key)
             .build()
             .expect("failed to build GCS client for emulator");
         Arc::new(store)
@@ -120,7 +128,6 @@ impl GcsEmulatorHarness {
             .args(["kill", &self.container_id])
             .output()
             .await;
-        std::env::remove_var("STORAGE_EMULATOR_HOST");
     }
 
     /// Wait until the emulator HTTP endpoint is reachable.

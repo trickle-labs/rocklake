@@ -37,6 +37,7 @@ jobs:
         run: docker pull fsouza/fake-gcs-server:latest
 
       - name: Run GCS emulator catalog compatibility tests (v0.27.12 suite)
+        timeout-minutes: 15
         run: |
           cargo test \
             -p rocklake-catalog \
@@ -45,6 +46,7 @@ jobs:
             -- --nocapture
 
       - name: Run GCS emulator backend compat (v0.36.0 suite)
+        timeout-minutes: 15
         run: |
           cargo test \
             -p rocklake-catalog \
