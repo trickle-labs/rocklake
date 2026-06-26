@@ -1140,13 +1140,7 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             vec![int8_col!("max")]
         }
         rocklake_sql::StatementKind::SelectLatestSnapshotId => {
-            vec![FieldInfo::new(
-                "ducklake_latest_snapshot_id".to_string(),
-                None,
-                None,
-                Type::INT8,
-                FieldFormat::Text,
-            )]
+            vec![int8_col!("ducklake_latest_snapshot_id")]
         }
         // Delegate to registry for the 4-col latest snapshot info shape.
         rocklake_sql::StatementKind::SelectLatestSnapshotInfo => {

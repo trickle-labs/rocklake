@@ -88,11 +88,11 @@ pub(super) fn make_single_int_response<'a>(col_name: &str, value: i64) -> Respon
         None,
         None,
         Type::INT8,
-        FieldFormat::Text,
+        FieldFormat::Binary,
     )]);
     let mut encoder = DataRowEncoder::new(schema.clone());
     encoder
-        .encode_field_with_type_and_format(&Some(value.to_string()), &Type::INT8, FieldFormat::Text)
+        .encode_field_with_type_and_format(&Some(value), &Type::INT8, FieldFormat::Binary)
         .unwrap();
     let row = encoder.finish();
     let data_rows = vec![row];
@@ -107,11 +107,11 @@ pub(super) fn make_null_int_response<'a>(col_name: &str) -> Response<'a> {
         None,
         None,
         Type::INT8,
-        FieldFormat::Text,
+        FieldFormat::Binary,
     )]);
     let mut encoder = DataRowEncoder::new(schema.clone());
     encoder
-        .encode_field_with_type_and_format(&None::<String>, &Type::INT8, FieldFormat::Text)
+        .encode_field_with_type_and_format(&None::<i64>, &Type::INT8, FieldFormat::Binary)
         .unwrap();
     let row = encoder.finish();
     let data_rows = vec![row];
