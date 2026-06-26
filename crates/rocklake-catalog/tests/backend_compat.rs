@@ -60,26 +60,24 @@ catalog_backend_compat_test!(localfs, {
 mod gcs_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::GcsEmulatorHarness;
-    use std::sync::OnceLock;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
-    static HARNESS: OnceLock<Result<GcsEmulatorHarness, String>> = OnceLock::new();
+    static HARNESS: tokio::sync::Mutex<Option<Arc<GcsEmulatorHarness>>> = 
+        tokio::sync::Mutex::const_new(None);
 
     async fn gcs_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
-        let harness = HARNESS
-            .get_or_init(|| {
-                // Block on the async initialization within the current runtime
-                match tokio::runtime::Handle::try_current() {
-                    Ok(rt) => rt.block_on(async {
-                        GcsEmulatorHarness::start().await
-                            .map_err(|e| e.to_string())
-                    }),
-                    Err(_) => Err("not in tokio runtime".to_string()),
-                }
-            })
-            .as_ref()
-            .map_err(|e| format!("GCS emulator unavailable (requires Docker + fake-gcs-server): {e}. \\n                         Run: docker pull fsouza/fake-gcs-server:latest"))
-            .expect("failed to initialize GCS emulator");
+        let mut harness_lock = HARNESS.lock().await;
+        
+        if harness_lock.is_none() {
+            let harness = GcsEmulatorHarness::start()
+                .await
+                .map_err(|e| format!("GCS emulator unavailable (requires Docker + fake-gcs-server): {e}. \n                         Run: docker pull fsouza/fake-gcs-server:latest"))
+                .expect("failed to initialize GCS emulator");
+            *harness_lock = Some(Arc::new(harness));
+        }
 
+        let harness = harness_lock.as_ref().expect("harness should be initialized");
         let bucket_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness.create_bucket(&bucket_name).await.ok();
         harness.object_store(&bucket_name)
@@ -94,26 +92,24 @@ mod gcs_compat {
 mod azure_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::AzureEmulatorHarness;
-    use std::sync::OnceLock;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
-    static HARNESS: OnceLock<Result<AzureEmulatorHarness, String>> = OnceLock::new();
+    static HARNESS: tokio::sync::Mutex<Option<Arc<AzureEmulatorHarness>>> = 
+        tokio::sync::Mutex::const_new(None);
 
     async fn azure_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
-        let harness = HARNESS
-            .get_or_init(|| {
-                // Block on the async initialization within the current runtime
-                match tokio::runtime::Handle::try_current() {
-                    Ok(rt) => rt.block_on(async {
-                        AzureEmulatorHarness::start().await
-                            .map_err(|e| e.to_string())
-                    }),
-                    Err(_) => Err("not in tokio runtime".to_string()),
-                }
-            })
-            .as_ref()
-            .map_err(|e| format!("Azure emulator unavailable (requires Docker + Azurite): {e}. \\n                         Run: docker pull mcr.microsoft.com/azure-storage/azurite:latest"))
-            .expect("failed to initialize Azure emulator");
+        let mut harness_lock = HARNESS.lock().await;
+        
+        if harness_lock.is_none() {
+            let harness = AzureEmulatorHarness::start()
+                .await
+                .map_err(|e| format!("Azure emulator unavailable (requires Docker + Azurite): {e}. \n                         Run: docker pull mcr.microsoft.com/azure-storage/azurite:latest"))
+                .expect("failed to initialize Azure emulator");
+            *harness_lock = Some(Arc::new(harness));
+        }
 
+        let harness = harness_lock.as_ref().expect("harness should be initialized");
         let container_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness.create_container(&container_name).await.ok();
         harness.object_store(&container_name)
