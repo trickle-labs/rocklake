@@ -129,7 +129,7 @@ fn has_invariant_tsc() -> bool {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         let cpuid_invariant_tsc_bts = 1 << 8;
-        #[allow(unused_unsafe)]
+        #[allow(unsafe_code, unused_unsafe)]
         unsafe {
             __cpuid(0x80000000).eax >= 0x80000007
                 && __cpuid(0x80000007).edx & cpuid_invariant_tsc_bts != 0

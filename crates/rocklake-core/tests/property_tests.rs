@@ -8,6 +8,7 @@ use rocklake_core::tags::*;
 use rocklake_core::values::{decode_value, encode_value};
 
 fn property_proptest_config() -> proptest::test_runner::Config {
+    #[allow(unused_mut)]
     let mut config = proptest::test_runner::Config::default();
     #[cfg(miri)]
     {
