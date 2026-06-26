@@ -43,7 +43,7 @@ jobs:
             -p rocklake-catalog \
             --test v02712_backend_compat_tests \
             --features gcs-emulator \
-            -- --nocapture
+            -- --nocapture --test-threads=1
 
       - name: Run GCS emulator backend compat (v0.36.0 suite)
         timeout-minutes: 30
@@ -52,7 +52,7 @@ jobs:
             -p rocklake-catalog \
             --test backend_compat \
             --features gcs-emulator \
-            -- --nocapture
+            -- --nocapture --test-threads=1
 
   azure-emulator-tests:
     name: Azure Emulator Tests

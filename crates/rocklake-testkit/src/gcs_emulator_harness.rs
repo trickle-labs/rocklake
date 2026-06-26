@@ -133,7 +133,15 @@ impl GcsEmulatorHarness {
     /// Wait until the emulator HTTP endpoint is reachable.
     async fn wait_for_ready(&self, timeout: Duration) -> Result<(), GcsHarnessError> {
         let start = std::time::Instant::now();
-        let client = reqwest::Client::new();
+        // Per-request timeout prevents send().await from hanging indefinitely
+        // when fake-gcs-server accepts the TCP connection but stalls before
+        // sending an HTTP response. Without this the outer elapsed() check
+        // never fires and the function hangs forever.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .connect_timeout(Duration::from_secs(1))
+            .build()
+            .unwrap_or_default();
         loop {
             if start.elapsed() > timeout {
                 return Err(GcsHarnessError::Timeout(
@@ -150,7 +158,11 @@ impl GcsEmulatorHarness {
 
     /// Create a bucket in the emulator via the GCS JSON API.
     pub async fn create_bucket(&self, bucket: &str) -> Result<ObjectPath, GcsHarnessError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(2))
+            .build()
+            .unwrap_or_default();
         // fake-gcs-server accepts bucket creation at POST /storage/v1/b.
         let url = format!("{}/storage/v1/b", self.endpoint);
         let body = serde_json::json!({ "name": bucket });

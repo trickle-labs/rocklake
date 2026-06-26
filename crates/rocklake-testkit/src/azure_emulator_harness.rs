@@ -126,7 +126,14 @@ impl AzureEmulatorHarness {
     /// Wait until the Azurite blob service responds.
     async fn wait_for_ready(&self, timeout: Duration) -> Result<(), AzureHarnessError> {
         let start = std::time::Instant::now();
-        let client = reqwest::Client::new();
+        // Per-request timeout prevents send().await from hanging indefinitely
+        // if the container accepts the TCP connection but stalls before
+        // responding. Without this the outer elapsed() check never fires.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .connect_timeout(Duration::from_secs(1))
+            .build()
+            .unwrap_or_default();
         loop {
             if start.elapsed() > timeout {
                 return Err(AzureHarnessError::Timeout(
