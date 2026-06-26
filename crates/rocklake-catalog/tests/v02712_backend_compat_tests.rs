@@ -37,28 +37,33 @@ catalog_backend_compat_test!(
 mod gcs_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::GcsEmulatorHarness;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use std::sync::OnceLock;
 
-    static HARNESS: tokio::sync::Mutex<Option<Arc<GcsEmulatorHarness>>> = 
-        tokio::sync::Mutex::const_new(None);
+    static HARNESS: OnceLock<Result<GcsEmulatorHarness, String>> = OnceLock::new();
 
     /// Run the GCS emulator and return an `Arc<dyn ObjectStore>`.
     ///
     /// If Docker is unavailable, the test is skipped gracefully via panic with
     /// a descriptive message.
     async fn gcs_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
-        let mut harness_lock = HARNESS.lock().await;
-        
-        if harness_lock.is_none() {
-            let harness = GcsEmulatorHarness::start()
-                .await
-                .map_err(|e| format!("GCS emulator unavailable (skipping emulator tests): {e}. \n                         Ensure Docker is installed and fake-gcs-server image is accessible."))
-                .expect("failed to initialize GCS emulator");
-            *harness_lock = Some(Arc::new(harness));
-        }
+        let harness = HARNESS
+            .get_or_init(|| {
+                // Spawn a new thread with its own runtime to avoid blocking the executor thread
+                std::thread::spawn(|| {
+                    tokio::runtime::Runtime::new()
+                        .unwrap()
+                        .block_on(async {
+                            GcsEmulatorHarness::start().await
+                                .map_err(|e| e.to_string())
+                        })
+                })
+                .join()
+                .unwrap_or_else(|_| Err("failed to initialize GCS harness thread".to_string()))
+            })
+            .as_ref()
+            .map_err(|e| format!("GCS emulator unavailable (skipping emulator tests): {e}. \n                         Ensure Docker is installed and fake-gcs-server image is accessible."))
+            .expect("failed to initialize GCS emulator");
 
-        let harness = harness_lock.as_ref().expect("harness should be initialized");
         let bucket_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness
             .create_bucket(&bucket_name)
@@ -76,27 +81,32 @@ mod gcs_compat {
 mod azure_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::AzureEmulatorHarness;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use std::sync::OnceLock;
 
-    static HARNESS: tokio::sync::Mutex<Option<Arc<AzureEmulatorHarness>>> = 
-        tokio::sync::Mutex::const_new(None);
+    static HARNESS: OnceLock<Result<AzureEmulatorHarness, String>> = OnceLock::new();
 
     /// Run the Azurite emulator and return an `Arc<dyn ObjectStore>`.
     ///
     /// If Docker is unavailable, the test panics with a descriptive message.
     async fn azure_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
-        let mut harness_lock = HARNESS.lock().await;
-        
-        if harness_lock.is_none() {
-            let harness = AzureEmulatorHarness::start()
-                .await
-                .map_err(|e| format!("Azure emulator unavailable (skipping emulator tests): {e}. \n                         Ensure Docker is installed and Azurite image is accessible."))
-                .expect("failed to initialize Azure emulator");
-            *harness_lock = Some(Arc::new(harness));
-        }
+        let harness = HARNESS
+            .get_or_init(|| {
+                // Spawn a new thread with its own runtime to avoid blocking the executor thread
+                std::thread::spawn(|| {
+                    tokio::runtime::Runtime::new()
+                        .unwrap()
+                        .block_on(async {
+                            AzureEmulatorHarness::start().await
+                                .map_err(|e| e.to_string())
+                        })
+                })
+                .join()
+                .unwrap_or_else(|_| Err("failed to initialize Azure harness thread".to_string()))
+            })
+            .as_ref()
+            .map_err(|e| format!("Azure emulator unavailable (skipping emulator tests): {e}. \n                         Ensure Docker is installed and Azurite image is accessible."))
+            .expect("failed to initialize Azure emulator");
 
-        let harness = harness_lock.as_ref().expect("harness should be initialized");
         // Container names in Azure must be lowercase, alphanumeric plus dash only
         let container_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness
