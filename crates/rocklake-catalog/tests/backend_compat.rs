@@ -60,23 +60,25 @@ catalog_backend_compat_test!(localfs, {
 mod gcs_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::GcsEmulatorHarness;
+    use std::sync::OnceLock;
 
-    static HARNESS: tokio::sync::OnceCell<GcsEmulatorHarness> = tokio::sync::OnceCell::const_new();
+    static HARNESS: OnceLock<Result<GcsEmulatorHarness, String>> = OnceLock::new();
 
     async fn gcs_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
         let harness = HARNESS
-            .get_or_init(|| async {
-                match GcsEmulatorHarness::start().await {
-                    Ok(h) => h,
-                    Err(e) => {
-                        panic!(
-                            "GCS emulator unavailable (requires Docker + fake-gcs-server): {e}. \
-                         Run: docker pull fsouza/fake-gcs-server:latest"
-                        );
-                    }
+            .get_or_init(|| {
+                // Block on the async initialization within the current runtime
+                match tokio::runtime::Handle::try_current() {
+                    Ok(rt) => rt.block_on(async {
+                        GcsEmulatorHarness::start().await
+                            .map_err(|e| e.to_string())
+                    }),
+                    Err(_) => Err("not in tokio runtime".to_string()),
                 }
             })
-            .await;
+            .as_ref()
+            .map_err(|e| format!("GCS emulator unavailable (requires Docker + fake-gcs-server): {e}. \\n                         Run: docker pull fsouza/fake-gcs-server:latest"))
+            .expect("failed to initialize GCS emulator");
 
         let bucket_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness.create_bucket(&bucket_name).await.ok();
@@ -92,24 +94,25 @@ mod gcs_compat {
 mod azure_compat {
     use rocklake_testkit::catalog_backend_compat_test;
     use rocklake_testkit::AzureEmulatorHarness;
+    use std::sync::OnceLock;
 
-    static HARNESS: tokio::sync::OnceCell<AzureEmulatorHarness> =
-        tokio::sync::OnceCell::const_new();
+    static HARNESS: OnceLock<Result<AzureEmulatorHarness, String>> = OnceLock::new();
 
     async fn azure_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
         let harness = HARNESS
-            .get_or_init(|| async {
-                match AzureEmulatorHarness::start().await {
-                    Ok(h) => h,
-                    Err(e) => {
-                        panic!(
-                            "Azure emulator unavailable (requires Docker + Azurite): {e}. \
-                         Run: docker pull mcr.microsoft.com/azure-storage/azurite:latest"
-                        );
-                    }
+            .get_or_init(|| {
+                // Block on the async initialization within the current runtime
+                match tokio::runtime::Handle::try_current() {
+                    Ok(rt) => rt.block_on(async {
+                        AzureEmulatorHarness::start().await
+                            .map_err(|e| e.to_string())
+                    }),
+                    Err(_) => Err("not in tokio runtime".to_string()),
                 }
             })
-            .await;
+            .as_ref()
+            .map_err(|e| format!("Azure emulator unavailable (requires Docker + Azurite): {e}. \\n                         Run: docker pull mcr.microsoft.com/azure-storage/azurite:latest"))
+            .expect("failed to initialize Azure emulator");
 
         let container_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness.create_container(&container_name).await.ok();
