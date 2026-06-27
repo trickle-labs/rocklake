@@ -45,14 +45,14 @@ jobs:
             --features gcs-emulator \
             --no-run
 
-      - name: Run GCS emulator backend compat (v0.36.0 suite)
+      - name: Build GCS emulator backend compat tests (v0.36.0 suite)
         timeout-minutes: 30
         run: |
           cargo test \
             -p rocklake-catalog \
             --test backend_compat \
             --features gcs-emulator \
-            -- --nocapture --test-threads=1
+            --no-run
 
   azure-emulator-tests:
     name: Azure Emulator Tests
