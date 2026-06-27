@@ -57,7 +57,9 @@ mod gcs_compat {
             *harness_lock = Some(Arc::new(harness));
         }
 
-        let harness = harness_lock.as_ref().expect("harness should be initialized");
+        let harness = harness_lock
+            .as_ref()
+            .expect("harness should be initialized");
 
         let bucket_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness
@@ -95,7 +97,9 @@ mod azure_compat {
             *harness_lock = Some(Arc::new(harness));
         }
 
-        let harness = harness_lock.as_ref().expect("harness should be initialized");
+        let harness = harness_lock
+            .as_ref()
+            .expect("harness should be initialized");
 
         // Container names in Azure must be lowercase, alphanumeric plus dash only
         let container_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());

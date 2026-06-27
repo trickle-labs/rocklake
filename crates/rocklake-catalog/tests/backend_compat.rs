@@ -67,7 +67,7 @@ mod gcs_compat {
 
     async fn gcs_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
         let mut harness_lock = HARNESS.lock().await;
-        
+
         if harness_lock.is_none() {
             let harness = GcsEmulatorHarness::start()
                 .await
@@ -76,7 +76,9 @@ mod gcs_compat {
             *harness_lock = Some(Arc::new(harness));
         }
 
-        let harness = harness_lock.as_ref().expect("harness should be initialized");
+        let harness = harness_lock
+            .as_ref()
+            .expect("harness should be initialized");
         let bucket_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness.create_bucket(&bucket_name).await.ok();
         harness.object_store(&bucket_name)
@@ -98,7 +100,7 @@ mod azure_compat {
 
     async fn azure_store() -> std::sync::Arc<dyn object_store::ObjectStore> {
         let mut harness_lock = HARNESS.lock().await;
-        
+
         if harness_lock.is_none() {
             let harness = AzureEmulatorHarness::start()
                 .await
@@ -107,7 +109,9 @@ mod azure_compat {
             *harness_lock = Some(Arc::new(harness));
         }
 
-        let harness = harness_lock.as_ref().expect("harness should be initialized");
+        let harness = harness_lock
+            .as_ref()
+            .expect("harness should be initialized");
         let container_name = format!("rocklake-test-{}", uuid::Uuid::new_v4());
         harness.create_container(&container_name).await.ok();
         harness.object_store(&container_name)
