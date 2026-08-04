@@ -124,7 +124,7 @@ impl ConnectionSubscriptions {
     /// Drain any pending notifications from all subscribed channels.
     pub fn drain_notifications(&mut self) -> Vec<Notification> {
         let mut notifications = Vec::new();
-        for (_channel, rx) in self.receivers.iter_mut() {
+        for rx in self.receivers.values_mut() {
             while let Ok(notif) = rx.try_recv() {
                 notifications.push(notif);
             }
