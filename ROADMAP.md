@@ -111,6 +111,12 @@ binding on every roadmap release below.
 | **v0.47.6 — Full Live DuckDB Container Loop** | Real DuckDB container loop against MinIO-backed RockLake, with end-to-end tutorial flow, object-store verification, and live regression transcripts | Complete |
 | **v0.47.10 — Public Surface Manifest & Contract Freeze** | Canonical surface manifest for SQL, PG-wire, CLI, bindings, object-store, and admin/maintenance entry points; every surface mapped to happy-path and negative tests; golden request/response fixtures; manifest coverage gate; versioned compatibility snapshots | Complete |
 | **v0.47.11 — Surface Completeness Matrix & Negative Testing** | Exhaustive matrix across clients, backends, restarts, concurrency, and emulator targets; deterministic crash/recovery and object-store fault injection; property/fuzz coverage for SQL classification, schema discovery, and snapshot visibility; release gate on zero uncovered export surfaces and zero unclassified protocol errors | Complete |
+| **v0.47.12 — Atomic Write Protocol & Conflict Safety** | Retry-safe snapshot commits; overlapping-writer counter conflict detection; stage every snapshot-dependent metadata mutation; transactionally correct PG-wire writes and strict parameter validation | Planning |
+| **v0.47.13 — Snapshot Read Correctness & Metadata Isolation** | Committed-snapshot bounds; conservative stats pruning; delete-file and CDC table isolation; explicit file retirement; snapshot-aware stats and complete DROP/ALTER cascades | Planning |
+| **v0.47.14 — Recovery, Retention & Cleanup Safety** | Complete atomic checkpoint restore; unified GC/checkpoint pins and leases; retention-safe excision; snapshot-correct scheduled deletion; canonical, fail-closed orphan cleanup | Planning |
+| **v0.47.15 — Catalog Fidelity, Migration & Integrity Verification** | Snapshot-consistent, lossless export/import; strict all-table DuckLake migration; counter/index reconstruction; full-catalog invariant verification and safe repair plans | Planning |
+| **v0.47.16 — Read-Only, Path & Engine Scan Correctness** | Truly write-free and fail-closed reader opens; immutable reader-mode enforcement; preserved cloud URI prefixes; canonical path resolution; correct DataFusion handling of deletes, inlined rows, and unsupported formats | Planning |
+| **v0.47.17 — Production Failure Certification Gate** | Real SlateDB crash-boundary tests; overlapping writer and rollback tests; value-level DuckLake conformance; executing GCS/Azure emulator suites; zero silent wrong-result release gate | Planning |
 | **v0.48.0 — Paginated Scans, Streaming & Observability Depth** | RFC-03: `list_data_files_paged()` with continuation token; `stream_data_files()` async Stream; PG-wire incremental `DataRow` streaming; proper histogram metrics via `prometheus` crate; per-query trace correlation and `trace_id` propagation; slow-query log; memory pressure and RSS metrics; SF100 catalog benchmark suite | Planning |
 | **v0.49.0 — Tiered NVMe Cache & Multi-Node Production Validation** | RFC-02: `TieredCache` L1/L2/L3 with local SSD spill; `--cache-dir` and `--cache-max-gb` CLI flags; L2 pre-population on cold start; wire up `slatedb_sst_count`/`slatedb_compaction_lag_ms` to real SlateDB stats; real 24h multi-node soak on AWS/GCP (not `InMemory`); GHCR container image with versioned tags; pod disruption budget + HPA documentation; v1.0 gating checklist completion | Planning |
 | **v0.70.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; blocked on upstream DuckDB community extension catalog API | Exploration |
@@ -142,6 +148,12 @@ Detailed sequence for v0.46–v0.49 (post-Assessment-2 hardening):
 * v0.47.9: Cross-backend failure matrix, restart semantics, and deterministic chaos
 * v0.47.10: Public surface manifest and contract freeze
 * v0.47.11: Surface completeness matrix and negative testing
+* v0.47.12: Atomic write protocol and conflict safety
+* v0.47.13: Snapshot read correctness and metadata isolation
+* v0.47.14: Recovery, retention, and cleanup safety
+* v0.47.15: Catalog fidelity, migration, and integrity verification
+* v0.47.16: Read-only, path, and engine scan correctness
+* v0.47.17: Production failure certification gate
 * v0.48: Paginated scans (RFC-03) + streaming wire protocol + proper histogram metrics + SF100 benchmarks
 * v0.49: Tiered NVMe cache (RFC-02) + real multi-node soak + GHCR images + v1.0 gating checklist
 
@@ -5213,6 +5225,249 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 - [x] Failure injection suite covering writer, reader, and object-store churn
 - [x] Orphan-free recovery assertions after every crash scenario
 - [x] Persistent failure transcript corpus for regressions
+
+---
+
+## v0.47.12 — Atomic Write Protocol & Conflict Safety
+
+> Make the existing single-writer protocol atomic at every observable boundary. A failed or overlapping write must either commit exactly once or leave no catalog state, consumed IDs, or lost retry state.
+
+### Retry-Safe Snapshot Commits
+
+- [ ] Keep staged rows, pending snapshot changes, schema-change state, and tentative counters intact until the SlateDB transaction commits; retrying the same writer after fencing or a transaction conflict must produce the intended commit exactly once.
+- [ ] Allocate snapshot, catalog, and file IDs from values validated inside the serializable transaction instead of trusting the `CatalogStore` counter copy captured by `begin_write()`.
+- [ ] Reject two overlapping writers created from the same store counter base with a structured serialization error; never overwrite a snapshot or entity key allocated by the winning writer.
+- [ ] Make `commit_writer()` synchronization impossible to omit or apply to the wrong store state, and add counter monotonicity assertions across commit failure, retry, and reopen.
+
+### One Atomic Mutation Boundary
+
+- [ ] Audit every direct `Db::put()` and `Db::delete()` in `writer/`; stage column and name mappings, partition/sort metadata, macro parameters, file/table stats, scheduled-deletion changes, and all other snapshot-dependent rows in the commit transaction.
+- [ ] For metadata that remains deliberately non-MVCC, validate the writer epoch in the same transaction as the mutation and document why independent visibility is safe.
+- [ ] Route all PG-wire DuckLake mutations through `PendingCatalogTxn`; `BEGIN` followed by `ROLLBACK` must leave every one of the catalog tables and counters unchanged.
+- [ ] Ensure any statement error aborts the logical DuckLake transaction without leaking rows written by earlier statements in that transaction.
+
+### Mutation Validation
+
+- [ ] Reject missing, NULL, malformed, overflowed, or type-incompatible required parameters instead of defaulting IDs and counts to `0` or paths to an empty string.
+- [ ] Validate parent schema, table, column, data-file, partition, and mapping ownership before staging a row; reject cross-table references with a stable SQLSTATE.
+- [ ] Persist every advanced data-file and delete-file field accepted by the DuckLake facade rather than routing inserts through reduced argument APIs.
+
+### Release Gates
+
+- [ ] Deterministic overlapping-writer test proves no duplicate snapshot, catalog, file, or row IDs and no lost winner data.
+- [ ] Failure injection before epoch check, after each staged write, before counter writes, and at transaction commit proves all-or-nothing visibility after reopen.
+- [ ] Retry tests prove a failed `CatalogWriter` retains its complete staged intent and can either retry safely or return an explicit terminal-state error.
+- [ ] PG-wire transaction matrix covers commit, rollback, statement failure, disconnect, and stale-writer fencing for every mutation family.
+
+### Deliverables
+
+- [ ] Retry-safe snapshot commit protocol with transactional counter validation
+- [ ] No snapshot-dependent direct writes outside the commit transaction
+- [ ] Strict PG-wire mutation validation and rollback semantics
+- [ ] Overlapping-writer and crash-boundary regression suite
+
+---
+
+## v0.47.13 — Snapshot Read Correctness & Metadata Isolation
+
+> Eliminate silent wrong results from synthetic snapshots, cross-table metadata, optimistic pruning, and inferred file replacement. Readers must return exactly the facts committed for the requested table and snapshot.
+
+### Committed Snapshot Semantics
+
+- [ ] Reject future snapshot IDs and gaps with `SnapshotNotFound`; replace `u64::MAX` "latest" sentinels with an explicit latest-reader path.
+- [ ] Validate `retain_from <= from_snapshot <= to_snapshot <= latest_committed` for time travel, diffs, CDC, leases, and all PG-wire snapshot functions.
+- [ ] Make snapshot-bound readers filter snapshot changes, stats, mappings, tags, and every dependent metadata category at the requested snapshot rather than exposing mutable latest state.
+- [ ] Define and test PG-wire transaction read semantics: stable transaction snapshot plus read-your-writes where DuckLake requires it.
+
+### File and Statistics Correctness
+
+- [ ] Make `prune_files()` start from all visible files and prune only when valid, type-compatible statistics conclusively exclude a match; missing, partial, stale, malformed, NaN, and null-only stats must conservatively keep the file.
+- [ ] Resolve delete-file ownership from an explicit `table_id` or its referenced data file; unresolved legacy rows are corruption, never a match for every table.
+- [ ] Remove row-range and equal-row-count consolidation heuristics from authoritative `list_data_files()` reads; replacement requires explicit MVCC retirement or replacement metadata.
+- [ ] Remove unconditional catalog-scan diagnostics from the read path and expose any legacy consolidation analysis only through explicit verification or repair tooling.
+
+### Table Isolation and Lifecycle
+
+- [ ] Resolve `table_changes(table_ref, ...)` to one stable table ID, filter added and retired files before scanning, use catalog `row_id_start`, and include delete-file and inlined-delete semantics without pairing unrelated rows as updates.
+- [ ] Complete DROP/ALTER retirement for schemas, tables, columns, views, macros, files, stats, mappings, tags, partitions, sort metadata, schema versions, and secondary indexes.
+- [ ] Correct mapping and variant-stat response builders so every value comes from its specified field; do not substitute mapping IDs for field or table IDs or emit placeholder NULLs for persisted values.
+
+### Release Gates
+
+- [ ] Two-table isolation tests cover data files, delete files, stats pruning, CDC, mappings, tags, and cascades at old and latest snapshots.
+- [ ] Property tests prove pruning is conservative: the pruned file set may contain false positives but never omit a file containing a match.
+- [ ] Golden consolidation tests prove legitimate same-size and overlapping-row-range files remain visible until explicitly retired.
+- [ ] Historical-reader tests mutate every dependent metadata family and prove old snapshots remain stable.
+
+### Deliverables
+
+- [ ] Strict committed-snapshot bounds across Rust and PG-wire APIs
+- [ ] Conservative, snapshot-aware pruning and metadata reads
+- [ ] Explicit file lifecycle with no read-time replacement guesses
+- [ ] Complete table isolation and dependent-row cascades
+
+---
+
+## v0.47.14 — Recovery, Retention & Cleanup Safety
+
+> Make rollback, retention, and physical cleanup preserve every retained snapshot. Maintenance commands must fail closed and report partial failure instead of claiming success after incomplete work.
+
+### Complete Atomic Checkpoint Restore
+
+- [ ] Define restore as a new atomic snapshot representing the checkpoint's full logical state; restore rows retired after the checkpoint as well as hide rows created later.
+- [ ] Cover every persisted DuckLake category, including data and delete files, indexes, inlined rows and deletes, stats, metadata, tags, mappings, partitions, sort state, views, and macros.
+- [ ] Allocate checkpoint IDs, write checkpoint metadata, apply restore mutations, and advance snapshot/counter state through serializable transactions with monotonic IDs.
+- [ ] Inject interruption throughout checkpoint creation and restore; reopen must expose either the complete pre-operation state or the complete restored state.
+
+### Pins, Leases and GC
+
+- [ ] Unify named checkpoint pins and snapshot pins under one authoritative representation; migrate existing `checkpoint-pin:` records or include them transactionally in every GC decision.
+- [ ] Permit the retain-from floor to equal a pinned snapshot, reject leases below the existing floor, and calculate `GcPlan.snapshots_affected` after pin adjustment.
+- [ ] Validate pins, leases, requested floors, and the retain-from update in the same serializable transaction.
+- [ ] Add race tests for pin, unpin, lease acquisition/expiry, GC planning, and GC apply.
+
+### Safe Excision and File Cleanup
+
+- [ ] Rework excision eligibility around visibility at the retention floor; never remove an open-ended inlined-delete marker or live data file merely because its begin snapshot is old.
+- [ ] Determine scheduled-deletion safety from file retirement snapshots and retention, using `schedule_start` only as wall-clock grace time; remove a schedule row only after confirmed deletion or confirmed absence.
+- [ ] Canonicalize relative and absolute data/delete paths against schema, table, and data roots before orphan comparison, verification, or deletion.
+- [ ] Stream object listings, propagate listing failures, and return structured per-object deletion failures; an incomplete cleanup run must not return an unqualified success.
+- [ ] Make excision and cleanup resumable and verify catalog/object-store convergence after retries.
+
+### Release Gates
+
+- [ ] Checkpoint round trips cover create, retire, restore, and historical reads for every catalog row category.
+- [ ] Retention-floor model tests prove all rows needed by any retained snapshot survive GC, excision, and scheduled cleanup.
+- [ ] Object-store fault tests cover list, HEAD, delete, retry, permission, and inconsistent-prefix failures without false orphan deletion.
+- [ ] Maintenance CLI output and exit status distinguish complete success, safe no-op, partial failure, and unsafe refusal.
+
+### Deliverables
+
+- [ ] Full-state atomic checkpoint restore
+- [ ] Unified, race-safe pin and lease retention semantics
+- [ ] Retention-correct excision and scheduled deletion
+- [ ] Canonical, fail-closed, resumable object cleanup
+
+---
+
+## v0.47.15 — Catalog Fidelity, Migration & Integrity Verification
+
+> Make backup, migration, verification, and repair trustworthy for every persisted DuckLake fact. A successful round trip must preserve exact values and remain safe for the next write.
+
+### Lossless Export and Import
+
+- [ ] Export from one stable storage read view so concurrent commits cannot mix generations across table scans.
+- [ ] Define a versioned manifest that enumerates every persisted catalog category and every field, including snapshot counter hints, UUID/path fields, nested column metadata, full file metadata, stats, mappings, scheduled deletions, and inlined deletes.
+- [ ] Validate the complete import before publishing writes; import atomically into an empty target or temporary namespace and leave no partial catalog on error.
+- [ ] Rebuild all counters and secondary indexes from imported maxima, including shared ID domains and table-by-ID/data-file indexes, before permitting the first post-import writer.
+
+### Strict DuckLake Migration
+
+- [ ] Migrate all supported DuckLake tables and fields from PostgreSQL and SQLite instead of a subset; unknown tables, malformed rows, and type conversion failures must be reported, not silently skipped or defaulted.
+- [ ] Commit the migrated catalog as one validated logical state, with source snapshot identity and a deterministic reconciliation report.
+- [ ] Verify row counts, primary/foreign keys, paths, field values, and snapshot-visible results against the source before cutover.
+
+### Full-Catalog Verification and Repair
+
+- [ ] Extend `verify_catalog()` across every tag and decoder, checking MVCC intervals, committed snapshot references, foreign-key ownership, duplicate live names, and overlapping versions.
+- [ ] Verify counters exceed every allocated ID, snapshot rows agree with counters, and all primary/secondary index copies decode to identical rows.
+- [ ] Verify file/delete/stats ownership, mapping/tag/partition/sort references, pin/lease validity, and canonical object paths; optionally HEAD referenced objects with structured unavailable-versus-corrupt results.
+- [ ] Make repair plans complete, deterministic, dry-run by default, and atomic on apply; never lower counters or discard ambiguous facts automatically.
+
+### Release Gates
+
+- [ ] Exact all-table/all-field export-import golden round trip followed by successful new schema, table, file, and snapshot allocation.
+- [ ] Corrupt, truncated, duplicate, unknown-version, and interrupted imports leave the target unchanged and return actionable errors.
+- [ ] PostgreSQL and SQLite migration corpora compare exact values and visibility against authoritative DuckLake output.
+- [ ] Mutation-based verifier tests inject broken counters, indexes, ownership, MVCC ranges, and references and require a specific finding for each defect.
+
+### Deliverables
+
+- [ ] Snapshot-consistent versioned catalog export format
+- [ ] Atomic, counter-safe import and complete external migration
+- [ ] Full-catalog invariant verifier
+- [ ] Conservative atomic repair workflow
+
+---
+
+## v0.47.16 — Read-Only, Path & Engine Scan Correctness
+
+> Make reader deployments incapable of mutation and make every engine resolve the same catalog URI and data-file path to the same object. Existing integrations must return correct rows or an explicit error, never an empty success.
+
+### Truly Read-Only and Fail-Closed Opens
+
+- [ ] Remove initialization and key migration from read-only opens; if a catalog is absent or requires migration, return a writer-required error without writing any SlateDB key.
+- [ ] Propagate counter, schema-version, retention, decode, and backend errors instead of treating corruption or transient I/O as snapshot/floor `0`.
+- [ ] Carry immutable access mode through PG-wire server, handler, session, and executor; reject every mutation before writer construction or direct I/O with SQLSTATE `25006`.
+- [ ] Prove `ReadOnlyCatalog::open()`, `refresh()`, and reader-mode PG-wire sessions perform zero object-store writes with a rejecting object-store wrapper.
+
+### Canonical URI and Path Resolution
+
+- [ ] Preserve nested prefixes from `s3://`, `gs://`, Azure, and local catalog URIs; do not discard the prefix and silently open a bucket-level `catalog` path.
+- [ ] Centralize catalog and data path resolution for client, DataFusion, CDC, cleanup, verification, FFI, and PG-wire code, honoring `path_is_relative` and already-absolute URIs.
+- [ ] Normalize separators and reject traversal, bucket/container mismatches, ambiguous roots, and unsupported schemes before object-store access.
+- [ ] Add cross-backend golden tests proving all clients open the same prefixed catalog and resolve identical data/delete objects.
+
+### DataFusion Scan Fidelity
+
+- [ ] Apply visible delete files, inlined rows, and inlined deletes when scanning a table; share row identity and snapshot semantics with the DuckLake/PG-wire path.
+- [ ] Use conservative catalog pruning only as an optimization and register the catalog's object-store instance for cloud URLs instead of assuming local filesystem behavior.
+- [ ] Honor absolute paths and `path_is_relative`; avoid unconditional root concatenation.
+- [ ] Return explicit unsupported-format or unsupported-type errors for registered files that cannot be scanned instead of `EmptyExec` and an apparently empty table.
+- [ ] Add deterministic bridge shutdown and propagate client/catalog close errors so process drain cannot hide unflushed state or leaked worker threads.
+
+### Release Gates
+
+- [ ] Write-rejecting object-store tests record zero PUT, DELETE, multipart, or migration calls for every reader entrypoint.
+- [ ] Nested-prefix matrix passes on LocalFS, MinIO/S3, GCS, and Azure for Rust client, PG-wire, DataFusion, and maintenance commands.
+- [ ] DataFusion results match DuckDB for base files, delete files, inlined rows, mixed relative/absolute paths, historical snapshots, and unsupported formats.
+- [ ] Reader startup under corrupt counters, retention state, or permissions fails closed with stable errors and no empty-catalog fallback.
+
+### Deliverables
+
+- [ ] Immutable, zero-write reader mode with fail-closed state loading
+- [ ] One canonical URI/path resolver across all integrations
+- [ ] DuckLake-correct DataFusion scans
+- [ ] Deterministic shutdown and close-error propagation
+
+---
+
+## v0.47.17 — Production Failure Certification Gate
+
+> Replace surface-count confidence with production-boundary evidence. This release adds no product capability; it proves that the v0.47 hardening work survives real storage, protocol, process, and concurrency failures before v0.48 changes scan execution.
+
+### Production-Boundary Fault Injection
+
+- [ ] Wire deterministic fail points into real `CatalogStore` commit, counter, index, checkpoint, restore, import, cleanup, and close boundaries rather than testing only mock manifest/WAL structures.
+- [ ] Reopen the actual SlateDB catalog after every injected failure and run full invariant verification plus snapshot-visible golden queries.
+- [ ] Exercise kill/restart around object creation, catalog registration, retirement, and cleanup; prove retries neither lose committed rows nor duplicate logical operations.
+
+### Value-Level DuckLake Certification
+
+- [ ] Replace schema-name and non-empty-response assertions with exact value, type, nullability, order, visibility, and SQLSTATE comparisons against an authoritative DuckDB 1.5.3 + DuckLake 1.0 corpus.
+- [ ] Add non-vacuous two-table, overlapping-writer, transaction rollback, cascading metadata, checkpoint restore, migration, and historical snapshot scenarios.
+- [ ] Compare the public surface manifest to storage tags, schema registry entries, response builders, mutation handlers, negative probes, and live corpus traffic so self-reported names cannot satisfy coverage.
+
+### Backend and Lifecycle Matrix
+
+- [ ] Execute, not merely compile, both GCS emulator suites; keep Azure execution and align LocalFS, MinIO, GCS, and Azure assertions.
+- [ ] Cover nested prefixes, transient retries, permission denial, listing inconsistency, partial deletion, reader startup, writer takeover, and process drain on every supported backend.
+- [ ] Run ASAN/LSAN/Miri where applicable for FFI and lifecycle paths and fail on leaked catalog handles, bridge threads, or unpropagated close failures.
+
+### Release Gates
+
+- [ ] Zero invariant violations after every production fail point and forced reopen.
+- [ ] Zero silent wrong-result cases across the value-level DuckLake corpus and backend matrix.
+- [ ] Zero uncovered storage tags, schema registry rows, response builders, mutation handlers, and public surfaces.
+- [ ] Zero skipped or build-only jobs in the required pre-release correctness matrix; unavailable external infrastructure must fail or explicitly block certification.
+- [ ] Publish a v0.47.17 certification report listing exact tool/client/backend versions, scenarios, failures injected, and residual limitations.
+
+### Deliverables
+
+- [ ] Real SlateDB and object-store crash/recovery suite
+- [ ] Value-level DuckLake conformance corpus
+- [ ] Executing multi-backend emulator matrix
+- [ ] Signed-off zero-silent-wrong-result certification report
 
 ---
 
