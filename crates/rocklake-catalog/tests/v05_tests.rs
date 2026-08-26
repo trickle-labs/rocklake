@@ -411,7 +411,8 @@ async fn schedule_and_list_file_deletion() {
         .schedule_file_deletion(file_id, "old.parquet", "data")
         .await
         .unwrap();
-    let _snap = writer.create_snapshot(None, None).await.unwrap();
+    let snap = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap);
 
     let reader = store.read_at(SnapshotId::new(1)).unwrap();
     let scheduled = reader.list_files_scheduled_for_deletion().await.unwrap();
@@ -426,6 +427,8 @@ async fn schedule_and_list_file_deletion() {
         .remove_scheduled_deletion(schedule_start, file_id)
         .await
         .unwrap();
+    let snap = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap);
 
     // After removal, list is empty
     let reader2 = store.read_latest();

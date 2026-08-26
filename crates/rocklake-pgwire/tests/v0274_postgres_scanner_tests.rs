@@ -440,6 +440,8 @@ async fn table_stats_merge_incremental_inlined_batches() {
             .await
             .unwrap();
         writer.adjust_table_record_count(3, -1).await.unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        lock.commit_writer(snapshot);
     }
 
     let reader = { store.lock().await.read_latest() };

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.47.12] — 2026-08-26
+
+### Added
+
+- Atomic snapshot commits now retain staged catalog state and tentative IDs until the SlateDB transaction succeeds.
+- Overlapping writers are rejected when their counter bases are stale, with regression coverage for winner preservation and ID reuse.
+- PG-wire transaction regressions cover statement failure, metadata rollback, and extended data-file metadata.
+
+### Changed
+
+- All catalog-writer mutations, including stats, mappings, partition and sort metadata, macro parameters, and deletion schedules, now stage behind the snapshot commit boundary.
+- PG-wire DuckLake metadata inserts use the pending transaction buffer and persist extended data-file and delete-file fields.
+
+### Fixed
+
+- Repeated table-stat deltas now read staged values, so one writer cannot discard earlier deltas in the same commit.
+
 ## [0.47.11] — 2026-06-25
 
 ### Added

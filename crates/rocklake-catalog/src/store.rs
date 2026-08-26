@@ -259,6 +259,9 @@ impl CatalogStore {
     /// `CatalogWriter::create_snapshot()`.  It is `#[must_use]` so the compiler
     /// will reject code that discards it without calling this method.
     pub fn commit_writer(&mut self, result: CommitResult) {
+        debug_assert!(result.next_snapshot_id >= self.counters.peek_snapshot_id());
+        debug_assert!(result.next_catalog_id >= self.counters.peek_catalog_id());
+        debug_assert!(result.next_file_id >= self.counters.peek_file_id());
         self.counters.sync_from(
             result.next_snapshot_id,
             result.next_catalog_id,

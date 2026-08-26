@@ -55,8 +55,103 @@ use helpers::{
 use meta::execute_virtual_catalog_scan;
 use session::{execute_hold_snapshot, execute_release_snapshot};
 
+async fn submit_ops(
+    ops: Vec<BufferedOp>,
+    session: &mut SessionState,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+    notify_manager: &Arc<NotifyManager>,
+) -> Result<usize, RockLakeError> {
+    let row_count = ops.len();
+    if session.in_transaction {
+        for op in ops {
+            session.pending_txn.push(op)?;
+        }
+    } else {
+        execute_commit(ops, store, notify_manager).await?;
+    }
+    Ok(row_count)
+}
+
+fn required_param_u64(
+    params: &ParamValues,
+    index: usize,
+    name: &str,
+) -> Result<u64, RockLakeError> {
+    params
+        .get_u64(index)
+        .map_err(|_| RockLakeError::MissingParam {
+            name: name.to_string(),
+        })
+}
+
+fn required_param_i64(
+    params: &ParamValues,
+    index: usize,
+    name: &str,
+) -> Result<i64, RockLakeError> {
+    params
+        .get_i64(index)
+        .map_err(|_| RockLakeError::MissingParam {
+            name: name.to_string(),
+        })
+}
+
+fn required_param_string(
+    params: &ParamValues,
+    index: usize,
+    name: &str,
+) -> Result<String, RockLakeError> {
+    params
+        .get_string(index)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| RockLakeError::MissingParam {
+            name: name.to_string(),
+        })
+}
+
+fn required_param_bool(
+    params: &ParamValues,
+    index: usize,
+    name: &str,
+) -> Result<bool, RockLakeError> {
+    params
+        .get_bool(index)
+        .map_err(|_| RockLakeError::MissingParam {
+            name: name.to_string(),
+        })
+}
+
 /// Execute a SQL statement against the catalog, returning PG wire responses.
 pub async fn execute_sql<'a>(
+    sql: &'a str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+    session: &mut SessionState,
+    notify_manager: &Arc<NotifyManager>,
+    extension_schemas: &Arc<Vec<String>>,
+) -> Result<Vec<Response<'a>>, RockLakeError> {
+    let result = execute_sql_inner(
+        sql,
+        params,
+        store,
+        session,
+        notify_manager,
+        extension_schemas,
+    )
+    .await;
+    if result.is_err() {
+        // A failed statement aborts the logical DuckLake transaction. No
+        // earlier buffered operation may become visible if a later statement
+        // in the same transaction fails.
+        session.pending_txn.clear();
+        session.bootstrap = Default::default();
+        session.in_transaction = false;
+    }
+    result
+}
+
+async fn execute_sql_inner<'a>(
     sql: &'a str,
     params: &ParamValues,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
@@ -480,19 +575,22 @@ fn parse_insert_rows_map(
     Some(result_rows)
 }
 
-fn row_map_string(
+pub(super) fn row_map_string(
     row: &std::collections::HashMap<String, Option<String>>,
     key: &str,
 ) -> Option<String> {
     row.get(key).and_then(|value| value.clone())
 }
 
-fn row_map_u64(row: &std::collections::HashMap<String, Option<String>>, key: &str) -> Option<u64> {
+pub(super) fn row_map_u64(
+    row: &std::collections::HashMap<String, Option<String>>,
+    key: &str,
+) -> Option<u64> {
     row.get(key)
         .and_then(|value| value.as_ref().and_then(|text| text.parse::<u64>().ok()))
 }
 
-fn row_map_bool(
+pub(super) fn row_map_bool(
     row: &std::collections::HashMap<String, Option<String>>,
     key: &str,
 ) -> Option<bool> {
@@ -505,6 +603,45 @@ fn row_map_bool(
                 _ => None,
             })
     })
+}
+
+fn required_row_u64_value(
+    row: &std::collections::HashMap<String, Option<String>>,
+    names: &[&str],
+) -> Result<u64, RockLakeError> {
+    names
+        .iter()
+        .find_map(|name| row_map_u64(row, name))
+        .ok_or_else(|| RockLakeError::MissingParam {
+            name: names[0].to_string(),
+        })
+}
+
+fn required_row_string_value(
+    row: &std::collections::HashMap<String, Option<String>>,
+    names: &[&str],
+) -> Result<String, RockLakeError> {
+    names
+        .iter()
+        .find_map(|name| row_map_string(row, name).filter(|value| !value.is_empty()))
+        .ok_or_else(|| RockLakeError::MissingParam {
+            name: names[0].to_string(),
+        })
+}
+
+fn optional_row_i64_value(
+    row: &std::collections::HashMap<String, Option<String>>,
+    name: &str,
+) -> Result<Option<i64>, RockLakeError> {
+    match row.get(name).and_then(|value| value.as_ref()) {
+        None => Ok(None),
+        Some(value) => value
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| RockLakeError::MissingParam {
+                name: name.to_string(),
+            }),
+    }
 }
 
 fn normalize_literal(value: &str) -> Option<String> {
@@ -741,283 +878,6 @@ fn normalize_table_ref(table_ref: &str) -> String {
         .trim()
         .trim_matches('"')
         .to_string()
-}
-
-async fn execute_ducklake_column_mapping_insert(
-    sql: &str,
-    params: &ParamValues,
-    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<usize, RockLakeError> {
-    let Some(rows) = parse_insert_rows_map(sql, params) else {
-        return Ok(0);
-    };
-
-    let mut catalog = store.lock().await;
-    let mut writer = catalog.begin_write();
-    let mut row_count = 0usize;
-
-    for row in rows {
-        let table_id = row
-            .get("table_id")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()))
-            .unwrap_or(0);
-        let mapping_id = row
-            .get("mapping_id")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
-        let column_id = row
-            .get("column_id")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
-        let file_column_name = row
-            .get("file_column_name")
-            .and_then(|value| value.as_deref())
-            .or_else(|| row.get("column_name").and_then(|value| value.as_deref()));
-        let mapping_type = row
-            .get("mapping_type")
-            .and_then(|value| value.as_deref())
-            .or_else(|| row.get("type").and_then(|value| value.as_deref()));
-
-        writer
-            .add_column_mapping(
-                table_id,
-                mapping_id,
-                column_id,
-                file_column_name,
-                mapping_type,
-            )
-            .await
-            .map_err(RockLakeError::from)?;
-        row_count += 1;
-    }
-
-    Ok(row_count)
-}
-
-async fn execute_ducklake_name_mapping_insert(
-    sql: &str,
-    params: &ParamValues,
-    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<usize, RockLakeError> {
-    let Some(rows) = parse_insert_rows_map(sql, params) else {
-        return Ok(0);
-    };
-
-    let mut catalog = store.lock().await;
-    let mut writer = catalog.begin_write();
-    let mut row_count = 0usize;
-
-    for row in rows {
-        let column_id = row
-            .get("column_id")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()))
-            .unwrap_or(0);
-        let mapping_id = row
-            .get("mapping_id")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
-        let name = row
-            .get("name")
-            .and_then(|value| value.as_deref())
-            .or_else(|| row.get("source_name").and_then(|value| value.as_deref()))
-            .or_else(|| row.get("field_name").and_then(|value| value.as_deref()))
-            .unwrap_or_default();
-        let source_name_hash = row
-            .get("source_name_hash")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
-        let target_field_id = row
-            .get("target_field_id")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
-        let parent_column = row
-            .get("parent_column")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<u64>().ok()));
-        let is_partition = row
-            .get("is_partition")
-            .and_then(|value| value.as_ref().and_then(|s| s.parse::<bool>().ok()));
-
-        writer
-            .add_name_mapping(
-                mapping_id,
-                column_id,
-                name,
-                source_name_hash,
-                target_field_id,
-                parent_column,
-                is_partition,
-            )
-            .await
-            .map_err(RockLakeError::from)?;
-        row_count += 1;
-    }
-
-    Ok(row_count)
-}
-
-async fn execute_ducklake_partition_info_insert(
-    sql: &str,
-    params: &ParamValues,
-    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<usize, RockLakeError> {
-    let Some(rows) = parse_insert_rows_map(sql, params) else {
-        return Ok(0);
-    };
-
-    let mut catalog = store.lock().await;
-    let mut writer = catalog.begin_write();
-    let mut row_count = 0usize;
-
-    for row in rows {
-        let table_id = row_map_u64(&row, "table_id").unwrap_or(0);
-        let partition_id = row_map_u64(&row, "partition_id");
-        writer
-            .register_partition_info(table_id, partition_id)
-            .await
-            .map_err(RockLakeError::from)?;
-        row_count += 1;
-    }
-
-    Ok(row_count)
-}
-
-async fn execute_ducklake_sort_info_insert(
-    sql: &str,
-    params: &ParamValues,
-    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<usize, RockLakeError> {
-    let Some(rows) = parse_insert_rows_map(sql, params) else {
-        return Ok(0);
-    };
-
-    let mut catalog = store.lock().await;
-    let mut writer = catalog.begin_write();
-    let mut row_count = 0usize;
-
-    for row in rows {
-        let table_id = row_map_u64(&row, "table_id").unwrap_or(0);
-        let sort_id = row_map_u64(&row, "sort_id");
-        writer
-            .register_sort_info(table_id, sort_id)
-            .await
-            .map_err(RockLakeError::from)?;
-        row_count += 1;
-    }
-
-    Ok(row_count)
-}
-
-async fn execute_ducklake_files_scheduled_for_deletion_insert(
-    sql: &str,
-    params: &ParamValues,
-    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<usize, RockLakeError> {
-    let Some(rows) = parse_insert_rows_map(sql, params) else {
-        return Ok(0);
-    };
-
-    let mut catalog = store.lock().await;
-    let mut writer = catalog.begin_write();
-    let mut row_count = 0usize;
-
-    for row in rows {
-        let data_file_id = row_map_u64(&row, "data_file_id").unwrap_or(0);
-        let path = row_map_string(&row, "path").unwrap_or_default();
-        let path_is_relative = row_map_bool(&row, "path_is_relative");
-        let schedule_start = row_map_u64(&row, "schedule_start")
-            .or_else(|| row_map_u64(&row, "deletion_scheduled_at"))
-            .unwrap_or_else(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            });
-        let file_type = row_map_string(&row, "file_type");
-        writer
-            .schedule_file_deletion_with_opts(
-                data_file_id,
-                &path,
-                file_type.as_deref(),
-                path_is_relative,
-                schedule_start,
-            )
-            .await
-            .map_err(RockLakeError::from)?;
-        row_count += 1;
-    }
-
-    Ok(row_count)
-}
-
-async fn execute_ducklake_partition_column_insert(
-    sql: &str,
-    params: &ParamValues,
-    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<usize, RockLakeError> {
-    let Some(rows) = parse_insert_rows_map(sql, params) else {
-        return Ok(0);
-    };
-
-    let mut catalog = store.lock().await;
-    let mut writer = catalog.begin_write();
-    let mut row_count = 0usize;
-
-    for row in rows {
-        let partition_id = row_map_u64(&row, "partition_id").unwrap_or(0);
-        let partition_key_index = row_map_u64(&row, "partition_key_index").unwrap_or(0);
-        let column_id = row_map_u64(&row, "column_id").unwrap_or(0);
-        let transform = row_map_string(&row, "transform");
-        let table_id = row_map_u64(&row, "table_id");
-        writer
-            .register_partition_column(
-                partition_id,
-                partition_key_index,
-                column_id,
-                transform.as_deref(),
-                table_id,
-            )
-            .await
-            .map_err(RockLakeError::from)?;
-        row_count += 1;
-    }
-
-    Ok(row_count)
-}
-
-async fn execute_ducklake_sort_expression_insert(
-    sql: &str,
-    params: &ParamValues,
-    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
-) -> Result<usize, RockLakeError> {
-    let Some(rows) = parse_insert_rows_map(sql, params) else {
-        return Ok(0);
-    };
-
-    let mut catalog = store.lock().await;
-    let mut writer = catalog.begin_write();
-    let mut row_count = 0usize;
-
-    for row in rows {
-        let sort_id = row_map_u64(&row, "sort_id").unwrap_or(0);
-        let sort_key_index = row_map_u64(&row, "sort_key_index").unwrap_or(0);
-        let column_id = row_map_u64(&row, "column_id").unwrap_or(0);
-        let sort_direction = row_map_string(&row, "sort_direction");
-        let null_order = row_map_string(&row, "null_order");
-        let table_id = row_map_u64(&row, "table_id");
-        let expression = row_map_string(&row, "expression");
-        let dialect = row_map_string(&row, "dialect");
-        writer
-            .register_sort_expression(
-                sort_id,
-                sort_key_index,
-                column_id,
-                sort_direction.as_deref(),
-                null_order.as_deref(),
-                table_id,
-                expression.as_deref(),
-                dialect.as_deref(),
-            )
-            .await
-            .map_err(RockLakeError::from)?;
-        row_count += 1;
-    }
-
-    Ok(row_count)
 }
 
 fn inlined_table_name_from_sql(sql: &str) -> Option<String> {
@@ -1846,11 +1706,15 @@ async fn execute_classified<'a>(
         StatementKind::InsertSnapshotChanges => {
             let literals = literal_insert_values(_sql);
             let op = BufferedOp::InsertSnapshotChanges {
-                change_type: params
-                    .get_string(0)
-                    .ok()
-                    .or_else(|| literal_string(&literals, 1))
-                    .unwrap_or_default(),
+                change_type: if _sql.contains('$') {
+                    required_param_string(params, 0, "change_type")?
+                } else {
+                    literal_string(&literals, 1)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "change_type".into(),
+                        })?
+                },
                 change_info: params
                     .get_optional_string(1)
                     .or_else(|| literal_string(&literals, 4)),
@@ -1881,6 +1745,11 @@ async fn execute_classified<'a>(
                     .or_else(|| literal_string(&literals, 4))
                     .unwrap_or_default();
             }
+            if schema_name.is_empty() {
+                return Err(RockLakeError::MissingParam {
+                    name: "schema_name".into(),
+                });
+            }
             let op = BufferedOp::InsertSchema { schema_name };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -1903,7 +1772,9 @@ async fn execute_classified<'a>(
                     schema_id = row
                         .get("schema_id")
                         .and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()))
-                        .unwrap_or(1);
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "schema_id".into(),
+                        })?;
                     table_name = row
                         .get("table_name")
                         .and_then(|v| v.clone())
@@ -1915,11 +1786,13 @@ async fn execute_classified<'a>(
                 }
             } else {
                 let literals = literal_insert_values(_sql);
-                schema_id = params
-                    .get_u64(0)
-                    .ok()
-                    .or_else(|| literal_u64(&literals, 4))
-                    .unwrap_or(1);
+                schema_id = if _sql.contains('$') {
+                    required_param_u64(params, 0, "schema_id")?
+                } else {
+                    literal_u64(&literals, 4).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "schema_id".into(),
+                    })?
+                };
                 table_name = params
                     .get_string(1)
                     .ok()
@@ -1930,6 +1803,11 @@ async fn execute_classified<'a>(
                     .or_else(|| literal_string(&literals, 6));
             }
 
+            if table_name.is_empty() {
+                return Err(RockLakeError::MissingParam {
+                    name: "table_name".into(),
+                });
+            }
             let op = BufferedOp::InsertTable {
                 table_id,
                 schema_id,
@@ -1950,19 +1828,26 @@ async fn execute_classified<'a>(
                     let column_id = row
                         .get("column_id")
                         .and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()));
-                    let table_id = row
-                        .get("table_id")
-                        .and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()))
-                        .unwrap_or(0);
+                    let table_id = row_map_u64(&row, "table_id").ok_or_else(|| {
+                        RockLakeError::MissingParam {
+                            name: "table_id".into(),
+                        }
+                    })?;
                     let column_name = row
                         .get("column_name")
                         .and_then(|v| v.clone())
-                        .unwrap_or_default();
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "column_name".into(),
+                        })?;
                     let data_type = row
                         .get("column_type")
                         .and_then(|v| v.clone())
                         .or_else(|| row.get("data_type").and_then(|v| v.clone()))
-                        .unwrap_or_default();
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "data_type".into(),
+                        })?;
                     let column_index = row
                         .get("column_order")
                         .and_then(|v| v.as_ref().and_then(|s| s.parse::<u64>().ok()))
@@ -2009,31 +1894,51 @@ async fn execute_classified<'a>(
                     let literals = literal_rows.into_iter().next().unwrap_or_default();
                     ops.push(BufferedOp::InsertColumn {
                         column_id: None,
-                        table_id: params
-                            .get_u64(0)
-                            .ok()
-                            .or_else(|| literal_u64(&literals, 3))
-                            .unwrap_or(0),
-                        column_name: params
-                            .get_string(1)
-                            .ok()
-                            .or_else(|| literal_string(&literals, 5))
-                            .unwrap_or_default(),
-                        data_type: params
-                            .get_string(2)
-                            .ok()
-                            .or_else(|| literal_string(&literals, 6))
-                            .unwrap_or_default(),
-                        column_index: params
-                            .get_u64(3)
-                            .ok()
-                            .or_else(|| literal_u64(&literals, 4))
-                            .unwrap_or(0),
-                        is_nullable: params
-                            .get_bool(4)
-                            .ok()
-                            .or_else(|| literal_bool(&literals, 9))
-                            .unwrap_or(true),
+                        table_id: if parameterized {
+                            required_param_u64(params, 0, "table_id")?
+                        } else {
+                            literal_u64(&literals, 3).ok_or_else(|| {
+                                RockLakeError::MissingParam {
+                                    name: "table_id".into(),
+                                }
+                            })?
+                        },
+                        column_name: if parameterized {
+                            required_param_string(params, 1, "column_name")?
+                        } else {
+                            literal_string(&literals, 5)
+                                .filter(|value| !value.is_empty())
+                                .ok_or_else(|| RockLakeError::MissingParam {
+                                    name: "column_name".into(),
+                                })?
+                        },
+                        data_type: if parameterized {
+                            required_param_string(params, 2, "data_type")?
+                        } else {
+                            literal_string(&literals, 6)
+                                .filter(|value| !value.is_empty())
+                                .ok_or_else(|| RockLakeError::MissingParam {
+                                    name: "data_type".into(),
+                                })?
+                        },
+                        column_index: if parameterized {
+                            required_param_u64(params, 3, "column_index")?
+                        } else {
+                            literal_u64(&literals, 4).ok_or_else(|| {
+                                RockLakeError::MissingParam {
+                                    name: "column_index".into(),
+                                }
+                            })?
+                        },
+                        is_nullable: if parameterized {
+                            required_param_bool(params, 4, "is_nullable")?
+                        } else {
+                            literal_bool(&literals, 9).ok_or_else(|| {
+                                RockLakeError::MissingParam {
+                                    name: "is_nullable".into(),
+                                }
+                            })?
+                        },
                         default_value: params
                             .get_optional_string(5)
                             .or_else(|| literal_string(&literals, 8)),
@@ -2069,6 +1974,21 @@ async fn execute_classified<'a>(
                     }
                 }
             }
+            if ops.iter().any(|op| {
+                matches!(op, BufferedOp::InsertColumn { table_id: 0, .. })
+                    || matches!(
+                        op,
+                        BufferedOp::InsertColumn {
+                            column_name,
+                            data_type,
+                            ..
+                        } if column_name.is_empty() || data_type.is_empty()
+                    )
+            }) {
+                return Err(RockLakeError::MissingParam {
+                    name: "column metadata".into(),
+                });
+            }
             let row_count = ops.len();
             if session.in_transaction {
                 for op in ops {
@@ -2082,33 +2002,80 @@ async fn execute_classified<'a>(
             )))])
         }
         StatementKind::InsertDataFile => {
+            if let Some(rows) = parse_insert_rows_map(_sql, params)
+                .filter(|rows| rows.iter().any(|row| !row.is_empty()))
+            {
+                let ops = rows
+                    .into_iter()
+                    .map(|row| {
+                        Ok(BufferedOp::InsertDataFile {
+                            table_id: required_row_u64_value(&row, &["table_id"])?,
+                            path: required_row_string_value(&row, &["path"])?,
+                            file_format: required_row_string_value(
+                                &row,
+                                &["file_format", "format"],
+                            )?,
+                            row_count: required_row_u64_value(
+                                &row,
+                                &["record_count", "row_count"],
+                            )?,
+                            file_size_bytes: required_row_u64_value(&row, &["file_size_bytes"])?,
+                            footer_size: optional_row_i64_value(&row, "footer_size")?,
+                            encryption_key: row_map_string(&row, "encryption_key"),
+                            partition_id: row_map_u64(&row, "partition_id"),
+                            mapping_id: row_map_u64(&row, "mapping_id"),
+                            partial_max: row_map_string(&row, "partial_max"),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, RockLakeError>>()?;
+                let row_count = submit_ops(ops, session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
             let literals = literal_insert_values(_sql);
+            let parameterized = _sql.contains('$');
             let op = BufferedOp::InsertDataFile {
-                table_id: params
-                    .get_u64(0)
-                    .ok()
-                    .or_else(|| literal_u64(&literals, 1))
-                    .unwrap_or(0),
-                path: params
-                    .get_string(1)
-                    .ok()
-                    .or_else(|| literal_string(&literals, 5))
-                    .unwrap_or_default(),
-                file_format: params
-                    .get_string(2)
-                    .ok()
-                    .or_else(|| literal_string(&literals, 7))
-                    .unwrap_or_else(|| "parquet".to_string()),
-                row_count: params
-                    .get_u64(3)
-                    .ok()
-                    .or_else(|| literal_u64(&literals, 8))
-                    .unwrap_or(0),
-                file_size_bytes: params
-                    .get_u64(4)
-                    .ok()
-                    .or_else(|| literal_u64(&literals, 9))
-                    .unwrap_or(0),
+                table_id: if parameterized {
+                    required_param_u64(params, 0, "table_id")?
+                } else {
+                    literal_u64(&literals, 1).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "table_id".into(),
+                    })?
+                },
+                path: if parameterized {
+                    required_param_string(params, 1, "path")?
+                } else {
+                    literal_string(&literals, 5)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "path".into(),
+                        })?
+                },
+                file_format: if parameterized {
+                    required_param_string(params, 2, "file_format")?
+                } else {
+                    literal_string(&literals, 7).unwrap_or_else(|| "parquet".to_string())
+                },
+                row_count: if parameterized {
+                    required_param_u64(params, 3, "row_count")?
+                } else {
+                    literal_u64(&literals, 8).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "row_count".into(),
+                    })?
+                },
+                file_size_bytes: if parameterized {
+                    required_param_u64(params, 4, "file_size_bytes")?
+                } else {
+                    literal_u64(&literals, 9).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "file_size_bytes".into(),
+                    })?
+                },
+                footer_size: None,
+                encryption_key: None,
+                partition_id: None,
+                mapping_id: None,
+                partial_max: None,
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -2118,11 +2085,71 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertDeleteFile => {
+            if let Some(rows) = parse_insert_rows_map(_sql, params)
+                .filter(|rows| rows.iter().any(|row| !row.is_empty()))
+            {
+                let ops = rows
+                    .into_iter()
+                    .map(|row| {
+                        Ok(BufferedOp::InsertDeleteFile {
+                            data_file_id: row_map_u64(&row, "data_file_id").unwrap_or(0),
+                            path: required_row_string_value(&row, &["path"])?,
+                            delete_count: required_row_u64_value(
+                                &row,
+                                &["delete_count", "row_count"],
+                            )?,
+                            file_size_bytes: required_row_u64_value(&row, &["file_size_bytes"])?,
+                            table_id: row_map_u64(&row, "table_id"),
+                            format: row_map_string(&row, "format"),
+                            path_is_relative: row_map_bool(&row, "path_is_relative"),
+                            footer_size: optional_row_i64_value(&row, "footer_size")?,
+                            partial_max: row_map_string(&row, "partial_max"),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, RockLakeError>>()?;
+                let row_count = submit_ops(ops, session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
+            let parameterized = _sql.contains('$');
+            let literals = literal_insert_values(_sql);
             let op = BufferedOp::InsertDeleteFile {
-                data_file_id: params.get_u64(0).unwrap_or(0),
-                path: params.get_string(1).unwrap_or_default(),
-                delete_count: params.get_u64(2).unwrap_or(0),
-                file_size_bytes: params.get_u64(3).unwrap_or(0),
+                data_file_id: if parameterized {
+                    required_param_u64(params, 0, "data_file_id")?
+                } else {
+                    literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "data_file_id".into(),
+                    })?
+                },
+                path: if parameterized {
+                    required_param_string(params, 1, "path")?
+                } else {
+                    literal_string(&literals, 1)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "path".into(),
+                        })?
+                },
+                delete_count: if parameterized {
+                    required_param_u64(params, 2, "delete_count")?
+                } else {
+                    literal_u64(&literals, 2).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "delete_count".into(),
+                    })?
+                },
+                file_size_bytes: if parameterized {
+                    required_param_u64(params, 3, "file_size_bytes")?
+                } else {
+                    literal_u64(&literals, 3).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "file_size_bytes".into(),
+                    })?
+                },
+                table_id: None,
+                format: None,
+                path_is_relative: None,
+                footer_size: None,
+                partial_max: None,
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -2133,28 +2160,40 @@ async fn execute_classified<'a>(
         }
         StatementKind::InsertTableStats => {
             let literals = literal_insert_values(_sql);
+            let parameterized = _sql.contains('$');
             let op = BufferedOp::InsertTableStats {
-                table_id: params
-                    .get_u64(0)
-                    .ok()
-                    .or_else(|| literal_u64(&literals, 0))
-                    .unwrap_or(0),
-                record_count: params
-                    .get_u64(1)
-                    .ok()
-                    .or_else(|| literal_u64(&literals, 1))
-                    .unwrap_or(0),
+                table_id: if parameterized {
+                    required_param_u64(params, 0, "table_id")?
+                } else {
+                    literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "table_id".into(),
+                    })?
+                },
+                record_count: if parameterized {
+                    required_param_u64(params, 1, "record_count")?
+                } else {
+                    literal_u64(&literals, 1).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "record_count".into(),
+                    })?
+                },
                 // DuckLake v1.0 position 2 is next_row_id, not file_count.
-                next_row_id: params
-                    .get_u64(2)
-                    .ok()
-                    .or_else(|| literal_u64(&literals, 2))
-                    .unwrap_or(0),
-                file_size_bytes: params
-                    .get_u64(3)
-                    .ok()
-                    .or_else(|| literal_u64(&literals, 3))
-                    .unwrap_or(0),
+                next_row_id: if parameterized {
+                    required_param_u64(params, 2, "next_row_id")?
+                } else {
+                    literal_u64(&literals, 2).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "next_row_id".into(),
+                    })?
+                },
+                file_size_bytes: if parameterized {
+                    match params.get(3) {
+                        Some(value) => value.parse().map_err(|_| RockLakeError::MissingParam {
+                            name: "file_size_bytes".into(),
+                        })?,
+                        None => 0,
+                    }
+                } else {
+                    literal_u64(&literals, 3).unwrap_or(0)
+                },
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -2164,48 +2203,112 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertFileColumnStats => {
-            let op = BufferedOp::InsertFileColumnStats {
-                table_id: params.get_u64(0).unwrap_or(0),
-                column_id: params.get_u64(1).unwrap_or(0),
-                data_file_id: params.get_u64(2).unwrap_or(0),
-                contains_null: params.get_bool(3).unwrap_or(false),
-                min_value: params.get_optional_string(4),
-                max_value: params.get_optional_string(5),
-                contains_nan: params.get_bool(6).unwrap_or(false),
-            };
-            if session.in_transaction {
-                session.pending_txn.push(op)?;
+            let parameterized = _sql.contains('$');
+            let mut ops = Vec::new();
+            if parameterized {
+                let null_count = required_param_u64(params, 5, "null_count")?;
+                ops.push(BufferedOp::InsertFileColumnStats {
+                    data_file_id: required_param_u64(params, 0, "data_file_id")?,
+                    table_id: required_param_u64(params, 1, "table_id")?,
+                    column_id: required_param_u64(params, 2, "column_id")?,
+                    contains_null: null_count > 0,
+                    column_size_bytes: Some(required_param_u64(params, 3, "column_size_bytes")?),
+                    value_count: Some(required_param_u64(params, 4, "value_count")?),
+                    null_count: Some(null_count),
+                    min_value: params.get_optional_string(6),
+                    max_value: params.get_optional_string(7),
+                    contains_nan: params
+                        .get(8)
+                        .map(|value| matches!(value, "t" | "true" | "1" | "TRUE"))
+                        .unwrap_or(false),
+                    extra_stats: params.get_optional_string(9),
+                });
             } else {
-                execute_commit(vec![op], store, notify_manager).await?;
+                for literals in literal_insert_rows(_sql) {
+                    let null_count =
+                        literal_u64(&literals, 5).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "null_count".into(),
+                        })?;
+                    ops.push(BufferedOp::InsertFileColumnStats {
+                        data_file_id: literal_u64(&literals, 0).ok_or_else(|| {
+                            RockLakeError::MissingParam {
+                                name: "data_file_id".into(),
+                            }
+                        })?,
+                        table_id: literal_u64(&literals, 1).ok_or_else(|| {
+                            RockLakeError::MissingParam {
+                                name: "table_id".into(),
+                            }
+                        })?,
+                        column_id: literal_u64(&literals, 2).ok_or_else(|| {
+                            RockLakeError::MissingParam {
+                                name: "column_id".into(),
+                            }
+                        })?,
+                        contains_null: null_count > 0,
+                        column_size_bytes: Some(literal_u64(&literals, 3).ok_or_else(|| {
+                            RockLakeError::MissingParam {
+                                name: "column_size_bytes".into(),
+                            }
+                        })?),
+                        value_count: Some(literal_u64(&literals, 4).ok_or_else(|| {
+                            RockLakeError::MissingParam {
+                                name: "value_count".into(),
+                            }
+                        })?),
+                        null_count: Some(null_count),
+                        min_value: literal_string(&literals, 6),
+                        max_value: literal_string(&literals, 7),
+                        contains_nan: literal_bool(&literals, 8).unwrap_or(false),
+                        extra_stats: literal_string(&literals, 9),
+                    });
+                }
             }
-            Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
+            let row_count = ops.len();
+            if session.in_transaction {
+                for op in ops {
+                    session.pending_txn.push(op)?;
+                }
+            } else {
+                execute_commit(ops, store, notify_manager).await?;
+            }
+            Ok(vec![Response::Execution(Tag::new(&format!(
+                "INSERT 0 {row_count}"
+            )))])
         }
         StatementKind::InsertTableColumnStats => {
             let literal_rows = literal_insert_rows(_sql);
-            let parameterized = params.get_u64(0).is_ok();
+            let parameterized = _sql.contains('$');
             let mut ops = Vec::new();
             if parameterized || literal_rows.is_empty() {
                 let literals = literal_rows.into_iter().next().unwrap_or_default();
                 ops.push(BufferedOp::InsertTableColumnStats {
-                    table_id: params
-                        .get_u64(0)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 0))
-                        .unwrap_or(0),
-                    column_id: params
-                        .get_u64(1)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 1))
-                        .unwrap_or(0),
-                    contains_null: params
-                        .get_bool(2)
-                        .ok()
-                        .or_else(|| literal_bool(&literals, 2))
-                        .unwrap_or(false),
-                    contains_nan: params
-                        .get_bool(3)
-                        .ok()
-                        .or_else(|| literal_bool(&literals, 3)),
+                    table_id: if parameterized {
+                        required_param_u64(params, 0, "table_id")?
+                    } else {
+                        literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "table_id".into(),
+                        })?
+                    },
+                    column_id: if parameterized {
+                        required_param_u64(params, 1, "column_id")?
+                    } else {
+                        literal_u64(&literals, 1).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "column_id".into(),
+                        })?
+                    },
+                    contains_null: if parameterized {
+                        required_param_bool(params, 2, "contains_null")?
+                    } else {
+                        literal_bool(&literals, 2).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "contains_null".into(),
+                        })?
+                    },
+                    contains_nan: if parameterized {
+                        Some(required_param_bool(params, 3, "contains_nan")?)
+                    } else {
+                        literal_bool(&literals, 3)
+                    },
                     min_value: params
                         .get_optional_string(4)
                         .or_else(|| literal_string(&literals, 4)),
@@ -2267,11 +2370,33 @@ async fn execute_classified<'a>(
             )))])
         }
         StatementKind::InsertMetadata => {
+            let parameterized = _sql.contains('$');
+            let literals = literal_insert_values(_sql);
             let op = BufferedOp::InsertMetadata {
-                key: params.get_string(0).unwrap_or_default(),
-                value: params.get_string(1).unwrap_or_default(),
-                scope: params.get_optional_string(2),
-                scope_id: params.get_u64(3).ok(),
+                key: if parameterized {
+                    required_param_string(params, 0, "key")?
+                } else {
+                    literal_string(&literals, 0)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam { name: "key".into() })?
+                },
+                value: if parameterized {
+                    required_param_string(params, 1, "value")?
+                } else {
+                    literal_string(&literals, 1).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "value".into(),
+                    })?
+                },
+                scope: if parameterized {
+                    params.get_optional_string(2)
+                } else {
+                    literal_string(&literals, 2)
+                },
+                scope_id: if parameterized {
+                    params.get_u64(3).ok()
+                } else {
+                    literal_u64(&literals, 3)
+                },
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -2282,26 +2407,32 @@ async fn execute_classified<'a>(
         }
         StatementKind::InsertSchemaVersions => {
             let literal_rows = literal_insert_rows(_sql);
-            let parameterized = params.get_u64(0).is_ok();
+            let parameterized = _sql.contains('$');
             let mut ops = Vec::new();
             if parameterized || literal_rows.is_empty() {
                 let literals = literal_rows.into_iter().next().unwrap_or_default();
                 ops.push(BufferedOp::InsertSchemaVersions {
-                    begin_snapshot: params
-                        .get_u64(0)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 0))
-                        .unwrap_or(0),
-                    schema_version: params
-                        .get_u64(1)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 1))
-                        .unwrap_or(0),
-                    table_id: params
-                        .get_u64(2)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 2))
-                        .unwrap_or(0),
+                    begin_snapshot: if parameterized {
+                        required_param_u64(params, 0, "begin_snapshot")?
+                    } else {
+                        literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "begin_snapshot".into(),
+                        })?
+                    },
+                    schema_version: if parameterized {
+                        required_param_u64(params, 1, "schema_version")?
+                    } else {
+                        literal_u64(&literals, 1).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "schema_version".into(),
+                        })?
+                    },
+                    table_id: if parameterized {
+                        required_param_u64(params, 2, "table_id")?
+                    } else {
+                        literal_u64(&literals, 2).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "table_id".into(),
+                        })?
+                    },
                 });
             } else {
                 for literals in literal_rows {
@@ -2326,26 +2457,34 @@ async fn execute_classified<'a>(
         }
         StatementKind::InsertInlinedDataTables => {
             let literal_rows = literal_insert_rows(_sql);
-            let parameterized = params.get_u64(0).is_ok();
+            let parameterized = _sql.contains('$');
             let mut ops = Vec::new();
             if parameterized || literal_rows.is_empty() {
                 let literals = literal_rows.into_iter().next().unwrap_or_default();
                 ops.push(BufferedOp::InsertInlinedDataTables {
-                    table_id: params
-                        .get_u64(0)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 0))
-                        .unwrap_or(0),
-                    table_name: params
-                        .get_string(1)
-                        .ok()
-                        .or_else(|| literal_string(&literals, 1))
-                        .unwrap_or_default(),
-                    schema_version: params
-                        .get_u64(2)
-                        .ok()
-                        .or_else(|| literal_u64(&literals, 2))
-                        .unwrap_or(0),
+                    table_id: if parameterized {
+                        required_param_u64(params, 0, "table_id")?
+                    } else {
+                        literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "table_id".into(),
+                        })?
+                    },
+                    table_name: if parameterized {
+                        required_param_string(params, 1, "table_name")?
+                    } else {
+                        literal_string(&literals, 1)
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| RockLakeError::MissingParam {
+                                name: "table_name".into(),
+                            })?
+                    },
+                    schema_version: if parameterized {
+                        required_param_u64(params, 2, "schema_version")?
+                    } else {
+                        literal_u64(&literals, 2).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "schema_version".into(),
+                        })?
+                    },
                 });
             } else {
                 for literals in literal_rows {
@@ -2369,10 +2508,32 @@ async fn execute_classified<'a>(
             )))])
         }
         StatementKind::InsertView => {
+            let parameterized = _sql.contains('$');
+            let literals = literal_insert_values(_sql);
             let op = BufferedOp::InsertView {
-                schema_id: params.get_u64(0).unwrap_or(0),
-                view_name: params.get_string(1).unwrap_or_default(),
-                sql: params.get_string(2).unwrap_or_default(),
+                schema_id: if parameterized {
+                    required_param_u64(params, 0, "schema_id")?
+                } else {
+                    literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "schema_id".into(),
+                    })?
+                },
+                view_name: if parameterized {
+                    required_param_string(params, 1, "view_name")?
+                } else {
+                    literal_string(&literals, 1)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "view_name".into(),
+                        })?
+                },
+                sql: if parameterized {
+                    required_param_string(params, 2, "sql")?
+                } else {
+                    literal_string(&literals, 2)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam { name: "sql".into() })?
+                },
                 view_uuid: params.get_optional_string(3),
                 dialect: params.get_optional_string(4),
                 column_aliases: params.get_optional_string(5),
@@ -2385,10 +2546,34 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertMacro => {
+            let parameterized = _sql.contains('$');
+            let literals = literal_insert_values(_sql);
             let op = BufferedOp::InsertMacro {
-                schema_id: params.get_u64(0).unwrap_or(0),
-                macro_name: params.get_string(1).unwrap_or_default(),
-                macro_type: params.get_string(2).unwrap_or_default(),
+                schema_id: if parameterized {
+                    required_param_u64(params, 0, "schema_id")?
+                } else {
+                    literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "schema_id".into(),
+                    })?
+                },
+                macro_name: if parameterized {
+                    required_param_string(params, 1, "macro_name")?
+                } else {
+                    literal_string(&literals, 1)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "macro_name".into(),
+                        })?
+                },
+                macro_type: if parameterized {
+                    required_param_string(params, 2, "macro_type")?
+                } else {
+                    literal_string(&literals, 2)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "macro_type".into(),
+                        })?
+                },
                 macro_uuid: params.get_optional_string(3),
             };
             if session.in_transaction {
@@ -2399,9 +2584,23 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertMacroImpl => {
+            let parameterized = _sql.contains('$');
+            let literals = literal_insert_values(_sql);
             let op = BufferedOp::InsertMacroImpl {
-                macro_id: params.get_u64(0).unwrap_or(0),
-                sql: params.get_string(1).unwrap_or_default(),
+                macro_id: if parameterized {
+                    required_param_u64(params, 0, "macro_id")?
+                } else {
+                    literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "macro_id".into(),
+                    })?
+                },
+                sql: if parameterized {
+                    required_param_string(params, 1, "sql")?
+                } else {
+                    literal_string(&literals, 1)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam { name: "sql".into() })?
+                },
                 dialect: params.get_optional_string(2),
                 impl_type: params.get_optional_string(3),
             };
@@ -2413,12 +2612,48 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertMacroParameters => {
+            let parameterized = _sql.contains('$');
+            let literals = literal_insert_values(_sql);
             let op = BufferedOp::InsertMacroParams {
-                macro_id: params.get_u64(0).unwrap_or(0),
-                impl_id: params.get_u64(1).unwrap_or(0),
-                column_id: params.get_u64(2).unwrap_or(0),
-                parameter_name: params.get_string(3).unwrap_or_default(),
-                parameter_type: params.get_string(4).unwrap_or_default(),
+                macro_id: if parameterized {
+                    required_param_u64(params, 0, "macro_id")?
+                } else {
+                    literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "macro_id".into(),
+                    })?
+                },
+                impl_id: if parameterized {
+                    required_param_u64(params, 1, "impl_id")?
+                } else {
+                    literal_u64(&literals, 1).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "impl_id".into(),
+                    })?
+                },
+                column_id: if parameterized {
+                    required_param_u64(params, 2, "column_id")?
+                } else {
+                    literal_u64(&literals, 2).ok_or_else(|| RockLakeError::MissingParam {
+                        name: "column_id".into(),
+                    })?
+                },
+                parameter_name: if parameterized {
+                    required_param_string(params, 3, "parameter_name")?
+                } else {
+                    literal_string(&literals, 3)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "parameter_name".into(),
+                        })?
+                },
+                parameter_type: if parameterized {
+                    required_param_string(params, 4, "parameter_type")?
+                } else {
+                    literal_string(&literals, 4)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "parameter_type".into(),
+                        })?
+                },
                 default_value: params.get_optional_string(5),
                 default_value_type: params.get_optional_string(6),
             };
@@ -2474,6 +2709,12 @@ async fn execute_classified<'a>(
                 }
             }
 
+            if entity_id == 0 || end_snapshot == 0 {
+                return Err(RockLakeError::MissingParam {
+                    name: "entity_id/end_snapshot".into(),
+                });
+            }
+
             let op = BufferedOp::UpdateEndSnapshot {
                 table_name: table_name.clone(),
                 entity_id,
@@ -2509,8 +2750,8 @@ async fn execute_classified<'a>(
                 }
             } else {
                 BufferedOp::UpdateTableStats {
-                    table_id: params.get_u64(1).unwrap_or(0),
-                    row_count_delta: params.get_i64(0).unwrap_or(0),
+                    table_id: required_param_u64(params, 1, "table_id")?,
+                    row_count_delta: required_param_i64(params, 0, "row_count_delta")?,
                 }
             };
             if session.in_transaction {
@@ -2528,48 +2769,29 @@ async fn execute_classified<'a>(
         }
         StatementKind::InsertInlinedRow => {
             let table_name = ducklake_insert_table_name(_sql).unwrap_or_default();
-            if table_name == "ducklake_column_mapping" {
-                let row_count = execute_ducklake_column_mapping_insert(_sql, params, store).await?;
-                return Ok(vec![Response::Execution(Tag::new(&format!(
-                    "INSERT 0 {row_count}"
-                )))]);
-            }
-            if table_name == "ducklake_name_mapping" {
-                let row_count = execute_ducklake_name_mapping_insert(_sql, params, store).await?;
-                return Ok(vec![Response::Execution(Tag::new(&format!(
-                    "INSERT 0 {row_count}"
-                )))]);
-            }
-            if table_name == "ducklake_partition_info" {
-                let row_count = execute_ducklake_partition_info_insert(_sql, params, store).await?;
-                return Ok(vec![Response::Execution(Tag::new(&format!(
-                    "INSERT 0 {row_count}"
-                )))]);
-            }
-            if table_name == "ducklake_sort_info" {
-                let row_count = execute_ducklake_sort_info_insert(_sql, params, store).await?;
-                return Ok(vec![Response::Execution(Tag::new(&format!(
-                    "INSERT 0 {row_count}"
-                )))]);
-            }
-            if table_name == "ducklake_files_scheduled_for_deletion" {
-                let row_count =
-                    execute_ducklake_files_scheduled_for_deletion_insert(_sql, params, store)
-                        .await?;
-                return Ok(vec![Response::Execution(Tag::new(&format!(
-                    "INSERT 0 {row_count}"
-                )))]);
-            }
-            if table_name == "ducklake_partition_column" {
-                let row_count =
-                    execute_ducklake_partition_column_insert(_sql, params, store).await?;
-                return Ok(vec![Response::Execution(Tag::new(&format!(
-                    "INSERT 0 {row_count}"
-                )))]);
-            }
-            if table_name == "ducklake_sort_expression" {
-                let row_count =
-                    execute_ducklake_sort_expression_insert(_sql, params, store).await?;
+            if matches!(
+                table_name.as_str(),
+                "ducklake_column_mapping"
+                    | "ducklake_name_mapping"
+                    | "ducklake_partition_info"
+                    | "ducklake_sort_info"
+                    | "ducklake_files_scheduled_for_deletion"
+                    | "ducklake_partition_column"
+                    | "ducklake_sort_expression"
+            ) {
+                let rows = parse_insert_rows_map(_sql, params).ok_or_else(|| {
+                    RockLakeError::Unsupported("could not parse DuckLake metadata insert".into())
+                })?;
+                let row_count = submit_ops(
+                    vec![BufferedOp::InsertDuckLakeRows {
+                        table_name: table_name.clone(),
+                        rows,
+                    }],
+                    session,
+                    store,
+                    notify_manager,
+                )
+                .await?;
                 return Ok(vec![Response::Execution(Tag::new(&format!(
                     "INSERT 0 {row_count}"
                 )))]);

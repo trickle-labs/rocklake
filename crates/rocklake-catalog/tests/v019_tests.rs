@@ -225,9 +225,9 @@ async fn lease_ttl_overflow_detected() {
 
 // ─── Staged Write Discipline Tests ──────────────────────────────────────────
 
-/// Non-MVCC writes (table stats) are visible immediately without create_snapshot.
+/// Table stats remain staged until create_snapshot commits them.
 #[tokio::test]
-async fn staged_write_discipline_non_mvcc_visible_without_snapshot() {
+async fn staged_write_discipline_table_stats_invisible_without_snapshot() {
     let dir = TempDir::new().unwrap();
     let opts = test_opts(&dir);
     let mut store = CatalogStore::open(opts).await.unwrap();
@@ -239,20 +239,23 @@ async fn staged_write_discipline_non_mvcc_visible_without_snapshot() {
     let _snap = w.create_snapshot(None, None).await.unwrap();
     store.commit_writer(_snap);
 
-    // Now write table stats directly (non-MVCC write)
+    // Stage table stats without a snapshot.
     let mut w2 = store.begin_write();
     w2.update_table_stats(table_id, 1000, 5, 1024 * 1024)
         .await
         .unwrap();
-    // Don't call create_snapshot — stats should still be written to DB
 
-    // Verify the stats key exists in the DB even without a snapshot commit
+    // The staged stats must not leak before commit.
     let stats_key = rocklake_core::keys::key_table_stats(table_id);
     let data = store.db().get(&stats_key).await.unwrap();
     assert!(
-        data.is_some(),
-        "table stats should be written even without snapshot commit"
+        data.is_none(),
+        "table stats should remain staged without snapshot commit"
     );
+
+    let snapshot = w2.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snapshot);
+    assert!(store.db().get(&stats_key).await.unwrap().is_some());
 
     store.close().await.unwrap();
 }

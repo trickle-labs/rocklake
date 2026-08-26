@@ -17,7 +17,7 @@ use crate::error::RockLakeError;
 use crate::notify::NotifyManager;
 use crate::session::BufferedOp;
 
-use super::extension::hash_table_ref;
+use super::{extension::hash_table_ref, row_map_bool, row_map_string, row_map_u64};
 
 pub(super) fn parse_inlined_table_ids(table_name: &str) -> Option<(u64, u64)> {
     let normalized = table_name.trim_matches('"').to_ascii_lowercase();
@@ -71,6 +71,26 @@ fn collect_deleted_inlined_rows(ops: &[BufferedOp]) -> HashSet<(u64, u64, u64)> 
         }
     }
     rows
+}
+
+fn required_row_u64(
+    row: &std::collections::HashMap<String, Option<String>>,
+    name: &str,
+) -> Result<u64, RockLakeError> {
+    row_map_u64(row, name).ok_or_else(|| RockLakeError::MissingParam {
+        name: name.to_string(),
+    })
+}
+
+fn required_row_string(
+    row: &std::collections::HashMap<String, Option<String>>,
+    name: &str,
+) -> Result<String, RockLakeError> {
+    row_map_string(row, name)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| RockLakeError::MissingParam {
+            name: name.to_string(),
+        })
 }
 
 pub(super) async fn execute_commit(
@@ -185,10 +205,26 @@ pub(super) async fn execute_commit(
                 file_format,
                 row_count,
                 file_size_bytes,
+                footer_size,
+                encryption_key,
+                partition_id,
+                mapping_id,
+                partial_max,
             } => {
                 needs_snapshot = true;
                 writer
-                    .register_data_file(table_id, &path, &file_format, row_count, file_size_bytes)
+                    .register_data_file_with_metadata(
+                        table_id,
+                        &path,
+                        &file_format,
+                        row_count,
+                        file_size_bytes,
+                        footer_size,
+                        encryption_key.as_deref(),
+                        partition_id,
+                        mapping_id,
+                        partial_max.as_deref(),
+                    )
                     .await
                     .map_err(RockLakeError::from)?;
             }
@@ -197,10 +233,25 @@ pub(super) async fn execute_commit(
                 path,
                 delete_count,
                 file_size_bytes,
+                table_id,
+                format,
+                path_is_relative,
+                footer_size,
+                partial_max,
             } => {
                 needs_snapshot = true;
                 writer
-                    .register_delete_file(data_file_id, &path, delete_count, file_size_bytes)
+                    .register_delete_file_with_opts(
+                        data_file_id,
+                        &path,
+                        delete_count,
+                        file_size_bytes,
+                        table_id,
+                        format.as_deref(),
+                        path_is_relative,
+                        footer_size,
+                        partial_max.as_deref(),
+                    )
                     .await
                     .map_err(RockLakeError::from)?;
             }
@@ -318,9 +369,13 @@ pub(super) async fn execute_commit(
                 column_id,
                 data_file_id,
                 contains_null,
+                column_size_bytes,
+                value_count,
+                null_count,
                 min_value,
                 max_value,
                 contains_nan,
+                extra_stats,
             } => {
                 needs_snapshot = true;
                 writer
@@ -332,10 +387,10 @@ pub(super) async fn execute_commit(
                         min_value: min_value.as_deref(),
                         max_value: max_value.as_deref(),
                         contains_nan,
-                        column_size_bytes: None,
-                        value_count: None,
-                        null_count: None,
-                        extra_stats: None,
+                        column_size_bytes,
+                        value_count,
+                        null_count,
+                        extra_stats: extra_stats.as_deref(),
                     })
                     .await
                     .map_err(RockLakeError::from)?;
@@ -349,6 +404,7 @@ pub(super) async fn execute_commit(
                 max_value,
                 extra_stats,
             } => {
+                needs_snapshot = true;
                 writer
                     .upsert_table_column_stats(
                         table_id,
@@ -401,6 +457,115 @@ pub(super) async fn execute_commit(
                     .register_schema_version(begin_snapshot, schema_version, table_id)
                     .await
                     .map_err(RockLakeError::from)?;
+            }
+            BufferedOp::InsertDuckLakeRows { table_name, rows } => {
+                needs_snapshot = true;
+                for row in rows {
+                    match table_name.as_str() {
+                        "ducklake_column_mapping" => {
+                            let file_column_name = row_map_string(&row, "file_column_name")
+                                .or_else(|| row_map_string(&row, "column_name"));
+                            let mapping_type = row_map_string(&row, "mapping_type")
+                                .or_else(|| row_map_string(&row, "type"));
+                            writer
+                                .add_column_mapping(
+                                    required_row_u64(&row, "table_id")?,
+                                    row_map_u64(&row, "mapping_id"),
+                                    row_map_u64(&row, "column_id"),
+                                    file_column_name.as_deref(),
+                                    mapping_type.as_deref(),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                        "ducklake_name_mapping" => {
+                            let name = required_row_string(&row, "name")?;
+                            writer
+                                .add_name_mapping(
+                                    row_map_u64(&row, "mapping_id"),
+                                    required_row_u64(&row, "column_id")?,
+                                    &name,
+                                    row_map_u64(&row, "source_name_hash"),
+                                    row_map_u64(&row, "target_field_id"),
+                                    row_map_u64(&row, "parent_column"),
+                                    row_map_bool(&row, "is_partition"),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                        "ducklake_partition_info" => {
+                            writer
+                                .register_partition_info(
+                                    required_row_u64(&row, "table_id")?,
+                                    row_map_u64(&row, "partition_id"),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                        "ducklake_sort_info" => {
+                            writer
+                                .register_sort_info(
+                                    required_row_u64(&row, "table_id")?,
+                                    row_map_u64(&row, "sort_id"),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                        "ducklake_files_scheduled_for_deletion" => {
+                            let path = required_row_string(&row, "path")?;
+                            let file_type = row_map_string(&row, "file_type");
+                            writer
+                                .schedule_file_deletion_with_opts(
+                                    required_row_u64(&row, "data_file_id")?,
+                                    &path,
+                                    file_type.as_deref(),
+                                    row_map_bool(&row, "path_is_relative"),
+                                    row_map_u64(&row, "schedule_start")
+                                        .or_else(|| row_map_u64(&row, "deletion_scheduled_at"))
+                                        .unwrap_or_else(|| {
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs()
+                                        }),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                        "ducklake_partition_column" => {
+                            writer
+                                .register_partition_column(
+                                    required_row_u64(&row, "partition_id")?,
+                                    required_row_u64(&row, "partition_key_index")?,
+                                    required_row_u64(&row, "column_id")?,
+                                    row_map_string(&row, "transform").as_deref(),
+                                    row_map_u64(&row, "table_id"),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                        "ducklake_sort_expression" => {
+                            writer
+                                .register_sort_expression(
+                                    required_row_u64(&row, "sort_id")?,
+                                    required_row_u64(&row, "sort_key_index")?,
+                                    required_row_u64(&row, "column_id")?,
+                                    row_map_string(&row, "sort_direction").as_deref(),
+                                    row_map_string(&row, "null_order").as_deref(),
+                                    row_map_u64(&row, "table_id"),
+                                    row_map_string(&row, "expression").as_deref(),
+                                    row_map_string(&row, "dialect").as_deref(),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                        _ => {
+                            return Err(RockLakeError::Unsupported(format!(
+                                "unsupported DuckLake metadata table: {table_name}"
+                            )));
+                        }
+                    }
+                }
             }
             BufferedOp::InsertInlinedRow { table_name, rows } => {
                 needs_snapshot = true;
@@ -583,6 +748,7 @@ pub(super) async fn execute_commit(
                 next_row_id,
                 file_size_bytes,
             } => {
+                needs_snapshot = true;
                 writer
                     .update_table_stats(table_id, record_count, next_row_id, file_size_bytes)
                     .await
@@ -2716,8 +2882,9 @@ fn decode_bytea_literal(value: &str) -> Vec<u8> {
     let value = value.strip_prefix("\\x").unwrap_or(value);
     if value.len().is_multiple_of(2) && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         let mut bytes = Vec::with_capacity(value.len() / 2);
-        let mut chars = value.as_bytes().chunks_exact(2);
-        for pair in &mut chars {
+        let (chunks, remainder) = value.as_bytes().as_chunks::<2>();
+        debug_assert!(remainder.is_empty());
+        for pair in chunks {
             let Ok(hex) = std::str::from_utf8(pair) else {
                 return value.as_bytes().to_vec();
             };

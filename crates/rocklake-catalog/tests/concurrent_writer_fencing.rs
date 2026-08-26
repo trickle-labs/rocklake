@@ -248,3 +248,38 @@ async fn no_sleep_same_tick_exactly_one_fenced() {
         "store1 (stale epoch) must be fenced; got: {result1:?}"
     );
 }
+
+/// Writers copied from one store counter base must not publish duplicate IDs.
+#[tokio::test]
+async fn overlapping_writers_reject_without_losing_the_winner() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+
+    let mut winner = store.begin_write();
+    let mut loser = store.begin_write();
+    winner.create_schema("winner").await.unwrap();
+    loser.create_schema("loser").await.unwrap();
+
+    let winner_commit = winner.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(winner_commit);
+    let loser_result = loser.create_snapshot(None, None).await;
+    assert!(
+        matches!(loser_result, Err(CatalogError::TransactionConflict(_))),
+        "overlapping writer must be rejected: {loser_result:?}"
+    );
+
+    let mut retry = store.begin_write();
+    retry.create_schema("after-overlap").await.unwrap();
+    let retry_commit = retry.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(retry_commit);
+
+    let schemas = store
+        .read_latest()
+        .list_schemas()
+        .await
+        .expect("catalog read must succeed");
+    assert_eq!(schemas.len(), 2);
+    assert!(schemas.iter().any(|row| row.schema_name == "winner"));
+    assert!(schemas.iter().any(|row| row.schema_name == "after-overlap"));
+    assert!(!schemas.iter().any(|row| row.schema_name == "loser"));
+}

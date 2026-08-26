@@ -40,12 +40,22 @@ pub enum BufferedOp {
         file_format: String,
         row_count: u64,
         file_size_bytes: u64,
+        footer_size: Option<i64>,
+        encryption_key: Option<String>,
+        partition_id: Option<u64>,
+        mapping_id: Option<u64>,
+        partial_max: Option<String>,
     },
     InsertDeleteFile {
         data_file_id: u64,
         path: String,
         delete_count: u64,
         file_size_bytes: u64,
+        table_id: Option<u64>,
+        format: Option<String>,
+        path_is_relative: Option<bool>,
+        footer_size: Option<i64>,
+        partial_max: Option<String>,
     },
     InsertSnapshot {
         author: Option<String>,
@@ -80,9 +90,13 @@ pub enum BufferedOp {
         column_id: u64,
         data_file_id: u64,
         contains_null: bool,
+        column_size_bytes: Option<u64>,
+        value_count: Option<u64>,
+        null_count: Option<u64>,
         min_value: Option<String>,
         max_value: Option<String>,
         contains_nan: bool,
+        extra_stats: Option<String>,
     },
     InsertTableColumnStats {
         table_id: u64,
@@ -112,6 +126,13 @@ pub enum BufferedOp {
     InsertInlinedRow {
         table_name: String,
         rows: Vec<Vec<Option<String>>>,
+    },
+    /// Rows from a named-column DuckLake metadata insert. Keeping the parsed
+    /// maps in the pending transaction preserves column order and NULLs until
+    /// the one catalog commit boundary.
+    InsertDuckLakeRows {
+        table_name: String,
+        rows: Vec<std::collections::HashMap<String, Option<String>>>,
     },
     DeleteInlinedRows {
         table_name: String,

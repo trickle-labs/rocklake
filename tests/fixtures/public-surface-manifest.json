@@ -1,5 +1,5 @@
 {
-    "release": "v0.47.11",
+    "release": "v0.47.12",
     "duckdb_version": "1.5.3",
     "ducklake_version": "1.0",
     "catalog_version": 7,
@@ -19,6 +19,15 @@
             "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
             "test_file": "crates/rocklake-pgwire/tests/v04711_completeness_matrix_tests.rs",
             "test_name": "completeness_matrix_client_surfaces_are_exhaustive"
+        },
+        {
+            "release": "v0.47.12",
+            "duckdb_version": "1.5.3",
+            "ducklake_version": "1.0",
+            "catalog_version": 7,
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
+            "test_file": "crates/rocklake-pgwire/tests/v04712_atomic_write_tests.rs",
+            "test_name": "statement_error_aborts_the_pending_transaction"
         }
     ],
     "negative_probes": [

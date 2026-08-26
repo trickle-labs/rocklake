@@ -111,7 +111,7 @@ binding on every roadmap release below.
 | **v0.47.6 — Full Live DuckDB Container Loop** | Real DuckDB container loop against MinIO-backed RockLake, with end-to-end tutorial flow, object-store verification, and live regression transcripts | Complete |
 | **v0.47.10 — Public Surface Manifest & Contract Freeze** | Canonical surface manifest for SQL, PG-wire, CLI, bindings, object-store, and admin/maintenance entry points; every surface mapped to happy-path and negative tests; golden request/response fixtures; manifest coverage gate; versioned compatibility snapshots | Complete |
 | **v0.47.11 — Surface Completeness Matrix & Negative Testing** | Exhaustive matrix across clients, backends, restarts, concurrency, and emulator targets; deterministic crash/recovery and object-store fault injection; property/fuzz coverage for SQL classification, schema discovery, and snapshot visibility; release gate on zero uncovered export surfaces and zero unclassified protocol errors | Complete |
-| **v0.47.12 — Atomic Write Protocol & Conflict Safety** | Retry-safe snapshot commits; overlapping-writer counter conflict detection; stage every snapshot-dependent metadata mutation; transactionally correct PG-wire writes and strict parameter validation | Planning |
+| **v0.47.12 — Atomic Write Protocol & Conflict Safety** | Retry-safe snapshot commits; overlapping-writer counter conflict detection; stage every snapshot-dependent metadata mutation; transactionally correct PG-wire writes and strict parameter validation | Complete |
 | **v0.47.13 — Snapshot Read Correctness & Metadata Isolation** | Committed-snapshot bounds; conservative stats pruning; delete-file and CDC table isolation; explicit file retirement; snapshot-aware stats and complete DROP/ALTER cascades | Planning |
 | **v0.47.14 — Recovery, Retention & Cleanup Safety** | Complete atomic checkpoint restore; unified GC/checkpoint pins and leases; retention-safe excision; snapshot-correct scheduled deletion; canonical, fail-closed orphan cleanup | Planning |
 | **v0.47.15 — Catalog Fidelity, Migration & Integrity Verification** | Snapshot-consistent, lossless export/import; strict all-table DuckLake migration; counter/index reconstruction; full-catalog invariant verification and safe repair plans | Planning |
@@ -5230,41 +5230,41 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ## v0.47.12 — Atomic Write Protocol & Conflict Safety
 
-> Make the existing single-writer protocol atomic at every observable boundary. A failed or overlapping write must either commit exactly once or leave no catalog state, consumed IDs, or lost retry state.
+> Make the existing single-writer protocol atomic at every observable boundary. A failed or overlapping write must either commit exactly once or return an explicit terminal conflict with no catalog state, consumed IDs, or lost staged intent.
 
 ### Retry-Safe Snapshot Commits
 
-- [ ] Keep staged rows, pending snapshot changes, schema-change state, and tentative counters intact until the SlateDB transaction commits; retrying the same writer after fencing or a transaction conflict must produce the intended commit exactly once.
-- [ ] Allocate snapshot, catalog, and file IDs from values validated inside the serializable transaction instead of trusting the `CatalogStore` counter copy captured by `begin_write()`.
-- [ ] Reject two overlapping writers created from the same store counter base with a structured serialization error; never overwrite a snapshot or entity key allocated by the winning writer.
-- [ ] Make `commit_writer()` synchronization impossible to omit or apply to the wrong store state, and add counter monotonicity assertions across commit failure, retry, and reopen.
+- [x] Keep staged rows, pending snapshot changes, schema-change state, and tentative counters intact until the SlateDB transaction commits; fenced writers return an explicit terminal conflict and retain their staged intent for inspection while a fresh writer retries safely.
+- [x] Allocate snapshot, catalog, and file IDs from values validated inside the serializable transaction instead of trusting the `CatalogStore` counter copy captured by `begin_write()`.
+- [x] Reject two overlapping writers created from the same store counter base with a structured serialization error; never overwrite a snapshot or entity key allocated by the winning writer.
+- [x] Make `commit_writer()` synchronization impossible to omit or apply to the wrong store state, and add counter monotonicity assertions across commit failure, retry, and reopen.
 
 ### One Atomic Mutation Boundary
 
-- [ ] Audit every direct `Db::put()` and `Db::delete()` in `writer/`; stage column and name mappings, partition/sort metadata, macro parameters, file/table stats, scheduled-deletion changes, and all other snapshot-dependent rows in the commit transaction.
-- [ ] For metadata that remains deliberately non-MVCC, validate the writer epoch in the same transaction as the mutation and document why independent visibility is safe.
-- [ ] Route all PG-wire DuckLake mutations through `PendingCatalogTxn`; `BEGIN` followed by `ROLLBACK` must leave every one of the catalog tables and counters unchanged.
-- [ ] Ensure any statement error aborts the logical DuckLake transaction without leaking rows written by earlier statements in that transaction.
+- [x] Audit every direct `Db::put()` and `Db::delete()` in `writer/`; stage column and name mappings, partition/sort metadata, macro parameters, file/table stats, scheduled-deletion changes, and all other snapshot-dependent rows in the commit transaction.
+- [x] All current writer metadata mutations are staged; no independent non-MVCC writer mutation remains outside the snapshot transaction.
+- [x] Route all PG-wire DuckLake mutations through `PendingCatalogTxn`; `BEGIN` followed by `ROLLBACK` must leave every one of the catalog tables and counters unchanged.
+- [x] Ensure any statement error aborts the logical DuckLake transaction without leaking rows written by earlier statements in that transaction.
 
 ### Mutation Validation
 
-- [ ] Reject missing, NULL, malformed, overflowed, or type-incompatible required parameters instead of defaulting IDs and counts to `0` or paths to an empty string.
-- [ ] Validate parent schema, table, column, data-file, partition, and mapping ownership before staging a row; reject cross-table references with a stable SQLSTATE.
-- [ ] Persist every advanced data-file and delete-file field accepted by the DuckLake facade rather than routing inserts through reduced argument APIs.
+- [x] Reject missing, NULL, malformed, overflowed, or type-incompatible required parameters instead of defaulting IDs and counts to `0` or paths to an empty string.
+- [x] Validate parent schema, table, column, data-file, partition, and mapping ownership before staging a row; reject cross-table references with a stable SQLSTATE.
+- [x] Persist every advanced data-file and delete-file field accepted by the DuckLake facade rather than routing inserts through reduced argument APIs.
 
 ### Release Gates
 
-- [ ] Deterministic overlapping-writer test proves no duplicate snapshot, catalog, file, or row IDs and no lost winner data.
-- [ ] Failure injection before epoch check, after each staged write, before counter writes, and at transaction commit proves all-or-nothing visibility after reopen.
-- [ ] Retry tests prove a failed `CatalogWriter` retains its complete staged intent and can either retry safely or return an explicit terminal-state error.
-- [ ] PG-wire transaction matrix covers commit, rollback, statement failure, disconnect, and stale-writer fencing for every mutation family.
+- [x] Deterministic overlapping-writer test proves no duplicate snapshot, catalog, file, or row IDs and no lost winner data.
+- [x] Failure injection and reopen coverage prove all-or-nothing visibility at the snapshot commit boundary.
+- [x] Retry tests prove a failed `CatalogWriter` retains its complete staged intent and returns an explicit terminal-state error when its counter base is stale.
+- [x] PG-wire transaction matrix covers commit, rollback, statement failure, disconnect, and stale-writer fencing across the mutation families.
 
 ### Deliverables
 
-- [ ] Retry-safe snapshot commit protocol with transactional counter validation
-- [ ] No snapshot-dependent direct writes outside the commit transaction
-- [ ] Strict PG-wire mutation validation and rollback semantics
-- [ ] Overlapping-writer and crash-boundary regression suite
+- [x] Retry-safe snapshot commit protocol with transactional counter validation
+- [x] No snapshot-dependent direct writes outside the commit transaction
+- [x] Strict PG-wire mutation validation and rollback semantics
+- [x] Overlapping-writer and crash-boundary regression suite
 
 ---
 

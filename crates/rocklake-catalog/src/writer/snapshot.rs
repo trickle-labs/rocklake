@@ -75,12 +75,17 @@ impl CatalogWriter {
         author: Option<&str>,
         message: Option<&str>,
     ) -> CatalogResult<CommitResult> {
-        let snapshot_id = self.counters.alloc_snapshot_id();
-
-        if self.schema_changed {
-            self.current_schema_version += 1;
-            self.schema_changed = false;
-        }
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let schema_version = if self.schema_changed {
+            self.current_schema_version
+                .checked_add(1)
+                .ok_or_else(|| CatalogError::Internal("schema version overflow".to_string()))?
+        } else {
+            self.current_schema_version
+        };
+        let next_snapshot_id = snapshot_id
+            .checked_add(1)
+            .ok_or_else(|| CatalogError::Internal("snapshot counter overflow".to_string()))?;
 
         // v0.27.8: author and message are persisted in ducklake_snapshot_changes
         // (DuckLake v1.0 spec), not in ducklake_snapshot.  SnapshotRow retains
@@ -88,7 +93,7 @@ impl CatalogWriter {
         // rows no longer populate them.
         let row = SnapshotRow {
             snapshot_id,
-            schema_version: self.current_schema_version,
+            schema_version,
             snapshot_time: chrono::Utc::now().to_rfc3339(),
             author: None,
             message: None,
@@ -96,15 +101,17 @@ impl CatalogWriter {
             next_file_id: Some(self.counters.peek_file_id()),
         };
 
-        // Drain staged mutations — these become part of the atomic commit.
-        let staged = std::mem::take(&mut self.staged);
+        // Keep all state intact until the transaction commits. A failed commit
+        // can therefore be retried with the same intent and IDs.
+        let staged = self.staged.clone();
+        let staged_deletes = self.staged_deletes.clone();
 
         // Drain and finalize the pending snapshot-changes row (if any), populating
         // author / commit_message from the InsertSnapshot op.
         let pending_changes = {
             let mut row = self
                 .pending_snapshot_changes
-                .take()
+                .clone()
                 .unwrap_or(SnapshotChangesRow {
                     snapshot_id,
                     change_type: String::new(),
@@ -140,10 +147,20 @@ impl CatalogWriter {
 
         // Verify writer-epoch fencing before touching any data.
         self.check_epoch(&tx).await?;
+        self.validate_counter(&tx, COUNTER_NEXT_SNAPSHOT_ID, self.counter_base_snapshot_id)
+            .await?;
+        self.validate_counter(&tx, COUNTER_NEXT_CATALOG_ID, self.counter_base_catalog_id)
+            .await?;
+        self.validate_counter(&tx, COUNTER_NEXT_FILE_ID, self.counter_base_file_id)
+            .await?;
 
         // Write all staged catalog rows.
         for (key, value) in &staged {
             tx.put(key, value)
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        }
+        for key in &staged_deletes {
+            tx.delete(key)
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         }
 
@@ -162,7 +179,7 @@ impl CatalogWriter {
         // Persist all counter values atomically with the snapshot.
         tx.put(
             keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID),
-            self.counters.encode_snapshot_counter(),
+            values::encode_counter(next_snapshot_id),
         )
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         tx.put(
@@ -180,9 +197,20 @@ impl CatalogWriter {
             .await
             .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
 
+        debug_assert_eq!(self.counters.peek_snapshot_id(), snapshot_id);
+        self.counters.alloc_snapshot_id();
+        self.counter_base_snapshot_id = next_snapshot_id;
+        self.counter_base_catalog_id = self.counters.peek_catalog_id();
+        self.counter_base_file_id = self.counters.peek_file_id();
+        self.staged.clear();
+        self.staged_deletes.clear();
+        self.pending_snapshot_changes = None;
+        self.current_schema_version = schema_version;
+        self.schema_changed = false;
+
         Ok(CommitResult {
             snapshot_id: SnapshotId::new(snapshot_id),
-            next_snapshot_id: self.counters.peek_snapshot_id(),
+            next_snapshot_id,
             next_catalog_id: self.counters.peek_catalog_id(),
             next_file_id: self.counters.peek_file_id(),
             schema_version: self.current_schema_version,
@@ -237,6 +265,27 @@ impl CatalogWriter {
             }
         }
 
+        Ok(())
+    }
+
+    async fn validate_counter(
+        &self,
+        tx: &DbTransaction,
+        counter: u8,
+        expected: u64,
+    ) -> CatalogResult<()> {
+        let key = keys::key_counter(counter);
+        let actual = tx
+            .get(&key)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .map(|data| values::decode_counter(&data))
+            .transpose()?;
+        if actual != Some(expected) {
+            return Err(CatalogError::TransactionConflict(format!(
+                "counter {counter:#x} changed: expected {expected}, got {actual:?}"
+            )));
+        }
         Ok(())
     }
 }
