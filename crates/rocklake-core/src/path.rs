@@ -2,14 +2,12 @@
 //!
 //! Never use raw string concatenation for object-store paths anywhere.
 
-/// Determine if a path is relative (no scheme) or absolute (has scheme like `s3://`, `az://`).
+/// Determine if a path is relative (no scheme or local absolute path).
 ///
 /// Returns `true` if the path is relative (should use `path_is_relative = true`),
-/// `false` if it's absolute with a scheme.
+/// `false` if it is a URI or a local absolute path.
 pub fn is_path_relative(path: &str) -> bool {
-    // Check if path contains a URI scheme (e.g., "s3://", "az://", "gs://", "file://")
-    // A scheme is identified by `scheme://` pattern
-    !path.contains("://")
+    !path.contains("://") && !std::path::Path::new(path).is_absolute()
 }
 
 /// Mode for data path storage.
@@ -180,5 +178,6 @@ mod tests {
         assert!(!is_path_relative("az://container/table/file.parquet"));
         assert!(!is_path_relative("gs://bucket/data/file.parquet"));
         assert!(!is_path_relative("file:///local/path/file.parquet"));
+        assert!(!is_path_relative("/local/path/file.parquet"));
     }
 }

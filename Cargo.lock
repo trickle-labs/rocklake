@@ -2302,9 +2302,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.14"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "171fefbc92fe4a4de27e0698d6a5b392d6a0e333506bc49133760b3bcf948733"
+checksum = "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -4288,7 +4288,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-catalog"
-version = "0.47.11"
+version = "0.47.12"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -4320,7 +4320,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-client"
-version = "0.47.11"
+version = "0.47.12"
 dependencies = [
  "async-trait",
  "object_store 0.12.5",
@@ -4333,7 +4333,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-core"
-version = "0.47.11"
+version = "0.47.12"
 dependencies = [
  "bytes",
  "chrono",
@@ -4354,7 +4354,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-datafusion"
-version = "0.47.11"
+version = "0.47.12"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4374,7 +4374,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-ffi"
-version = "0.47.11"
+version = "0.47.12"
 dependencies = [
  "object_store 0.12.5",
  "rocklake-catalog",
@@ -4385,7 +4385,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-pgwire"
-version = "0.47.11"
+version = "0.47.12"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4423,7 +4423,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-sql"
-version = "0.47.11"
+version = "0.47.12"
 dependencies = [
  "arrow",
  "bytes",
@@ -4440,7 +4440,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-testkit"
-version = "0.47.11"
+version = "0.47.12"
 dependencies = [
  "base64",
  "chrono",

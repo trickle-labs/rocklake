@@ -445,14 +445,16 @@ async fn writer_failover_localfs_slo() {
             .create_table(schema_id, "failover_table", None)
             .await
             .unwrap();
-        let _ = writer.create_snapshot(None, None).await.unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
 
         for i in 0..2 {
             let mut w2 = catalog.begin_write();
-            let _ = w2
+            let snapshot = w2
                 .create_snapshot(Some(&format!("snapshot-{i}")), None)
                 .await
                 .unwrap();
+            catalog.commit_writer(snapshot);
         }
         // "Kill" the writer: drop without calling close()
         // (CatalogStore drop will flush WAL)

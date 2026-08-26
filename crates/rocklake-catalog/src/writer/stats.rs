@@ -260,6 +260,7 @@ impl CatalogWriter {
         next_row_id: u64,
         file_size_bytes: u64,
     ) -> CatalogResult<()> {
+        self.ensure_table_exists(table_id).await?;
         let existing = self.read_table_stats_or_default(table_id).await?;
         // Advance next_row_id by at least the number of new rows inserted in this
         // batch (additive), but also honour any larger absolute value that DuckDB
@@ -280,7 +281,7 @@ impl CatalogWriter {
             next_row_id: Some(merged_next_row_id),
         };
         let key = keys::key_table_stats(table_id);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
@@ -289,10 +290,11 @@ impl CatalogWriter {
         table_id: u64,
         delta: i64,
     ) -> CatalogResult<()> {
+        self.ensure_table_exists(table_id).await?;
         let mut row = self.read_table_stats_or_default(table_id).await?;
         row.record_count = apply_i64_delta(row.record_count, delta);
         let key = keys::key_table_stats(table_id);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
@@ -303,9 +305,15 @@ impl CatalogWriter {
         file_size_bytes: u64,
         next_row_id: u64,
     ) -> CatalogResult<()> {
+        self.ensure_table_exists(table_id).await?;
         let existing_internal_file_count = {
             let key = keys::key_table_stats(table_id);
-            match self.db.get(&key).await? {
+            match self.staged_value(&key).map(ToOwned::to_owned).or(self
+                .db
+                .get(&key)
+                .await?
+                .map(|data| data.to_vec()))
+            {
                 Some(data) => {
                     let existing: TableStatsRow = rocklake_core::values::decode_value(&data)
                         .unwrap_or(TableStatsRow {
@@ -328,7 +336,7 @@ impl CatalogWriter {
             next_row_id: Some(next_row_id),
         };
         let key = keys::key_table_stats(table_id);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
@@ -344,9 +352,15 @@ impl CatalogWriter {
         contains_nan: Option<bool>,
         extra_stats: Option<&str>,
     ) -> CatalogResult<()> {
+        self.ensure_column_belongs(table_id, column_id).await?;
         let existing = {
             let key = keys::key_table_column_stats(table_id, column_id);
-            match self.db.get(&key).await? {
+            match self.staged_value(&key).map(ToOwned::to_owned).or(self
+                .db
+                .get(&key)
+                .await?
+                .map(|data| data.to_vec()))
+            {
                 Some(data) => {
                     rocklake_core::values::decode_value::<TableColumnStatsRow>(&data).ok()
                 }
@@ -377,34 +391,45 @@ impl CatalogWriter {
                 .or_else(|| existing.and_then(|row| row.extra_stats)),
         };
         let key = keys::key_table_column_stats(table_id, column_id);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
     async fn read_table_stats_or_default(&self, table_id: u64) -> CatalogResult<TableStatsRow> {
         let key = keys::key_table_stats(table_id);
-        Ok(match self.db.get(&key).await? {
-            Some(data) => rocklake_core::values::decode_value(&data).unwrap_or(TableStatsRow {
-                table_id,
-                record_count: 0,
-                internal_file_count: 0,
-                file_size_bytes: 0,
-                next_row_id: None,
-            }),
-            None => TableStatsRow {
-                table_id,
-                record_count: 0,
-                internal_file_count: 0,
-                file_size_bytes: 0,
-                next_row_id: None,
+        Ok(
+            match self.staged_value(&key).map(ToOwned::to_owned).or(self
+                .db
+                .get(&key)
+                .await?
+                .map(|data| data.to_vec()))
+            {
+                Some(data) => rocklake_core::values::decode_value(&data).unwrap_or(TableStatsRow {
+                    table_id,
+                    record_count: 0,
+                    internal_file_count: 0,
+                    file_size_bytes: 0,
+                    next_row_id: None,
+                }),
+                None => TableStatsRow {
+                    table_id,
+                    record_count: 0,
+                    internal_file_count: 0,
+                    file_size_bytes: 0,
+                    next_row_id: None,
+                },
             },
-        })
+        )
     }
 
     pub async fn upsert_file_column_stats(
         &mut self,
         input: FileColumnStatsInput<'_>,
     ) -> CatalogResult<()> {
+        self.ensure_data_file_belongs(input.table_id, input.data_file_id)
+            .await?;
+        self.ensure_column_belongs(input.table_id, input.column_id)
+            .await?;
         let row = FileColumnStatsRow {
             table_id: input.table_id,
             column_id: input.column_id,
@@ -419,7 +444,7 @@ impl CatalogWriter {
             extra_stats: input.extra_stats.map(|s| s.to_string()),
         };
         let key = keys::key_file_column_stats(input.table_id, input.column_id, input.data_file_id);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
@@ -427,6 +452,11 @@ impl CatalogWriter {
         &mut self,
         input: FileVariantStatsInput<'_>,
     ) -> CatalogResult<()> {
+        self.ensure_table_exists(input.table_id).await?;
+        self.ensure_data_file_belongs(input.table_id, input.data_file_id)
+            .await?;
+        self.ensure_column_belongs(input.table_id, input.column_id)
+            .await?;
         let variant_path_hash = hash_tag_key(input.variant_key);
         #[allow(deprecated)]
         let row = FileVariantStatsRow {
@@ -450,7 +480,7 @@ impl CatalogWriter {
             variant_path_hash,
             input.data_file_id,
         );
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 }

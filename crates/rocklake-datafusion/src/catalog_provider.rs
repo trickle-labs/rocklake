@@ -642,8 +642,12 @@ impl TableProvider for RockLakeTableProvider {
         let urls: Result<Vec<ListingTableUrl>, _> = parquet_files
             .iter()
             .map(|f| {
-                // Construct absolute path: combine root with file path
-                let abs = format!("{}/{}", root.trim_end_matches('/'), f.path);
+                // Construct an absolute path only for relative catalog entries.
+                let abs = if f.path_is_relative == Some(false) {
+                    f.path.clone()
+                } else {
+                    format!("{}/{}", root.trim_end_matches('/'), f.path)
+                };
 
                 // Handle different URL schemes:
                 // - If root starts with a scheme (s3://, az://, gs://, etc.), use as-is

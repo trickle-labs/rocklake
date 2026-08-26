@@ -139,9 +139,14 @@ async fn writer_lease_timeout_releases() {
     let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
 
     // This test verifies that even if a writer doesn't explicitly commit,
-    // the system remains available for other writers
+    // the system remains available for other writers.
+    let mut setup = store.begin_write();
+    let schema_id = setup.create_schema("s1").await.unwrap();
+    let setup_snapshot = setup.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(setup_snapshot);
+
     let mut w1 = store.begin_write();
-    let schema_id = w1.create_schema("s1").await.unwrap();
+    w1.create_schema("abandoned").await.unwrap();
     // Don't commit w1 - simulates writer timeout or crash
 
     drop(w1); // Release the writer

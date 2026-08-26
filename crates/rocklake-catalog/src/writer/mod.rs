@@ -11,23 +11,9 @@
 //! counter updates and the snapshot row in **one atomic SlateDB transaction**.
 //! A crash before `create_snapshot()` leaves the catalog unchanged.
 //!
-//! # Non-MVCC direct writes (v0.19 staged write discipline)
-//!
-//! The following methods write directly via `self.db.put()` and are intentionally
-//! **not** staged through `create_snapshot()`. They are safe to write outside
-//! the snapshot boundary because they are ancillary metadata that does not
-//! participate in MVCC versioning and does not need crash-atomic commit with
-//! the snapshot row:
-//!
-//! - `update_table_stats()` — aggregate statistics, recomputable from data files
-//! - `upsert_file_column_stats()` — per-file zone maps, recomputable from Parquet
-//! - `upsert_file_variant_stats()` — variant stats, recomputable
-//! - `add_macro_parameter()` — macro metadata, idempotent
-//! - `schedule_file_deletion()` — deletion scheduling, advisory
-//! - `remove_scheduled_deletion()` — cleanup of scheduling metadata
-//!
-//! A partial write of any of these is always recoverable: either the data is
-//! recomputed on next access, or the operation is idempotent on retry.
+//! All catalog mutations are staged through `create_snapshot()`. This keeps
+//! snapshot-dependent metadata, counters, and the snapshot row in one atomic
+//! SlateDB transaction.
 
 #![allow(missing_docs)]
 
@@ -58,6 +44,13 @@ pub struct CatalogWriter {
     current_schema_version: u64,
     /// Staged (key, value) pairs committed atomically by `create_snapshot()`.
     staged: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Staged deletes committed atomically by `create_snapshot()`.
+    staged_deletes: Vec<Vec<u8>>,
+    /// Counter values observed when this writer was created. They are checked
+    /// again in the commit transaction to reject overlapping writers.
+    pub(crate) counter_base_snapshot_id: u64,
+    pub(crate) counter_base_catalog_id: u64,
+    pub(crate) counter_base_file_id: u64,
     /// Pending snapshot-changes row for the current transaction.
     ///
     /// Multiple `add_snapshot_changes()` calls accumulate into this single row
@@ -74,6 +67,9 @@ impl CatalogWriter {
         writer_nonce: String,
         schema_version: u64,
     ) -> Self {
+        let counter_base_snapshot_id = counters.peek_snapshot_id();
+        let counter_base_catalog_id = counters.peek_catalog_id();
+        let counter_base_file_id = counters.peek_file_id();
         Self {
             db,
             counters,
@@ -82,13 +78,367 @@ impl CatalogWriter {
             schema_changed: false,
             current_schema_version: schema_version,
             staged: Vec::new(),
+            staged_deletes: Vec::new(),
+            counter_base_snapshot_id,
+            counter_base_catalog_id,
+            counter_base_file_id,
             pending_snapshot_changes: None,
         }
     }
 
     /// Stage a (key, value) write for atomic commit in `create_snapshot()`.
     fn stage(&mut self, key: Vec<u8>, value: Vec<u8>) {
-        self.staged.push((key, value));
+        self.staged_deletes.retain(|staged_key| staged_key != &key);
+        if let Some((_, staged_value)) = self
+            .staged
+            .iter_mut()
+            .find(|(staged_key, _)| staged_key == &key)
+        {
+            *staged_value = value;
+        } else {
+            self.staged.push((key, value));
+        }
+    }
+
+    /// Stage a delete for atomic commit in `create_snapshot()`.
+    fn stage_delete(&mut self, key: Vec<u8>) {
+        self.staged.retain(|(staged_key, _)| staged_key != &key);
+        if !self
+            .staged_deletes
+            .iter()
+            .any(|staged_key| staged_key == &key)
+        {
+            self.staged_deletes.push(key);
+        }
+    }
+
+    pub(crate) fn staged_value(&self, key: &[u8]) -> Option<&[u8]> {
+        self.staged
+            .iter()
+            .find(|(staged_key, _)| staged_key.as_slice() == key)
+            .map(|(_, value)| value.as_slice())
+    }
+
+    async fn ensure_schema_exists(&self, schema_id: u64) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_SCHEMA);
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<SchemaRow>(value)
+                    .map(|row| row.schema_id == schema_id && row.end_snapshot.is_none())
+                    .unwrap_or(false)
+        }) {
+            return Ok(());
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SchemaRow = values::decode_value(&kv.value)?;
+            if row.schema_id == schema_id && row.end_snapshot.is_none() {
+                return Ok(());
+            }
+        }
+        Err(CatalogError::NotFound(format!("schema {schema_id}")))
+    }
+
+    async fn ensure_table_exists(&self, table_id: u64) -> CatalogResult<()> {
+        if self.find_table_schema_id(table_id).await?.is_some() {
+            return Ok(());
+        }
+
+        // Some DuckLake clients register files or stats before they mirror the
+        // table row. Keep that bootstrap case working, but reject an unknown
+        // parent once the catalog has any table rows to compare against.
+        let staged_table_count = self
+            .staged
+            .iter()
+            .filter(|(key, value)| {
+                key.starts_with(&keys::prefix_for_tag(TAG_TABLE))
+                    && values::decode_value::<TableRow>(value)
+                        .map(|row| row.end_snapshot.is_none())
+                        .unwrap_or(false)
+            })
+            .count();
+        let prefix = keys::prefix_for_tag(TAG_TABLE);
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        let mut live_table_count = staged_table_count;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: TableRow = values::decode_value(&kv.value)?;
+            if row.end_snapshot.is_none() {
+                live_table_count += 1;
+            }
+        }
+        if live_table_count > 1 {
+            return Err(CatalogError::NotFound(format!("table {table_id}")));
+        }
+        Ok(())
+    }
+
+    async fn ensure_column_belongs(&self, table_id: u64, column_id: u64) -> CatalogResult<()> {
+        let prefix = keys::prefix_columns_for_table(table_id);
+        let mut live_column_count = 0;
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<ColumnRow>(value)
+                    .map(|row| {
+                        row.table_id == table_id
+                            && row.column_id == column_id
+                            && row.end_snapshot.is_none()
+                    })
+                    .unwrap_or(false)
+        }) {
+            return Ok(());
+        }
+        live_column_count += self
+            .staged
+            .iter()
+            .filter(|(key, value)| {
+                key.starts_with(&prefix)
+                    && values::decode_value::<ColumnRow>(value)
+                        .map(|row| row.table_id == table_id && row.end_snapshot.is_none())
+                        .unwrap_or(false)
+            })
+            .count();
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ColumnRow = values::decode_value(&kv.value)?;
+            if row.end_snapshot.is_none() {
+                live_column_count += 1;
+            }
+            if row.column_id == column_id && row.end_snapshot.is_none() {
+                return Ok(());
+            }
+        }
+        // ponytail: allow bootstrap stats before columns are mirrored; tighten
+        // once all clients create column rows before their stats rows.
+        if live_column_count == 0 {
+            return Ok(());
+        }
+        Err(CatalogError::NotFound(format!(
+            "column {column_id} on table {table_id}"
+        )))
+    }
+
+    async fn ensure_data_file_belongs(
+        &self,
+        table_id: u64,
+        data_file_id: u64,
+    ) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_DATA_FILE);
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<DataFileRow>(value)
+                    .map(|row| row.table_id == table_id && row.data_file_id == data_file_id)
+                    .unwrap_or(false)
+        }) {
+            return Ok(());
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: DataFileRow = values::decode_value(&kv.value)?;
+            if row.table_id == table_id && row.data_file_id == data_file_id {
+                return Ok(());
+            }
+        }
+        Err(CatalogError::NotFound(format!(
+            "data file {data_file_id} on table {table_id}"
+        )))
+    }
+
+    async fn ensure_data_file_exists(&self, data_file_id: u64) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_DATA_FILE);
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<DataFileRow>(value)
+                    .map(|row| row.data_file_id == data_file_id)
+                    .unwrap_or(false)
+        }) {
+            return Ok(());
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: DataFileRow = values::decode_value(&kv.value)?;
+            if row.data_file_id == data_file_id {
+                return Ok(());
+            }
+        }
+        Err(CatalogError::NotFound(format!("data file {data_file_id}")))
+    }
+
+    async fn ensure_partition_belongs(
+        &self,
+        partition_id: u64,
+        table_id: Option<u64>,
+    ) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_PARTITION_INFO);
+        let mut live_partition_count = self
+            .staged
+            .iter()
+            .filter(|(key, value)| {
+                key.starts_with(&prefix)
+                    && values::decode_value::<PartitionInfoRow>(value)
+                        .map(|row| row.end_snapshot.is_none())
+                        .unwrap_or(false)
+            })
+            .count();
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<PartitionInfoRow>(value)
+                    .map(|row| {
+                        row.partition_id == partition_id
+                            && row.end_snapshot.is_none()
+                            && table_id.is_none_or(|id| row.table_id == id)
+                    })
+                    .unwrap_or(false)
+        }) {
+            return Ok(());
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: PartitionInfoRow = values::decode_value(&kv.value)?;
+            if row.end_snapshot.is_none() {
+                live_partition_count += 1;
+            }
+            if row.partition_id == partition_id
+                && row.end_snapshot.is_none()
+                && table_id.is_none_or(|id| row.table_id == id)
+            {
+                return Ok(());
+            }
+        }
+        // Keep bootstrap catalogs working when data-file rows arrive before
+        // partition-info rows; validate ownership as soon as parent rows exist.
+        if live_partition_count == 0 {
+            return Ok(());
+        }
+        Err(CatalogError::NotFound(format!("partition {partition_id}")))
+    }
+
+    async fn ensure_mapping_belongs(&self, mapping_id: u64, table_id: u64) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_COLUMN_MAPPING);
+        let mut live_mapping_count = self
+            .staged
+            .iter()
+            .filter(|(key, value)| {
+                key.starts_with(&prefix)
+                    && values::decode_value::<ColumnMappingRow>(value)
+                        .map(|row| row.mapping_id == mapping_id)
+                        .unwrap_or(false)
+            })
+            .count();
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<ColumnMappingRow>(value)
+                    .map(|row| row.mapping_id == mapping_id && row.table_id == table_id)
+                    .unwrap_or(false)
+        }) {
+            return Ok(());
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ColumnMappingRow = values::decode_value(&kv.value)?;
+            live_mapping_count += 1;
+            if row.mapping_id == mapping_id && row.table_id == table_id {
+                return Ok(());
+            }
+        }
+        // ponytail: tolerate legacy files before mapping rows are mirrored;
+        // enforce ownership once the mapping catalog is populated.
+        if live_mapping_count == 0 {
+            return Ok(());
+        }
+        Err(CatalogError::NotFound(format!(
+            "mapping {mapping_id} on table {table_id}"
+        )))
+    }
+
+    async fn ensure_sort_belongs(&self, sort_id: u64, table_id: Option<u64>) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_SORT_INFO);
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<SortInfoRow>(value)
+                    .map(|row| {
+                        row.sort_id == sort_id
+                            && row.end_snapshot.is_none()
+                            && table_id.is_none_or(|id| row.table_id == id)
+                    })
+                    .unwrap_or(false)
+        }) {
+            return Ok(());
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SortInfoRow = values::decode_value(&kv.value)?;
+            if row.sort_id == sort_id
+                && row.end_snapshot.is_none()
+                && table_id.is_none_or(|id| row.table_id == id)
+            {
+                return Ok(());
+            }
+        }
+        Err(CatalogError::NotFound(format!("sort order {sort_id}")))
     }
 
     /// Helper to get next row id start and update/stage table stats.
@@ -204,6 +554,7 @@ impl CatalogWriter {
         table_name: &str,
         data_path: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.ensure_schema_exists(schema_id).await?;
         let table_id = self.counters.alloc_catalog_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
@@ -236,6 +587,7 @@ impl CatalogWriter {
         table_name: &str,
         data_path: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.ensure_schema_exists(schema_id).await?;
         self.counters.ensure_catalog_id_at_least(table_id);
         let snapshot_id = self.counters.peek_snapshot_id();
 
@@ -521,6 +873,9 @@ impl CatalogWriter {
     /// a guaranteed result should fall back to the legacy scan themselves.
     pub async fn find_table_schema_id(&self, table_id: u64) -> CatalogResult<Option<u64>> {
         let idx_key = keys::key_table_by_id(table_id);
+        if let Some(data) = self.staged_value(&idx_key) {
+            return Ok(Some(values::decode_counter(data)?));
+        }
         match self.db.get(&idx_key).await? {
             Some(data) => Ok(Some(values::decode_counter(&data)?)),
             None => {
@@ -671,6 +1026,7 @@ impl CatalogWriter {
         default_value_dialect: Option<&str>,
         parent_column: Option<u64>,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
         let column_id = self.counters.alloc_catalog_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
@@ -711,6 +1067,7 @@ impl CatalogWriter {
         default_value_dialect: Option<&str>,
         parent_column: Option<u64>,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
         self.counters.ensure_catalog_id_at_least(column_id);
         let snapshot_id = self.counters.peek_snapshot_id();
 
@@ -769,6 +1126,19 @@ impl CatalogWriter {
     /// Used by the PG-Wire executor to resolve `UPDATE end_snapshot` on
     /// `ducklake_column` without using entity_id for both table_id and column_id.
     pub async fn find_column_table_id(&self, column_id: u64) -> CatalogResult<Option<u64>> {
+        let prefix = keys::prefix_for_tag(TAG_COLUMN);
+        for (key, value) in &self.staged {
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            let row: ColumnRow = match values::decode_value(value) {
+                Ok(row) => row,
+                Err(_) => continue,
+            };
+            if row.column_id == column_id && row.end_snapshot.is_none() {
+                return Ok(Some(row.table_id));
+            }
+        }
         let prefix = keys::prefix_for_tag(TAG_COLUMN);
         let mut iter = self
             .db
@@ -855,6 +1225,7 @@ impl CatalogWriter {
         record_count: u64,
         file_size_bytes: u64,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         // v0.24: assign file_order as monotonically increasing within table.
@@ -908,6 +1279,7 @@ impl CatalogWriter {
         file_size_bytes: u64,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         let file_order = data_file_id;
@@ -963,6 +1335,14 @@ impl CatalogWriter {
         mapping_id: Option<u64>,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
+        if let Some(partition_id) = partition_id {
+            self.ensure_partition_belongs(partition_id, Some(table_id))
+                .await?;
+        }
+        if let Some(mapping_id) = mapping_id {
+            self.ensure_mapping_belongs(mapping_id, table_id).await?;
+        }
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         let file_order = data_file_id;
@@ -1012,11 +1392,50 @@ impl CatalogWriter {
         footer_size: Option<i64>,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.register_delete_file_with_opts(
+            data_file_id,
+            path,
+            delete_count,
+            file_size_bytes,
+            None,
+            None,
+            None,
+            footer_size,
+            partial_max,
+        )
+        .await
+    }
+
+    /// Register a delete file with its optional DuckLake metadata.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_delete_file_with_opts(
+        &mut self,
+        data_file_id: u64,
+        path: &str,
+        delete_count: u64,
+        file_size_bytes: u64,
+        table_id: Option<u64>,
+        format: Option<&str>,
+        path_is_relative: Option<bool>,
+        footer_size: Option<i64>,
+        partial_max: Option<&str>,
+    ) -> CatalogResult<u64> {
+        if let Some(table_id) = table_id {
+            if data_file_id != 0 {
+                self.ensure_data_file_belongs(table_id, data_file_id)
+                    .await?;
+            } else {
+                self.ensure_table_exists(table_id).await?;
+            }
+        } else {
+            self.ensure_data_file_exists(data_file_id).await?;
+        }
         let delete_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
-        let path_is_relative = rocklake_core::path::is_path_relative(path);
+        let path_is_relative =
+            path_is_relative.unwrap_or_else(|| rocklake_core::path::is_path_relative(path));
 
         let row = DeleteFileRow {
             delete_file_id,
@@ -1025,11 +1444,13 @@ impl CatalogWriter {
             delete_count,
             file_size_bytes,
             snapshot_id,
-            table_id: None,
+            table_id,
             begin_snapshot: Some(snapshot_id),
             end_snapshot: None,
             path_is_relative: Some(path_is_relative),
-            format: Some("parquet".to_string()),
+            format: format
+                .map(str::to_string)
+                .or_else(|| Some("parquet".to_string())),
             footer_size,
             partial_max: partial_max.map(|s| s.to_string()),
         };
@@ -1046,31 +1467,18 @@ impl CatalogWriter {
         delete_count: u64,
         file_size_bytes: u64,
     ) -> CatalogResult<u64> {
-        let delete_file_id = self.counters.alloc_file_id();
-        let snapshot_id = self.counters.peek_snapshot_id();
-
-        // Detect if path is relative (no scheme like s3://, az://) or absolute
-        let path_is_relative = rocklake_core::path::is_path_relative(path);
-
-        let row = DeleteFileRow {
-            delete_file_id,
+        self.register_delete_file_with_opts(
             data_file_id,
-            path: path.to_string(),
+            path,
             delete_count,
             file_size_bytes,
-            snapshot_id,
-            table_id: None,
-            begin_snapshot: Some(snapshot_id),
-            end_snapshot: None,
-            path_is_relative: Some(path_is_relative),
-            format: Some("parquet".to_string()),
-            footer_size: None,
-            partial_max: None,
-        };
-
-        let key = keys::key_delete_file(data_file_id, delete_file_id);
-        self.stage(key, values::encode_value(&row));
-        Ok(delete_file_id)
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
     }
 
     pub async fn register_inlined_insert(
@@ -1154,6 +1562,10 @@ impl CatalogWriter {
         file_column_name: Option<&str>,
         mapping_type: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
+        if let Some(column_id) = column_id {
+            self.ensure_column_belongs(table_id, column_id).await?;
+        }
         let mapping_id = mapping_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
         self.counters.ensure_catalog_id_at_least(mapping_id);
 
@@ -1166,7 +1578,7 @@ impl CatalogWriter {
         };
 
         let key = keys::key_column_mapping(table_id, mapping_id);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(mapping_id)
     }
 
@@ -1181,6 +1593,26 @@ impl CatalogWriter {
         parent_column: Option<u64>,
         is_partition: Option<bool>,
     ) -> CatalogResult<u64> {
+        if self.find_column_table_id(column_id).await?.is_none() {
+            // DuckLake's bootstrap catalog can create name mappings before it
+            // mirrors the column rows. Reject unknown IDs once columns exist.
+            let prefix = keys::prefix_for_tag(TAG_COLUMN);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let row: ColumnRow = values::decode_value(&kv.value)?;
+                if row.end_snapshot.is_none() {
+                    return Err(CatalogError::NotFound(format!("column {column_id}")));
+                }
+            }
+        }
         let mapping_id = mapping_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
         self.counters.ensure_catalog_id_at_least(mapping_id);
 
@@ -1195,7 +1627,7 @@ impl CatalogWriter {
         };
 
         let key = keys::key_name_mapping(mapping_id, column_id, source_name_hash.unwrap_or(0));
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(mapping_id)
     }
 
@@ -1496,7 +1928,7 @@ impl CatalogWriter {
         };
 
         let key = keys::key_macro_parameters(macro_id, impl_id, column_id);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
@@ -1601,6 +2033,7 @@ impl CatalogWriter {
         table_id: u64,
         partition_id: Option<u64>,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
         let partition_id = partition_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
         self.counters.ensure_catalog_id_at_least(partition_id);
         let begin_snapshot = self.counters.peek_snapshot_id();
@@ -1611,7 +2044,7 @@ impl CatalogWriter {
             end_snapshot: None,
         };
         let key = keys::key_partition_info(table_id, partition_id, begin_snapshot);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(partition_id)
     }
 
@@ -1620,6 +2053,7 @@ impl CatalogWriter {
     /// Stores an individual MVCC entry under `key_sort_info`, which `list_all_sort_info`
     /// can scan.  The sort_id must be caller-assigned and unique within the table.
     pub async fn add_sort_info(&mut self, table_id: u64, sort_id: u64) -> CatalogResult<()> {
+        self.ensure_table_exists(table_id).await?;
         let snapshot_id = self.counters.peek_snapshot_id();
         let row = SortInfoRow {
             sort_id,
@@ -1638,6 +2072,7 @@ impl CatalogWriter {
         table_id: u64,
         sort_id: Option<u64>,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
         let sort_id = sort_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
         self.counters.ensure_catalog_id_at_least(sort_id);
         let begin_snapshot = self.counters.peek_snapshot_id();
@@ -1648,7 +2083,7 @@ impl CatalogWriter {
             end_snapshot: None,
         };
         let key = keys::key_sort_info(table_id, sort_id, begin_snapshot);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(sort_id)
     }
 
@@ -1661,6 +2096,17 @@ impl CatalogWriter {
         transform: Option<&str>,
         table_id: Option<u64>,
     ) -> CatalogResult<()> {
+        self.ensure_partition_belongs(partition_id, table_id)
+            .await?;
+        let column_table_id = self
+            .find_column_table_id(column_id)
+            .await?
+            .ok_or_else(|| CatalogError::NotFound(format!("column {column_id}")))?;
+        if let Some(table_id) = table_id {
+            self.ensure_column_belongs(table_id, column_id).await?;
+        } else if column_table_id == 0 {
+            return Err(CatalogError::NotFound(format!("column {column_id}")));
+        }
         let row = PartitionColumnRow {
             partition_id,
             partition_key_index,
@@ -1669,7 +2115,7 @@ impl CatalogWriter {
             table_id,
         };
         let key = keys::key_partition_column(partition_id, partition_key_index);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
@@ -1686,6 +2132,16 @@ impl CatalogWriter {
         expression: Option<&str>,
         dialect: Option<&str>,
     ) -> CatalogResult<()> {
+        self.ensure_sort_belongs(sort_id, table_id).await?;
+        let column_table_id = self
+            .find_column_table_id(column_id)
+            .await?
+            .ok_or_else(|| CatalogError::NotFound(format!("column {column_id}")))?;
+        if let Some(table_id) = table_id {
+            self.ensure_column_belongs(table_id, column_id).await?;
+        } else if column_table_id == 0 {
+            return Err(CatalogError::NotFound(format!("column {column_id}")));
+        }
         let row = SortExpressionRow {
             sort_id,
             sort_key_index,
@@ -1697,7 +2153,7 @@ impl CatalogWriter {
             dialect: dialect.map(|value| value.to_string()),
         };
         let key = keys::key_sort_expression(sort_id, sort_key_index);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
@@ -1736,6 +2192,7 @@ impl CatalogWriter {
         path_is_relative: Option<bool>,
         schedule_start: u64,
     ) -> CatalogResult<()> {
+        self.ensure_data_file_exists(data_file_id).await?;
         let row = FilesScheduledForDeletionRow {
             data_file_id,
             schedule_start,
@@ -1745,7 +2202,7 @@ impl CatalogWriter {
         };
 
         let key = keys::key_files_scheduled_for_deletion(schedule_start, data_file_id);
-        self.db.put(&key, values::encode_value(&row)).await?;
+        self.stage(key, values::encode_value(&row));
         Ok(())
     }
 
@@ -1755,7 +2212,7 @@ impl CatalogWriter {
         data_file_id: u64,
     ) -> CatalogResult<()> {
         let key = keys::key_files_scheduled_for_deletion(schedule_start, data_file_id);
-        self.db.delete(&key).await?;
+        self.stage_delete(key);
         Ok(())
     }
 
@@ -1908,8 +2365,14 @@ impl CatalogWriter {
         table_id: u64,
         row_count_delta: i64,
     ) -> CatalogResult<()> {
+        self.ensure_table_exists(table_id).await?;
         let key = keys::key_table_stats(table_id);
-        let existing = match self.db.get(&key).await? {
+        let existing = match self.staged_value(&key).map(ToOwned::to_owned).or(self
+            .db
+            .get(&key)
+            .await?
+            .map(|data| data.to_vec()))
+        {
             Some(data) => rocklake_core::values::decode_value::<TableStatsRow>(&data).unwrap_or(
                 TableStatsRow {
                     table_id,
@@ -1941,7 +2404,7 @@ impl CatalogWriter {
             file_size_bytes: existing.file_size_bytes,
             next_row_id: existing.next_row_id,
         };
-        self.db.put(&key, values::encode_value(&updated)).await?;
+        self.stage(key, values::encode_value(&updated));
         Ok(())
     }
 }
