@@ -94,11 +94,11 @@ jobs:
       - name: Test
         run: cargo test --all
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
 
       - name: Security audit
-        run: cargo audit
+        run: cargo deny check advisories bans sources licenses
 
   # Build release binaries for each target platform.
   build:
