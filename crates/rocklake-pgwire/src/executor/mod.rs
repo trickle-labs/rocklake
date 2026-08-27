@@ -986,6 +986,7 @@ fn inlined_table_name_from_sql(sql: &str) -> Option<String> {
     Some(rest[..end].trim_matches('"').to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_classified<'a>(
     kind: StatementKind,
     _sql: &str,
