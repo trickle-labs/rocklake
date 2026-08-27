@@ -56,6 +56,66 @@ use helpers::{
 use meta::execute_virtual_catalog_scan;
 use session::{execute_hold_snapshot, execute_release_snapshot};
 
+/// Access mode enforced before any statement reaches catalog I/O.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessMode {
+    Writer,
+    Reader,
+}
+
+fn is_mutating_statement(kind: &StatementKind, sql: &str) -> bool {
+    match kind {
+        StatementKind::InsertSnapshot
+        | StatementKind::InsertSnapshotChanges
+        | StatementKind::InsertSchema
+        | StatementKind::InsertTable
+        | StatementKind::InsertColumn
+        | StatementKind::InsertDataFile
+        | StatementKind::InsertDeleteFile
+        | StatementKind::InsertTableStats
+        | StatementKind::InsertTableColumnStats
+        | StatementKind::InsertFileColumnStats
+        | StatementKind::InsertMetadata
+        | StatementKind::InsertInlinedDataTables
+        | StatementKind::InsertSchemaVersions
+        | StatementKind::InsertView
+        | StatementKind::InsertMacro
+        | StatementKind::InsertMacroImpl
+        | StatementKind::InsertMacroParameters
+        | StatementKind::UpdateEndSnapshot(_)
+        | StatementKind::UpdateTableStats
+        | StatementKind::UpdateTableColumnStats
+        | StatementKind::CreateInlinedTable
+        | StatementKind::InsertInlinedRow
+        | StatementKind::UpdateInlinedRowEndSnapshot
+        | StatementKind::VirtualCatalogMutation { .. }
+        | StatementKind::CreateExtensionTable { .. }
+        | StatementKind::InsertExtensionRow { .. }
+        | StatementKind::DeleteExtensionRows { .. }
+        | StatementKind::DeleteInlinedDataRows { .. }
+        | StatementKind::DeleteDuckLakeCatalogRows { .. }
+        | StatementKind::CopyFromStdin { .. }
+        | StatementKind::NextRowidRange { .. }
+        | StatementKind::HoldSnapshot { .. }
+        | StatementKind::ReleaseSnapshot { .. } => true,
+        StatementKind::Unsupported(_) => {
+            let lower = sql.trim_start().to_ascii_lowercase();
+            matches!(
+                lower.split_whitespace().next(),
+                Some("insert" | "update" | "delete" | "create" | "alter" | "drop" | "truncate")
+            ) || (lower.starts_with("copy ") && lower.contains(" from "))
+        }
+        _ => false,
+    }
+}
+
+fn ensure_access(mode: AccessMode, kind: &StatementKind, sql: &str) -> Result<(), RockLakeError> {
+    if mode == AccessMode::Reader && is_mutating_statement(kind, sql) {
+        return Err(RockLakeError::ReadOnlyReplica);
+    }
+    Ok(())
+}
+
 async fn submit_ops(
     ops: Vec<BufferedOp>,
     session: &mut SessionState,
@@ -132,6 +192,28 @@ pub async fn execute_sql<'a>(
     notify_manager: &Arc<NotifyManager>,
     extension_schemas: &Arc<Vec<String>>,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
+    execute_sql_with_mode(
+        sql,
+        params,
+        store,
+        session,
+        notify_manager,
+        extension_schemas,
+        AccessMode::Writer,
+    )
+    .await
+}
+
+/// Execute a SQL statement with an immutable access mode.
+pub async fn execute_sql_with_mode<'a>(
+    sql: &'a str,
+    params: &ParamValues,
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+    session: &mut SessionState,
+    notify_manager: &Arc<NotifyManager>,
+    extension_schemas: &Arc<Vec<String>>,
+    mode: AccessMode,
+) -> Result<Vec<Response<'a>>, RockLakeError> {
     let result = execute_sql_inner(
         sql,
         params,
@@ -139,6 +221,7 @@ pub async fn execute_sql<'a>(
         session,
         notify_manager,
         extension_schemas,
+        mode,
     )
     .await;
     if result.is_err() {
@@ -159,6 +242,7 @@ async fn execute_sql_inner<'a>(
     session: &mut SessionState,
     notify_manager: &Arc<NotifyManager>,
     extension_schemas: &Arc<Vec<String>>,
+    mode: AccessMode,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
     println!("[SQL] execute_sql: {}", sql);
     let has_delete = sql.to_lowercase().contains("delete");
@@ -186,6 +270,7 @@ async fn execute_sql_inner<'a>(
                             session,
                             notify_manager,
                             extension_schemas,
+                            mode,
                         )
                         .await
                         {
@@ -214,6 +299,7 @@ async fn execute_sql_inner<'a>(
                 session,
                 notify_manager,
                 extension_schemas,
+                mode,
             )
             .await?;
             all_responses.append(&mut responses);
@@ -222,6 +308,7 @@ async fn execute_sql_inner<'a>(
     }
 
     let kind = classify_statement(sql)?;
+    ensure_access(mode, &kind, sql)?;
     execute_classified(
         kind,
         sql,
@@ -230,6 +317,7 @@ async fn execute_sql_inner<'a>(
         session,
         notify_manager,
         extension_schemas,
+        mode,
     )
     .await
 }
@@ -906,7 +994,9 @@ async fn execute_classified<'a>(
     session: &mut SessionState,
     notify_manager: &Arc<NotifyManager>,
     extension_schemas: &Arc<Vec<String>>,
+    mode: AccessMode,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
+    ensure_access(mode, &kind, _sql)?;
     match kind {
         // ─── Session / Introspection ───────────────────────────────────
         StatementKind::SelectVersion => Ok(vec![make_single_text_response(

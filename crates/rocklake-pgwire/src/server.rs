@@ -184,6 +184,15 @@ pub async fn run_server(
     config: ServerConfig,
     catalog: Arc<Mutex<CatalogStore>>,
 ) -> std::io::Result<()> {
+    run_server_with_mode(config, catalog, crate::executor::AccessMode::Writer).await
+}
+
+/// Run the RockLake PG-Wire server with an immutable access mode.
+pub async fn run_server_with_mode(
+    config: ServerConfig,
+    catalog: Arc<Mutex<CatalogStore>>,
+    access_mode: crate::executor::AccessMode,
+) -> std::io::Result<()> {
     #[cfg(unix)]
     let shutdown_signal = async {
         use tokio::signal::unix::{signal, SignalKind};
@@ -200,7 +209,7 @@ pub async fn run_server(
         let _ = shutdown_tx.send(());
     });
 
-    run_server_with_shutdown(config, catalog, shutdown_rx).await
+    run_server_with_shutdown_mode(config, catalog, shutdown_rx, access_mode).await
 }
 
 /// Run the server with a shutdown signal (for testing and graceful drain).
@@ -208,6 +217,22 @@ pub async fn run_server_with_shutdown(
     config: ServerConfig,
     catalog: Arc<Mutex<CatalogStore>>,
     shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> std::io::Result<()> {
+    run_server_with_shutdown_mode(
+        config,
+        catalog,
+        shutdown,
+        crate::executor::AccessMode::Writer,
+    )
+    .await
+}
+
+/// Run the server with a shutdown signal and an immutable access mode.
+pub async fn run_server_with_shutdown_mode(
+    config: ServerConfig,
+    catalog: Arc<Mutex<CatalogStore>>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
+    access_mode: crate::executor::AccessMode,
 ) -> std::io::Result<()> {
     let tls_acceptor = if config.tls.is_enabled() {
         Some(build_tls_acceptor(&config.tls)?)
@@ -279,8 +304,14 @@ pub async fn run_server_with_shutdown(
                     }
 
                     info!("New connection from {addr}");
-                    let handlers =
-                        RockLakeServerHandlers::new_with_config(catalog, auth, tls_required, nm, es);
+                    let handlers = RockLakeServerHandlers::new_with_config_mode(
+                        catalog,
+                        auth,
+                        tls_required,
+                        nm,
+                        es,
+                        access_mode,
+                    );
 
                     if let Err(e) = pgwire::tokio::process_socket(socket, tls, handlers).await {
                         error!("Connection error from {addr}: {e}");

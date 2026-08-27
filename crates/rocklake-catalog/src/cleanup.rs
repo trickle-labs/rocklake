@@ -344,36 +344,37 @@ fn canonical_object_path(
     stored_path: &str,
     path_is_relative: Option<bool>,
 ) -> CatalogResult<ObjectPath> {
-    let relative =
-        path_is_relative.unwrap_or_else(|| rocklake_core::path::is_path_relative(stored_path));
-    let path = if relative {
-        let mut result = data_prefix.clone();
-        for part in stored_path.trim_matches('/').split('/') {
-            if !part.is_empty() {
-                result = result.child(part);
-            }
-        }
-        result
-    } else {
-        let path = stored_path
-            .split_once("://")
-            .and_then(|(_, rest)| rest.split_once('/').map(|(_, path)| path))
-            .unwrap_or_else(|| stored_path.trim_start_matches('/'));
-        ObjectPath::from(path)
-    };
-    let prefix = data_prefix.as_ref().trim_end_matches('/');
-    let in_prefix = prefix.is_empty()
-        || path.as_ref() == prefix
-        || path
-            .as_ref()
-            .strip_prefix(prefix)
-            .is_some_and(|suffix| suffix.starts_with('/'));
-    if !in_prefix {
-        return Err(CatalogError::InvalidInput(format!(
-            "path '{stored_path}' is outside data prefix '{data_prefix}'"
-        )));
-    }
-    Ok(path)
+    rocklake_core::path::resolve_object_path(data_prefix.as_ref(), stored_path, path_is_relative)
+        .map(ObjectPath::from)
+        .map_err(|e| CatalogError::InvalidInput(e.to_string()))
 }
 
 use futures::TryStreamExt;
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_object_path;
+    use object_store::path::Path;
+
+    #[test]
+    fn canonical_paths_keep_nested_prefixes_and_reject_unsafe_rows() {
+        assert_eq!(
+            canonical_object_path(
+                &Path::from("data/warehouse/nested"),
+                "table/file.parquet",
+                Some(true)
+            )
+            .unwrap(),
+            Path::from("data/warehouse/nested/table/file.parquet")
+        );
+        assert!(
+            canonical_object_path(&Path::from("data/warehouse"), "../outside", Some(true)).is_err()
+        );
+        assert!(canonical_object_path(
+            &Path::from("data/warehouse"),
+            "data/other/file",
+            Some(false)
+        )
+        .is_err());
+    }
+}

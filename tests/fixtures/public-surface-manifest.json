@@ -1,5 +1,5 @@
 {
-    "release": "v0.47.15",
+    "release": "v0.47.16",
     "duckdb_version": "1.5.3",
     "ducklake_version": "1.0",
     "catalog_version": 7,
@@ -55,6 +55,15 @@
             "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
             "test_file": "crates/rocklake-catalog/tests/v04715_catalog_fidelity_tests.rs",
             "test_name": "malformed_import_leaves_target_unchanged"
+        },
+        {
+            "release": "v0.47.16",
+            "duckdb_version": "1.5.3",
+            "ducklake_version": "1.0",
+            "catalog_version": 7,
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
+            "test_file": "crates/rocklake-datafusion/tests/v04716_scan_fidelity_tests.rs",
+            "test_name": "unsupported_registered_format_is_an_error"
         }
     ],
     "negative_probes": [
@@ -75,6 +84,12 @@
             "name": "unsupported statement rejection",
             "test_file": "crates/rocklake-pgwire/tests/dialect_fuzz.rs",
             "test_name": "dialect_fuzz_unsupported_returns_0a000_or_ok"
+        },
+        {
+            "surface": "pgwire_reader_mode",
+            "name": "reader mutation rejection",
+            "test_file": "crates/rocklake-pgwire/tests/integration_tests.rs",
+            "test_name": "reader_mode_rejects_mutations_before_catalog_io"
         },
         {
             "surface": "sqlstate",

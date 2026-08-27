@@ -24,7 +24,7 @@ use tracing_subscriber::EnvFilter;
 
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::{CatalogStore, OpenOptions};
-use rocklake_pgwire::server::{run_server, ServerConfig};
+use rocklake_pgwire::server::{run_server_with_mode, ServerConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -535,7 +535,8 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         endpoint: config.s3_endpoint.clone(),
         path_style: config.s3_path_style,
     };
-    let (catalog_path, object_store) = resolve_catalog_with_opts(&config.catalog_url, &s3_opts)?;
+    let (catalog_path, object_store) =
+        resolve_catalog_with_opts_mode(&config.catalog_url, &s3_opts, config.mode != "reader")?;
 
     let opts = OpenOptions {
         object_store: object_store.clone(),
@@ -560,6 +561,11 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         CatalogStore::open(opts)
             .await
             .map_err(|e| format!("Failed to open catalog: {e}"))?
+    };
+    let access_mode = if config.mode == "reader" {
+        rocklake_pgwire::executor::AccessMode::Reader
+    } else {
+        rocklake_pgwire::executor::AccessMode::Writer
     };
 
     tracing::info!("Catalog opened successfully");
@@ -639,14 +645,14 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         };
         let df_catalog = catalog.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_server(df_config, df_catalog).await {
+            if let Err(e) = run_server_with_mode(df_config, df_catalog, access_mode).await {
                 tracing::error!("DataFusion pg-wire listener error: {e}");
             }
         });
         tracing::info!("DataFusion pg-wire listener started on port {df_port}");
     }
 
-    run_server(server_config, catalog).await?;
+    run_server_with_mode(server_config, catalog, access_mode).await?;
     Ok(())
 }
 
@@ -1667,11 +1673,21 @@ fn resolve_catalog_with_opts(
     url: &str,
     s3_opts: &S3Options,
 ) -> Result<(ObjectPath, Arc<dyn object_store::ObjectStore>), String> {
+    resolve_catalog_with_opts_mode(url, s3_opts, true)
+}
+
+fn resolve_catalog_with_opts_mode(
+    url: &str,
+    s3_opts: &S3Options,
+    create_local_root: bool,
+) -> Result<(ObjectPath, Arc<dyn object_store::ObjectStore>), String> {
     if let Some(without_scheme) = url.strip_prefix("s3://") {
         let (bucket, prefix) = match without_scheme.find('/') {
             Some(idx) => (&without_scheme[..idx], &without_scheme[idx + 1..]),
             None => (without_scheme, ""),
         };
+        rocklake_core::path::validate_object_prefix(prefix)
+            .map_err(|e| format!("invalid catalog prefix: {e}"))?;
 
         let mut builder = object_store::aws::AmazonS3Builder::from_env().with_bucket_name(bucket);
         if let Some(ref endpoint) = s3_opts.endpoint {
@@ -1691,6 +1707,8 @@ fn resolve_catalog_with_opts(
             Some(idx) => (&without_scheme[..idx], &without_scheme[idx + 1..]),
             None => (without_scheme, ""),
         };
+        rocklake_core::path::validate_object_prefix(prefix)
+            .map_err(|e| format!("invalid catalog prefix: {e}"))?;
 
         let store = object_store::gcp::GoogleCloudStorageBuilder::from_env()
             .with_bucket_name(bucket)
@@ -1709,6 +1727,8 @@ fn resolve_catalog_with_opts(
             Some(idx) => (&without_scheme[..idx], &without_scheme[idx + 1..]),
             None => (without_scheme, ""),
         };
+        rocklake_core::path::validate_object_prefix(prefix)
+            .map_err(|e| format!("invalid catalog prefix: {e}"))?;
 
         let store = object_store::azure::MicrosoftAzureBuilder::from_env()
             .with_container_name(container)
@@ -1723,6 +1743,11 @@ fn resolve_catalog_with_opts(
             path.canonicalize()
                 .map_err(|e| format!("cannot resolve path: {e}"))?
         } else {
+            if !create_local_root {
+                return Err(format!(
+                    "catalog path '{url}' does not exist; writer initialization is required"
+                ));
+            }
             std::fs::create_dir_all(path).map_err(|e| format!("cannot create catalog dir: {e}"))?;
             path.canonicalize()
                 .map_err(|e| format!("cannot resolve path: {e}"))?

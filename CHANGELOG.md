@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.47.16] — 2026-08-27
+
+### Added
+
+- Immutable reader-mode PG-wire serving with SQLSTATE `25006` mutation rejection.
+- Checked canonical URI and data-file path resolution with nested-prefix and traversal validation.
+- DataFusion scan registration for cloud object stores with explicit errors for deletes, inlined rows, and unsupported formats.
+
+### Changed
+
+- Read-only catalog opens now fail closed when format, migration, counters, schema, or retention state is missing or corrupt.
+- Catalog client shutdown errors are returned to callers.
+
 ## [0.47.15] — 2026-08-27
 
 ### Added

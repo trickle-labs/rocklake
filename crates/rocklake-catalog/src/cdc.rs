@@ -146,6 +146,7 @@ impl CdcSnapshot {
                     "data_file_id": row.data_file_id,
                     "table_id": row.table_id,
                     "path": row.path,
+                    "path_is_relative": row.path_is_relative,
                     "file_format": row.file_format,
                     "record_count": row.record_count,
                     "file_size_bytes": row.file_size_bytes,
@@ -162,6 +163,7 @@ impl CdcSnapshot {
                     "data_file_id": row.data_file_id,
                     "table_id": row.table_id,
                     "path": row.path,
+                    "path_is_relative": row.path_is_relative,
                     "end_snapshot": row.end_snapshot,
                 }),
             });

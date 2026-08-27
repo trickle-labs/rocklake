@@ -48,11 +48,16 @@ use crate::session::{BootstrapSchemaRow, SessionState};
 #[derive(Clone)]
 pub struct RockLakeCopyHandler {
     session: Arc<Mutex<SessionState>>,
+    mode: executor::AccessMode,
 }
 
 impl RockLakeCopyHandler {
     pub fn new(session: Arc<Mutex<SessionState>>) -> Self {
-        Self { session }
+        Self::new_with_mode(session, executor::AccessMode::Writer)
+    }
+
+    pub fn new_with_mode(session: Arc<Mutex<SessionState>>, mode: executor::AccessMode) -> Self {
+        Self { session, mode }
     }
 }
 
@@ -68,6 +73,9 @@ impl CopyHandler for RockLakeCopyHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        if self.mode == executor::AccessMode::Reader {
+            return Err(read_only_error());
+        }
         // Append incoming bytes to the accumulator for the active COPY table.
         let mut session = self.session.lock().await;
         if let Some(acc) = &mut session.pending_copy {
@@ -86,6 +94,9 @@ impl CopyHandler for RockLakeCopyHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        if self.mode == executor::AccessMode::Reader {
+            return Err(read_only_error());
+        }
         // Drain the accumulator outside the lock to avoid holding it during parsing.
         let (table, data) = {
             let mut session = self.session.lock().await;
@@ -157,6 +168,14 @@ impl CopyHandler for RockLakeCopyHandler {
     }
 }
 
+fn read_only_error() -> PgWireError {
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        "ERROR".to_string(),
+        "25006".to_string(),
+        "cannot execute write operation in a read-only transaction".to_string(),
+    )))
+}
+
 /// Send `CommandComplete "COPY N"` to the client.
 async fn send_copy_done<C>(client: &mut C, rows: usize) -> PgWireResult<()>
 where
@@ -183,10 +202,18 @@ pub struct RockLakeHandler {
     pub notify_manager: Arc<NotifyManager>,
     /// Allowed extension schema names (configurable via --extension-schemas).
     pub extension_schemas: Arc<Vec<String>>,
+    pub access_mode: executor::AccessMode,
 }
 
 impl RockLakeHandler {
     pub fn new(catalog: Arc<Mutex<CatalogStore>>) -> Self {
+        Self::new_with_mode(catalog, executor::AccessMode::Writer)
+    }
+
+    pub fn new_with_mode(
+        catalog: Arc<Mutex<CatalogStore>>,
+        access_mode: executor::AccessMode,
+    ) -> Self {
         Self {
             catalog,
             session: Arc::new(Mutex::new(SessionState::new())),
@@ -194,10 +221,19 @@ impl RockLakeHandler {
             auth: Arc::new(AuthConfig::default()),
             notify_manager: Arc::new(NotifyManager::new()),
             extension_schemas: Arc::new(vec!["pgtrickle".to_string()]),
+            access_mode,
         }
     }
 
     pub fn new_with_auth(catalog: Arc<Mutex<CatalogStore>>, auth: Arc<AuthConfig>) -> Self {
+        Self::new_with_auth_mode(catalog, auth, executor::AccessMode::Writer)
+    }
+
+    pub fn new_with_auth_mode(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        access_mode: executor::AccessMode,
+    ) -> Self {
         Self {
             catalog,
             session: Arc::new(Mutex::new(SessionState::new())),
@@ -205,6 +241,7 @@ impl RockLakeHandler {
             auth,
             notify_manager: Arc::new(NotifyManager::new()),
             extension_schemas: Arc::new(vec!["pgtrickle".to_string()]),
+            access_mode,
         }
     }
 
@@ -214,6 +251,22 @@ impl RockLakeHandler {
         notify_manager: Arc<NotifyManager>,
         extension_schemas: Arc<Vec<String>>,
     ) -> Self {
+        Self::new_with_config_mode(
+            catalog,
+            auth,
+            notify_manager,
+            extension_schemas,
+            executor::AccessMode::Writer,
+        )
+    }
+
+    pub fn new_with_config_mode(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+    ) -> Self {
         Self {
             catalog,
             session: Arc::new(Mutex::new(SessionState::new())),
@@ -221,6 +274,7 @@ impl RockLakeHandler {
             auth,
             notify_manager,
             extension_schemas,
+            access_mode,
         }
     }
 
@@ -244,13 +298,14 @@ impl RockLakeHandler {
 
         let params = ParamValues::default();
         let mut session = self.session.lock().await;
-        let mut responses = executor::execute_sql(
+        let mut responses = executor::execute_sql_with_mode(
             &query,
             &params,
             &self.catalog,
             &mut session,
             &self.notify_manager,
             &self.extension_schemas,
+            self.access_mode,
         )
         .await
         .map_err(|e| -> PgWireError { e.into() })?;
@@ -761,13 +816,14 @@ impl SimpleQueryHandler for RockLakeHandler {
 
         let params = ParamValues::default();
         let mut session = self.session.lock().await;
-        match executor::execute_sql(
+        match executor::execute_sql_with_mode(
             query,
             &params,
             &self.catalog,
             &mut session,
             &self.notify_manager,
             &self.extension_schemas,
+            self.access_mode,
         )
         .await
         {
@@ -868,13 +924,14 @@ impl ExtendedQueryHandler for RockLakeHandler {
         let params = ParamValues::new(param_values);
 
         let mut session = self.session.lock().await;
-        match executor::execute_sql(
+        match executor::execute_sql_with_mode(
             sql,
             &params,
             &self.catalog,
             &mut session,
             &self.notify_manager,
             &self.extension_schemas,
+            self.access_mode,
         )
         .await
         {
@@ -947,7 +1004,10 @@ impl RockLakeServerHandlers {
     pub fn new(catalog: Arc<Mutex<CatalogStore>>) -> Self {
         let auth = Arc::new(AuthConfig::default());
         let handler = Arc::new(RockLakeHandler::new(catalog));
-        let copy_handler = Arc::new(RockLakeCopyHandler::new(handler.session.clone()));
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
+            handler.session.clone(),
+            handler.access_mode,
+        ));
         Self {
             handler,
             startup: Arc::new(RockLakeStartupHandler::new(auth)),
@@ -958,7 +1018,10 @@ impl RockLakeServerHandlers {
 
     pub fn new_with_auth(catalog: Arc<Mutex<CatalogStore>>, auth: Arc<AuthConfig>) -> Self {
         let handler = Arc::new(RockLakeHandler::new_with_auth(catalog, auth.clone()));
-        let copy_handler = Arc::new(RockLakeCopyHandler::new(handler.session.clone()));
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
+            handler.session.clone(),
+            handler.access_mode,
+        ));
         Self {
             handler,
             startup: Arc::new(RockLakeStartupHandler::new(auth)),
@@ -974,13 +1037,35 @@ impl RockLakeServerHandlers {
         notify_manager: Arc<NotifyManager>,
         extension_schemas: Arc<Vec<String>>,
     ) -> Self {
-        let handler = Arc::new(RockLakeHandler::new_with_config(
+        Self::new_with_config_mode(
+            catalog,
+            auth.clone(),
+            tls_required,
+            notify_manager,
+            extension_schemas,
+            executor::AccessMode::Writer,
+        )
+    }
+
+    pub fn new_with_config_mode(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        tls_required: bool,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+    ) -> Self {
+        let handler = Arc::new(RockLakeHandler::new_with_config_mode(
             catalog,
             auth.clone(),
             notify_manager,
             extension_schemas,
+            access_mode,
         ));
-        let copy_handler = Arc::new(RockLakeCopyHandler::new(handler.session.clone()));
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
+            handler.session.clone(),
+            access_mode,
+        ));
         Self {
             handler,
             startup: Arc::new(RockLakeStartupHandler::new_with_tls_required(

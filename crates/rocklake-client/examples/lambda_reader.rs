@@ -116,6 +116,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    client.close().await;
+    client.close().await?;
     Ok(())
 }

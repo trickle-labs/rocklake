@@ -319,6 +319,7 @@ impl CatalogStore {
         };
 
         init::verify_format_version(&db).await?;
+        init::verify_migrations_complete(&db).await?;
         let counters = init::load_counters_from_db(&db).await?;
         let schema_version = Self::load_schema_version(&db, &counters).await?;
         let retain_from_initial = Self::load_retain_from(&db).await?;

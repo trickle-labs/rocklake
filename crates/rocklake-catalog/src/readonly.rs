@@ -7,7 +7,7 @@
 //!
 //! # Guarantees
 //!
-//! * Zero writes to SlateDB on open or refresh.
+//! * No RockLake catalog metadata writes on open or refresh.
 //! * `reader()` creates a `CatalogReader` bound to the most recently refreshed
 //!   snapshot; it never sees data past a snapshot that was committed *after*
 //!   the last `refresh()` call (snapshot isolation).
@@ -83,6 +83,7 @@ impl ReadOnlyCatalog {
         };
 
         crate::init::verify_format_version(&db).await?;
+        crate::init::verify_migrations_complete(&db).await?;
         crate::init::load_counters_from_db(&db).await?;
 
         let current_snapshot_id = Self::read_latest_snapshot_id(&db).await?;
@@ -136,6 +137,7 @@ impl ReadOnlyCatalog {
     /// SlateDB.  Returns the newly observed snapshot ID.
     pub async fn refresh(&mut self) -> CatalogResult<SnapshotId> {
         crate::init::verify_format_version(&self.db).await?;
+        crate::init::verify_migrations_complete(&self.db).await?;
         crate::init::load_counters_from_db(&self.db).await?;
 
         // Refresh snapshot ID.
