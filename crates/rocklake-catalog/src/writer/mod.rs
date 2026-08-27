@@ -2090,6 +2090,7 @@ impl CatalogWriter {
             data_file_id,
             row_id,
             begin_snapshot: snapshot_id,
+            end_snapshot: None,
         };
 
         let key = keys::key_inlined_delete(table_id, data_file_id, row_id);

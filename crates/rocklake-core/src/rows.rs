@@ -663,6 +663,9 @@ pub struct InlinedDeleteRow {
     pub row_id: u64,
     #[prost(uint64, tag = "4")]
     pub begin_snapshot: u64,
+    /// Snapshot at which this delete marker was retired, if ever.
+    #[prost(uint64, optional, tag = "5")]
+    pub end_snapshot: Option<u64>,
 }
 
 /// Excision audit record (stored under 0xFF | "excised" | timestamp).

@@ -246,6 +246,12 @@ pub enum CheckpointSubcommand {
     List(CheckpointListArgs),
     /// Restore catalog to a saved checkpoint.
     Restore(CheckpointRestoreArgs),
+    /// Pin a snapshot under a durable name.
+    Pin(CheckpointPinArgs),
+    /// Remove a named snapshot pin.
+    Unpin(CheckpointUnpinArgs),
+    /// List named snapshot pins.
+    Pins(CheckpointListArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -275,6 +281,32 @@ pub struct CheckpointRestoreArgs {
     /// ID of the checkpoint to restore.
     #[arg(long)]
     pub id: u64,
+}
+
+#[derive(Debug, Parser)]
+pub struct CheckpointPinArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+
+    /// Name of the durable pin.
+    #[arg(long)]
+    pub name: String,
+
+    /// Snapshot ID to retain.
+    #[arg(long)]
+    pub snapshot: u64,
+}
+
+#[derive(Debug, Parser)]
+pub struct CheckpointUnpinArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+
+    /// Name of the durable pin.
+    #[arg(long)]
+    pub name: String,
 }
 
 // ─── export ────────────────────────────────────────────────────────────────

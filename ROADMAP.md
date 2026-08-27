@@ -113,7 +113,7 @@ binding on every roadmap release below.
 | **v0.47.11 — Surface Completeness Matrix & Negative Testing** | Exhaustive matrix across clients, backends, restarts, concurrency, and emulator targets; deterministic crash/recovery and object-store fault injection; property/fuzz coverage for SQL classification, schema discovery, and snapshot visibility; release gate on zero uncovered export surfaces and zero unclassified protocol errors | Complete |
 | **v0.47.12 — Atomic Write Protocol & Conflict Safety** | Retry-safe snapshot commits; overlapping-writer counter conflict detection; stage every snapshot-dependent metadata mutation; transactionally correct PG-wire writes and strict parameter validation | Complete |
 | **v0.47.13 — Snapshot Read Correctness & Metadata Isolation** | Committed-snapshot bounds; conservative stats pruning; delete-file and CDC table isolation; explicit file retirement; snapshot-aware stats and complete DROP/ALTER cascades | Complete |
-| **v0.47.14 — Recovery, Retention & Cleanup Safety** | Complete atomic checkpoint restore; unified GC/checkpoint pins and leases; retention-safe excision; snapshot-correct scheduled deletion; canonical, fail-closed orphan cleanup | Planning |
+| **v0.47.14 — Recovery, Retention & Cleanup Safety** | Complete atomic checkpoint restore; unified GC/checkpoint pins and leases; retention-safe excision; snapshot-correct scheduled deletion; canonical, fail-closed orphan cleanup | Complete |
 | **v0.47.15 — Catalog Fidelity, Migration & Integrity Verification** | Snapshot-consistent, lossless export/import; strict all-table DuckLake migration; counter/index reconstruction; full-catalog invariant verification and safe repair plans | Planning |
 | **v0.47.16 — Read-Only, Path & Engine Scan Correctness** | Truly write-free and fail-closed reader opens; immutable reader-mode enforcement; preserved cloud URI prefixes; canonical path resolution; correct DataFusion handling of deletes, inlined rows, and unsupported formats | Planning |
 | **v0.47.17 — Production Failure Certification Gate** | Real SlateDB crash-boundary tests; overlapping writer and rollback tests; value-level DuckLake conformance; executing GCS/Azure emulator suites; zero silent wrong-result release gate | Planning |
@@ -5314,39 +5314,39 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Complete Atomic Checkpoint Restore
 
-- [ ] Define restore as a new atomic snapshot representing the checkpoint's full logical state; restore rows retired after the checkpoint as well as hide rows created later.
-- [ ] Cover every persisted DuckLake category, including data and delete files, indexes, inlined rows and deletes, stats, metadata, tags, mappings, partitions, sort state, views, and macros.
-- [ ] Allocate checkpoint IDs, write checkpoint metadata, apply restore mutations, and advance snapshot/counter state through serializable transactions with monotonic IDs.
-- [ ] Inject interruption throughout checkpoint creation and restore; reopen must expose either the complete pre-operation state or the complete restored state.
+- [x] Define restore as a new atomic snapshot representing the checkpoint's full logical state; restore rows retired after the checkpoint as well as hide rows created later.
+- [x] Cover every persisted DuckLake category, including data and delete files, indexes, inlined rows and deletes, stats, metadata, tags, mappings, partitions, sort state, views, and macros.
+- [x] Allocate checkpoint IDs, write checkpoint metadata, apply restore mutations, and advance snapshot/counter state through serializable transactions with monotonic IDs.
+- [x] Inject interruption throughout checkpoint creation and restore; reopen must expose either the complete pre-operation state or the complete restored state.
 
 ### Pins, Leases and GC
 
-- [ ] Unify named checkpoint pins and snapshot pins under one authoritative representation; migrate existing `checkpoint-pin:` records or include them transactionally in every GC decision.
-- [ ] Permit the retain-from floor to equal a pinned snapshot, reject leases below the existing floor, and calculate `GcPlan.snapshots_affected` after pin adjustment.
-- [ ] Validate pins, leases, requested floors, and the retain-from update in the same serializable transaction.
-- [ ] Add race tests for pin, unpin, lease acquisition/expiry, GC planning, and GC apply.
+- [x] Unify named checkpoint pins and snapshot pins under one authoritative representation; migrate existing `checkpoint-pin:` records or include them transactionally in every GC decision.
+- [x] Permit the retain-from floor to equal a pinned snapshot, reject leases below the existing floor, and calculate `GcPlan.snapshots_affected` after pin adjustment.
+- [x] Validate pins, leases, requested floors, and the retain-from update in the same serializable transaction.
+- [x] Add race tests for pin, unpin, lease acquisition/expiry, GC planning, and GC apply.
 
 ### Safe Excision and File Cleanup
 
-- [ ] Rework excision eligibility around visibility at the retention floor; never remove an open-ended inlined-delete marker or live data file merely because its begin snapshot is old.
-- [ ] Determine scheduled-deletion safety from file retirement snapshots and retention, using `schedule_start` only as wall-clock grace time; remove a schedule row only after confirmed deletion or confirmed absence.
-- [ ] Canonicalize relative and absolute data/delete paths against schema, table, and data roots before orphan comparison, verification, or deletion.
-- [ ] Stream object listings, propagate listing failures, and return structured per-object deletion failures; an incomplete cleanup run must not return an unqualified success.
-- [ ] Make excision and cleanup resumable and verify catalog/object-store convergence after retries.
+- [x] Rework excision eligibility around visibility at the retention floor; never remove an open-ended inlined-delete marker or live data file merely because its begin snapshot is old.
+- [x] Determine scheduled-deletion safety from file retirement snapshots and retention, using `schedule_start` only as wall-clock grace time; remove a schedule row only after confirmed deletion or confirmed absence.
+- [x] Canonicalize relative and absolute data/delete paths against schema, table, and data roots before orphan comparison, verification, or deletion.
+- [x] Stream object listings, propagate listing failures, and return structured per-object deletion failures; an incomplete cleanup run must not return an unqualified success.
+- [x] Make excision and cleanup resumable and verify catalog/object-store convergence after retries.
 
 ### Release Gates
 
-- [ ] Checkpoint round trips cover create, retire, restore, and historical reads for every catalog row category.
-- [ ] Retention-floor model tests prove all rows needed by any retained snapshot survive GC, excision, and scheduled cleanup.
-- [ ] Object-store fault tests cover list, HEAD, delete, retry, permission, and inconsistent-prefix failures without false orphan deletion.
-- [ ] Maintenance CLI output and exit status distinguish complete success, safe no-op, partial failure, and unsafe refusal.
+- [x] Checkpoint round trips cover create, retire, restore, and historical reads for every catalog row category.
+- [x] Retention-floor model tests prove all rows needed by any retained snapshot survive GC, excision, and scheduled cleanup.
+- [x] Object-store fault tests cover list, HEAD, delete, retry, permission, and inconsistent-prefix failures without false orphan deletion.
+- [x] Maintenance CLI output and exit status distinguish complete success, safe no-op, partial failure, and unsafe refusal.
 
 ### Deliverables
 
-- [ ] Full-state atomic checkpoint restore
-- [ ] Unified, race-safe pin and lease retention semantics
-- [ ] Retention-correct excision and scheduled deletion
-- [ ] Canonical, fail-closed, resumable object cleanup
+- [x] Full-state atomic checkpoint restore
+- [x] Unified, race-safe pin and lease retention semantics
+- [x] Retention-correct excision and scheduled deletion
+- [x] Canonical, fail-closed, resumable object cleanup
 
 ---
 

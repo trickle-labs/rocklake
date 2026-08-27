@@ -73,12 +73,33 @@ pub async fn excise_plan(db: &Db, before_snapshot: u64) -> CatalogResult<ExciseP
     version_rows_eligible += count_excisable_schemas(db, before_snapshot).await?;
     version_rows_eligible += count_excisable_tables(db, before_snapshot).await?;
     version_rows_eligible += count_excisable_columns(db, before_snapshot).await?;
+    for (tag, predicate) in [
+        (
+            TAG_VIEW,
+            view_is_excisable as fn(&[u8], u64) -> CatalogResult<bool>,
+        ),
+        (TAG_MACRO, macro_is_excisable),
+        (TAG_PARTITION_INFO, partition_is_excisable),
+        (TAG_SORT_INFO, sort_is_excisable),
+        (TAG_TAG, tag_is_excisable),
+        (TAG_COLUMN_TAG, column_tag_is_excisable),
+        (TAG_ENCRYPTION_KEY, encryption_key_is_excisable),
+    ] {
+        version_rows_eligible += count_rows_where(db, tag, before_snapshot, predicate).await?;
+    }
 
     // Scan inlined inserts
     let inlined_inserts_eligible = count_excisable_inlined_inserts(db, before_snapshot).await?;
 
     // Scan inlined deletes
     let inlined_deletes_eligible = count_excisable_inlined_deletes(db, before_snapshot).await?;
+    version_rows_eligible +=
+        count_rows_where(db, TAG_DELETE_FILE, before_snapshot, |value, floor| {
+            Ok(values::decode_value::<DeleteFileRow>(value)?
+                .end_snapshot
+                .is_some_and(|end| end <= floor))
+        })
+        .await?;
 
     // Check data files not referenced by any retained snapshot
     let data_files_eligible = find_excisable_data_files(db, before_snapshot).await?;
@@ -135,6 +156,64 @@ pub async fn excise_apply(
 
     // Delete excisable inlined deletes
     let (d, f) = delete_excisable_inlined_deletes(db, before_snapshot).await?;
+    keys_deleted += d;
+    keys_failed += f;
+
+    // Delete retired data and delete-file catalog rows, including the data-file
+    // snapshot index. Object bytes are handled by scheduled cleanup.
+    let (d, f) = delete_excisable_data_files(db, before_snapshot).await?;
+    keys_deleted += d;
+    keys_failed += f;
+    let (d, f) = delete_excisable_delete_files(db, before_snapshot).await?;
+    keys_deleted += d;
+    keys_failed += f;
+
+    // Remove the remaining MVCC families at the same retention boundary.
+    for (tag, name, predicate) in [
+        (
+            TAG_VIEW,
+            "view",
+            view_is_excisable as fn(&[u8], u64) -> CatalogResult<bool>,
+        ),
+        (TAG_MACRO, "macro", macro_is_excisable),
+        (TAG_PARTITION_INFO, "partition", partition_is_excisable),
+        (TAG_SORT_INFO, "sort", sort_is_excisable),
+        (TAG_TAG, "tag", tag_is_excisable),
+        (TAG_COLUMN_TAG, "column tag", column_tag_is_excisable),
+        (
+            TAG_ENCRYPTION_KEY,
+            "encryption key",
+            encryption_key_is_excisable,
+        ),
+    ] {
+        let (d, f) = delete_rows_where(db, tag, before_snapshot, predicate, name).await?;
+        keys_deleted += d;
+        keys_failed += f;
+    }
+    let (d, f) = delete_rows_where(
+        db,
+        TAG_SCHEMA_VERSIONS,
+        before_snapshot,
+        |value, floor| {
+            let row: SchemaVersionsRow = values::decode_value(value)?;
+            Ok(row.begin_snapshot < floor)
+        },
+        "schema version",
+    )
+    .await?;
+    keys_deleted += d;
+    keys_failed += f;
+    let (d, f) = delete_rows_where(
+        db,
+        TAG_SNAPSHOT_CHANGES,
+        before_snapshot,
+        |value, floor| {
+            let row: SnapshotChangesRow = values::decode_value(value)?;
+            Ok(row.snapshot_id < floor)
+        },
+        "snapshot changes",
+    )
+    .await?;
     keys_deleted += d;
     keys_failed += f;
 
@@ -317,7 +396,7 @@ async fn count_excisable_inlined_deletes(db: &Db, before_snapshot: u64) -> Catal
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
     {
         let row: InlinedDeleteRow = values::decode_value(&kv.value)?;
-        if row.begin_snapshot < before_snapshot {
+        if row.end_snapshot.is_some_and(|end| end <= before_snapshot) {
             count += 1;
         }
     }
@@ -334,11 +413,164 @@ async fn find_excisable_data_files(db: &Db, before_snapshot: u64) -> CatalogResu
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
     {
         let row: DataFileRow = values::decode_value(&kv.value)?;
-        if row.begin_snapshot.unwrap_or(0) < before_snapshot {
+        if row.end_snapshot.is_some_and(|end| end <= before_snapshot) {
             paths.push(row.path);
         }
     }
     Ok(paths)
+}
+
+async fn delete_rows_where(
+    db: &Db,
+    tag: u8,
+    floor: u64,
+    predicate: fn(&[u8], u64) -> CatalogResult<bool>,
+    name: &str,
+) -> CatalogResult<(u64, u64)> {
+    let mut to_delete = Vec::new();
+    let mut iter = db.scan_prefix(&keys::prefix_for_tag(tag)).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        if predicate(&kv.value, floor)? {
+            to_delete.push(kv.key.to_vec());
+        }
+    }
+    delete_keys(db, to_delete, name).await
+}
+
+async fn count_rows_where(
+    db: &Db,
+    tag: u8,
+    floor: u64,
+    predicate: fn(&[u8], u64) -> CatalogResult<bool>,
+) -> CatalogResult<u64> {
+    let mut count = 0;
+    let mut iter = db.scan_prefix(&keys::prefix_for_tag(tag)).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        if predicate(&kv.value, floor)? {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+async fn delete_keys(
+    db: &Db,
+    keys_to_delete: Vec<Vec<u8>>,
+    name: &str,
+) -> CatalogResult<(u64, u64)> {
+    let mut deleted = 0;
+    let mut failed = 0;
+    for key in keys_to_delete {
+        match db.delete(&key).await {
+            Ok(_) => deleted += 1,
+            Err(e) => {
+                tracing::warn!("Failed to delete {name} key: {e}");
+                failed += 1;
+            }
+        }
+    }
+    Ok((deleted, failed))
+}
+
+fn view_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
+    Ok(values::decode_value::<ViewRow>(value)?
+        .end_snapshot
+        .is_some_and(|end| end <= floor))
+}
+
+fn macro_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
+    Ok(values::decode_value::<MacroRow>(value)?
+        .end_snapshot
+        .is_some_and(|end| end <= floor))
+}
+
+fn partition_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
+    Ok(values::decode_value::<PartitionInfoRow>(value)?
+        .end_snapshot
+        .is_some_and(|end| end <= floor))
+}
+
+fn sort_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
+    Ok(values::decode_value::<SortInfoRow>(value)?
+        .end_snapshot
+        .is_some_and(|end| end <= floor))
+}
+
+fn tag_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
+    Ok(values::decode_value::<TagRow>(value)?
+        .end_snapshot
+        .is_some_and(|end| end <= floor))
+}
+
+fn column_tag_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
+    Ok(values::decode_value::<ColumnTagRow>(value)?
+        .end_snapshot
+        .is_some_and(|end| end <= floor))
+}
+
+fn encryption_key_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
+    Ok(values::decode_value::<EncryptionKeyRow>(value)?
+        .end_snapshot
+        .is_some_and(|end| end <= floor))
+}
+
+async fn delete_excisable_data_files(db: &Db, before_snapshot: u64) -> CatalogResult<(u64, u64)> {
+    let prefix = keys::prefix_for_tag(TAG_DATA_FILE);
+    let mut to_delete = Vec::new();
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: DataFileRow = values::decode_value(&kv.value)?;
+        if row.end_snapshot.is_some_and(|end| end <= before_snapshot) {
+            let begin = row.begin_snapshot.unwrap_or(0);
+            to_delete.push((
+                kv.key.to_vec(),
+                keys::key_data_file_by_snapshot(row.table_id, begin, row.data_file_id),
+            ));
+        }
+    }
+    let mut deleted = 0;
+    let mut failed = 0;
+    for (key, index_key) in to_delete {
+        for key in [key, index_key] {
+            match db.delete(&key).await {
+                Ok(_) => deleted += 1,
+                Err(e) => {
+                    tracing::warn!("Failed to delete data-file key: {e}");
+                    failed += 1;
+                }
+            }
+        }
+    }
+    Ok((deleted, failed))
+}
+
+async fn delete_excisable_delete_files(db: &Db, before_snapshot: u64) -> CatalogResult<(u64, u64)> {
+    let prefix = keys::prefix_for_tag(TAG_DELETE_FILE);
+    let mut to_delete = Vec::new();
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: DeleteFileRow = values::decode_value(&kv.value)?;
+        if row.end_snapshot.is_some_and(|end| end <= before_snapshot) {
+            to_delete.push(kv.key.to_vec());
+        }
+    }
+    delete_keys(db, to_delete, "delete-file").await
 }
 
 async fn delete_excisable_schemas(db: &Db, before_snapshot: u64) -> CatalogResult<(u64, u64)> {
@@ -488,7 +720,7 @@ async fn delete_excisable_inlined_deletes(
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
     {
         let row: InlinedDeleteRow = values::decode_value(&kv.value)?;
-        if row.begin_snapshot < before_snapshot {
+        if row.end_snapshot.is_some_and(|end| end <= before_snapshot) {
             to_delete.push(kv.key.to_vec());
         }
     }

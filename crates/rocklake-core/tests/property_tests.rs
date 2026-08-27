@@ -185,6 +185,7 @@ proptest! {
             data_file_id,
             row_id,
             begin_snapshot,
+            end_snapshot: None,
         };
         let encoded = encode_value(&row);
         let decoded: InlinedDeleteRow = decode_value(&encoded).unwrap();

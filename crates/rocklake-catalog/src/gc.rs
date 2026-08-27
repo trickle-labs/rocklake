@@ -24,6 +24,8 @@ pub struct GcPlan {
     pub snapshots_affected: u64,
     /// Pinned snapshots that block advancement.
     pub pinned_snapshots: Vec<u64>,
+    /// Active lease snapshots that block advancement.
+    pub leased_snapshots: Vec<u64>,
 }
 
 /// Result of a GC apply operation.
@@ -63,28 +65,28 @@ pub async fn gc_plan(db: &Db, retention_days: u64) -> CatalogResult<GcPlan> {
         find_snapshot_before_time(db, &cutoff_time.to_rfc3339(), latest_snapshot_id).await?
     };
 
-    // Count affected snapshots
-    let snapshots_affected = proposed_retain_from.saturating_sub(current_retain_from);
-
     // Check for pinned snapshots
     let pinned_snapshots = read_pinned_snapshots(db).await?;
+    let leases = crate::lease::list_active_leases(db).await?;
+    let leased_snapshots: Vec<u64> = leases.iter().map(|lease| lease.min_snapshot_id).collect();
 
-    // Adjust proposed_retain_from to respect pins
-    let effective_proposed = if let Some(&min_pin) = pinned_snapshots.iter().min() {
-        if proposed_retain_from >= min_pin {
-            min_pin.saturating_sub(1)
-        } else {
-            proposed_retain_from
-        }
-    } else {
-        proposed_retain_from
-    };
+    // A floor equal to a blocker is safe: that snapshot remains visible.
+    let min_blocker = pinned_snapshots
+        .iter()
+        .chain(leased_snapshots.iter())
+        .copied()
+        .min();
+    let effective_proposed = min_blocker.map_or(proposed_retain_from, |blocker| {
+        proposed_retain_from.min(blocker)
+    });
+    let snapshots_affected = effective_proposed.saturating_sub(current_retain_from);
 
     Ok(GcPlan {
         current_retain_from,
         proposed_retain_from: effective_proposed,
         snapshots_affected,
         pinned_snapshots,
+        leased_snapshots,
     })
 }
 
@@ -124,7 +126,7 @@ pub async fn gc_apply(db: &Db, new_retain_from: u64) -> CatalogResult<GcApplyRes
         // v0.28.0: Check pinned snapshots inside the same transaction.
         let pinned = read_pinned_snapshots_in_tx(&tx).await?;
         if let Some(&min_pin) = pinned.iter().min() {
-            if new_retain_from >= min_pin {
+            if new_retain_from > min_pin {
                 return Err(CatalogError::PinnedSnapshotBlocks {
                     pinned_snapshot: min_pin,
                     requested_retain_from: new_retain_from,
@@ -163,15 +165,37 @@ pub async fn gc_apply(db: &Db, new_retain_from: u64) -> CatalogResult<GcApplyRes
 /// Pin a snapshot to prevent GC from advancing past it.
 pub async fn pin_snapshot(db: &Db, snapshot_id: u64) -> CatalogResult<()> {
     let key = key_pinned_snapshot(snapshot_id);
-    db.put(&key, &values::encode_counter(snapshot_id)).await?;
-    Ok(())
+    loop {
+        let tx = db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.put(&key, values::encode_counter(snapshot_id))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        match tx.commit().await {
+            Ok(_) => return Ok(()),
+            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
+            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+        }
+    }
 }
 
 /// Unpin a snapshot.
 pub async fn unpin_snapshot(db: &Db, snapshot_id: u64) -> CatalogResult<()> {
     let key = key_pinned_snapshot(snapshot_id);
-    db.delete(&key).await?;
-    Ok(())
+    loop {
+        let tx = db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.delete(&key)
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        match tx.commit().await {
+            Ok(_) => return Ok(()),
+            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
+            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+        }
+    }
 }
 
 /// Read all pinned snapshots.
@@ -187,6 +211,18 @@ pub async fn read_pinned_snapshots(db: &Db) -> CatalogResult<Vec<u64>> {
         let id = values::decode_counter(&kv.value)?;
         pinned.push(id);
     }
+    let checkpoint_pin_prefix = checkpoint_pin_prefix();
+    let mut iter = db.scan_prefix(&checkpoint_pin_prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let pin: crate::checkpoint::CheckpointMetadata = values::decode_value(&kv.value)?;
+        pinned.push(pin.snapshot_id);
+    }
+    pinned.sort_unstable();
+    pinned.dedup();
     Ok(pinned)
 }
 
@@ -209,6 +245,21 @@ pub async fn read_pinned_snapshots_in_tx(tx: &DbTransaction) -> CatalogResult<Ve
         let id = values::decode_counter(&kv.value)?;
         pinned.push(id);
     }
+    let checkpoint_pin_prefix = checkpoint_pin_prefix();
+    let mut iter = tx
+        .scan_prefix(&checkpoint_pin_prefix)
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let pin: crate::checkpoint::CheckpointMetadata = values::decode_value(&kv.value)?;
+        pinned.push(pin.snapshot_id);
+    }
+    pinned.sort_unstable();
+    pinned.dedup();
     Ok(pinned)
 }
 
@@ -238,6 +289,13 @@ async fn read_latest_snapshot_id(db: &Db) -> CatalogResult<u64> {
             Ok(if next > 0 { next - 1 } else { 0 })
         }
     }
+}
+
+fn checkpoint_pin_prefix() -> Vec<u8> {
+    let mut buf = Vec::with_capacity(1 + 16);
+    buf.push(TAG_SYSTEM);
+    buf.extend_from_slice(b"checkpoint-pin:");
+    buf
 }
 
 async fn find_snapshot_before_time(

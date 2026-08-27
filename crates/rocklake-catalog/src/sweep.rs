@@ -54,6 +54,8 @@ pub struct SweepResult {
     pub deleted: usize,
     /// Total files scanned.
     pub total_scanned: u64,
+    /// Files that could not be deleted in apply mode.
+    pub deletion_failures: Vec<(String, String)>,
 }
 
 impl SweepResult {
@@ -83,5 +85,6 @@ pub async fn sweep_orphans(
         orphan_files: inner.orphaned_files,
         deleted: inner.deleted_files.len(),
         total_scanned: inner.total_files_scanned,
+        deletion_failures: inner.deletion_failures,
     })
 }
