@@ -458,7 +458,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(hex: &str) -> CatalogResult<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(CatalogError::RepairRefused(
             "repair key has an odd number of hex digits".to_string(),
         ));

@@ -39,13 +39,22 @@
             "test_name": "test_pgwire_transaction_snapshot_isolation"
         },
         {
-            "release": "v0.47.15",
+            "release": "v0.47.14",
             "duckdb_version": "1.5.3",
             "ducklake_version": "1.0",
             "catalog_version": 7,
             "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
             "test_file": "crates/rocklake-catalog/tests/v04714_recovery_retention_cleanup_tests.rs",
             "test_name": "checkpoint_restore_round_trip_restores_retired_and_later_state"
+        },
+        {
+            "release": "v0.47.15",
+            "duckdb_version": "1.5.3",
+            "ducklake_version": "1.0",
+            "catalog_version": 7,
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
+            "test_file": "crates/rocklake-catalog/tests/v04715_catalog_fidelity_tests.rs",
+            "test_name": "malformed_import_leaves_target_unchanged"
         }
     ],
     "negative_probes": [

@@ -2820,7 +2820,7 @@ fn hex_bytes(bytes: &[u8]) -> String {
 }
 
 fn decode_hex_key(encoded: &str, line: usize) -> CatalogResult<Vec<u8>> {
-    if encoded.is_empty() || encoded.len() % 2 != 0 {
+    if encoded.is_empty() || !encoded.len().is_multiple_of(2) {
         return Err(CatalogError::Import {
             line,
             table: EXPORT_MANIFEST_TABLE.to_string(),
