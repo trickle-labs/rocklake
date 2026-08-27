@@ -90,14 +90,14 @@ pub async fn create_checkpoint(db: &Db, label: Option<&str>) -> CatalogResult<Ch
             state_version: 1,
         };
         tx.put(
-            &keys::key_counter(COUNTER_NEXT_CHECKPOINT_ID),
+            keys::key_counter(COUNTER_NEXT_CHECKPOINT_ID),
             values::encode_counter(next_id),
         )
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
-        tx.put(&checkpoint_key(id), values::encode_value(&meta))
+        tx.put(checkpoint_key(id), values::encode_value(&meta))
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         for (key, value) in state {
-            tx.put(&checkpoint_state_key(id, &key), value)
+            tx.put(checkpoint_state_key(id, &key), value)
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         }
 
@@ -233,17 +233,17 @@ pub async fn restore_checkpoint(db: &Db, checkpoint_id: u64) -> CatalogResult<Ch
             changes_made: Some("full logical catalog state restored".to_string()),
         };
         tx.put(
-            &keys::key_snapshot(restore_snapshot_id),
+            keys::key_snapshot(restore_snapshot_id),
             values::encode_value(&snapshot),
         )
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         tx.put(
-            &keys::key_snapshot_changes(restore_snapshot_id),
+            keys::key_snapshot_changes(restore_snapshot_id),
             values::encode_value(&changes),
         )
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         tx.put(
-            &keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID),
+            keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID),
             values::encode_counter(next_snapshot_id),
         )
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
