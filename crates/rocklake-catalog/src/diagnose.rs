@@ -20,7 +20,6 @@ use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values;
 
-use crate::cleanup::collect_referenced_paths;
 use crate::error::{CatalogError, CatalogResult};
 use crate::inspect::inspect_snapshot;
 
@@ -266,27 +265,32 @@ async fn detect_orphan_files(
 ) -> CatalogResult<Vec<String>> {
     use futures::TryStreamExt;
 
-    let referenced = collect_referenced_paths(db).await?;
     let root_path = ObjectPath::from(data_root);
+    let referenced = crate::cleanup::collect_referenced_paths_at(db, &root_path).await?;
     let mut orphans = Vec::new();
 
-    let list_result = store.list(Some(&root_path)).try_collect::<Vec<_>>().await;
-
-    match list_result {
-        Ok(objects) => {
-            for meta in &objects {
+    let mut objects = store.list(Some(&root_path));
+    loop {
+        match objects.try_next().await {
+            Ok(Some(meta)) => {
                 let path_str = meta.location.to_string();
-                if path_str.ends_with(".parquet") && !referenced.contains(&path_str) {
+                if (path_str.ends_with(".parquet")
+                    || path_str.ends_with(".arrow")
+                    || path_str.ends_with(".avro"))
+                    && !referenced.contains(&path_str)
+                {
                     orphans.push(path_str);
                 }
             }
-        }
-        Err(e) => {
-            findings.push(DiagnosticFinding {
-                severity: FindingSeverity::P2,
-                category: "orphan-files".to_string(),
-                message: format!("Error listing object store at {data_root}: {e}"),
-            });
+            Ok(None) => break,
+            Err(e) => {
+                findings.push(DiagnosticFinding {
+                    severity: FindingSeverity::P2,
+                    category: "orphan-files".to_string(),
+                    message: format!("Error listing object store at {data_root}: {e}"),
+                });
+                break;
+            }
         }
     }
 

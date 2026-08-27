@@ -238,10 +238,8 @@ async fn export_manifest_covers_expected_tables() {
 
 // ─── 4. Checkpoint Restore Noop: Counter Not Over-Advanced ───────────────
 
-/// When `restore_checkpoint()` is called immediately after
-/// `create_checkpoint()` (no new writes), `hide_snapshot == meta.snapshot_id
-/// + 1`, so the counter must stay at `meta.snapshot_id + 1`.  With the old
-/// code the counter was incorrectly advanced to `meta.snapshot_id + 2`.
+/// Restoring immediately after checkpoint creation still creates a fresh
+/// snapshot, so the next snapshot counter advances past the restore snapshot.
 #[tokio::test]
 async fn checkpoint_restore_noop_no_extra_counter_advance() {
     use rocklake_core::{keys, tags::COUNTER_NEXT_SNAPSHOT_ID, values};
@@ -279,7 +277,7 @@ async fn checkpoint_restore_noop_no_extra_counter_advance() {
         .await
         .unwrap();
 
-    // Counter must remain at 2, not be advanced to 3.
+    // The restore itself consumes snapshot 2; the next write must use 3.
     let counter_after: u64 = db
         .get(&counter_key)
         .await
@@ -287,8 +285,8 @@ async fn checkpoint_restore_noop_no_extra_counter_advance() {
         .map(|d| values::decode_counter(&d).unwrap())
         .unwrap_or(0);
     assert_eq!(
-        counter_after, 2,
-        "counter must stay at meta.snapshot_id+1=2, not be over-advanced to 3"
+        counter_after, 3,
+        "counter must advance past the atomic restore snapshot"
     );
 
     db.close().await.unwrap();

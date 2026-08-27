@@ -210,6 +210,42 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
                     ];
                     cmd_checkpoint(&s).await?;
                 }
+                CheckpointSubcommand::Pin(a) => {
+                    let s = vec![
+                        "rocklake".to_string(),
+                        "checkpoint".to_string(),
+                        "pin".to_string(),
+                        "--catalog".to_string(),
+                        a.catalog,
+                        "--name".to_string(),
+                        a.name,
+                        "--snapshot".to_string(),
+                        a.snapshot.to_string(),
+                    ];
+                    cmd_checkpoint(&s).await?;
+                }
+                CheckpointSubcommand::Unpin(a) => {
+                    let s = vec![
+                        "rocklake".to_string(),
+                        "checkpoint".to_string(),
+                        "unpin".to_string(),
+                        "--catalog".to_string(),
+                        a.catalog,
+                        "--name".to_string(),
+                        a.name,
+                    ];
+                    cmd_checkpoint(&s).await?;
+                }
+                CheckpointSubcommand::Pins(a) => {
+                    let s = vec![
+                        "rocklake".to_string(),
+                        "checkpoint".to_string(),
+                        "pins".to_string(),
+                        "--catalog".to_string(),
+                        a.catalog,
+                    ];
+                    cmd_checkpoint(&s).await?;
+                }
             }
         }
         Commands::Export(a) => {
@@ -963,6 +999,9 @@ async fn cmd_gc(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             if !plan.pinned_snapshots.is_empty() {
                 println!("  Pinned snapshots: {:?}", plan.pinned_snapshots);
             }
+            if !plan.leased_snapshots.is_empty() {
+                println!("  Leased snapshots: {:?}", plan.leased_snapshots);
+            }
         }
         "apply" => {
             let plan = rocklake_catalog::gc::gc_plan(&db, retention_days).await?;
@@ -1016,6 +1055,13 @@ async fn cmd_excise(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             println!("  Keys deleted: {}", result.keys_deleted);
             println!("  Keys failed: {}", result.keys_failed);
             println!("  Audit entry ID: {}", result.audit_entry_id);
+            if result.keys_failed > 0 {
+                return Err(format!(
+                    "excision incomplete: {} catalog deletions failed",
+                    result.keys_failed
+                )
+                .into());
+            }
         }
         _ => {
             eprintln!("Usage: rocklake excise [plan|apply] --catalog <path> --before <snapshot>");
@@ -1068,10 +1114,37 @@ async fn cmd_checkpoint(args: &[String]) -> Result<(), Box<dyn std::error::Error
             let info = rocklake_catalog::checkpoint::restore_checkpoint(&db, id).await?;
             println!("Checkpoint restored:");
             println!("  ID: {}", info.id);
-            println!("  Restored to snapshot: {}", info.snapshot_id);
+            println!(
+                "  Restored to snapshot: {}",
+                info.restore_snapshot_id.unwrap_or(info.snapshot_id)
+            );
+        }
+        "pin" => {
+            let name =
+                extract_string_arg(args, "--name").ok_or("--name <name> is required for pin")?;
+            let snapshot = extract_numeric_arg(args, "--snapshot")
+                .ok_or("--snapshot <snapshot_id> is required for pin")?;
+            let pin = rocklake_catalog::checkpoint::pin_checkpoint(&db, &name, snapshot).await?;
+            println!("Checkpoint pin created:");
+            println!("  Name: {}", pin.name);
+            println!("  Snapshot ID: {}", pin.snapshot_id);
+        }
+        "unpin" => {
+            let name =
+                extract_string_arg(args, "--name").ok_or("--name <name> is required for unpin")?;
+            rocklake_catalog::checkpoint::unpin_checkpoint(&db, &name).await?;
+            println!("Checkpoint pin removed: {name}");
+        }
+        "pins" => {
+            let pins = rocklake_catalog::checkpoint::list_checkpoint_pins(&db).await?;
+            for pin in pins {
+                println!("{} {} {}", pin.name, pin.snapshot_id, pin.created_at);
+            }
         }
         _ => {
-            eprintln!("Usage: rocklake checkpoint [create|list|restore] --catalog <path>");
+            eprintln!(
+                "Usage: rocklake checkpoint [create|list|restore|pin|unpin|pins] --catalog <path>"
+            );
             std::process::exit(1);
         }
     }
@@ -1863,6 +1936,7 @@ async fn cmd_sweep_orphans(args: &[String]) -> Result<(), Box<dyn std::error::Er
     println!("  Files scanned:      {}", result.total_scanned);
     println!("  Orphan files found: {}", result.orphan_files.len());
     println!("  Files deleted:      {}", result.deleted);
+    println!("  Deletion failures:  {}", result.deletion_failures.len());
     println!("  Grace period:       {grace_period_hours}h");
 
     if !result.orphan_files.is_empty() {
@@ -1870,6 +1944,14 @@ async fn cmd_sweep_orphans(args: &[String]) -> Result<(), Box<dyn std::error::Er
         for f in &result.orphan_files {
             println!("  {f}");
         }
+    }
+
+    if !result.deletion_failures.is_empty() {
+        return Err(format!(
+            "sweep incomplete: {} object deletions failed",
+            result.deletion_failures.len()
+        )
+        .into());
     }
 
     Ok(())

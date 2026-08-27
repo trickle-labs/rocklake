@@ -8,7 +8,7 @@ use rocklake_core::keys;
 use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values;
-use slatedb::Db;
+use slatedb::{Db, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 
@@ -23,6 +23,8 @@ pub struct CheckpointInfo {
     pub snapshot_id: u64,
     /// Human-readable label.
     pub label: Option<String>,
+    /// Snapshot created by a restore operation, if this is its result.
+    pub restore_snapshot_id: Option<u64>,
 }
 
 /// Checkpoint metadata stored under system keys.
@@ -36,65 +38,83 @@ pub struct CheckpointMetadata {
     pub snapshot_id: u64,
     #[prost(string, optional, tag = "4")]
     pub label: Option<String>,
+    /// Version of the full-state checkpoint representation.
+    #[prost(uint32, tag = "5")]
+    pub state_version: u32,
 }
 
 /// Create a new checkpoint of the current catalog state.
 pub async fn create_checkpoint(db: &Db, label: Option<&str>) -> CatalogResult<CheckpointInfo> {
-    // Get current snapshot ID
-    let snapshot_key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
-    let current_snapshot = match db.get(&snapshot_key).await? {
-        Some(data) => {
-            let next = values::decode_counter(&data)?;
-            if next > 0 {
-                next - 1
-            } else {
-                0
-            }
-        }
-        None => 0,
-    };
-
-    let id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    // Guard: if the wall-clock millis would collide with an existing key
-    // (e.g. two checkpoints created in the same millisecond under automation),
-    // advance the counter past the collision.  We always use
-    // `COUNTER_NEXT_CHECKPOINT_ID` as the authoritative ID source so checkpoint
-    // IDs are unique and strictly monotonic regardless of clock resolution.
-    let counter_key = keys::key_counter(COUNTER_NEXT_CHECKPOINT_ID);
-    let next_counter = match db.get(&counter_key).await? {
-        Some(data) => values::decode_counter(&data)?,
-        None => 0,
-    };
-    // Use the larger of the wall-clock millis and the persisted counter so the
-    // ID space is roughly time-ordered for human readability while guaranteeing
-    // no collision.
-    let id = id.max(next_counter);
-    // Persist counter = id + 1 so the next checkpoint always gets id + 1 at minimum.
-    db.put(&counter_key, &values::encode_counter(id + 1))
-        .await?;
-
     let created_at = chrono::Utc::now().to_rfc3339();
 
-    let meta = CheckpointMetadata {
-        id,
-        created_at: created_at.clone(),
-        snapshot_id: current_snapshot,
-        label: label.map(|s| s.to_string()),
-    };
+    loop {
+        let tx = db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
 
-    // Store checkpoint metadata
-    let key = checkpoint_key(id);
-    db.put(&key, &values::encode_value(&meta)).await?;
+        let next_snapshot = read_counter_in_tx(&tx, COUNTER_NEXT_SNAPSHOT_ID, 1).await?;
+        let current_snapshot = next_snapshot.saturating_sub(1);
+        let next_checkpoint = read_counter_in_tx(&tx, COUNTER_NEXT_CHECKPOINT_ID, 0).await?;
+        let clock_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let id = clock_id.max(next_checkpoint);
+        let next_id = id
+            .checked_add(1)
+            .ok_or_else(|| CatalogError::Internal("checkpoint ID overflow".to_string()))?;
 
-    Ok(CheckpointInfo {
-        id,
-        created_at,
-        snapshot_id: current_snapshot,
-        label: label.map(|s| s.to_string()),
-    })
+        // ponytail: duplicate the logical key/value set per checkpoint; use native
+        // SlateDB snapshots if checkpoint volume makes this storage-bound.
+        let mut state = Vec::new();
+        let mut iter = tx
+            .scan_prefix(&[])
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            if !is_checkpoint_state_key(&kv.key) {
+                state.push((kv.key.to_vec(), kv.value.to_vec()));
+            }
+        }
+
+        let meta = CheckpointMetadata {
+            id,
+            created_at: created_at.clone(),
+            snapshot_id: current_snapshot,
+            label: label.map(str::to_string),
+            state_version: 1,
+        };
+        tx.put(
+            &keys::key_counter(COUNTER_NEXT_CHECKPOINT_ID),
+            values::encode_counter(next_id),
+        )
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.put(&checkpoint_key(id), values::encode_value(&meta))
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        for (key, value) in state {
+            tx.put(&checkpoint_state_key(id, &key), value)
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        }
+
+        match tx.commit().await {
+            Ok(_) => {
+                return Ok(CheckpointInfo {
+                    id,
+                    created_at,
+                    snapshot_id: current_snapshot,
+                    label: label.map(str::to_string),
+                    restore_snapshot_id: None,
+                });
+            }
+            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
+            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+        }
+    }
 }
 
 /// List all available checkpoints.
@@ -113,176 +133,135 @@ pub async fn list_checkpoints(db: &Db) -> CatalogResult<Vec<CheckpointInfo>> {
             created_at: meta.created_at,
             snapshot_id: meta.snapshot_id,
             label: meta.label,
+            restore_snapshot_id: None,
         });
     }
     checkpoints.sort_by_key(|c| c.id);
     Ok(checkpoints)
 }
 
-/// Restore catalog to a checkpoint by hiding post-checkpoint facts and advancing
-/// the snapshot counter so new writes cannot reuse historical snapshot IDs.
+/// Restore the checkpoint's complete logical catalog state as a fresh snapshot.
+/// Snapshot counters remain monotonic so new writes cannot reuse historical IDs.
 pub async fn restore_checkpoint(db: &Db, checkpoint_id: u64) -> CatalogResult<CheckpointInfo> {
-    // Find the checkpoint
-    let key = checkpoint_key(checkpoint_id);
-    let data = db
-        .get(&key)
-        .await?
-        .ok_or_else(|| CatalogError::NotFound(format!("checkpoint {checkpoint_id}")))?;
+    loop {
+        let tx = db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        let data = tx
+            .get(checkpoint_key(checkpoint_id))
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .ok_or_else(|| CatalogError::NotFound(format!("checkpoint {checkpoint_id}")))?;
+        let meta: CheckpointMetadata = values::decode_value(&data)?;
+        if meta.state_version != 1 {
+            return Err(CatalogError::InvalidInput(format!(
+                "checkpoint {checkpoint_id} predates full-state restore; create a new checkpoint"
+            )));
+        }
 
-    let meta: CheckpointMetadata = values::decode_value(&data)?;
+        let current_next_snapshot = read_counter_in_tx(&tx, COUNTER_NEXT_SNAPSHOT_ID, 1).await?;
+        let restore_snapshot_id = current_next_snapshot.max(
+            meta.snapshot_id
+                .checked_add(1)
+                .ok_or_else(|| CatalogError::Internal("snapshot ID overflow".to_string()))?,
+        );
+        let next_snapshot_id = restore_snapshot_id
+            .checked_add(1)
+            .ok_or_else(|| CatalogError::Internal("snapshot counter overflow".to_string()))?;
+        let schema_version =
+            checkpoint_schema_version(&tx, checkpoint_id, meta.snapshot_id).await?;
 
-    // Read the current next_snapshot_id. This is the "hide snapshot": facts created
-    // after the checkpoint will have their end_snapshot set to this value, hiding
-    // them from reads at or after hide_snapshot.
-    let counter_key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
-    let hide_snapshot = match db.get(&counter_key).await? {
-        Some(data) => values::decode_counter(&data)?,
-        None => meta.snapshot_id + 1,
-    };
-
-    if hide_snapshot > meta.snapshot_id + 1 {
-        // Post-checkpoint facts exist: mark them hidden and advance the counter
-        // past hide_snapshot so it cannot be reused as a live snapshot ID.
-        hide_post_checkpoint_facts(db, meta.snapshot_id, hide_snapshot).await?;
-        db.put(&counter_key, &values::encode_counter(hide_snapshot + 1))
-            .await?;
-    }
-    // When hide_snapshot == meta.snapshot_id + 1 no facts were written after
-    // the checkpoint, so hide_snapshot is already the correct next-snapshot-id.
-    // Skip the +1 advance: the counter is already at the right value.
-
-    Ok(CheckpointInfo {
-        id: meta.id,
-        created_at: meta.created_at,
-        snapshot_id: meta.snapshot_id,
-        label: meta.label,
-    })
-}
-
-/// Scan all versioned rows and set `end_snapshot = hide_snapshot` for any row
-/// whose `begin_snapshot > checkpoint_snapshot_id`.  This prevents those facts
-/// from appearing in reads at snapshot IDs >= hide_snapshot, while keeping them
-/// readable via their original historical snapshot IDs.
-async fn hide_post_checkpoint_facts(
-    db: &Db,
-    checkpoint_snapshot_id: u64,
-    hide_snapshot: u64,
-) -> CatalogResult<()> {
-    // Schema rows
-    {
-        let prefix = keys::prefix_for_tag(TAG_SCHEMA);
-        let mut iter = db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
+        let state_prefix = checkpoint_state_prefix(checkpoint_id);
+        let mut checkpoint_state = Vec::new();
+        let mut state_iter = tx
+            .scan_prefix(&state_prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = state_iter
             .next()
             .await
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
-            let mut row: SchemaRow = values::decode_value(&kv.value)?;
-            if row.begin_snapshot > checkpoint_snapshot_id
-                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
-            {
-                row.end_snapshot = Some(hide_snapshot);
-                db.put(&kv.key, &values::encode_value(&row)).await?;
-            }
+            checkpoint_state.push((kv.key[state_prefix.len()..].to_vec(), kv.value.to_vec()));
         }
-    }
 
-    // Table rows
-    {
-        let prefix = keys::prefix_for_tag(TAG_TABLE);
-        let mut iter = db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
+        let mut current_state_keys = Vec::new();
+        let mut current_iter = tx
+            .scan_prefix(&[])
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = current_iter
             .next()
             .await
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
-            let mut row: TableRow = values::decode_value(&kv.value)?;
-            if row.begin_snapshot > checkpoint_snapshot_id
-                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
-            {
-                row.end_snapshot = Some(hide_snapshot);
-                db.put(&kv.key, &values::encode_value(&row)).await?;
+            if is_checkpoint_state_key(&kv.key) {
+                continue;
             }
+            current_state_keys.push(kv.key.to_vec());
+        }
+        for key in current_state_keys {
+            tx.delete(&key)
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        }
+        for (key, value) in checkpoint_state {
+            tx.put(&key, value)
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        }
+
+        let next_catalog_id = read_counter_in_tx(&tx, COUNTER_NEXT_CATALOG_ID, 1).await?;
+        let next_file_id = read_counter_in_tx(&tx, COUNTER_NEXT_FILE_ID, 1).await?;
+        let snapshot = SnapshotRow {
+            snapshot_id: restore_snapshot_id,
+            schema_version,
+            snapshot_time: chrono::Utc::now().to_rfc3339(),
+            author: Some("rocklake".to_string()),
+            message: Some(format!("restore checkpoint {checkpoint_id}")),
+            next_catalog_id: Some(next_catalog_id),
+            next_file_id: Some(next_file_id),
+        };
+        let changes = SnapshotChangesRow {
+            snapshot_id: restore_snapshot_id,
+            change_type: "restore".to_string(),
+            change_info: Some(format!("checkpoint_id={checkpoint_id}")),
+            schema_id: None,
+            table_id: None,
+            author: Some("rocklake".to_string()),
+            commit_message: Some(format!("restore checkpoint {checkpoint_id}")),
+            commit_extra_info: None,
+            changes_made: Some("full logical catalog state restored".to_string()),
+        };
+        tx.put(
+            &keys::key_snapshot(restore_snapshot_id),
+            values::encode_value(&snapshot),
+        )
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.put(
+            &keys::key_snapshot_changes(restore_snapshot_id),
+            values::encode_value(&changes),
+        )
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.put(
+            &keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID),
+            values::encode_counter(next_snapshot_id),
+        )
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        match tx.commit().await {
+            Ok(_) => {
+                return Ok(CheckpointInfo {
+                    id: meta.id,
+                    created_at: meta.created_at,
+                    snapshot_id: meta.snapshot_id,
+                    label: meta.label,
+                    restore_snapshot_id: Some(restore_snapshot_id),
+                });
+            }
+            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
+            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
         }
     }
-
-    // Column rows
-    {
-        let prefix = keys::prefix_for_tag(TAG_COLUMN);
-        let mut iter = db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let mut row: ColumnRow = values::decode_value(&kv.value)?;
-            if row.begin_snapshot > checkpoint_snapshot_id
-                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
-            {
-                row.end_snapshot = Some(hide_snapshot);
-                db.put(&kv.key, &values::encode_value(&row)).await?;
-            }
-        }
-    }
-
-    // View rows
-    {
-        let prefix = keys::prefix_for_tag(TAG_VIEW);
-        let mut iter = db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let mut row: ViewRow = values::decode_value(&kv.value)?;
-            if row.begin_snapshot > checkpoint_snapshot_id
-                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
-            {
-                row.end_snapshot = Some(hide_snapshot);
-                db.put(&kv.key, &values::encode_value(&row)).await?;
-            }
-        }
-    }
-
-    // Macro rows
-    {
-        let prefix = keys::prefix_for_tag(TAG_MACRO);
-        let mut iter = db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let mut row: MacroRow = values::decode_value(&kv.value)?;
-            if row.begin_snapshot > checkpoint_snapshot_id
-                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
-            {
-                row.end_snapshot = Some(hide_snapshot);
-                db.put(&kv.key, &values::encode_value(&row)).await?;
-            }
-        }
-    }
-
-    // Inlined insert rows
-    {
-        let prefix = vec![TAG_INLINED_ROWS, INLINED_SUBTYPE_INSERT];
-        let mut iter = db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let mut row: InlinedInsertRow = values::decode_value(&kv.value)?;
-            if row.begin_snapshot > checkpoint_snapshot_id
-                && row.end_snapshot.is_none_or(|e| e > checkpoint_snapshot_id)
-            {
-                row.end_snapshot = Some(hide_snapshot);
-                db.put(&kv.key, &values::encode_value(&row)).await?;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 // ─── Checkpoint Pin API ────────────────────────────────────────────────────
@@ -313,9 +292,23 @@ pub async fn pin_checkpoint(db: &Db, name: &str, snapshot_id: u64) -> CatalogRes
         created_at: created_at.clone(),
         snapshot_id,
         label: Some(name.to_string()),
+        state_version: 0,
     };
 
-    db.put(&key, &values::encode_value(&meta)).await?;
+    let value = values::encode_value(&meta);
+    loop {
+        let tx = db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.put(&key, value.clone())
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        match tx.commit().await {
+            Ok(_) => break,
+            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
+            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+        }
+    }
 
     Ok(CheckpointPin {
         name: name.to_string(),
@@ -329,12 +322,23 @@ pub async fn pin_checkpoint(db: &Db, name: &str, snapshot_id: u64) -> CatalogRes
 /// Returns `CatalogError::NotFound` if no pin with the given name exists.
 pub async fn unpin_checkpoint(db: &Db, name: &str) -> CatalogResult<()> {
     let key = checkpoint_pin_key(name);
-    // Verify pin exists before deleting.
-    db.get(&key)
-        .await?
-        .ok_or_else(|| CatalogError::NotFound(format!("checkpoint pin '{name}'")))?;
-    db.delete(&key).await?;
-    Ok(())
+    loop {
+        let tx = db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        tx.get(&key)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .ok_or_else(|| CatalogError::NotFound(format!("checkpoint pin '{name}'")))?;
+        tx.delete(&key)
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        match tx.commit().await {
+            Ok(_) => return Ok(()),
+            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
+            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+        }
+    }
 }
 
 /// List all named checkpoint pins.
@@ -376,6 +380,53 @@ fn checkpoint_key(id: u64) -> Vec<u8> {
     buf.extend_from_slice(b"checkpoint:");
     buf.extend_from_slice(&id.to_be_bytes());
     buf
+}
+
+fn checkpoint_state_prefix(id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(1 + 17 + 8);
+    buf.push(TAG_SYSTEM);
+    buf.extend_from_slice(b"checkpoint-state:");
+    buf.extend_from_slice(&id.to_be_bytes());
+    buf
+}
+
+fn checkpoint_state_key(id: u64, key: &[u8]) -> Vec<u8> {
+    let mut buf = checkpoint_state_prefix(id);
+    buf.extend_from_slice(key);
+    buf
+}
+
+fn is_checkpoint_state_key(key: &[u8]) -> bool {
+    matches!(key.first(), Some(&TAG_SYSTEM) | Some(&TAG_COUNTERS))
+}
+
+async fn read_counter_in_tx(
+    tx: &slatedb::DbTransaction,
+    counter: u8,
+    default: u64,
+) -> CatalogResult<u64> {
+    Ok(tx
+        .get(keys::key_counter(counter))
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        .map(|data| values::decode_counter(&data))
+        .transpose()
+        .map(|value| value.unwrap_or(default))?)
+}
+
+async fn checkpoint_schema_version(
+    tx: &slatedb::DbTransaction,
+    checkpoint_id: u64,
+    snapshot_id: u64,
+) -> CatalogResult<u64> {
+    let key = checkpoint_state_key(checkpoint_id, &keys::key_snapshot(snapshot_id));
+    Ok(tx
+        .get(key)
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        .map(|data| values::decode_value::<SnapshotRow>(&data).map(|row| row.schema_version))
+        .transpose()
+        .map(|value| value.unwrap_or(0))?)
 }
 
 fn checkpoint_pin_prefix() -> Vec<u8> {

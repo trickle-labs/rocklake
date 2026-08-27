@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.47.14] — 2026-08-27
+
+### Added
+
+- Full-state atomic checkpoint restore with monotonic restore snapshots and durable checkpoint pin CLI commands.
+- Retention and cleanup regression gates covering pins, leases, excision, scheduled deletion, and checkpoint round trips.
+
+### Changed
+
+- GC plans and applies now account for named checkpoint pins and active leases as one retention boundary.
+- Excision only removes retired catalog facts and reports partial deletion failures.
+- Orphan and scheduled cleanup canonicalize paths, stream listings, and fail closed on object-store or deletion errors.
+
+### Fixed
+
+- Restores now resurrect facts retired after the checkpoint instead of only hiding later facts.
+- Open-ended data files and inlined delete markers are preserved during excision.
+
 ## [0.47.13] — 2026-08-27
 
 ### Added

@@ -62,6 +62,16 @@ pub fn is_inlined_delete_visible(begin_snapshot: u64, dl_snapshot_id: SnapshotId
     begin_snapshot <= dl_snapshot_id.0
 }
 
+/// Check an inlined-delete marker with optional retirement metadata.
+#[inline]
+pub fn is_inlined_delete_visible_at(
+    begin_snapshot: u64,
+    end_snapshot: Option<u64>,
+    dl_snapshot_id: SnapshotId,
+) -> bool {
+    is_visible(begin_snapshot, end_snapshot, dl_snapshot_id)
+}
+
 /// Physical GC eligibility for inlined insert rows.
 /// Eligible when: `end_snapshot IS NOT NULL AND end_snapshot <= oldest_retained_snapshot`.
 #[inline]

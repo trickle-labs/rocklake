@@ -556,7 +556,11 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: InlinedDeleteRow = values::decode_value(&kv.value)?;
-            if mvcc::is_inlined_delete_visible(row.begin_snapshot, self.dl_snapshot_id) {
+            if mvcc::is_inlined_delete_visible_at(
+                row.begin_snapshot,
+                row.end_snapshot,
+                self.dl_snapshot_id,
+            ) {
                 rows.push(row);
             }
         }
