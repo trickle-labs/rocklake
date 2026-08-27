@@ -60,7 +60,7 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
     assert_path_exists(&manifest_path);
 
     let manifest = load_json(&manifest_path);
-    assert_eq!(manifest["release"], "v0.47.12");
+    assert_eq!(manifest["release"], "v0.47.13");
     assert_eq!(manifest["duckdb_version"], "1.5.3");
     assert_eq!(manifest["ducklake_version"], "1.0");
     assert_eq!(manifest["catalog_version"], 7);
@@ -111,7 +111,7 @@ fn public_surface_manifest_matches_inventories_and_fixtures() {
     assert!(
         snapshot_releases
             .iter()
-            .any(|release| release == "v0.47.12"),
+            .any(|release| release == "v0.47.13"),
         "compatibility snapshots must include the current release"
     );
     assert!(

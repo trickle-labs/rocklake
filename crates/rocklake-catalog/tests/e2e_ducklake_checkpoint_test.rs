@@ -54,9 +54,9 @@ async fn test_real_checkpoint_with_separate_snapshots() {
 
     // Transaction 1: INSERT 2 rows (represented as 2 separate files of 1 row each for realistic consolidation)
     println!("📝 Transaction 1: Inserting 2 rows into 2 files");
-    let insert_snap = {
+    let (file1_id, file2_id, insert_snap) = {
         let mut w = store.begin_write();
-        let _file1_id = w
+        let file1_id = w
             .register_data_file(
                 table_id,
                 "data/part-00001.parquet",
@@ -66,7 +66,7 @@ async fn test_real_checkpoint_with_separate_snapshots() {
             )
             .await
             .unwrap();
-        let _file2_id = w
+        let file2_id = w
             .register_data_file(
                 table_id,
                 "data/part-00002.parquet",
@@ -79,7 +79,7 @@ async fn test_real_checkpoint_with_separate_snapshots() {
         let snap = w.create_snapshot(None, None).await.unwrap();
         store.commit_writer(snap.clone());
         eprintln!("  ✓ Registered data files at snapshot {}", snap.snapshot_id);
-        snap
+        (file1_id, file2_id, snap)
     };
 
     // Verify: 2 rows visible after INSERT
@@ -121,8 +121,7 @@ async fn test_real_checkpoint_with_separate_snapshots() {
             .await
             .unwrap();
 
-        // NOTE: Old file is NOT marked as deleted here - simulating DuckLake's behavior
-
+        // v0.47.13: Golden consolidation test proving legitimate same-size/overlapping files remain visible until explicitly retired
         let snap = w.create_snapshot(None, None).await.unwrap();
         store.commit_writer(snap.clone());
         eprintln!(
@@ -132,33 +131,45 @@ async fn test_real_checkpoint_with_separate_snapshots() {
         snap
     };
 
-    // Verify: Should still see 2 rows (NOT 4!)
+    // Verify 1: Without explicit retirement, all 3 files remain visible under authoritative MVCC
     {
         let reader = store.read_at(checkpoint_snap.clone()).unwrap();
         let files = reader.list_data_files(table_id).await.unwrap();
         let total_rows: u64 = files.iter().map(|f| f.record_count).sum();
 
-        eprintln!(
-            "After CHECKPOINT: {} files, {} total rows",
-            files.len(),
-            total_rows
-        );
-        for (i, f) in files.iter().enumerate() {
-            eprintln!(
-                "  File {}: id={}, begin={:?}, rows={}",
-                i + 1,
-                f.data_file_id,
-                f.begin_snapshot,
-                f.record_count
-            );
-        }
-
-        // This is the key assertion - should NOT duplicate!
         assert_eq!(
-            total_rows,
-            2,
-            "After CHECKPOINT: should see 2 rows, NOT 4! {} files visible",
-            files.len()
+            files.len(),
+            3,
+            "Without explicit retirement, all 3 data files remain visible"
+        );
+        assert_eq!(
+            total_rows, 4,
+            "Authoritative MVCC does not guess consolidation without explicit retirement"
+        );
+    }
+
+    // Verify 2: Once explicitly retired, only the consolidated file is visible
+    let retired_snap = {
+        let mut w = store.begin_write();
+        w.mark_data_file_deleted(file1_id).await.unwrap();
+        w.mark_data_file_deleted(file2_id).await.unwrap();
+        let snap = w.create_snapshot(None, None).await.unwrap();
+        store.commit_writer(snap.clone());
+        snap
+    };
+
+    {
+        let reader = store.read_at(retired_snap).unwrap();
+        let files = reader.list_data_files(table_id).await.unwrap();
+        let total_rows: u64 = files.iter().map(|f| f.record_count).sum();
+        assert_eq!(
+            files.len(),
+            1,
+            "Only consolidated file visible after retirement"
+        );
+        assert_eq!(
+            total_rows, 2,
+            "Only 2 rows visible after explicit retirement"
         );
     }
 

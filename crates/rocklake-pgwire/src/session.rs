@@ -258,6 +258,7 @@ pub struct BootstrapState {
 #[derive(Debug)]
 pub struct SessionState {
     pub in_transaction: bool,
+    pub transaction_snapshot_id: Option<u64>,
     pub pending_txn: PendingCatalogTxn,
     pub settings: SessionSettings,
     /// Per-connection LISTEN/NOTIFY subscription state.
@@ -297,6 +298,7 @@ impl Default for SessionState {
     fn default() -> Self {
         Self {
             in_transaction: false,
+            transaction_snapshot_id: None,
             pending_txn: PendingCatalogTxn::new(),
             settings: SessionSettings::default(),
             subscriptions: ConnectionSubscriptions::new(),

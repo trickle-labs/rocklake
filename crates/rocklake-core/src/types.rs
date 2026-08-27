@@ -412,15 +412,16 @@ pub fn prune_file(
         return Ok(PruneResult::Keep);
     }
 
+    // If the column contains NaN, conservatively keep the file
+    if contains_nan {
+        return Ok(PruneResult::Keep);
+    }
+
     // Handle NaN for float types
     if matches!(col_type, DuckLakeType::Float { .. })
         && (predicate_value == "NaN" || predicate_value == "nan")
     {
-        return Ok(if contains_nan {
-            PruneResult::Keep
-        } else {
-            PruneResult::Prune
-        });
+        return Ok(PruneResult::Prune);
     }
 
     // If min > predicate → prune (NaN comparison fails closed: keep the file)

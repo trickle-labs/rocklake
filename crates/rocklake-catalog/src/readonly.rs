@@ -106,17 +106,31 @@ impl ReadOnlyCatalog {
     /// Returns `CatalogError::SnapshotOutOfRetention` if the current snapshot
     /// has been GC-retired.
     pub fn reader(&self) -> CatalogResult<CatalogReader> {
+        self.read_at(self.current_snapshot_id)
+    }
+
+    /// Return a reader bound to a specific snapshot ID.
+    ///
+    /// Returns `CatalogError::SnapshotOutOfRetention` if `dl_snapshot_id`
+    /// falls below the current retain-from floor, or `CatalogError::SnapshotNotFound`
+    /// if `dl_snapshot_id` exceeds the latest observed committed snapshot.
+    pub fn read_at(&self, dl_snapshot_id: impl Into<SnapshotId>) -> CatalogResult<CatalogReader> {
+        let dl_snapshot_id = dl_snapshot_id.into();
         let retain_from = self.retain_from.load(Ordering::Acquire);
-        if retain_from > 0 && self.current_snapshot_id.as_u64() < retain_from {
+        if retain_from > 0 && dl_snapshot_id.as_u64() < retain_from {
             return Err(CatalogError::SnapshotOutOfRetention {
-                requested: self.current_snapshot_id.as_u64(),
+                requested: dl_snapshot_id.as_u64(),
                 retain_from,
             });
         }
-        Ok(CatalogReader::new(
-            self.db.clone(),
-            self.current_snapshot_id,
-        ))
+        let latest = self.current_snapshot_id.as_u64();
+        if dl_snapshot_id.as_u64() > latest {
+            return Err(CatalogError::SnapshotNotFound {
+                requested: dl_snapshot_id.as_u64(),
+                latest_committed: latest,
+            });
+        }
+        Ok(CatalogReader::new(self.db.clone(), dl_snapshot_id))
     }
 
     /// Advance to the latest committed snapshot without writer coordination.

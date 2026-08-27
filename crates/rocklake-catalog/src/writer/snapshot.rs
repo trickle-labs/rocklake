@@ -197,6 +197,9 @@ impl CatalogWriter {
             .await
             .map_err(|e| CatalogError::TransactionConflict(e.to_string()))?;
 
+        self.latest_snapshot_cache
+            .store(snapshot_id, std::sync::atomic::Ordering::Release);
+
         debug_assert_eq!(self.counters.peek_snapshot_id(), snapshot_id);
         self.counters.alloc_snapshot_id();
         self.counter_base_snapshot_id = next_snapshot_id;

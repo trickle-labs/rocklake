@@ -567,45 +567,55 @@ pub fn latest_snapshot_info_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_file_variant_stats ───────────────────────────────────────────────
 
-/// `ducklake_file_variant_stats(data_file_id, column_id, value_count,
-/// null_count, bloom_filter_offset, bloom_filter_length)` —
-/// DuckLake v1.0 spec (Catalog Version 7): per-file variant-type statistics.
+/// `ducklake_file_variant_stats(data_file_id, table_id, column_id, variant_path,
+/// shredded_type, column_size_bytes, value_count, null_count, min_value, max_value,
+/// contains_nan, extra_stats)` —
+/// DuckLake v1.0 spec: per-file variant-type statistics.
 pub fn file_variant_stats_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("data_file_id"),
+        int8t!("table_id"),
         int8t!("column_id"),
+        text_col!("variant_path"),
+        text_col!("shredded_type"),
+        int8t!("column_size_bytes"),
         int8t!("value_count"),
         int8t!("null_count"),
-        int8t!("bloom_filter_offset"),
-        int8t!("bloom_filter_length"),
+        text_col!("min_value"),
+        text_col!("max_value"),
+        bool_col!("contains_nan"),
+        text_col!("extra_stats"),
     ])
 }
 
 // ── ducklake_column_mapping ───────────────────────────────────────────────────
 
-/// `ducklake_column_mapping(table_id, column_id, field_id, mapping_type)` —
-/// DuckLake v1.0 spec (Catalog Version 7): maps logical column IDs to physical
+/// `ducklake_column_mapping(mapping_id, table_id, column_id, type)` —
+/// DuckLake v1.0 spec: maps logical column IDs to physical
 /// field IDs for Iceberg-compatible column evolution.
 pub fn column_mapping_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
+        int8t!("mapping_id"),
         int8t!("table_id"),
         int8t!("column_id"),
-        int8t!("field_id"),
-        text_col!("mapping_type"),
+        text_col!("type"),
     ])
 }
 
 // ── ducklake_name_mapping ─────────────────────────────────────────────────────
 
-/// `ducklake_name_mapping(table_id, field_name, field_id, column_id)` —
-/// DuckLake v1.0 spec (Catalog Version 7): maps physical field names to logical
+/// `ducklake_name_mapping(mapping_id, table_id, column_id, source_name, target_field_id, parent_column, is_partition)` —
+/// DuckLake v1.0 spec: maps physical field names to logical
 /// column IDs; required for by-name column evolution in Iceberg-format catalogs.
 pub fn name_mapping_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
+        int8t!("mapping_id"),
         int8t!("table_id"),
-        text_col!("field_name"),
-        int8t!("field_id"),
         int8t!("column_id"),
+        text_col!("source_name"),
+        int8t!("target_field_id"),
+        int8t!("parent_column"),
+        bool_col!("is_partition"),
     ])
 }
 

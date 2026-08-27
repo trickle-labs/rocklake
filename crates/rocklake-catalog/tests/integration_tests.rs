@@ -60,7 +60,8 @@ async fn create_schema_and_table() {
         .create_table(schema_id, "users", Some("s3://bucket/data/users/"))
         .await
         .unwrap();
-    let _snap = writer.create_snapshot(None, None).await.unwrap();
+    let snap = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap);
 
     let reader = store.read_at(SnapshotId::new(1)).unwrap();
     let schemas = reader.list_schemas().await.unwrap();
@@ -96,7 +97,8 @@ async fn add_and_describe_columns() {
         .await
         .unwrap();
 
-    let _snap = writer.create_snapshot(None, None).await.unwrap();
+    let snap = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap);
 
     let reader = store.read_at(SnapshotId::new(1)).unwrap();
     let desc = reader.describe_table(table_id).await.unwrap().unwrap();
@@ -118,9 +120,12 @@ async fn drop_schema_makes_invisible() {
 
     let schema_id = writer.create_schema("temp").await.unwrap();
     let snap1 = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap1);
 
+    let mut writer = store.begin_write();
     writer.drop_schema(schema_id).await.unwrap();
     let snap2 = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap2);
 
     // Visible at snapshot 1
     let reader1 = store.read_at(snap1).unwrap();
@@ -169,6 +174,7 @@ async fn register_data_files() {
         .unwrap();
 
     let snap = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap);
 
     let reader = store.read_at(snap).unwrap();
     let files = reader.list_data_files(table_id).await.unwrap();
@@ -199,14 +205,17 @@ async fn inlined_insert_and_delete() {
         .unwrap();
 
     let snap1 = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap1);
 
     // Mark row 0 as deleted
+    let mut writer = store.begin_write();
     writer
         .mark_inlined_insert_deleted(table_id, 1, 0)
         .await
         .unwrap();
 
     let snap2 = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap2);
 
     // At snapshot 1, both rows visible
     let reader1 = store.read_at(snap1).unwrap();
@@ -231,15 +240,18 @@ async fn schema_version_increments_on_ddl() {
     // Schema change → increments
     let _schema_id = writer.create_schema("s1").await.unwrap();
     let snap1 = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap1);
 
     let reader1 = store.read_at(snap1).unwrap();
     let s1 = reader1.get_snapshot().await.unwrap().unwrap();
     assert_eq!(s1.schema_version, 1);
 
     // Data-only (register file) → does NOT increment
+    let mut writer = store.begin_write();
     let schema_id = writer.create_schema("s2").await.unwrap();
     let table_id = writer.create_table(schema_id, "t1", None).await.unwrap();
     let snap2 = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap2);
 
     // Another schema change
     let reader2 = store.read_at(snap2).unwrap();
@@ -247,11 +259,13 @@ async fn schema_version_increments_on_ddl() {
     assert_eq!(s2.schema_version, 2); // create_schema + create_table both trigger
 
     // Now do a data-only op
+    let mut writer = store.begin_write();
     let _file_id = writer
         .register_data_file(table_id, "file.parquet", "parquet", 100, 5000)
         .await
         .unwrap();
     let snap3 = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap3);
 
     let reader3 = store.read_at(snap3).unwrap();
     let s3 = reader3.get_snapshot().await.unwrap().unwrap();
@@ -268,7 +282,8 @@ async fn verify_catalog_passes_on_valid() {
     let mut writer = store.begin_write();
 
     writer.create_schema("main").await.unwrap();
-    let _snap = writer.create_snapshot(None, None).await.unwrap();
+    let snap = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap);
 
     let result = rocklake_catalog::verify::verify_catalog(store.db())
         .await
@@ -370,6 +385,7 @@ async fn file_column_stats_and_pruning() {
         .unwrap();
 
     let snap = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap);
     let reader = store.read_at(snap).unwrap();
 
     let col_type = DuckLakeType::Integer {

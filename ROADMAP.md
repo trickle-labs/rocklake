@@ -112,7 +112,7 @@ binding on every roadmap release below.
 | **v0.47.10 — Public Surface Manifest & Contract Freeze** | Canonical surface manifest for SQL, PG-wire, CLI, bindings, object-store, and admin/maintenance entry points; every surface mapped to happy-path and negative tests; golden request/response fixtures; manifest coverage gate; versioned compatibility snapshots | Complete |
 | **v0.47.11 — Surface Completeness Matrix & Negative Testing** | Exhaustive matrix across clients, backends, restarts, concurrency, and emulator targets; deterministic crash/recovery and object-store fault injection; property/fuzz coverage for SQL classification, schema discovery, and snapshot visibility; release gate on zero uncovered export surfaces and zero unclassified protocol errors | Complete |
 | **v0.47.12 — Atomic Write Protocol & Conflict Safety** | Retry-safe snapshot commits; overlapping-writer counter conflict detection; stage every snapshot-dependent metadata mutation; transactionally correct PG-wire writes and strict parameter validation | Complete |
-| **v0.47.13 — Snapshot Read Correctness & Metadata Isolation** | Committed-snapshot bounds; conservative stats pruning; delete-file and CDC table isolation; explicit file retirement; snapshot-aware stats and complete DROP/ALTER cascades | Planning |
+| **v0.47.13 — Snapshot Read Correctness & Metadata Isolation** | Committed-snapshot bounds; conservative stats pruning; delete-file and CDC table isolation; explicit file retirement; snapshot-aware stats and complete DROP/ALTER cascades | Complete |
 | **v0.47.14 — Recovery, Retention & Cleanup Safety** | Complete atomic checkpoint restore; unified GC/checkpoint pins and leases; retention-safe excision; snapshot-correct scheduled deletion; canonical, fail-closed orphan cleanup | Planning |
 | **v0.47.15 — Catalog Fidelity, Migration & Integrity Verification** | Snapshot-consistent, lossless export/import; strict all-table DuckLake migration; counter/index reconstruction; full-catalog invariant verification and safe repair plans | Planning |
 | **v0.47.16 — Read-Only, Path & Engine Scan Correctness** | Truly write-free and fail-closed reader opens; immutable reader-mode enforcement; preserved cloud URI prefixes; canonical path resolution; correct DataFusion handling of deletes, inlined rows, and unsupported formats | Planning |
@@ -5274,37 +5274,37 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Committed Snapshot Semantics
 
-- [ ] Reject future snapshot IDs and gaps with `SnapshotNotFound`; replace `u64::MAX` "latest" sentinels with an explicit latest-reader path.
-- [ ] Validate `retain_from <= from_snapshot <= to_snapshot <= latest_committed` for time travel, diffs, CDC, leases, and all PG-wire snapshot functions.
-- [ ] Make snapshot-bound readers filter snapshot changes, stats, mappings, tags, and every dependent metadata category at the requested snapshot rather than exposing mutable latest state.
-- [ ] Define and test PG-wire transaction read semantics: stable transaction snapshot plus read-your-writes where DuckLake requires it.
+- [x] Reject future snapshot IDs and gaps with `SnapshotNotFound`; replace `u64::MAX` "latest" sentinels with an explicit latest-reader path.
+- [x] Validate `retain_from <= from_snapshot <= to_snapshot <= latest_committed` for time travel, diffs, CDC, leases, and all PG-wire snapshot functions.
+- [x] Make snapshot-bound readers filter snapshot changes, stats, mappings, tags, and every dependent metadata category at the requested snapshot rather than exposing mutable latest state.
+- [x] Define and test PG-wire transaction read semantics: stable transaction snapshot plus read-your-writes where DuckLake requires it.
 
 ### File and Statistics Correctness
 
-- [ ] Make `prune_files()` start from all visible files and prune only when valid, type-compatible statistics conclusively exclude a match; missing, partial, stale, malformed, NaN, and null-only stats must conservatively keep the file.
-- [ ] Resolve delete-file ownership from an explicit `table_id` or its referenced data file; unresolved legacy rows are corruption, never a match for every table.
-- [ ] Remove row-range and equal-row-count consolidation heuristics from authoritative `list_data_files()` reads; replacement requires explicit MVCC retirement or replacement metadata.
-- [ ] Remove unconditional catalog-scan diagnostics from the read path and expose any legacy consolidation analysis only through explicit verification or repair tooling.
+- [x] Make `prune_files()` start from all visible files and prune only when valid, type-compatible statistics conclusively exclude a match; missing, partial, stale, malformed, NaN, and null-only stats must conservatively keep the file.
+- [x] Resolve delete-file ownership from an explicit `table_id` or its referenced data file; unresolved legacy rows are corruption, never a match for every table.
+- [x] Remove row-range and equal-row-count consolidation heuristics from authoritative `list_data_files()` reads; replacement requires explicit MVCC retirement or replacement metadata.
+- [x] Remove unconditional catalog-scan diagnostics from the read path and expose any legacy consolidation analysis only through explicit verification or repair tooling.
 
 ### Table Isolation and Lifecycle
 
-- [ ] Resolve `table_changes(table_ref, ...)` to one stable table ID, filter added and retired files before scanning, use catalog `row_id_start`, and include delete-file and inlined-delete semantics without pairing unrelated rows as updates.
-- [ ] Complete DROP/ALTER retirement for schemas, tables, columns, views, macros, files, stats, mappings, tags, partitions, sort metadata, schema versions, and secondary indexes.
-- [ ] Correct mapping and variant-stat response builders so every value comes from its specified field; do not substitute mapping IDs for field or table IDs or emit placeholder NULLs for persisted values.
+- [x] Resolve `table_changes(table_ref, ...)` to one stable table ID, filter added and retired files before scanning, use catalog `row_id_start`, and include delete-file and inlined-delete semantics without pairing unrelated rows as updates.
+- [x] Complete DROP/ALTER retirement for schemas, tables, columns, views, macros, files, stats, mappings, tags, partitions, sort metadata, schema versions, and secondary indexes.
+- [x] Correct mapping and variant-stat response builders so every value comes from its specified field; do not substitute mapping IDs for field or table IDs or emit placeholder NULLs for persisted values.
 
 ### Release Gates
 
-- [ ] Two-table isolation tests cover data files, delete files, stats pruning, CDC, mappings, tags, and cascades at old and latest snapshots.
-- [ ] Property tests prove pruning is conservative: the pruned file set may contain false positives but never omit a file containing a match.
-- [ ] Golden consolidation tests prove legitimate same-size and overlapping-row-range files remain visible until explicitly retired.
-- [ ] Historical-reader tests mutate every dependent metadata family and prove old snapshots remain stable.
+- [x] Two-table isolation tests cover data files, delete files, stats pruning, CDC, mappings, tags, and cascades at old and latest snapshots.
+- [x] Property tests prove pruning is conservative: the pruned file set may contain false positives but never omit a file containing a match.
+- [x] Golden consolidation tests prove legitimate same-size and overlapping-row-range files remain visible until explicitly retired.
+- [x] Historical-reader tests mutate every dependent metadata family and prove old snapshots remain stable.
 
 ### Deliverables
 
-- [ ] Strict committed-snapshot bounds across Rust and PG-wire APIs
-- [ ] Conservative, snapshot-aware pruning and metadata reads
-- [ ] Explicit file lifecycle with no read-time replacement guesses
-- [ ] Complete table isolation and dependent-row cascades
+- [x] Strict committed-snapshot bounds across Rust and PG-wire APIs
+- [x] Conservative, snapshot-aware pruning and metadata reads
+- [x] Explicit file lifecycle with no read-time replacement guesses
+- [x] Complete table isolation and dependent-row cascades
 
 ---
 

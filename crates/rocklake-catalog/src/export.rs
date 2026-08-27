@@ -945,6 +945,10 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
         };
     }
 
+    let mut max_snapshot_id = 0u64;
+    let mut max_catalog_id = 0u64;
+    let mut max_file_id = 0u64;
+
     for line in reader.lines() {
         line_no += 1;
         let line = line.map_err(|e| CatalogError::SlateDb(e.to_string()))?;
@@ -966,14 +970,29 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
         match tbl {
             "ducklake_snapshot" => {
                 let snapshot_id = req_u64!(d, "snapshot_id", tbl);
+                if snapshot_id > max_snapshot_id {
+                    max_snapshot_id = snapshot_id;
+                }
+                let next_cat = d["next_catalog_id"].as_u64();
+                if let Some(nc) = next_cat {
+                    if nc > max_catalog_id {
+                        max_catalog_id = nc;
+                    }
+                }
+                let next_file = d["next_file_id"].as_u64();
+                if let Some(nf) = next_file {
+                    if nf > max_file_id {
+                        max_file_id = nf;
+                    }
+                }
                 let row = SnapshotRow {
                     snapshot_id,
                     schema_version: req_u64!(d, "schema_version", tbl),
                     snapshot_time: req_str!(d, "snapshot_time", tbl),
                     author: d["author"].as_str().map(|s| s.to_string()),
                     message: d["message"].as_str().map(|s| s.to_string()),
-                    next_catalog_id: d["next_catalog_id"].as_u64(),
-                    next_file_id: d["next_file_id"].as_u64(),
+                    next_catalog_id: next_cat,
+                    next_file_id: next_file,
                 };
                 let key = keys::key_snapshot(snapshot_id);
                 db.put(&key, &values::encode_value(&row)).await?;
@@ -1472,6 +1491,41 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                 tracing::warn!("Unknown table in import at line {line_no}: {tbl}");
             }
         }
+    }
+
+    // Ensure catalog format version is persisted
+    let format_key = keys::key_system(SYSTEM_CATALOG_FORMAT_VERSION);
+    if db.get(&format_key).await?.is_none() {
+        db.put(
+            &format_key,
+            &values::encode_format_version(CATALOG_FORMAT_VERSION),
+        )
+        .await?;
+    }
+
+    // Persist counter values
+    let snap_key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
+    if db.get(&snap_key).await?.is_none() || max_snapshot_id > 0 {
+        let val = if max_snapshot_id > 0 {
+            max_snapshot_id + 1
+        } else {
+            1
+        };
+        db.put(&snap_key, &values::encode_counter(val)).await?;
+    }
+    let cat_key = keys::key_counter(COUNTER_NEXT_CATALOG_ID);
+    if db.get(&cat_key).await?.is_none() || max_catalog_id > 0 {
+        let val = if max_catalog_id > 0 {
+            max_catalog_id + 1
+        } else {
+            1
+        };
+        db.put(&cat_key, &values::encode_counter(val)).await?;
+    }
+    let file_key = keys::key_counter(COUNTER_NEXT_FILE_ID);
+    if db.get(&file_key).await?.is_none() || max_file_id > 0 {
+        let val = if max_file_id > 0 { max_file_id + 1 } else { 1 };
+        db.put(&file_key, &values::encode_counter(val)).await?;
     }
 
     Ok(ImportResult {

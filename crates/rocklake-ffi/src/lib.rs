@@ -961,7 +961,7 @@ mod tests {
         let catalog = rocklake_open(path.as_ptr(), &mut err);
         assert!(!catalog.is_null());
 
-        let schemas = rocklake_list_schemas(catalog, 1, &mut err);
+        let schemas = rocklake_list_schemas(catalog, 0, &mut err);
         assert_eq!(err.code, 0);
         assert_eq!(schemas.count, 0);
 

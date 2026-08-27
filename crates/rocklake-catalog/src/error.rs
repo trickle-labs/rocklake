@@ -55,6 +55,11 @@ pub enum CatalogError {
     RepairRefused(String),
     #[error("snapshot {requested} is below the retention floor {retain_from} (SQLSTATE 22023)")]
     SnapshotOutOfRetention { requested: u64, retain_from: u64 },
+    #[error("snapshot {requested} not found (latest committed snapshot: {latest_committed}) (SQLSTATE 22023)")]
+    SnapshotNotFound {
+        requested: u64,
+        latest_committed: u64,
+    },
     #[error("import error at line {line} (table {table}): {message}")]
     Import {
         line: usize,

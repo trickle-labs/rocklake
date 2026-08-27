@@ -481,18 +481,18 @@ fn ffi_list_operations_empty_catalog() {
     let catalog = rocklake_ffi::rocklake_open(path.as_ptr(), &mut err);
     assert!(!catalog.is_null());
 
-    // List schemas (empty)
-    let schemas = rocklake_ffi::rocklake_list_schemas(catalog, 1, &mut err);
+    // List schemas (empty at snapshot 0)
+    let schemas = rocklake_ffi::rocklake_list_schemas(catalog, 0, &mut err);
     assert_eq!(err.code, 0);
     assert_eq!(schemas.count, 0);
 
-    // List tables (empty)
-    let tables = rocklake_ffi::rocklake_list_tables(catalog, 1, 1, &mut err);
+    // List tables (empty at snapshot 0)
+    let tables = rocklake_ffi::rocklake_list_tables(catalog, 1, 0, &mut err);
     assert_eq!(err.code, 0);
     assert_eq!(tables.count, 0);
 
-    // List files (empty)
-    let files = rocklake_ffi::rocklake_list_data_files(catalog, 1, 1, &mut err);
+    // List files (empty at snapshot 0)
+    let files = rocklake_ffi::rocklake_list_data_files(catalog, 1, 0, &mut err);
     assert_eq!(err.code, 0);
     assert_eq!(files.count, 0);
 

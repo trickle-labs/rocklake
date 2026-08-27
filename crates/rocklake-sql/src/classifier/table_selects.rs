@@ -192,7 +192,7 @@ pub(super) fn classify_data_file_select(query: &sqlparser::ast::Query) -> Statem
     StatementKind::SelectDataFiles
 }
 
-/// Check if query has ORDER BY ... ASC LIMIT 1.
+/// Check if query has ORDER BY ... LIMIT 1.
 pub(super) fn has_order_by_asc_limit_1(query: &sqlparser::ast::Query) -> bool {
     if query.order_by.is_some() {
         if let Some(ref limit) = query.limit {

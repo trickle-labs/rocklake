@@ -51,6 +51,7 @@ use helpers::{
     make_null_int_response, make_null_text_response, make_pg_catalog_inlined_table_response,
     make_pg_catalog_scan_responses, make_pg_type_response, make_single_int_response,
     make_single_text_response, make_version_with_rds_check_response, require_param_u64,
+    resolve_reader,
 };
 use meta::execute_virtual_catalog_scan;
 use session::{execute_hold_snapshot, execute_release_snapshot};
@@ -978,12 +979,15 @@ async fn execute_classified<'a>(
         // ─── Transaction Control ───────────────────────────────────────
         StatementKind::Begin => {
             session.in_transaction = true;
+            let latest_snap = { store.lock().await.read_latest().snapshot_id().as_u64() };
+            session.transaction_snapshot_id = Some(latest_snap);
             Ok(vec![Response::TransactionStart(Tag::new("BEGIN"))])
         }
         StatementKind::Commit => {
             let bootstrap = std::mem::take(&mut session.bootstrap);
             let ops = session.pending_txn.take();
             session.in_transaction = false;
+            session.transaction_snapshot_id = None;
 
             // If this transaction contained COPY FROM STDIN bootstrap data
             // (i.e. DuckDB ATTACH initialisation), convert those rows into
@@ -1019,6 +1023,7 @@ async fn execute_classified<'a>(
         StatementKind::Rollback => {
             session.pending_txn.clear();
             session.in_transaction = false;
+            session.transaction_snapshot_id = None;
             Ok(vec![Response::TransactionEnd(Tag::new("ROLLBACK"))])
         }
 
@@ -1069,11 +1074,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::SelectSchemas => {
             let snap_id = get_snapshot_param(params);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
             Ok(vec![make_schemas_response(schemas)])
         }
@@ -1081,11 +1082,7 @@ async fn execute_classified<'a>(
             let schema_id = resolve_comparison_u64(_sql, "schema_id", params);
             let snap_id =
                 resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let raw_tables = if let Some(schema_id) = schema_id {
                 reader
                     .list_tables(schema_id)
@@ -1110,11 +1107,7 @@ async fn execute_classified<'a>(
             let table_id = resolve_comparison_u64(_sql, "table_id", params);
             let snap_id =
                 resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let columns = if let Some(table_id) = table_id {
                 let result = reader
                     .describe_table(table_id)
@@ -1147,11 +1140,7 @@ async fn execute_classified<'a>(
             let table_id = resolve_comparison_u64(_sql, "table_id", params);
             let snap_id =
                 resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let files = if let Some(table_id) = table_id {
                 reader
                     .list_data_files(table_id)
@@ -1193,11 +1182,7 @@ async fn execute_classified<'a>(
                 )]);
             };
             let snap_id = params.get_u64(2).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let predicate = params.get(3).unwrap_or("");
             if predicate.is_empty() {
                 let rows = reader
@@ -1223,11 +1208,7 @@ async fn execute_classified<'a>(
         StatementKind::SelectTableStats => {
             let table_id = params.get_u64(0).ok();
             let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             if _sql
                 .to_ascii_lowercase()
                 .contains("ducklake_table_column_stats")
@@ -1286,11 +1267,7 @@ async fn execute_classified<'a>(
         StatementKind::SelectDeleteFiles => {
             let table_id = params.get_u64(0).ok();
             let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let files = if let Some(table_id) = table_id {
                 reader
                     .list_delete_files(table_id)
@@ -1339,11 +1316,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::SelectSnapshotChanges => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let rows = reader
                 .list_all_snapshot_changes()
                 .await
@@ -1352,11 +1325,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::SelectMetadata => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let rows = reader
                 .list_all_metadata()
                 .await
@@ -1365,21 +1334,13 @@ async fn execute_classified<'a>(
         }
         StatementKind::SelectViews => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let rows = reader.list_all_views().await.map_err(RockLakeError::from)?;
             Ok(vec![make_views_response(rows)])
         }
         StatementKind::SelectMacros => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let rows = reader
                 .list_all_macros()
                 .await
@@ -1388,11 +1349,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::SelectMacroImpls => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let macros = reader
                 .list_all_macros()
                 .await
@@ -1410,11 +1367,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::SelectMacroParameters => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let macros = reader
                 .list_all_macros()
                 .await
@@ -1440,21 +1393,13 @@ async fn execute_classified<'a>(
         // ─── v0.27: ducklake_tag / ducklake_column_tag / ducklake_sort_info ─
         StatementKind::SelectTags => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let rows = reader.list_all_tags().await.map_err(RockLakeError::from)?;
             Ok(vec![make_tags_response(rows)])
         }
         StatementKind::SelectColumnTags => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let rows = reader
                 .list_all_column_tags()
                 .await
@@ -1463,11 +1408,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::SelectSortInfo => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let rows = reader
                 .list_all_sort_info()
                 .await
@@ -1654,27 +1595,21 @@ async fn execute_classified<'a>(
             }
         }
         StatementKind::SelectFirstSnapshot => {
-            let reader = {
+            let snap = {
                 let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(1))
-                    .map_err(RockLakeError::from)?
+                match s.read_at(rocklake_core::mvcc::SnapshotId::new(1)) {
+                    Ok(reader) => reader.get_snapshot().await.map_err(RockLakeError::from)?,
+                    Err(rocklake_catalog::error::CatalogError::SnapshotNotFound { .. }) => None,
+                    Err(e) => return Err(RockLakeError::from(e)),
+                }
             };
-            let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
-            if let Some(snap) = snap {
-                Ok(vec![make_snapshot_row_response(snap)])
-            } else {
-                Ok(vec![make_empty_response()])
-            }
+            Ok(vec![make_latest_snapshot_info_response(snap)])
         }
         StatementKind::SelectDataFilesWithLimit => {
             let table_id = require_param_u64(params, 0, "table_id")?;
             let limit = params.get_u64(1).unwrap_or(u64::MAX);
             let snap_id = params.get_u64(2).unwrap_or(u64::MAX);
-            let reader = {
-                let s = store.lock().await;
-                s.read_at(rocklake_core::mvcc::SnapshotId::new(snap_id))
-                    .map_err(RockLakeError::from)?
-            };
+            let reader = resolve_reader(store, session, snap_id).await?;
             let mut files = reader
                 .list_data_files(table_id)
                 .await
