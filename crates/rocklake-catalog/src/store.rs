@@ -128,7 +128,7 @@ impl CatalogStore {
         };
 
         // Load current schema version (from latest snapshot, or 0)
-        let schema_version = Self::load_schema_version(&db, &counters).await;
+        let schema_version = Self::load_schema_version(&db, &counters).await?;
 
         // Seed the retain-from cache from SlateDB (single read at startup).
         let retain_from_initial = crate::gc::read_retain_from(&db).await.unwrap_or(0);
@@ -318,10 +318,10 @@ impl CatalogStore {
             Db::open(opts.path, opts.object_store).await?
         };
 
-        crate::key_migration::migrate_key_encoding_if_needed(&db).await?;
-        let counters = init::initialize_catalog(&db).await?;
-        let schema_version = Self::load_schema_version(&db, &counters).await;
-        let retain_from_initial = crate::gc::read_retain_from(&db).await.unwrap_or(0);
+        init::verify_format_version(&db).await?;
+        let counters = init::load_counters_from_db(&db).await?;
+        let schema_version = Self::load_schema_version(&db, &counters).await?;
+        let retain_from_initial = Self::load_retain_from(&db).await?;
         let latest_initial = if counters.peek_snapshot_id() > 1 {
             counters.peek_snapshot_id() - 1
         } else {
@@ -371,22 +371,22 @@ impl CatalogStore {
     }
 
     /// Load schema version from the latest snapshot.
-    async fn load_schema_version(db: &Db, counters: &CounterCache) -> u64 {
+    async fn load_schema_version(db: &Db, counters: &CounterCache) -> CatalogResult<u64> {
         let latest_id = if counters.peek_snapshot_id() > 1 {
             counters.peek_snapshot_id() - 1
         } else {
-            return 0;
+            return Ok(0);
         };
 
         let key = keys::key_snapshot(latest_id);
-        match db.get(&key).await {
-            Ok(Some(data)) => {
-                match values::decode_value::<rocklake_core::rows::SnapshotRow>(&data) {
-                    Ok(row) => row.schema_version,
-                    Err(_) => 0,
-                }
-            }
-            _ => 0,
-        }
+        let data = db.get(&key).await?.ok_or(CatalogError::NotInitialized)?;
+        let row = values::decode_value::<rocklake_core::rows::SnapshotRow>(&data)?;
+        Ok(row.schema_version)
+    }
+
+    async fn load_retain_from(db: &Db) -> CatalogResult<u64> {
+        let key = keys::key_system(SYSTEM_RETAIN_FROM);
+        let data = db.get(&key).await?.ok_or(CatalogError::NotInitialized)?;
+        Ok(values::decode_counter(&data)?)
     }
 }
