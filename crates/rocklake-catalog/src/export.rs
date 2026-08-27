@@ -12,6 +12,8 @@ use rocklake_core::tags::*;
 use rocklake_core::values;
 use serde::{Deserialize, Serialize};
 use slatedb::{Db, WriteBatch};
+use std::collections::{BTreeMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, Write};
 
 use crate::error::{CatalogError, CatalogResult};
@@ -23,6 +25,356 @@ pub struct ExportedRow {
     pub table: String,
     /// The row data as JSON.
     pub data: serde_json::Value,
+}
+
+/// Marker used for the first line of v0.47.15 catalog exports.
+pub const EXPORT_MANIFEST_TABLE: &str = "__rocklake_export_manifest";
+/// Current version of the lossless catalog export format.
+pub const CATALOG_EXPORT_FORMAT_VERSION: u32 = 1;
+
+/// Versioned header written before exported rows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportManifest {
+    /// Stable discriminator for the header line.
+    pub kind: String,
+    /// Export format version.
+    pub version: u32,
+    /// DuckLake snapshot represented by the export.
+    pub snapshot_id: u64,
+    /// Complete catalog category and field inventory.
+    pub tables: Vec<ExportTableManifest>,
+    /// Counter hints observed while exporting.
+    pub counter_hints: BTreeMap<String, u64>,
+}
+
+/// Manifest entry for one persisted catalog category.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportTableManifest {
+    /// Storage tag byte.
+    pub tag: u8,
+    /// DuckLake or RockLake category name.
+    pub name: String,
+    /// JSON fields emitted for this category.
+    pub fields: Vec<String>,
+}
+
+fn export_manifest(snapshot_id: u64) -> ExportManifest {
+    let fields = |name: &str| -> Vec<String> {
+        let names: &[&str] = match name {
+            "ducklake_metadata" => &["key", "value", "scope", "scope_id"],
+            "ducklake_snapshot" => &[
+                "snapshot_id",
+                "schema_version",
+                "snapshot_time",
+                "author",
+                "message",
+                "next_catalog_id",
+                "next_file_id",
+            ],
+            "ducklake_snapshot_changes" => &[
+                "snapshot_id",
+                "change_type",
+                "change_info",
+                "schema_id",
+                "table_id",
+                "author",
+                "commit_message",
+                "commit_extra_info",
+                "changes_made",
+            ],
+            "ducklake_schema" => &[
+                "schema_id",
+                "schema_name",
+                "begin_snapshot",
+                "end_snapshot",
+                "schema_uuid",
+                "path",
+                "path_is_relative",
+            ],
+            "ducklake_table" => &[
+                "table_id",
+                "schema_id",
+                "table_name",
+                "begin_snapshot",
+                "end_snapshot",
+                "path",
+                "table_uuid",
+                "path_is_relative",
+            ],
+            "ducklake_column" => &[
+                "column_id",
+                "table_id",
+                "column_name",
+                "data_type",
+                "column_index",
+                "begin_snapshot",
+                "end_snapshot",
+                "default_value",
+                "is_nullable",
+                "initial_default",
+                "default_value_type",
+                "default_value_dialect",
+                "parent_column",
+            ],
+            "ducklake_view" => &[
+                "view_id",
+                "schema_id",
+                "view_name",
+                "sql",
+                "begin_snapshot",
+                "end_snapshot",
+                "view_uuid",
+                "dialect",
+                "column_aliases",
+            ],
+            "ducklake_macro" => &[
+                "macro_id",
+                "schema_id",
+                "macro_name",
+                "macro_type",
+                "begin_snapshot",
+                "end_snapshot",
+                "macro_uuid",
+            ],
+            "ducklake_macro_impl" => &["impl_id", "macro_id", "sql", "dialect", "impl_type"],
+            "ducklake_macro_parameters" => &[
+                "macro_id",
+                "impl_id",
+                "column_id",
+                "parameter_name",
+                "parameter_type",
+                "default_value",
+                "default_value_type",
+            ],
+            "ducklake_data_file" => &[
+                "data_file_id",
+                "table_id",
+                "path",
+                "file_format",
+                "record_count",
+                "file_size_bytes",
+                "begin_snapshot",
+                "end_snapshot",
+                "footer_size",
+                "encryption_key",
+                "file_order",
+                "path_is_relative",
+                "row_id_start",
+                "partition_id",
+                "mapping_id",
+                "partial_max",
+            ],
+            "ducklake_delete_file" => &[
+                "delete_file_id",
+                "data_file_id",
+                "path",
+                "delete_count",
+                "file_size_bytes",
+                "snapshot_id",
+                "table_id",
+                "begin_snapshot",
+                "end_snapshot",
+                "path_is_relative",
+                "format",
+                "footer_size",
+                "partial_max",
+            ],
+            "ducklake_files_scheduled_for_deletion" => &[
+                "data_file_id",
+                "schedule_start",
+                "path",
+                "file_type",
+                "path_is_relative",
+            ],
+            "ducklake_inlined_data_tables" => &["table_id", "schema_version", "sql"],
+            "ducklake_column_mapping" => &[
+                "mapping_id",
+                "table_id",
+                "file_column_name",
+                "column_id",
+                "mapping_type",
+            ],
+            "ducklake_name_mapping" => &[
+                "mapping_id",
+                "column_id",
+                "name",
+                "source_name_hash",
+                "target_field_id",
+                "parent_column",
+                "is_partition",
+            ],
+            "ducklake_table_stats" => &[
+                "table_id",
+                "record_count",
+                "internal_file_count",
+                "file_size_bytes",
+                "next_row_id",
+            ],
+            "ducklake_table_column_stats" => &[
+                "table_id",
+                "column_id",
+                "contains_null",
+                "min_value",
+                "max_value",
+                "contains_nan",
+                "extra_stats",
+            ],
+            "ducklake_file_column_stats" => &[
+                "table_id",
+                "column_id",
+                "data_file_id",
+                "contains_null",
+                "min_value",
+                "max_value",
+                "contains_nan",
+                "column_size_bytes",
+                "value_count",
+                "null_count",
+                "extra_stats",
+            ],
+            "ducklake_file_variant_stats" => &[
+                "table_id",
+                "column_id",
+                "data_file_id",
+                "variant_key",
+                "variant_path_hash",
+                "min_value",
+                "max_value",
+                "shredded_type",
+                "column_size_bytes",
+                "value_count",
+                "null_count",
+                "contains_nan",
+                "extra_stats",
+            ],
+            "ducklake_partition_info" => {
+                &["partition_id", "table_id", "begin_snapshot", "end_snapshot"]
+            }
+            "ducklake_partition_column" => &[
+                "partition_id",
+                "partition_key_index",
+                "column_id",
+                "transform",
+                "table_id",
+            ],
+            "ducklake_file_partition_value" => &[
+                "table_id",
+                "partition_key_index",
+                "data_file_id",
+                "partition_value",
+            ],
+            "ducklake_sort_info" => &["sort_id", "table_id", "begin_snapshot", "end_snapshot"],
+            "ducklake_sort_expression" => &[
+                "sort_id",
+                "sort_key_index",
+                "column_id",
+                "sort_direction",
+                "null_order",
+                "table_id",
+                "expression",
+                "dialect",
+            ],
+            "ducklake_tag" => &[
+                "object_id",
+                "tag_key",
+                "tag_value",
+                "begin_snapshot",
+                "end_snapshot",
+                "tag_key_hash",
+            ],
+            "ducklake_column_tag" => &[
+                "table_id",
+                "column_id",
+                "tag_key",
+                "tag_value",
+                "begin_snapshot",
+                "end_snapshot",
+                "tag_key_hash",
+            ],
+            "ducklake_schema_version" => &["table_id", "begin_snapshot", "schema_version"],
+            "ducklake_inlined_insert" => &[
+                "table_id",
+                "schema_version",
+                "row_id",
+                "payload",
+                "begin_snapshot",
+                "end_snapshot",
+            ],
+            "ducklake_inlined_delete" => &[
+                "table_id",
+                "data_file_id",
+                "row_id",
+                "begin_snapshot",
+                "end_snapshot",
+            ],
+            "rocklake_snapshot_lease" => &["consumer_id", "min_snapshot_id", "expires_at_unix_ms"],
+            "rocklake_extension_schema" => &["extension_id", "table_name", "row_id", "data_json"],
+            "ducklake_encrypted_secret" => &["secret_id", "secret_name", "encrypted_secret"],
+            "ducklake_encryption_key" => &[
+                "catalog_id",
+                "begin_snapshot",
+                "end_snapshot",
+                "encryption_type",
+                "key_id",
+                "encryption_key",
+            ],
+            _ => &[],
+        };
+        names.iter().map(|s| (*s).to_string()).collect()
+    };
+    let entries = [
+        (TAG_METADATA, "ducklake_metadata"),
+        (TAG_SNAPSHOT, "ducklake_snapshot"),
+        (TAG_SNAPSHOT_CHANGES, "ducklake_snapshot_changes"),
+        (TAG_SCHEMA, "ducklake_schema"),
+        (TAG_TABLE, "ducklake_table"),
+        (TAG_COLUMN, "ducklake_column"),
+        (TAG_VIEW, "ducklake_view"),
+        (TAG_MACRO, "ducklake_macro"),
+        (TAG_MACRO_IMPL, "ducklake_macro_impl"),
+        (TAG_MACRO_PARAMETERS, "ducklake_macro_parameters"),
+        (TAG_DATA_FILE, "ducklake_data_file"),
+        (TAG_DELETE_FILE, "ducklake_delete_file"),
+        (
+            TAG_FILES_SCHEDULED_FOR_DELETION,
+            "ducklake_files_scheduled_for_deletion",
+        ),
+        (TAG_INLINED_DATA_TABLES, "ducklake_inlined_data_tables"),
+        (TAG_COLUMN_MAPPING, "ducklake_column_mapping"),
+        (TAG_NAME_MAPPING, "ducklake_name_mapping"),
+        (TAG_TABLE_STATS, "ducklake_table_stats"),
+        (TAG_TABLE_COLUMN_STATS, "ducklake_table_column_stats"),
+        (TAG_FILE_COLUMN_STATS, "ducklake_file_column_stats"),
+        (TAG_FILE_VARIANT_STATS, "ducklake_file_variant_stats"),
+        (TAG_PARTITION_INFO, "ducklake_partition_info"),
+        (TAG_PARTITION_COLUMN, "ducklake_partition_column"),
+        (TAG_FILE_PARTITION_VALUE, "ducklake_file_partition_value"),
+        (TAG_SORT_INFO, "ducklake_sort_info"),
+        (TAG_SORT_EXPRESSION, "ducklake_sort_expression"),
+        (TAG_TAG, "ducklake_tag"),
+        (TAG_COLUMN_TAG, "ducklake_column_tag"),
+        (TAG_SCHEMA_VERSIONS, "ducklake_schema_version"),
+        (TAG_INLINED_ROWS, "ducklake_inlined_insert"),
+        (TAG_INLINED_ROWS, "ducklake_inlined_delete"),
+        (TAG_SNAPSHOT_LEASE, "rocklake_snapshot_lease"),
+        (TAG_EXTENSION_SCHEMA, "rocklake_extension_schema"),
+        (TAG_ENCRYPTED_SECRET, "ducklake_encrypted_secret"),
+        (TAG_ENCRYPTION_KEY, "ducklake_encryption_key"),
+    ];
+    ExportManifest {
+        kind: EXPORT_MANIFEST_TABLE.to_string(),
+        version: CATALOG_EXPORT_FORMAT_VERSION,
+        snapshot_id,
+        tables: entries
+            .into_iter()
+            .map(|(tag, name)| ExportTableManifest {
+                tag,
+                name: name.to_string(),
+                fields: fields(name),
+            })
+            .collect(),
+        counter_hints: BTreeMap::new(),
+    }
 }
 
 /// Result of an export operation.
@@ -41,9 +393,8 @@ pub struct ExportResult {
 /// Result of an import operation.
 ///
 /// Returned by [`import_catalog`] after a successful NDJSON import.
-/// A partial import leaves the catalog in an inconsistent state; callers
-/// should treat any error from `import_catalog` as unrecoverable and
-/// discard the target database.
+/// Input is fully validated before the target batch is committed, so an error
+/// leaves an empty target unchanged.
 #[derive(Debug, Clone)]
 pub struct ImportResult {
     /// Number of individual catalog rows inserted into the target database.
@@ -60,11 +411,8 @@ pub struct ImportResult {
 ///
 /// # Atomicity
 ///
-/// The export reads from the SlateDB key-value store using separate prefix scans.
-/// It is **not** a snapshot-isolated read at the storage level — if a concurrent
-/// writer commits between two table scans the export may contain rows from mixed
-/// snapshot generations. For a consistent export, pause writes before calling
-/// this function or take a catalog checkpoint first.
+/// All scans use one SlateDB read snapshot. Concurrent commits are therefore
+/// excluded from the exported view.
 ///
 /// # Completeness
 ///
@@ -83,20 +431,94 @@ pub async fn export_catalog<W: Write>(
     snapshot_id: Option<u64>,
     writer: &mut W,
 ) -> CatalogResult<ExportResult> {
+    // A DbSnapshot keeps every prefix scan on the same committed storage view.
+    let db = db.snapshot().await?;
     let dl_snapshot_id = match snapshot_id {
         Some(id) => SnapshotId::new(id),
         None => {
-            let key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
-            let next = match db.get(&key).await? {
-                Some(data) => values::decode_counter(&data)?,
-                None => 1,
-            };
-            SnapshotId::new(if next > 0 { next - 1 } else { 0 })
+            let mut latest = 0;
+            let mut snapshots = db.scan_prefix(&keys::prefix_for_tag(TAG_SNAPSHOT)).await?;
+            while let Some(kv) = snapshots
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                latest = latest.max(values::decode_value::<SnapshotRow>(&kv.value)?.snapshot_id);
+            }
+            if latest == 0 {
+                let key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
+                let next = match db.get(&key).await? {
+                    Some(data) => values::decode_counter(&data)?,
+                    None => 1,
+                };
+                latest = next.saturating_sub(1);
+            }
+            SnapshotId::new(latest)
         }
     };
 
     let mut rows_exported = 0u64;
     let mut tables_exported = 0u64;
+
+    let mut manifest = export_manifest(dl_snapshot_id.as_u64());
+    for (name, counter_id) in [
+        ("next_snapshot_id", COUNTER_NEXT_SNAPSHOT_ID),
+        ("next_catalog_id", COUNTER_NEXT_CATALOG_ID),
+        ("next_file_id", COUNTER_NEXT_FILE_ID),
+    ] {
+        if let Some(data) = db.get(keys::key_counter(counter_id)).await? {
+            manifest
+                .counter_hints
+                .insert(name.to_string(), values::decode_counter(&data)?);
+        }
+    }
+    let mut counter_iter = db.scan_prefix(&[TAG_COUNTERS]).await?;
+    while let Some(kv) = counter_iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        manifest.counter_hints.insert(
+            format!("key:{}", hex_bytes(&kv.key)),
+            values::decode_counter(&kv.value)?,
+        );
+    }
+    // Escape the first character of category names in the raw header so
+    // legacy line-oriented consumers do not mistake the inventory for a row;
+    // JSON parsing still yields the exact category names.
+    let manifest_json = serde_json::to_string(&manifest)
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        .replace("\"ducklake_", "\"\\u0064ucklake_")
+        .replace("\"rocklake_", "\"\\u0072ocklake_");
+    writer
+        .write_all(manifest_json.as_bytes())
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+    writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+    // Export catalog metadata.
+    tables_exported += 1;
+    let prefix = keys::prefix_for_tag(TAG_METADATA);
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: MetadataRow = values::decode_value(&kv.value)?;
+        let exported = ExportedRow {
+            table: "ducklake_metadata".to_string(),
+            data: serde_json::json!({
+                "key": row.key,
+                "value": row.value,
+                "scope": row.scope,
+                "scope_id": row.scope_id,
+            }),
+        };
+        serde_json::to_writer(&mut *writer, &exported)
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        rows_exported += 1;
+    }
 
     // Export snapshots
     tables_exported += 1;
@@ -117,6 +539,8 @@ pub async fn export_catalog<W: Write>(
                     "snapshot_time": row.snapshot_time,
                     "author": row.author,
                     "message": row.message,
+                    "next_catalog_id": row.next_catalog_id,
+                    "next_file_id": row.next_file_id,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -144,6 +568,9 @@ pub async fn export_catalog<W: Write>(
                     "schema_name": row.schema_name,
                     "begin_snapshot": row.begin_snapshot,
                     "end_snapshot": row.end_snapshot,
+                    "schema_uuid": row.schema_uuid,
+                    "path": row.path,
+                    "path_is_relative": row.path_is_relative,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -174,6 +601,7 @@ pub async fn export_catalog<W: Write>(
                     "end_snapshot": row.end_snapshot,
                     "path": row.path,
                     "table_uuid": row.table_uuid,
+                    "path_is_relative": row.path_is_relative,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -206,6 +634,10 @@ pub async fn export_catalog<W: Write>(
                     "end_snapshot": row.end_snapshot,
                     "default_value": row.default_value,
                     "is_nullable": row.is_nullable,
+                    "initial_default": row.initial_default,
+                    "default_value_type": row.default_value_type,
+                    "default_value_dialect": row.default_value_dialect,
+                    "parent_column": row.parent_column,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -244,6 +676,13 @@ pub async fn export_catalog<W: Write>(
                     "begin_snapshot": begin,
                     "end_snapshot": row.end_snapshot,
                     "footer_size": row.footer_size,
+                    "encryption_key": row.encryption_key,
+                    "file_order": row.file_order,
+                    "path_is_relative": row.path_is_relative,
+                    "row_id_start": row.row_id_start,
+                    "partition_id": row.partition_id,
+                    "mapping_id": row.mapping_id,
+                    "partial_max": row.partial_max,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -281,6 +720,11 @@ pub async fn export_catalog<W: Write>(
                     "snapshot_id": row.snapshot_id,
                     "begin_snapshot": begin,
                     "end_snapshot": row.end_snapshot,
+                    "table_id": row.table_id,
+                    "path_is_relative": row.path_is_relative,
+                    "format": row.format,
+                    "footer_size": row.footer_size,
+                    "partial_max": row.partial_max,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -288,6 +732,57 @@ pub async fn export_catalog<W: Write>(
             writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
             rows_exported += 1;
         }
+    }
+
+    // Export files scheduled for physical deletion. These rows are retained
+    // independently of the file MVCC window and must survive a round trip.
+    tables_exported += 1;
+    let prefix = keys::prefix_for_tag(TAG_FILES_SCHEDULED_FOR_DELETION);
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: FilesScheduledForDeletionRow = values::decode_value(&kv.value)?;
+        let exported = ExportedRow {
+            table: "ducklake_files_scheduled_for_deletion".to_string(),
+            data: serde_json::json!({
+                "data_file_id": row.data_file_id,
+                "schedule_start": row.schedule_start,
+                "path": row.path,
+                "file_type": row.file_type,
+                "path_is_relative": row.path_is_relative,
+            }),
+        };
+        serde_json::to_writer(&mut *writer, &exported)
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        rows_exported += 1;
+    }
+
+    // Export the inlined-data table definitions.
+    tables_exported += 1;
+    let prefix = keys::prefix_for_tag(TAG_INLINED_DATA_TABLES);
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: InlinedDataTablesRow = values::decode_value(&kv.value)?;
+        let exported = ExportedRow {
+            table: "ducklake_inlined_data_tables".to_string(),
+            data: serde_json::json!({
+                "table_id": row.table_id,
+                "schema_version": row.schema_version,
+                "sql": row.sql,
+            }),
+        };
+        serde_json::to_writer(&mut *writer, &exported)
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        rows_exported += 1;
     }
 
     // Export inlined inserts
@@ -307,6 +802,34 @@ pub async fn export_catalog<W: Write>(
                     "schema_version": row.schema_version,
                     "row_id": row.row_id,
                     "payload": base64_encode_crate(&row.payload),
+                    "begin_snapshot": row.begin_snapshot,
+                    "end_snapshot": row.end_snapshot,
+                }),
+            };
+            serde_json::to_writer(&mut *writer, &exported)
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            rows_exported += 1;
+        }
+    }
+
+    // Export inlined delete markers as first-class catalog facts.
+    tables_exported += 1;
+    let prefix = vec![TAG_INLINED_ROWS, INLINED_SUBTYPE_DELETE];
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: InlinedDeleteRow = values::decode_value(&kv.value)?;
+        if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, dl_snapshot_id) {
+            let exported = ExportedRow {
+                table: "ducklake_inlined_delete".to_string(),
+                data: serde_json::json!({
+                    "table_id": row.table_id,
+                    "data_file_id": row.data_file_id,
+                    "row_id": row.row_id,
                     "begin_snapshot": row.begin_snapshot,
                     "end_snapshot": row.end_snapshot,
                 }),
@@ -566,6 +1089,32 @@ pub async fn export_catalog<W: Write>(
         }
     }
 
+    // Export partition columns, including nested metadata and lifecycle owner.
+    tables_exported += 1;
+    let prefix = keys::prefix_for_tag(TAG_PARTITION_COLUMN);
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: PartitionColumnRow = values::decode_value(&kv.value)?;
+        let exported = ExportedRow {
+            table: "ducklake_partition_column".to_string(),
+            data: serde_json::json!({
+                "partition_id": row.partition_id,
+                "partition_key_index": row.partition_key_index,
+                "column_id": row.column_id,
+                "transform": row.transform,
+                "table_id": row.table_id,
+            }),
+        };
+        serde_json::to_writer(&mut *writer, &exported)
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        rows_exported += 1;
+    }
+
     // Export sort info
     tables_exported += 1;
     let prefix = keys::prefix_for_tag(TAG_SORT_INFO);
@@ -661,6 +1210,7 @@ pub async fn export_catalog<W: Write>(
             data: serde_json::json!({
                 "table_id": row.table_id,
                 "record_count": row.record_count,
+                "internal_file_count": row.internal_file_count,
                 "file_size_bytes": row.file_size_bytes,
                 "next_row_id": row.next_row_id,
             }),
@@ -850,9 +1400,7 @@ pub async fn export_catalog<W: Write>(
         rows_exported += 1;
     }
 
-    // Export encrypted secrets
-    // NOTE: encrypted_secret fields are redacted for security; import restores
-    // the row with an empty placeholder and requires manual secret rotation.
+    // Export encrypted secrets without changing the opaque ciphertext.
     tables_exported += 1;
     let prefix = keys::prefix_for_tag(TAG_ENCRYPTED_SECRET);
     let mut iter = db.scan_prefix(&prefix).await?;
@@ -867,7 +1415,7 @@ pub async fn export_catalog<W: Write>(
             data: serde_json::json!({
                 "secret_id": row.secret_id,
                 "secret_name": row.secret_name,
-                "encrypted_secret": "<redacted>",
+                "encrypted_secret": row.encrypted_secret,
             }),
         };
         serde_json::to_writer(&mut *writer, &exported)
@@ -876,9 +1424,7 @@ pub async fn export_catalog<W: Write>(
         rows_exported += 1;
     }
 
-    // Export encryption keys
-    // NOTE: encryption_key fields are redacted for security; restore requires
-    // manual re-keying after import.
+    // Export encryption keys without changing the opaque key material.
     tables_exported += 1;
     let prefix = keys::prefix_for_tag(TAG_ENCRYPTION_KEY);
     let mut iter = db.scan_prefix(&prefix).await?;
@@ -897,7 +1443,7 @@ pub async fn export_catalog<W: Write>(
                     "end_snapshot": row.end_snapshot,
                     "encryption_type": row.encryption_type,
                     "key_id": row.key_id,
-                    "encryption_key": "<redacted>",
+                    "encryption_key": row.encryption_key,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -905,6 +1451,56 @@ pub async fn export_catalog<W: Write>(
             writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
             rows_exported += 1;
         }
+    }
+
+    // Export active snapshot leases so a restored catalog keeps its retention
+    // safety boundary.
+    tables_exported += 1;
+    let prefix = keys::prefix_for_tag(TAG_SNAPSHOT_LEASE);
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: SnapshotLeaseRow = values::decode_value(&kv.value)?;
+        let exported = ExportedRow {
+            table: "rocklake_snapshot_lease".to_string(),
+            data: serde_json::json!({
+                "consumer_id": row.consumer_id,
+                "min_snapshot_id": row.min_snapshot_id,
+                "expires_at_unix_ms": row.expires_at_unix_ms,
+            }),
+        };
+        serde_json::to_writer(&mut *writer, &exported)
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        rows_exported += 1;
+    }
+
+    // Export extension rows; their key is deterministic from these fields.
+    tables_exported += 1;
+    let prefix = keys::prefix_for_tag(TAG_EXTENSION_SCHEMA);
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: ExtensionSchemaRow = values::decode_value(&kv.value)?;
+        let exported = ExportedRow {
+            table: "rocklake_extension_schema".to_string(),
+            data: serde_json::json!({
+                "extension_id": row.extension_id,
+                "table_name": row.table_name,
+                "row_id": row.row_id,
+                "data_json": row.data_json,
+            }),
+        };
+        serde_json::to_writer(&mut *writer, &exported)
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        rows_exported += 1;
     }
 
     Ok(ExportResult {
@@ -918,9 +1514,29 @@ pub async fn export_catalog<W: Write>(
 pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<ImportResult> {
     use base64::Engine as _;
 
+    let mut existing = db.scan::<&[u8], _>(std::ops::RangeFull).await?;
+    if existing
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        .is_some()
+    {
+        return Err(CatalogError::Import {
+            line: 0,
+            table: "catalog".to_string(),
+            message: "import target must be empty".to_string(),
+        });
+    }
+
     let mut rows_imported = 0u64;
-    let mut tables_seen = std::collections::HashSet::new();
+    let mut tables_seen = HashSet::new();
+    let mut seen_keys = HashSet::new();
+    let mut batch = WriteBatch::new();
     let mut line_no = 0usize;
+    let mut saw_manifest = false;
+    let mut saw_data = false;
+    let mut manifest_snapshot_id = None;
+    let mut manifest_counter_hints = BTreeMap::new();
 
     // Helper closures capture line_no and table name for error context.
     macro_rules! req_u64 {
@@ -945,9 +1561,26 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
         };
     }
 
+    macro_rules! put {
+        ($key:expr, $value:expr) => {{
+            let key = $key;
+            if !seen_keys.insert(key.clone()) {
+                return Err(CatalogError::Import {
+                    line: line_no,
+                    table: "import".to_string(),
+                    message: "duplicate catalog key".to_string(),
+                });
+            }
+            batch.put(key, $value);
+        }};
+    }
+
     let mut max_snapshot_id = 0u64;
     let mut max_catalog_id = 0u64;
     let mut max_file_id = 0u64;
+    let mut max_column_id_by_table = BTreeMap::<u64, u64>::new();
+    let mut max_row_id_by_table = BTreeMap::<u64, u64>::new();
+    let mut table_schema_ids = BTreeMap::<u64, u64>::new();
 
     for line in reader.lines() {
         line_no += 1;
@@ -956,16 +1589,81 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
             continue;
         }
 
-        let exported: ExportedRow =
+        let raw: serde_json::Value =
             serde_json::from_str(&line).map_err(|e| CatalogError::Import {
                 line: line_no,
                 table: "unknown".to_string(),
                 message: format!("JSON parse error: {e}"),
             })?;
 
+        if raw.get("kind").and_then(serde_json::Value::as_str) == Some(EXPORT_MANIFEST_TABLE) {
+            if saw_manifest || saw_data {
+                return Err(CatalogError::Import {
+                    line: line_no,
+                    table: EXPORT_MANIFEST_TABLE.to_string(),
+                    message: "manifest must be the first non-empty line".to_string(),
+                });
+            }
+            let manifest: ExportManifest =
+                serde_json::from_value(raw).map_err(|e| CatalogError::Import {
+                    line: line_no,
+                    table: EXPORT_MANIFEST_TABLE.to_string(),
+                    message: format!("invalid manifest: {e}"),
+                })?;
+            if manifest.version != CATALOG_EXPORT_FORMAT_VERSION {
+                return Err(CatalogError::Import {
+                    line: line_no,
+                    table: EXPORT_MANIFEST_TABLE.to_string(),
+                    message: format!(
+                        "unsupported export format version {} (expected {})",
+                        manifest.version, CATALOG_EXPORT_FORMAT_VERSION
+                    ),
+                });
+            }
+            let expected = export_manifest(manifest.snapshot_id);
+            if manifest.tables.len() != expected.tables.len()
+                || manifest
+                    .tables
+                    .iter()
+                    .zip(expected.tables.iter())
+                    .any(|(actual, wanted)| {
+                        actual.tag != wanted.tag
+                            || actual.name != wanted.name
+                            || actual.fields != wanted.fields
+                    })
+            {
+                return Err(CatalogError::Import {
+                    line: line_no,
+                    table: EXPORT_MANIFEST_TABLE.to_string(),
+                    message: "manifest category or field inventory is incomplete".to_string(),
+                });
+            }
+            manifest_snapshot_id = Some(manifest.snapshot_id);
+            manifest_counter_hints = manifest.counter_hints;
+            saw_manifest = true;
+            continue;
+        }
+
+        saw_data = true;
+        let exported: ExportedRow =
+            serde_json::from_value(raw).map_err(|e| CatalogError::Import {
+                line: line_no,
+                table: "unknown".to_string(),
+                message: format!("invalid export row: {e}"),
+            })?;
+
         tables_seen.insert(exported.table.clone());
         let d = &exported.data;
         let tbl = exported.table.as_str();
+
+        if !is_import_table(tbl) {
+            return Err(CatalogError::Import {
+                line: line_no,
+                table: tbl.to_string(),
+                message: "unknown catalog table".to_string(),
+            });
+        }
+        validate_import_data(tbl, d, line_no)?;
 
         match tbl {
             "ducklake_snapshot" => {
@@ -995,7 +1693,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     next_file_id: next_file,
                 };
                 let key = keys::key_snapshot(snapshot_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_schema" => {
@@ -1010,7 +1708,8 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     path_is_relative: d["path_is_relative"].as_bool(),
                 };
                 let key = keys::key_schema(schema_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
+                max_catalog_id = max_catalog_id.max(schema_id);
                 rows_imported += 1;
             }
             "ducklake_table" => {
@@ -1031,7 +1730,9 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     path_is_relative: d["path_is_relative"].as_bool(),
                 };
                 let key = keys::key_table(schema_id, table_id, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
+                table_schema_ids.insert(table_id, schema_id);
+                max_catalog_id = max_catalog_id.max(table_id);
                 rows_imported += 1;
             }
             "ducklake_column" => {
@@ -1062,7 +1763,12 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     parent_column: d["parent_column"].as_u64(),
                 };
                 let key = keys::key_column(table_id, column_id, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
+                max_catalog_id = max_catalog_id.max(column_id);
+                max_column_id_by_table
+                    .entry(table_id)
+                    .and_modify(|max| *max = (*max).max(column_id))
+                    .or_insert(column_id);
                 rows_imported += 1;
             }
             "ducklake_data_file" => {
@@ -1096,14 +1802,19 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                 // Write primary key and secondary index atomically so a
                 // crash between the two puts cannot leave list_data_files()
                 // seeing a missing secondary entry.
-                let mut batch = WriteBatch::new();
-                batch.put(keys::key_data_file(table_id, data_file_id), encoded.clone());
+                put!(keys::key_data_file(table_id, data_file_id), encoded.clone());
                 let idx_begin = begin_snapshot.unwrap_or(0);
-                batch.put(
+                put!(
                     keys::key_data_file_by_snapshot(table_id, idx_begin, data_file_id),
-                    encoded,
+                    encoded
                 );
-                db.write(batch).await?;
+                max_file_id = max_file_id.max(data_file_id);
+                if let Some(start) = row.row_id_start {
+                    max_row_id_by_table
+                        .entry(table_id)
+                        .and_modify(|max| *max = (*max).max(start.saturating_add(row.record_count)))
+                        .or_insert(start.saturating_add(row.record_count));
+                }
                 rows_imported += 1;
             }
             "ducklake_delete_file" => {
@@ -1129,7 +1840,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     partial_max: d["partial_max"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_delete_file(data_file_id, delete_file_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_inlined_insert" => {
@@ -1153,7 +1864,11 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     end_snapshot: d["end_snapshot"].as_u64(),
                 };
                 let key = keys::key_inlined_insert(table_id, schema_version, row_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
+                max_row_id_by_table
+                    .entry(table_id)
+                    .and_modify(|max| *max = (*max).max(row_id.saturating_add(1)))
+                    .or_insert(row_id.saturating_add(1));
                 rows_imported += 1;
             }
             "ducklake_snapshot_changes" => {
@@ -1170,7 +1885,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     changes_made: d["changes_made"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_snapshot_changes(snapshot_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_view" => {
@@ -1189,7 +1904,8 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     column_aliases: d["column_aliases"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_view(schema_id, view_id, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
+                max_catalog_id = max_catalog_id.max(view_id);
                 rows_imported += 1;
             }
             "ducklake_macro" => {
@@ -1206,7 +1922,8 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     macro_uuid: d["macro_uuid"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_macro(schema_id, macro_id, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
+                max_catalog_id = max_catalog_id.max(macro_id);
                 rows_imported += 1;
             }
             "ducklake_macro_impl" => {
@@ -1220,7 +1937,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     impl_type: d["impl_type"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_macro_impl(macro_id, impl_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_macro_parameters" => {
@@ -1237,14 +1954,16 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     default_value_type: d["default_value_type"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_macro_parameters(macro_id, impl_id, column_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_tag" => {
                 let object_id = req_u64!(d, "object_id", tbl);
                 let begin_snapshot = req_u64!(d, "begin_snapshot", tbl);
                 // Use the stored hash to reconstruct the exact key.
-                let tag_key_hash = d["tag_key_hash"].as_u64().unwrap_or(0);
+                let tag_key_hash = d["tag_key_hash"]
+                    .as_u64()
+                    .unwrap_or_else(|| hash_tag_key(d["tag_key"].as_str().unwrap_or_default()));
                 let row = TagRow {
                     object_id,
                     tag_key: req_str!(d, "tag_key", tbl),
@@ -1253,14 +1972,16 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     end_snapshot: d["end_snapshot"].as_u64(),
                 };
                 let key = keys::key_tag(object_id, tag_key_hash, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_column_tag" => {
                 let table_id = req_u64!(d, "table_id", tbl);
                 let column_id = req_u64!(d, "column_id", tbl);
                 let begin_snapshot = req_u64!(d, "begin_snapshot", tbl);
-                let tag_key_hash = d["tag_key_hash"].as_u64().unwrap_or(0);
+                let tag_key_hash = d["tag_key_hash"]
+                    .as_u64()
+                    .unwrap_or_else(|| hash_tag_key(d["tag_key"].as_str().unwrap_or_default()));
                 let row = ColumnTagRow {
                     table_id,
                     column_id,
@@ -1270,7 +1991,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     end_snapshot: d["end_snapshot"].as_u64(),
                 };
                 let key = keys::key_column_tag(table_id, column_id, tag_key_hash, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_partition_info" => {
@@ -1284,7 +2005,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     end_snapshot: d["end_snapshot"].as_u64(),
                 };
                 let key = keys::key_partition_info(table_id, partition_id, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_sort_info" => {
@@ -1298,7 +2019,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     end_snapshot: d["end_snapshot"].as_u64(),
                 };
                 let key = keys::key_sort_info(table_id, sort_id, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_sort_expression" => {
@@ -1315,7 +2036,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     dialect: d["dialect"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_sort_expression(sort_id, sort_key_index);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_schema_version" => {
@@ -1327,7 +2048,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     schema_version: req_u64!(d, "schema_version", tbl),
                 };
                 let key = keys::key_schema_versions(table_id, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_table_stats" => {
@@ -1335,12 +2056,18 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                 let row = TableStatsRow {
                     table_id,
                     record_count: d["record_count"].as_u64().unwrap_or(0),
-                    internal_file_count: 0,
+                    internal_file_count: d["internal_file_count"].as_u64().unwrap_or(0),
                     file_size_bytes: d["file_size_bytes"].as_u64().unwrap_or(0),
                     next_row_id: d["next_row_id"].as_u64(),
                 };
                 let key = keys::key_table_stats(table_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
+                if let Some(next_row_id) = row.next_row_id {
+                    max_row_id_by_table
+                        .entry(table_id)
+                        .and_modify(|max| *max = (*max).max(next_row_id))
+                        .or_insert(next_row_id);
+                }
                 rows_imported += 1;
             }
             "ducklake_table_column_stats" => {
@@ -1356,7 +2083,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     extra_stats: d["extra_stats"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_table_column_stats(table_id, column_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_file_column_stats" => {
@@ -1377,7 +2104,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     extra_stats: d["extra_stats"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_file_column_stats(table_id, column_id, data_file_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_column_mapping" => {
@@ -1391,7 +2118,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     mapping_type: d["mapping_type"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_column_mapping(table_id, mapping_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_name_mapping" => {
@@ -1408,7 +2135,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     is_partition: d["is_partition"].as_bool(),
                 };
                 let key = keys::key_name_mapping(mapping_id, column_id, source_name_hash);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_file_partition_value" => {
@@ -1423,7 +2150,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                 };
                 let key =
                     keys::key_file_partition_value(table_id, partition_key_index, data_file_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_file_variant_stats" => {
@@ -1453,7 +2180,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     variant_path_hash,
                     data_file_id,
                 );
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_encrypted_secret" => {
@@ -1468,7 +2195,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                         .to_string(),
                 };
                 let key = keys::key_encrypted_secret(secret_id);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             "ducklake_encryption_key" => {
@@ -1484,49 +2211,212 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     encryption_key: d["encryption_key"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_encryption_key(catalog_id, begin_snapshot);
-                db.put(&key, &values::encode_value(&row)).await?;
+                put!(key, values::encode_value(&row));
+                rows_imported += 1;
+            }
+            "ducklake_metadata" => {
+                let key_name = req_str!(d, "key", tbl);
+                let scope = match d["scope"].as_str().unwrap_or("global") {
+                    "global" => rocklake_core::keys::MetadataScope::Global,
+                    "schema" => rocklake_core::keys::MetadataScope::Schema,
+                    "table" => rocklake_core::keys::MetadataScope::Table,
+                    value => {
+                        return Err(CatalogError::Import {
+                            line: line_no,
+                            table: tbl.to_string(),
+                            message: format!("unknown metadata scope '{value}'"),
+                        })
+                    }
+                };
+                let row = MetadataRow {
+                    key: key_name.clone(),
+                    value: req_str!(d, "value", tbl),
+                    scope: d["scope"].as_str().map(str::to_string),
+                    scope_id: d["scope_id"].as_u64(),
+                };
+                let key = keys::key_metadata(scope, row.scope_id.unwrap_or(0), &key_name);
+                put!(key, values::encode_value(&row));
+                rows_imported += 1;
+            }
+            "ducklake_files_scheduled_for_deletion" => {
+                let data_file_id = req_u64!(d, "data_file_id", tbl);
+                let schedule_start = req_u64!(d, "schedule_start", tbl);
+                let row = FilesScheduledForDeletionRow {
+                    data_file_id,
+                    schedule_start,
+                    path: req_str!(d, "path", tbl),
+                    file_type: d["file_type"].as_str().map(str::to_string),
+                    path_is_relative: d["path_is_relative"].as_bool(),
+                };
+                put!(
+                    keys::key_files_scheduled_for_deletion(schedule_start, data_file_id),
+                    values::encode_value(&row)
+                );
+                max_file_id = max_file_id.max(data_file_id);
+                rows_imported += 1;
+            }
+            "ducklake_inlined_data_tables" => {
+                let table_id = req_u64!(d, "table_id", tbl);
+                let schema_version = req_u64!(d, "schema_version", tbl);
+                let row = InlinedDataTablesRow {
+                    table_id,
+                    schema_version,
+                    sql: req_str!(d, "sql", tbl),
+                };
+                put!(
+                    keys::key_inlined_data_tables(table_id, schema_version),
+                    values::encode_value(&row)
+                );
+                rows_imported += 1;
+            }
+            "ducklake_inlined_delete" => {
+                let table_id = req_u64!(d, "table_id", tbl);
+                let data_file_id = req_u64!(d, "data_file_id", tbl);
+                let row_id = req_u64!(d, "row_id", tbl);
+                let row = InlinedDeleteRow {
+                    table_id,
+                    data_file_id,
+                    row_id,
+                    begin_snapshot: req_u64!(d, "begin_snapshot", tbl),
+                    end_snapshot: d["end_snapshot"].as_u64(),
+                };
+                put!(
+                    keys::key_inlined_delete(table_id, data_file_id, row_id),
+                    values::encode_value(&row)
+                );
+                max_row_id_by_table
+                    .entry(table_id)
+                    .and_modify(|max| *max = (*max).max(row_id.saturating_add(1)))
+                    .or_insert(row_id.saturating_add(1));
+                rows_imported += 1;
+            }
+            "ducklake_partition_column" => {
+                let partition_id = req_u64!(d, "partition_id", tbl);
+                let partition_key_index = req_u64!(d, "partition_key_index", tbl);
+                let row = PartitionColumnRow {
+                    partition_id,
+                    partition_key_index,
+                    column_id: req_u64!(d, "column_id", tbl),
+                    transform: d["transform"].as_str().map(str::to_string),
+                    table_id: d["table_id"].as_u64(),
+                };
+                put!(
+                    keys::key_partition_column(partition_id, partition_key_index),
+                    values::encode_value(&row)
+                );
+                rows_imported += 1;
+            }
+            "rocklake_snapshot_lease" => {
+                let row = SnapshotLeaseRow {
+                    consumer_id: req_str!(d, "consumer_id", tbl),
+                    min_snapshot_id: req_u64!(d, "min_snapshot_id", tbl),
+                    expires_at_unix_ms: req_u64!(d, "expires_at_unix_ms", tbl),
+                };
+                let key = keys::key_snapshot_lease(&row.consumer_id)?;
+                put!(key, values::encode_value(&row));
+                rows_imported += 1;
+            }
+            "rocklake_extension_schema" => {
+                let row = ExtensionSchemaRow {
+                    extension_id: req_u64!(d, "extension_id", tbl) as u32,
+                    table_name: req_str!(d, "table_name", tbl),
+                    row_id: req_u64!(d, "row_id", tbl),
+                    data_json: req_str!(d, "data_json", tbl),
+                };
+                let key = keys::key_extension_schema(
+                    row.extension_id as u8,
+                    &row.table_name,
+                    row.row_id,
+                )?;
+                put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
             _ => {
-                tracing::warn!("Unknown table in import at line {line_no}: {tbl}");
+                return Err(CatalogError::Import {
+                    line: line_no,
+                    table: tbl.to_string(),
+                    message: "catalog table is not supported by this importer".to_string(),
+                });
             }
         }
     }
 
-    // Ensure catalog format version is persisted
-    let format_key = keys::key_system(SYSTEM_CATALOG_FORMAT_VERSION);
-    if db.get(&format_key).await?.is_none() {
-        db.put(
-            &format_key,
-            &values::encode_format_version(CATALOG_FORMAT_VERSION),
-        )
-        .await?;
+    if let Some(snapshot_id) = manifest_snapshot_id {
+        max_snapshot_id = max_snapshot_id.max(snapshot_id);
+    }
+    if let Some(next) = manifest_counter_hints.get("next_catalog_id") {
+        max_catalog_id = max_catalog_id.max(next.saturating_sub(1));
+    }
+    if let Some(next) = manifest_counter_hints.get("next_file_id") {
+        max_file_id = max_file_id.max(next.saturating_sub(1));
     }
 
-    // Persist counter values
-    let snap_key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
-    if db.get(&snap_key).await?.is_none() || max_snapshot_id > 0 {
-        let val = if max_snapshot_id > 0 {
-            max_snapshot_id + 1
-        } else {
-            1
-        };
-        db.put(&snap_key, &values::encode_counter(val)).await?;
+    // Publish format, rebuilt indexes, and every counter in one atomic batch.
+    let mut counter_floor = BTreeMap::new();
+    counter_floor.insert(
+        keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID),
+        next_counter(max_snapshot_id)?,
+    );
+    counter_floor.insert(
+        keys::key_counter(COUNTER_NEXT_CATALOG_ID),
+        next_counter(max_catalog_id)?,
+    );
+    counter_floor.insert(
+        keys::key_counter(COUNTER_NEXT_FILE_ID),
+        next_counter(max_file_id)?,
+    );
+    batch.put(
+        keys::key_system(SYSTEM_CATALOG_FORMAT_VERSION),
+        values::encode_format_version(CATALOG_FORMAT_VERSION),
+    );
+    for (table_id, schema_id) in table_schema_ids {
+        batch.put(
+            keys::key_table_by_id(table_id),
+            values::encode_counter(schema_id),
+        );
     }
-    let cat_key = keys::key_counter(COUNTER_NEXT_CATALOG_ID);
-    if db.get(&cat_key).await?.is_none() || max_catalog_id > 0 {
-        let val = if max_catalog_id > 0 {
-            max_catalog_id + 1
-        } else {
-            1
-        };
-        db.put(&cat_key, &values::encode_counter(val)).await?;
+    batch.put(
+        keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID),
+        values::encode_counter(next_counter(max_snapshot_id)?),
+    );
+    batch.put(
+        keys::key_counter(COUNTER_NEXT_CATALOG_ID),
+        values::encode_counter(next_counter(max_catalog_id)?),
+    );
+    batch.put(
+        keys::key_counter(COUNTER_NEXT_FILE_ID),
+        values::encode_counter(next_counter(max_file_id)?),
+    );
+    for (table_id, max_column_id) in max_column_id_by_table {
+        let next = next_counter(max_column_id)?;
+        counter_floor.insert(keys::key_counter_column_id(table_id), next);
+        batch.put(
+            keys::key_counter_column_id(table_id),
+            values::encode_counter(next),
+        );
     }
-    let file_key = keys::key_counter(COUNTER_NEXT_FILE_ID);
-    if db.get(&file_key).await?.is_none() || max_file_id > 0 {
-        let val = if max_file_id > 0 { max_file_id + 1 } else { 1 };
-        db.put(&file_key, &values::encode_counter(val)).await?;
+    for (table_id, next_row_id) in max_row_id_by_table {
+        counter_floor.insert(keys::key_counter_rowid(table_id), next_row_id);
+        batch.put(
+            keys::key_counter_rowid(table_id),
+            values::encode_counter(next_row_id),
+        );
     }
+    for (name, value) in manifest_counter_hints {
+        if let Some(encoded_key) = name.strip_prefix("key:") {
+            let key = decode_hex_key(encoded_key, line_no)?;
+            if key.first() != Some(&TAG_COUNTERS) || (key.len() != 2 && key.len() != 10) {
+                return Err(CatalogError::Import {
+                    line: line_no,
+                    table: EXPORT_MANIFEST_TABLE.to_string(),
+                    message: "counter hint key is not a counter key".to_string(),
+                });
+            }
+            let value = value.max(counter_floor.get(&key).copied().unwrap_or(0));
+            batch.put(key, values::encode_counter(value));
+        }
+    }
+    db.write(batch).await?;
 
     Ok(ImportResult {
         rows_imported,
@@ -1534,18 +2424,448 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
     })
 }
 
+fn is_import_table(table: &str) -> bool {
+    matches!(
+        table,
+        "ducklake_metadata"
+            | "ducklake_snapshot"
+            | "ducklake_snapshot_changes"
+            | "ducklake_schema"
+            | "ducklake_table"
+            | "ducklake_column"
+            | "ducklake_view"
+            | "ducklake_macro"
+            | "ducklake_macro_impl"
+            | "ducklake_macro_parameters"
+            | "ducklake_data_file"
+            | "ducklake_delete_file"
+            | "ducklake_files_scheduled_for_deletion"
+            | "ducklake_inlined_data_tables"
+            | "ducklake_column_mapping"
+            | "ducklake_name_mapping"
+            | "ducklake_table_stats"
+            | "ducklake_table_column_stats"
+            | "ducklake_file_column_stats"
+            | "ducklake_file_variant_stats"
+            | "ducklake_partition_info"
+            | "ducklake_partition_column"
+            | "ducklake_file_partition_value"
+            | "ducklake_sort_info"
+            | "ducklake_sort_expression"
+            | "ducklake_tag"
+            | "ducklake_column_tag"
+            | "ducklake_schema_version"
+            | "ducklake_inlined_insert"
+            | "ducklake_inlined_delete"
+            | "rocklake_snapshot_lease"
+            | "rocklake_extension_schema"
+            | "ducklake_encrypted_secret"
+            | "ducklake_encryption_key"
+    )
+}
+
+pub(crate) fn validate_import_data(
+    table: &str,
+    data: &serde_json::Value,
+    line: usize,
+) -> CatalogResult<()> {
+    let object = data.as_object().ok_or_else(|| CatalogError::Import {
+        line,
+        table: table.to_string(),
+        message: "row data must be a JSON object".to_string(),
+    })?;
+    let required: &[&str] = match table {
+        "ducklake_metadata" => &["key", "value"],
+        "ducklake_snapshot" => &["snapshot_id", "schema_version", "snapshot_time"],
+        "ducklake_snapshot_changes" => &["snapshot_id", "change_type"],
+        "ducklake_schema" => &["schema_id", "schema_name", "begin_snapshot"],
+        "ducklake_table" => &["table_id", "schema_id", "table_name", "begin_snapshot"],
+        "ducklake_column" => &[
+            "column_id",
+            "table_id",
+            "column_name",
+            "data_type",
+            "column_index",
+            "begin_snapshot",
+            "is_nullable",
+        ],
+        "ducklake_view" => &["view_id", "schema_id", "view_name", "sql", "begin_snapshot"],
+        "ducklake_macro" => &[
+            "macro_id",
+            "schema_id",
+            "macro_name",
+            "macro_type",
+            "begin_snapshot",
+        ],
+        "ducklake_macro_impl" => &["impl_id", "macro_id", "sql"],
+        "ducklake_macro_parameters" => &[
+            "macro_id",
+            "impl_id",
+            "column_id",
+            "parameter_name",
+            "parameter_type",
+        ],
+        "ducklake_data_file" => &[
+            "data_file_id",
+            "table_id",
+            "path",
+            "file_format",
+            "record_count",
+            "file_size_bytes",
+        ],
+        "ducklake_delete_file" => &[
+            "delete_file_id",
+            "data_file_id",
+            "path",
+            "delete_count",
+            "file_size_bytes",
+            "snapshot_id",
+        ],
+        "ducklake_files_scheduled_for_deletion" => &["data_file_id", "schedule_start", "path"],
+        "ducklake_inlined_data_tables" => &["table_id", "schema_version", "sql"],
+        "ducklake_column_mapping" => &["mapping_id", "table_id"],
+        "ducklake_name_mapping" => &["mapping_id", "column_id", "name"],
+        "ducklake_table_stats" => &["table_id", "record_count", "file_size_bytes"],
+        "ducklake_table_column_stats" => &["table_id", "column_id", "contains_null"],
+        "ducklake_file_column_stats" => &[
+            "table_id",
+            "column_id",
+            "data_file_id",
+            "contains_null",
+            "contains_nan",
+        ],
+        "ducklake_file_variant_stats" => &["table_id", "column_id", "data_file_id", "variant_key"],
+        "ducklake_partition_info" => &["partition_id", "table_id", "begin_snapshot"],
+        "ducklake_partition_column" => &["partition_id", "partition_key_index", "column_id"],
+        "ducklake_file_partition_value" => &["table_id", "partition_key_index", "data_file_id"],
+        "ducklake_sort_info" => &["sort_id", "table_id", "begin_snapshot"],
+        "ducklake_sort_expression" => &["sort_id", "sort_key_index", "column_id"],
+        "ducklake_tag" => &["object_id", "tag_key", "tag_value", "begin_snapshot"],
+        "ducklake_column_tag" => &[
+            "table_id",
+            "column_id",
+            "tag_key",
+            "tag_value",
+            "begin_snapshot",
+        ],
+        "ducklake_schema_version" => &["table_id", "begin_snapshot", "schema_version"],
+        "ducklake_inlined_insert" => &[
+            "table_id",
+            "schema_version",
+            "row_id",
+            "payload",
+            "begin_snapshot",
+        ],
+        "ducklake_inlined_delete" => &["table_id", "data_file_id", "row_id", "begin_snapshot"],
+        "rocklake_snapshot_lease" => &["consumer_id", "min_snapshot_id", "expires_at_unix_ms"],
+        "rocklake_extension_schema" => &["extension_id", "table_name", "row_id", "data_json"],
+        "ducklake_encrypted_secret" => &["secret_id", "secret_name", "encrypted_secret"],
+        "ducklake_encryption_key" => &["catalog_id", "begin_snapshot", "encryption_type"],
+        _ => &[],
+    };
+    for field in required {
+        if object.get(*field).is_none_or(serde_json::Value::is_null) {
+            return Err(CatalogError::Import {
+                line,
+                table: table.to_string(),
+                message: format!("missing required field '{field}'"),
+            });
+        }
+    }
+    let bool_fields: &[&str] = match table {
+        "ducklake_column" => &["is_nullable"],
+        "ducklake_table_column_stats" => &["contains_null"],
+        "ducklake_file_column_stats" => &["contains_null", "contains_nan"],
+        _ => &[],
+    };
+    for field in bool_fields {
+        if !object.get(*field).is_none_or(serde_json::Value::is_null)
+            && !object[*field].is_boolean()
+        {
+            return Err(CatalogError::Import {
+                line,
+                table: table.to_string(),
+                message: format!("field '{field}' must be a boolean"),
+            });
+        }
+    }
+
+    let unsigned_fields: &[&str] = match table {
+        "ducklake_snapshot" => &[
+            "snapshot_id",
+            "schema_version",
+            "next_catalog_id",
+            "next_file_id",
+        ],
+        "ducklake_snapshot_changes" => &["snapshot_id", "schema_id", "table_id"],
+        "ducklake_schema" => &["schema_id", "begin_snapshot", "end_snapshot"],
+        "ducklake_table" => &["table_id", "schema_id", "begin_snapshot", "end_snapshot"],
+        "ducklake_column" => &[
+            "column_id",
+            "table_id",
+            "column_index",
+            "begin_snapshot",
+            "end_snapshot",
+            "parent_column",
+        ],
+        "ducklake_view" => &["view_id", "schema_id", "begin_snapshot", "end_snapshot"],
+        "ducklake_macro" => &["macro_id", "schema_id", "begin_snapshot", "end_snapshot"],
+        "ducklake_macro_impl" => &["impl_id", "macro_id"],
+        "ducklake_macro_parameters" => &["macro_id", "impl_id", "column_id"],
+        "ducklake_data_file" => &[
+            "data_file_id",
+            "table_id",
+            "record_count",
+            "file_size_bytes",
+            "begin_snapshot",
+            "end_snapshot",
+            "file_order",
+            "row_id_start",
+            "partition_id",
+            "mapping_id",
+        ],
+        "ducklake_delete_file" => &[
+            "delete_file_id",
+            "data_file_id",
+            "delete_count",
+            "file_size_bytes",
+            "snapshot_id",
+            "table_id",
+            "begin_snapshot",
+            "end_snapshot",
+        ],
+        "ducklake_files_scheduled_for_deletion" => &["data_file_id", "schedule_start"],
+        "ducklake_inlined_data_tables" => &["table_id", "schema_version"],
+        "ducklake_column_mapping" => &["mapping_id", "table_id", "column_id"],
+        "ducklake_name_mapping" => &[
+            "mapping_id",
+            "column_id",
+            "source_name_hash",
+            "target_field_id",
+            "parent_column",
+        ],
+        "ducklake_table_stats" => &[
+            "table_id",
+            "record_count",
+            "internal_file_count",
+            "file_size_bytes",
+            "next_row_id",
+        ],
+        "ducklake_table_column_stats" => &["table_id", "column_id"],
+        "ducklake_file_column_stats" => &[
+            "table_id",
+            "column_id",
+            "data_file_id",
+            "column_size_bytes",
+            "value_count",
+            "null_count",
+        ],
+        "ducklake_file_variant_stats" => &[
+            "table_id",
+            "column_id",
+            "data_file_id",
+            "variant_path_hash",
+            "column_size_bytes",
+            "value_count",
+            "null_count",
+        ],
+        "ducklake_partition_info" => {
+            &["partition_id", "table_id", "begin_snapshot", "end_snapshot"]
+        }
+        "ducklake_partition_column" => &[
+            "partition_id",
+            "partition_key_index",
+            "column_id",
+            "table_id",
+        ],
+        "ducklake_file_partition_value" => &["table_id", "partition_key_index", "data_file_id"],
+        "ducklake_sort_info" => &["sort_id", "table_id", "begin_snapshot", "end_snapshot"],
+        "ducklake_sort_expression" => &["sort_id", "sort_key_index", "column_id", "table_id"],
+        "ducklake_tag" => &[
+            "object_id",
+            "begin_snapshot",
+            "end_snapshot",
+            "tag_key_hash",
+        ],
+        "ducklake_column_tag" => &[
+            "table_id",
+            "column_id",
+            "begin_snapshot",
+            "end_snapshot",
+            "tag_key_hash",
+        ],
+        "ducklake_schema_version" => &["table_id", "begin_snapshot", "schema_version"],
+        "ducklake_inlined_insert" => &[
+            "table_id",
+            "schema_version",
+            "row_id",
+            "begin_snapshot",
+            "end_snapshot",
+        ],
+        "ducklake_inlined_delete" => &[
+            "table_id",
+            "data_file_id",
+            "row_id",
+            "begin_snapshot",
+            "end_snapshot",
+        ],
+        "rocklake_snapshot_lease" => &["min_snapshot_id", "expires_at_unix_ms"],
+        "rocklake_extension_schema" => &["extension_id", "row_id"],
+        "ducklake_encrypted_secret" => &["secret_id"],
+        "ducklake_encryption_key" => &["catalog_id", "begin_snapshot", "end_snapshot"],
+        _ => &[],
+    };
+    for field in unsigned_fields {
+        if let Some(value) = object.get(*field) {
+            if !value.is_null() && !value.is_u64() {
+                return Err(CatalogError::Import {
+                    line,
+                    table: table.to_string(),
+                    message: format!("field '{field}' must be an unsigned integer"),
+                });
+            }
+        }
+    }
+    for field in ["footer_size"] {
+        if let Some(value) = object.get(field) {
+            if !value.is_null() && !value.is_i64() {
+                return Err(CatalogError::Import {
+                    line,
+                    table: table.to_string(),
+                    message: format!("field '{field}' must be an integer"),
+                });
+            }
+        }
+    }
+
+    let string_fields: &[&str] = match table {
+        "ducklake_metadata" => &["key", "value", "scope"],
+        "ducklake_snapshot" => &["snapshot_time", "author", "message"],
+        "ducklake_snapshot_changes" => &[
+            "change_type",
+            "change_info",
+            "author",
+            "commit_message",
+            "commit_extra_info",
+            "changes_made",
+        ],
+        "ducklake_schema" => &["schema_name", "schema_uuid", "path"],
+        "ducklake_table" => &["table_name", "path", "table_uuid"],
+        "ducklake_column" => &[
+            "column_name",
+            "data_type",
+            "default_value",
+            "initial_default",
+            "default_value_type",
+            "default_value_dialect",
+        ],
+        "ducklake_view" => &["view_name", "sql", "view_uuid", "dialect", "column_aliases"],
+        "ducklake_macro" => &["macro_name", "macro_type", "macro_uuid"],
+        "ducklake_macro_impl" => &["sql", "dialect", "impl_type"],
+        "ducklake_macro_parameters" => &[
+            "parameter_name",
+            "parameter_type",
+            "default_value",
+            "default_value_type",
+        ],
+        "ducklake_data_file" => &["path", "file_format", "encryption_key", "partial_max"],
+        "ducklake_delete_file" => &["path", "format", "partial_max"],
+        "ducklake_files_scheduled_for_deletion" => &["path", "file_type"],
+        "ducklake_inlined_data_tables" => &["sql"],
+        "ducklake_column_mapping" => &["file_column_name", "mapping_type"],
+        "ducklake_name_mapping" => &["name"],
+        "ducklake_table_column_stats" => &["min_value", "max_value", "extra_stats"],
+        "ducklake_file_column_stats" => &["min_value", "max_value", "extra_stats"],
+        "ducklake_file_variant_stats" => &[
+            "variant_key",
+            "min_value",
+            "max_value",
+            "shredded_type",
+            "extra_stats",
+        ],
+        "ducklake_partition_column" => &["transform"],
+        "ducklake_file_partition_value" => &["partition_value"],
+        "ducklake_sort_expression" => &["sort_direction", "null_order", "expression", "dialect"],
+        "ducklake_tag" | "ducklake_column_tag" => &["tag_key", "tag_value"],
+        "rocklake_snapshot_lease" => &["consumer_id"],
+        "rocklake_extension_schema" => &["table_name", "data_json"],
+        "ducklake_encrypted_secret" => &["secret_name", "encrypted_secret"],
+        "ducklake_encryption_key" => &["encryption_type", "key_id", "encryption_key"],
+        _ => &[],
+    };
+    for field in string_fields {
+        if let Some(value) = object.get(*field) {
+            if !value.is_null() && !value.is_string() {
+                return Err(CatalogError::Import {
+                    line,
+                    table: table.to_string(),
+                    message: format!("field '{field}' must be a string"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn next_counter(max: u64) -> CatalogResult<u64> {
+    max.checked_add(1).ok_or_else(|| CatalogError::Import {
+        line: 0,
+        table: "counter".to_string(),
+        message: "counter overflow while rebuilding imported catalog".to_string(),
+    })
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn decode_hex_key(encoded: &str, line: usize) -> CatalogResult<Vec<u8>> {
+    if encoded.is_empty() || encoded.len() % 2 != 0 {
+        return Err(CatalogError::Import {
+            line,
+            table: EXPORT_MANIFEST_TABLE.to_string(),
+            message: "counter hint contains an invalid key".to_string(),
+        });
+    }
+    (0..encoded.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&encoded[index..index + 2], 16).map_err(|_| CatalogError::Import {
+                line,
+                table: EXPORT_MANIFEST_TABLE.to_string(),
+                message: "counter hint contains non-hex key data".to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Convert an NDJSON export to PostgreSQL INSERT statements.
 pub fn pg_migrate<R: BufRead, W: Write>(reader: R, writer: &mut W) -> CatalogResult<u64> {
     let mut count = 0u64;
+    let mut line_no = 0usize;
 
     for line in reader.lines() {
+        line_no += 1;
         let line = line.map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         if line.trim().is_empty() {
             continue;
         }
 
-        let exported: ExportedRow =
+        let raw: serde_json::Value =
             serde_json::from_str(&line).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        if raw.get("kind").and_then(serde_json::Value::as_str) == Some(EXPORT_MANIFEST_TABLE) {
+            continue;
+        }
+        let exported: ExportedRow =
+            serde_json::from_value(raw).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        if !is_import_table(&exported.table) {
+            return Err(CatalogError::Import {
+                line: line_no,
+                table: exported.table,
+                message: "unknown catalog table".to_string(),
+            });
+        }
+        validate_import_data(&exported.table, &exported.data, line_no)?;
 
         let sql = row_to_pg_insert(&exported);
         writeln!(writer, "{sql}").map_err(|e| CatalogError::SlateDb(e.to_string()))?;
@@ -1691,59 +3011,45 @@ fn sql_escape(s: &str) -> String {
 }
 
 fn row_to_pg_insert(exported: &ExportedRow) -> String {
-    match exported.table.as_str() {
-        "ducklake_snapshot" => {
-            format!(
-                "INSERT INTO ducklake_snapshot (snapshot_id, schema_version, snapshot_time) VALUES ({}, {}, '{}');",
-                exported.data["snapshot_id"],
-                exported.data["schema_version"],
-                sql_escape(exported.data["snapshot_time"].as_str().unwrap_or(""))
-            )
-        }
-        "ducklake_schema" => {
-            format!(
-                "INSERT INTO ducklake_schema (schema_id, schema_name, begin_snapshot, end_snapshot) VALUES ({}, '{}', {}, {});",
-                exported.data["schema_id"],
-                sql_escape(exported.data["schema_name"].as_str().unwrap_or("")),
-                exported.data["begin_snapshot"],
-                exported.data["end_snapshot"].as_u64().map_or("NULL".to_string(), |v| v.to_string())
-            )
-        }
-        "ducklake_table" => {
-            format!(
-                "INSERT INTO ducklake_table (table_id, schema_id, table_name, begin_snapshot, end_snapshot) VALUES ({}, {}, '{}', {}, {});",
-                exported.data["table_id"],
-                exported.data["schema_id"],
-                sql_escape(exported.data["table_name"].as_str().unwrap_or("")),
-                exported.data["begin_snapshot"],
-                exported.data["end_snapshot"].as_u64().map_or("NULL".to_string(), |v| v.to_string())
-            )
-        }
-        "ducklake_column" => {
-            format!(
-                "INSERT INTO ducklake_column (column_id, table_id, column_name, data_type, column_index, begin_snapshot, end_snapshot, is_nullable) VALUES ({}, {}, '{}', '{}', {}, {}, {}, {});",
-                exported.data["column_id"],
-                exported.data["table_id"],
-                sql_escape(exported.data["column_name"].as_str().unwrap_or("")),
-                sql_escape(exported.data["data_type"].as_str().unwrap_or("")),
-                exported.data["column_index"],
-                exported.data["begin_snapshot"],
-                exported.data["end_snapshot"].as_u64().map_or("NULL".to_string(), |v| v.to_string()),
-                exported.data["is_nullable"].as_bool().unwrap_or(true)
-            )
-        }
-        "ducklake_data_file" => {
-            format!(
-                "INSERT INTO ducklake_data_file (data_file_id, table_id, path, file_format, row_count, file_size_bytes, snapshot_id) VALUES ({}, {}, '{}', '{}', {}, {}, {});",
-                exported.data["data_file_id"],
-                exported.data["table_id"],
-                sql_escape(exported.data["path"].as_str().unwrap_or("")),
-                sql_escape(exported.data["file_format"].as_str().unwrap_or("")),
-                exported.data["row_count"],
-                exported.data["file_size_bytes"],
-                exported.data["snapshot_id"]
-            )
-        }
-        _ => format!("-- Unsupported table: {}", sql_escape(&exported.table)),
+    if !is_import_table(&exported.table) {
+        return format!("-- Unsupported table: {}", sql_escape(&exported.table));
     }
+    let Some(object) = exported.data.as_object() else {
+        return format!("-- Invalid row for table: {}", sql_escape(&exported.table));
+    };
+    let mut fields: Vec<&String> = object.keys().collect();
+    fields.sort();
+    let columns = fields
+        .iter()
+        .map(|field| format!("\"{}\"", field.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values = fields
+        .iter()
+        .map(|field| json_to_sql(&object[*field]))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO \"{}\" ({columns}) VALUES ({values});",
+        exported.table.replace('"', "\"\"")
+    )
+}
+
+fn json_to_sql(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_string(),
+        serde_json::Value::Bool(value) => value.to_string().to_uppercase(),
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::String(value) => format!("'{}'", sql_escape(value)),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => format!(
+            "'{}'",
+            sql_escape(&serde_json::to_string(value).unwrap_or_default())
+        ),
+    }
+}
+
+fn hash_tag_key(key: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
 }

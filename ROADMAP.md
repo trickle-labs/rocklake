@@ -114,7 +114,7 @@ binding on every roadmap release below.
 | **v0.47.12 — Atomic Write Protocol & Conflict Safety** | Retry-safe snapshot commits; overlapping-writer counter conflict detection; stage every snapshot-dependent metadata mutation; transactionally correct PG-wire writes and strict parameter validation | Complete |
 | **v0.47.13 — Snapshot Read Correctness & Metadata Isolation** | Committed-snapshot bounds; conservative stats pruning; delete-file and CDC table isolation; explicit file retirement; snapshot-aware stats and complete DROP/ALTER cascades | Complete |
 | **v0.47.14 — Recovery, Retention & Cleanup Safety** | Complete atomic checkpoint restore; unified GC/checkpoint pins and leases; retention-safe excision; snapshot-correct scheduled deletion; canonical, fail-closed orphan cleanup | Complete |
-| **v0.47.15 — Catalog Fidelity, Migration & Integrity Verification** | Snapshot-consistent, lossless export/import; strict all-table DuckLake migration; counter/index reconstruction; full-catalog invariant verification and safe repair plans | Planning |
+| **v0.47.15 — Catalog Fidelity, Migration & Integrity Verification** | Snapshot-consistent, lossless export/import; strict all-table DuckLake migration; counter/index reconstruction; full-catalog invariant verification and safe repair plans | Complete |
 | **v0.47.16 — Read-Only, Path & Engine Scan Correctness** | Truly write-free and fail-closed reader opens; immutable reader-mode enforcement; preserved cloud URI prefixes; canonical path resolution; correct DataFusion handling of deletes, inlined rows, and unsupported formats | Planning |
 | **v0.47.17 — Production Failure Certification Gate** | Real SlateDB crash-boundary tests; overlapping writer and rollback tests; value-level DuckLake conformance; executing GCS/Azure emulator suites; zero silent wrong-result release gate | Planning |
 | **v0.48.0 — Paginated Scans, Streaming & Observability Depth** | RFC-03: `list_data_files_paged()` with continuation token; `stream_data_files()` async Stream; PG-wire incremental `DataRow` streaming; proper histogram metrics via `prometheus` crate; per-query trace correlation and `trace_id` propagation; slow-query log; memory pressure and RSS metrics; SF100 catalog benchmark suite | Planning |
@@ -5356,23 +5356,23 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Lossless Export and Import
 
-- [ ] Export from one stable storage read view so concurrent commits cannot mix generations across table scans.
-- [ ] Define a versioned manifest that enumerates every persisted catalog category and every field, including snapshot counter hints, UUID/path fields, nested column metadata, full file metadata, stats, mappings, scheduled deletions, and inlined deletes.
-- [ ] Validate the complete import before publishing writes; import atomically into an empty target or temporary namespace and leave no partial catalog on error.
-- [ ] Rebuild all counters and secondary indexes from imported maxima, including shared ID domains and table-by-ID/data-file indexes, before permitting the first post-import writer.
+- [x] Export from one stable storage read view so concurrent commits cannot mix generations across table scans.
+- [x] Define a versioned manifest that enumerates every persisted catalog category and every field, including snapshot counter hints, UUID/path fields, nested column metadata, full file metadata, stats, mappings, scheduled deletions, and inlined deletes.
+- [x] Validate the complete import before publishing writes; import atomically into an empty target or temporary namespace and leave no partial catalog on error.
+- [x] Rebuild all counters and secondary indexes from imported maxima, including shared ID domains and table-by-ID/data-file indexes, before permitting the first post-import writer.
 
 ### Strict DuckLake Migration
 
-- [ ] Migrate all supported DuckLake tables and fields from PostgreSQL and SQLite instead of a subset; unknown tables, malformed rows, and type conversion failures must be reported, not silently skipped or defaulted.
-- [ ] Commit the migrated catalog as one validated logical state, with source snapshot identity and a deterministic reconciliation report.
-- [ ] Verify row counts, primary/foreign keys, paths, field values, and snapshot-visible results against the source before cutover.
+- [x] Migrate all supported DuckLake tables and fields from PostgreSQL and SQLite instead of a subset; unknown tables, malformed rows, and type conversion failures must be reported, not silently skipped or defaulted.
+- [x] Commit the migrated catalog as one validated logical state, with source snapshot identity and a deterministic reconciliation report.
+- [x] Verify row counts, primary/foreign keys, paths, field values, and snapshot-visible results against the source before cutover.
 
 ### Full-Catalog Verification and Repair
 
-- [ ] Extend `verify_catalog()` across every tag and decoder, checking MVCC intervals, committed snapshot references, foreign-key ownership, duplicate live names, and overlapping versions.
-- [ ] Verify counters exceed every allocated ID, snapshot rows agree with counters, and all primary/secondary index copies decode to identical rows.
-- [ ] Verify file/delete/stats ownership, mapping/tag/partition/sort references, pin/lease validity, and canonical object paths; optionally HEAD referenced objects with structured unavailable-versus-corrupt results.
-- [ ] Make repair plans complete, deterministic, dry-run by default, and atomic on apply; never lower counters or discard ambiguous facts automatically.
+- [x] Extend `verify_catalog()` across every tag and decoder, checking MVCC intervals, committed snapshot references, foreign-key ownership, duplicate live names, and overlapping versions.
+- [x] Verify counters exceed every allocated ID, snapshot rows agree with counters, and all primary/secondary index copies decode to identical rows.
+- [x] Verify file/delete/stats ownership, mapping/tag/partition/sort references, pin/lease validity, and canonical object paths; optionally HEAD referenced objects with structured unavailable-versus-corrupt results.
+- [x] Make repair plans complete, deterministic, dry-run by default, and atomic on apply; never lower counters or discard ambiguous facts automatically.
 
 ### Release Gates
 
@@ -5383,10 +5383,10 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Deliverables
 
-- [ ] Snapshot-consistent versioned catalog export format
-- [ ] Atomic, counter-safe import and complete external migration
-- [ ] Full-catalog invariant verifier
-- [ ] Conservative atomic repair workflow
+- [x] Snapshot-consistent versioned catalog export format
+- [x] Atomic, counter-safe import and complete external migration
+- [x] Full-catalog invariant verifier
+- [x] Conservative atomic repair workflow
 
 ---
 

@@ -1744,6 +1744,7 @@ fn resolve_catalog_with_opts(
 ///
 /// The source can be:
 ///   - A SQLite DuckLake catalog:  `--source sqlite:/path/to/catalog.db`
+///   - A PostgreSQL DuckLake catalog: `--source postgres://...`
 ///   - An NDJSON dump (legacy):    `--source /path/to/dump.ndjson`
 ///
 /// Use `--accept-version V1_1_DEV_1` to allow migration from a DuckLake v1.1
@@ -1756,8 +1757,9 @@ fn resolve_catalog_with_opts(
 ///   rocklake migrate-from-ducklake --source sqlite:./duck.db --catalog ./my-catalog
 ///   rocklake migrate-from-ducklake --source dump.ndjson --catalog ./my-catalog
 async fn cmd_migrate_from_ducklake(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let source = extract_string_arg(args, "--source")
-        .ok_or("--source <file|sqlite:path> is required for migrate-from-ducklake")?;
+    let source = extract_string_arg(args, "--source").ok_or(
+        "--source <file|sqlite:path|postgres://...> is required for migrate-from-ducklake",
+    )?;
     let catalog_url = extract_string_arg(args, "--catalog")
         .ok_or("--catalog <path> is required for migrate-from-ducklake")?;
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -1799,6 +1801,34 @@ async fn cmd_migrate_from_ducklake(args: &[String]) -> Result<(), Box<dyn std::e
             "Migration {}:",
             if dry_run { "dry-run" } else { "complete" }
         );
+        println!(
+            "  Source catalog version: {}",
+            report.source_catalog_version
+        );
+        println!("  Source snapshot:       {}", report.source_snapshot_id);
+        println!("  Data files:      {}", report.data_file_count);
+        println!("  Total migrated:  {}", report.total_migrated());
+        println!("  Total skipped:   {}", report.total_skipped());
+        if !dry_run {
+            println!("  Catalog written to: {catalog_url}");
+        }
+    } else if source.starts_with("postgres://") || source.starts_with("postgresql://") {
+        let mut src =
+            rocklake_catalog::migrate_from_ducklake::PostgresDuckLakeSource::connect(&source, None)
+                .await?;
+        let report = rocklake_catalog::migrate_from_ducklake::migrate_from_source(
+            &mut src,
+            &db,
+            &accept_refs,
+            dry_run,
+        )
+        .await?;
+
+        println!(
+            "Migration {}:",
+            if dry_run { "dry-run" } else { "complete" }
+        );
+        println!("  Source snapshot:       {}", report.source_snapshot_id);
         println!(
             "  Source catalog version: {}",
             report.source_catalog_version

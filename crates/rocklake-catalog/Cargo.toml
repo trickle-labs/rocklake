@@ -30,6 +30,7 @@ aes-gcm = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
 rusqlite = { workspace = true }
+tokio-postgres = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

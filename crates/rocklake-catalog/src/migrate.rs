@@ -116,15 +116,8 @@ pub async fn migrate_apply(
         backup_path
     );
 
-    // Step 2: Reimport — in a real migration, the catalog would be reinitialized
-    // at the new format version. For this implementation, we mark the version
-    // as updated and reimport the data.
-    let backup_read = std::fs::File::open(&backup_path)
-        .map_err(|e| CatalogError::Internal(format!("Cannot read backup: {e}")))?;
-    let reader = std::io::BufReader::new(backup_read);
-    let import_result = export::import_catalog(db, reader).await?;
-
-    // Step 3: Update the format version key
+    // Step 2: This format bump does not change row encoding, so keep the
+    // existing catalog in place and publish only the new format marker.
     use rocklake_core::keys;
     use rocklake_core::tags::SYSTEM_CATALOG_FORMAT_VERSION;
     use rocklake_core::values;
@@ -134,13 +127,13 @@ pub async fn migrate_apply(
 
     tracing::info!(
         "Migration complete: {} rows migrated, format version {} → {}",
-        import_result.rows_imported,
+        export_result.rows_exported,
         current_version,
         target_version
     );
 
     Ok(MigrateResult {
-        rows_migrated: import_result.rows_imported,
+        rows_migrated: export_result.rows_exported,
         new_version: target_version,
         backup_path,
     })
