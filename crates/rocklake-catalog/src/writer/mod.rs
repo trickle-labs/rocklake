@@ -51,6 +51,7 @@ pub struct CatalogWriter {
     pub(crate) counter_base_snapshot_id: u64,
     pub(crate) counter_base_catalog_id: u64,
     pub(crate) counter_base_file_id: u64,
+    pub(crate) latest_snapshot_cache: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Pending snapshot-changes row for the current transaction.
     ///
     /// Multiple `add_snapshot_changes()` calls accumulate into this single row
@@ -66,6 +67,7 @@ impl CatalogWriter {
         writer_epoch: u64,
         writer_nonce: String,
         schema_version: u64,
+        latest_snapshot_cache: std::sync::Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         let counter_base_snapshot_id = counters.peek_snapshot_id();
         let counter_base_catalog_id = counters.peek_catalog_id();
@@ -82,6 +84,7 @@ impl CatalogWriter {
             counter_base_snapshot_id,
             counter_base_catalog_id,
             counter_base_file_id,
+            latest_snapshot_cache,
             pending_snapshot_changes: None,
         }
     }
@@ -544,6 +547,79 @@ impl CatalogWriter {
         row.end_snapshot = Some(snapshot_id);
 
         self.stage(key, values::encode_value(&row));
+
+        // CASCADE: drop all live tables in this schema
+        {
+            let prefix = keys::prefix_tables_for_schema(schema_id);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut tables_to_drop = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let table_row: TableRow = values::decode_value(&kv.value)?;
+                if table_row.end_snapshot.is_none() {
+                    tables_to_drop.push((table_row.table_id, table_row.begin_snapshot));
+                }
+            }
+            for (tid, begin_snap) in tables_to_drop {
+                self.drop_table(schema_id, tid, begin_snap).await?;
+            }
+        }
+
+        // CASCADE: drop all live views in this schema
+        {
+            let prefix = keys::prefix_views_for_schema(schema_id);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut views_to_drop = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let view_row: ViewRow = values::decode_value(&kv.value)?;
+                if view_row.end_snapshot.is_none() {
+                    views_to_drop.push((view_row.view_id, view_row.begin_snapshot));
+                }
+            }
+            for (vid, begin_snap) in views_to_drop {
+                self.drop_view(schema_id, vid, begin_snap).await?;
+            }
+        }
+
+        // CASCADE: drop all live macros in this schema
+        {
+            let prefix = keys::prefix_macros_for_schema(schema_id);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut macros_to_drop = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let macro_row: MacroRow = values::decode_value(&kv.value)?;
+                if macro_row.end_snapshot.is_none() {
+                    macros_to_drop.push((macro_row.macro_id, macro_row.begin_snapshot));
+                }
+            }
+            for (mid, begin_snap) in macros_to_drop {
+                self.drop_macro(schema_id, mid, begin_snap).await?;
+            }
+        }
+
         self.mark_schema_changed();
         Ok(())
     }
@@ -861,6 +937,209 @@ impl CatalogWriter {
             }
         }
 
+        // CASCADE: retire partition columns for this table
+        {
+            let prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_PARTITION_COLUMN);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire: Vec<Vec<u8>> = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let row: PartitionColumnRow = values::decode_value(&kv.value)?;
+                if row.table_id == Some(table_id) {
+                    to_retire.push(kv.key.to_vec());
+                }
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
+        // CASCADE: retire sort expressions for this table
+        {
+            let prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_SORT_EXPRESSION);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire: Vec<Vec<u8>> = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let row: SortExpressionRow = values::decode_value(&kv.value)?;
+                if row.table_id == Some(table_id) {
+                    to_retire.push(kv.key.to_vec());
+                }
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
+        // CASCADE: retire table stats and table column stats
+        {
+            let ts_key = keys::key_table_stats(table_id);
+            self.stage_delete(ts_key);
+
+            let mut tcs_prefix = Vec::with_capacity(9);
+            tcs_prefix.push(rocklake_core::tags::TAG_TABLE_COLUMN_STATS);
+            tcs_prefix.extend_from_slice(&keys::encode_u64(table_id));
+            let mut iter = self
+                .db
+                .scan_prefix(&tcs_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
+        // CASCADE: retire file column stats and file variant stats for this table
+        {
+            let mut fcs_prefix = Vec::with_capacity(9);
+            fcs_prefix.push(rocklake_core::tags::TAG_FILE_COLUMN_STATS);
+            fcs_prefix.extend_from_slice(&keys::encode_u64(table_id));
+            let mut iter = self
+                .db
+                .scan_prefix(&fcs_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+
+            let mut fvs_prefix = Vec::with_capacity(9);
+            fvs_prefix.push(rocklake_core::tags::TAG_FILE_VARIANT_STATS);
+            fvs_prefix.extend_from_slice(&keys::encode_u64(table_id));
+            let mut iter = self
+                .db
+                .scan_prefix(&fvs_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
+        // CASCADE: retire column mappings and name mappings for this table
+        {
+            let mut cm_prefix = Vec::with_capacity(9);
+            cm_prefix.push(rocklake_core::tags::TAG_COLUMN_MAPPING);
+            cm_prefix.extend_from_slice(&keys::encode_u64(table_id));
+            let mut iter = self
+                .db
+                .scan_prefix(&cm_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
+        // CASCADE: inlined data tables, inlined deletes, schema versions
+        {
+            let idt_prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_INLINED_DATA_TABLES);
+            let mut iter = self
+                .db
+                .scan_prefix(&idt_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let idt_row: InlinedDataTablesRow = values::decode_value(&kv.value)?;
+                if idt_row.table_id == table_id {
+                    to_retire.push(kv.key.to_vec());
+                }
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+
+            let id_prefix = keys::prefix_inlined_deletes_for_table(table_id);
+            let mut iter = self
+                .db
+                .scan_prefix(&id_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+
+            let sv_prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_SCHEMA_VERSIONS);
+            let mut iter = self
+                .db
+                .scan_prefix(&sv_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let sv_row: SchemaVersionsRow = values::decode_value(&kv.value)?;
+                if sv_row.table_id == table_id {
+                    to_retire.push(kv.key.to_vec());
+                }
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
         self.mark_schema_changed();
         Ok(())
     }
@@ -1116,6 +1395,152 @@ impl CatalogWriter {
         row.end_snapshot = Some(snapshot_id);
 
         self.stage(key, values::encode_value(&row));
+
+        // CASCADE: retire column tags
+        {
+            let prefix = keys::prefix_column_tags(table_id, column_id);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let mut ct_row: ColumnTagRow = values::decode_value(&kv.value)?;
+                if ct_row.end_snapshot.is_none() {
+                    ct_row.end_snapshot = Some(snapshot_id);
+                    to_retire.push((kv.key.to_vec(), ct_row));
+                }
+            }
+            for (ct_key, ct_row) in to_retire {
+                self.stage(ct_key, values::encode_value(&ct_row));
+            }
+        }
+
+        // CASCADE: retire table column stats
+        {
+            let tcs_key = keys::key_table_column_stats(table_id, column_id);
+            self.stage_delete(tcs_key);
+        }
+
+        // CASCADE: retire file column stats & file variant stats
+        {
+            let mut fcs_prefix = Vec::with_capacity(17);
+            fcs_prefix.push(rocklake_core::tags::TAG_FILE_COLUMN_STATS);
+            fcs_prefix.extend_from_slice(&keys::encode_u64(table_id));
+            fcs_prefix.extend_from_slice(&keys::encode_u64(column_id));
+            let mut iter = self
+                .db
+                .scan_prefix(&fcs_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+
+            let mut fvs_prefix = Vec::with_capacity(17);
+            fvs_prefix.push(rocklake_core::tags::TAG_FILE_VARIANT_STATS);
+            fvs_prefix.extend_from_slice(&keys::encode_u64(table_id));
+            fvs_prefix.extend_from_slice(&keys::encode_u64(column_id));
+            let mut iter = self
+                .db
+                .scan_prefix(&fvs_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
+        // CASCADE: retire partition columns & sort expressions referencing this column
+        {
+            let pc_prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_PARTITION_COLUMN);
+            let mut iter = self
+                .db
+                .scan_prefix(&pc_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let pc_row: PartitionColumnRow = values::decode_value(&kv.value)?;
+                if pc_row.column_id == column_id {
+                    to_retire.push(kv.key.to_vec());
+                }
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+
+            let se_prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_SORT_EXPRESSION);
+            let mut iter = self
+                .db
+                .scan_prefix(&se_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let se_row: SortExpressionRow = values::decode_value(&kv.value)?;
+                if se_row.column_id == column_id {
+                    to_retire.push(kv.key.to_vec());
+                }
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
+        // CASCADE: retire name mappings referencing this column
+        {
+            let nm_prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_NAME_MAPPING);
+            let mut iter = self
+                .db
+                .scan_prefix(&nm_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let nm_row: NameMappingRow = values::decode_value(&kv.value)?;
+                if nm_row.column_id == column_id {
+                    to_retire.push(kv.key.to_vec());
+                }
+            }
+            for key in to_retire {
+                self.stage_delete(key);
+            }
+        }
+
         self.mark_schema_changed();
         Ok(())
     }
@@ -1802,6 +2227,32 @@ impl CatalogWriter {
         row.end_snapshot = Some(snapshot_id);
 
         self.stage(key, values::encode_value(&row));
+
+        // CASCADE: retire tags for this view
+        {
+            let prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_TAG);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let mut tag_row: TagRow = values::decode_value(&kv.value)?;
+                if tag_row.object_id == view_id && tag_row.end_snapshot.is_none() {
+                    tag_row.end_snapshot = Some(snapshot_id);
+                    to_retire.push((kv.key.to_vec(), tag_row));
+                }
+            }
+            for (tag_key, tag_row) in to_retire {
+                self.stage(tag_key, values::encode_value(&tag_row));
+            }
+        }
+
         self.mark_schema_changed();
         Ok(())
     }
@@ -1852,6 +2303,73 @@ impl CatalogWriter {
         row.end_snapshot = Some(snapshot_id);
 
         self.stage(key, values::encode_value(&row));
+
+        // CASCADE: retire tags for this macro
+        {
+            let prefix = keys::prefix_for_tag(rocklake_core::tags::TAG_TAG);
+            let mut iter = self
+                .db
+                .scan_prefix(&prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let mut tag_row: TagRow = values::decode_value(&kv.value)?;
+                if tag_row.object_id == macro_id && tag_row.end_snapshot.is_none() {
+                    tag_row.end_snapshot = Some(snapshot_id);
+                    to_retire.push((kv.key.to_vec(), tag_row));
+                }
+            }
+            for (tag_key, tag_row) in to_retire {
+                self.stage(tag_key, values::encode_value(&tag_row));
+            }
+        }
+
+        // CASCADE: retire macro impls and parameters
+        {
+            let impl_prefix = keys::prefix_macro_impls(macro_id);
+            let mut iter = self
+                .db
+                .scan_prefix(&impl_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage(key, Vec::new());
+            }
+
+            let mut param_prefix = Vec::with_capacity(9);
+            param_prefix.push(rocklake_core::tags::TAG_MACRO_PARAMETERS);
+            param_prefix.extend_from_slice(&keys::encode_u64(macro_id));
+            let mut iter = self
+                .db
+                .scan_prefix(&param_prefix)
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                to_retire.push(kv.key.to_vec());
+            }
+            for key in to_retire {
+                self.stage(key, Vec::new());
+            }
+        }
+
         self.mark_schema_changed();
         Ok(())
     }

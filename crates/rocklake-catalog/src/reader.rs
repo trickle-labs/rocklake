@@ -4,7 +4,7 @@ use rocklake_core::keys;
 use rocklake_core::mvcc::{self, SnapshotId};
 use rocklake_core::rows::*;
 use rocklake_core::tags::*;
-use rocklake_core::types::{DuckLakeType, PruneResult};
+use rocklake_core::types::DuckLakeType;
 use rocklake_core::values;
 use slatedb::Db;
 
@@ -108,7 +108,9 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: SnapshotChangesRow = values::decode_value(&kv.value)?;
-            rows.push(row);
+            if row.snapshot_id <= self.dl_snapshot_id.as_u64() {
+                rows.push(row);
+            }
         }
         Ok(rows)
     }
@@ -311,141 +313,6 @@ impl CatalogReader {
             files.push(row);
         }
 
-        // v0.24: Consolidation cleanup for same-snapshot and cross-snapshot cases
-        //
-        // Case 1: Same-snapshot consolidation (INSERT + CHECKPOINT in same transaction)
-        //   - Old files get begin_snapshot = N
-        //   - Consolidated file gets begin_snapshot = N (same!)
-        //   - Without cleanup: both visible, causing row duplication
-        //   - Solution: Keep only highest file_id
-        //
-        // Case 2: Cross-snapshot consolidation (INSERT in snapshot N, CHECKPOINT in snapshot N+1)
-        //   - Old files get begin_snapshot = N
-        //   - Consolidated file gets begin_snapshot = N+1 (different!)
-        //   - Without cleanup: both visible, causing row duplication
-        //   - Solution: Keep only highest file_id
-        //
-        // Debug: Log what files are visible before consolidation cleanup
-        if files.len() > 1 {
-            eprintln!(
-                "[CONSOLIDATION] table_id={} snapshot={} found {} files:",
-                table_id,
-                self.dl_snapshot_id.as_u64(),
-                files.len()
-            );
-            for f in &files {
-                eprintln!(
-                    "  file_id={} begin={:?} end={:?} rows={} path={}",
-                    f.data_file_id, f.begin_snapshot, f.end_snapshot, f.record_count, f.path
-                );
-            }
-        }
-
-        // Advanced partition-level cross-snapshot consolidation filter:
-        // We group files by partition_id first.
-        // Within each partition, we check if multiple files from earlier snapshots
-        // have been merged into a single consolidated file in the latest snapshot.
-        if files.len() > 1 {
-            let mut by_partition: std::collections::HashMap<Option<u64>, Vec<&DataFileRow>> =
-                std::collections::HashMap::new();
-            for f in &files {
-                by_partition.entry(f.partition_id).or_default().push(f);
-            }
-
-            let mut resolved_file_ids = std::collections::HashSet::new();
-            let mut changed = false;
-
-            for (part_id, part_files) in by_partition {
-                if part_files.len() <= 1 {
-                    for f in part_files {
-                        resolved_file_ids.insert(f.data_file_id);
-                    }
-                    continue;
-                }
-
-                // Sort files in this partition by begin_snapshot (or data_file_id as a fallback) to process chronologically.
-                let mut sorted_files = part_files.clone();
-                sorted_files.sort_by(|a, b| {
-                    let a_snap = a.begin_snapshot.unwrap_or(0);
-                    let b_snap = b.begin_snapshot.unwrap_or(0);
-                    if a_snap != b_snap {
-                        a_snap.cmp(&b_snap)
-                    } else {
-                        a.data_file_id.cmp(&b.data_file_id)
-                    }
-                });
-
-                let mut obsolete_file_ids = std::collections::HashSet::new();
-
-                for i in 0..sorted_files.len() {
-                    let f_older = sorted_files[i];
-
-                    // We only look for newer files (chronologically preceding/succeeding elements) to cover this file
-                    for j in (i + 1)..sorted_files.len() {
-                        let f_newer = sorted_files[j];
-
-                        // Check precise row ID range coverage
-                        if let (Some(old_start), Some(new_start)) =
-                            (f_older.row_id_start, f_newer.row_id_start)
-                        {
-                            let old_end = old_start + f_older.record_count;
-                            let new_end = new_start + f_newer.record_count;
-
-                            let old_snap = f_older.begin_snapshot.unwrap_or(0);
-                            let new_snap = f_newer.begin_snapshot.unwrap_or(0);
-
-                            let is_covered = if old_snap == new_snap {
-                                // Within the same snapshot/transaction, parallel data files do not consolidate each other.
-                                false
-                            } else {
-                                // For cross-snapshot check, any space containment is a valid consolidation.
-                                new_start <= old_start && new_end >= old_end
-                            };
-
-                            if is_covered {
-                                eprintln!("[CONSOLIDATION] Partition {:?}: Older file_id={} (range [{}, {})) is covered by newer file_id={} (range [{}, {}))",
-                                    part_id, f_older.data_file_id, old_start, old_end, f_newer.data_file_id, new_start, new_end);
-                                obsolete_file_ids.insert(f_older.data_file_id);
-                                changed = true;
-                                break; // Found a covering file; no need to check further for this older file
-                            }
-                        } else {
-                            // Fallback heuristic for legacy formats where row_id_start is missing:
-                            let old_snap = f_older.begin_snapshot.unwrap_or(0);
-                            let new_snap = f_newer.begin_snapshot.unwrap_or(0);
-                            if old_snap < new_snap {
-                                let total_older_rows: u64 = sorted_files
-                                    .iter()
-                                    .filter(|f| f.begin_snapshot.unwrap_or(0) < new_snap)
-                                    .map(|f| f.record_count)
-                                    .sum();
-
-                                if f_newer.record_count == total_older_rows
-                                    || f_newer.record_count == f_older.record_count
-                                {
-                                    eprintln!("[CONSOLIDATION] Partition {:?}: Legacy fallback. Obsoleting file_id={} in favor of newer file_id={}",
-                                        part_id, f_older.data_file_id, f_newer.data_file_id);
-                                    obsolete_file_ids.insert(f_older.data_file_id);
-                                    changed = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                for f in part_files {
-                    if !obsolete_file_ids.contains(&f.data_file_id) {
-                        resolved_file_ids.insert(f.data_file_id);
-                    }
-                }
-            }
-
-            if changed {
-                files.retain(|f| resolved_file_ids.contains(&f.data_file_id));
-            }
-        }
-
         // v0.24: order results by file_order (spec requirement).
         files.sort_by_key(|f| f.file_order.unwrap_or(f.data_file_id));
         Ok(files)
@@ -467,11 +334,16 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: DeleteFileRow = values::decode_value(&kv.value)?;
-            // Filter by table_id if populated; fall back to data_file_id key for legacy rows.
-            if let Some(tid) = row.table_id {
-                if tid != table_id {
-                    continue;
+            // Filter by table_id if populated; resolve owning data file if table_id is missing.
+            let matches_table = match row.table_id {
+                Some(tid) => tid == table_id,
+                None => {
+                    let df_key = keys::key_data_file(table_id, row.data_file_id);
+                    self.db.get(&df_key).await?.is_some()
                 }
+            };
+            if !matches_table {
+                continue;
             }
             // MVCC visibility using begin_snapshot / end_snapshot if present,
             // falling back to legacy snapshot_id.
@@ -498,7 +370,7 @@ impl CatalogReader {
         }
     }
 
-    /// List all aggregate table stats rows.
+    /// List all aggregate table stats rows for tables visible at this snapshot.
     pub async fn list_all_table_stats(&self) -> CatalogResult<Vec<TableStatsRow>> {
         let prefix = keys::prefix_for_tag(TAG_TABLE_STATS);
         let mut rows = Vec::new();
@@ -508,7 +380,8 @@ impl CatalogReader {
             .await
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
-            rows.push(values::decode_value(&kv.value)?);
+            let row: TableStatsRow = values::decode_value(&kv.value)?;
+            rows.push(row);
         }
         Ok(rows)
     }
@@ -521,64 +394,73 @@ impl CatalogReader {
         predicate_value: &str,
         col_type: &DuckLakeType,
     ) -> CatalogResult<Vec<u64>> {
-        use rocklake_core::types::{prune_file, type_aware_compare};
+        use rocklake_core::types::{prune_file, type_aware_compare, PruneResult};
 
-        let mut buf = Vec::with_capacity(17);
-        buf.push(TAG_FILE_COLUMN_STATS);
-        buf.extend_from_slice(&keys::encode_u64(table_id));
-        buf.extend_from_slice(&keys::encode_u64(column_id));
-
+        let visible_files = self.list_data_files(table_id).await?;
         let mut kept_file_ids = Vec::new();
-        let mut iter = self.db.scan_prefix(&buf).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let row: FileColumnStatsRow = values::decode_value(&kv.value)?;
-            let result = prune_file(
-                predicate_value,
-                row.min_value.as_deref(),
-                row.max_value.as_deref(),
-                row.contains_nan,
-                col_type,
-            )?;
-            if result == PruneResult::Keep {
-                kept_file_ids.push(row.data_file_id);
-            }
-        }
 
-        // v0.26: partial_max pruning shortcut.
-        // If a data file has partial_max IS NOT NULL and predicate > partial_max,
-        // the file cannot contain matching rows — prune it.
-        if !kept_file_ids.is_empty() {
-            let data_files = self.list_data_files(table_id).await?;
-            let partial_map: std::collections::HashMap<u64, &str> = data_files
-                .iter()
-                .filter_map(|f| f.partial_max.as_deref().map(|pm| (f.data_file_id, pm)))
-                .collect();
-            kept_file_ids.retain(|&file_id| {
-                if let Some(partial_max) = partial_map.get(&file_id) {
-                    // If predicate > partial_max, the file can be pruned.
-                    match type_aware_compare(predicate_value, partial_max, col_type) {
-                        Ok(std::cmp::Ordering::Greater) => false, // prune
-                        _ => true,                                // keep
+        for file in visible_files {
+            let key = keys::key_file_column_stats(table_id, column_id, file.data_file_id);
+            let mut should_keep = true;
+
+            if let Some(data) = self.db.get(&key).await? {
+                if let Ok(row) = values::decode_value::<FileColumnStatsRow>(&data) {
+                    let has_stats =
+                        row.min_value.is_some() || row.max_value.is_some() || row.contains_nan;
+                    if has_stats {
+                        match prune_file(
+                            predicate_value,
+                            row.min_value.as_deref(),
+                            row.max_value.as_deref(),
+                            row.contains_nan,
+                            col_type,
+                        ) {
+                            Ok(PruneResult::Prune) => {
+                                should_keep = false;
+                            }
+                            Ok(PruneResult::Keep) => {
+                                should_keep = true;
+                            }
+                            Err(_) => {
+                                // malformed, NaN, or unsupported -> conservatively keep
+                                should_keep = true;
+                            }
+                        }
                     }
-                } else {
-                    true // no partial_max — keep
                 }
-            });
+            }
+
+            // Check partial_max pruning only if still a candidate to prune
+            if should_keep {
+                if let Some(ref partial_max) = file.partial_max {
+                    if !partial_max.is_empty() {
+                        if let Ok(std::cmp::Ordering::Greater) =
+                            type_aware_compare(predicate_value, partial_max, col_type)
+                        {
+                            should_keep = false;
+                        }
+                    }
+                }
+            }
+
+            if should_keep {
+                kept_file_ids.push(file.data_file_id);
+            }
         }
 
         Ok(kept_file_ids)
     }
 
-    /// List file-level column statistics for a table column.
+    /// List file-level column statistics for a table column for files visible at this snapshot.
     pub async fn list_file_column_stats(
         &self,
         table_id: u64,
         column_id: u64,
     ) -> CatalogResult<Vec<FileColumnStatsRow>> {
+        let visible_files = self.list_data_files(table_id).await?;
+        let visible_file_ids: std::collections::HashSet<u64> =
+            visible_files.into_iter().map(|f| f.data_file_id).collect();
+
         let mut prefix = Vec::with_capacity(17);
         prefix.push(TAG_FILE_COLUMN_STATS);
         prefix.extend_from_slice(&keys::encode_u64(table_id));
@@ -591,7 +473,10 @@ impl CatalogReader {
             .await
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
-            stats.push(values::decode_value(&kv.value)?);
+            let row: FileColumnStatsRow = values::decode_value(&kv.value)?;
+            if visible_file_ids.contains(&row.data_file_id) {
+                stats.push(row);
+            }
         }
         Ok(stats)
     }
@@ -850,12 +735,18 @@ impl CatalogReader {
 
     // ─── Phase 6: File Variant Stats ────────────────────────────────────────
 
-    /// List file-level variant statistics for a column.
+    // ─── Phase 6: File Variant Stats ────────────────────────────────────────
+
+    /// List file-level variant statistics for a column for files visible at this snapshot.
     pub async fn list_file_variant_stats(
         &self,
         table_id: u64,
         column_id: u64,
     ) -> CatalogResult<Vec<FileVariantStatsRow>> {
+        let visible_files = self.list_data_files(table_id).await?;
+        let visible_file_ids: std::collections::HashSet<u64> =
+            visible_files.into_iter().map(|f| f.data_file_id).collect();
+
         let mut buf = Vec::with_capacity(17);
         buf.push(TAG_FILE_VARIANT_STATS);
         buf.extend_from_slice(&keys::encode_u64(table_id));
@@ -869,7 +760,9 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: FileVariantStatsRow = values::decode_value(&kv.value)?;
-            stats.push(row);
+            if visible_file_ids.contains(&row.data_file_id) {
+                stats.push(row);
+            }
         }
         Ok(stats)
     }
@@ -961,12 +854,14 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: SchemaVersionsRow = values::decode_value(&kv.value)?;
-            rows.push(row);
+            if row.begin_snapshot <= self.dl_snapshot_id.as_u64() {
+                rows.push(row);
+            }
         }
         Ok(rows)
     }
 
-    /// List all `ducklake_table_column_stats` rows.
+    /// List all `ducklake_table_column_stats` rows visible at this snapshot.
     pub async fn list_all_table_column_stats(&self) -> CatalogResult<Vec<TableColumnStatsRow>> {
         let prefix = keys::prefix_for_tag(TAG_TABLE_COLUMN_STATS);
         let mut rows = Vec::new();
@@ -982,7 +877,7 @@ impl CatalogReader {
         Ok(rows)
     }
 
-    /// List all `ducklake_column_mapping` rows.
+    /// List all `ducklake_column_mapping` rows visible at this snapshot.
     pub async fn list_column_mappings(&self) -> CatalogResult<Vec<ColumnMappingRow>> {
         let prefix = keys::prefix_for_tag(TAG_COLUMN_MAPPING);
         let mut rows = Vec::new();
@@ -993,13 +888,30 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: ColumnMappingRow = values::decode_value(&kv.value)?;
-            rows.push(row);
+            if self.describe_table(row.table_id).await?.is_some() {
+                rows.push(row);
+            }
         }
         Ok(rows)
     }
 
-    /// List all `ducklake_name_mapping` rows.
+    /// List all `ducklake_name_mapping` rows visible at this snapshot.
     pub async fn list_name_mappings(&self) -> CatalogResult<Vec<NameMappingRow>> {
+        let visible_columns: std::collections::HashSet<u64> = {
+            let schemas = self.list_schemas().await?;
+            let mut cols = std::collections::HashSet::new();
+            for s in schemas {
+                for t in self.list_tables(s.schema_id).await? {
+                    if let Some((_, table_cols)) = self.describe_table(t.table_id).await? {
+                        for c in table_cols {
+                            cols.insert(c.column_id);
+                        }
+                    }
+                }
+            }
+            cols
+        };
+
         let prefix = keys::prefix_for_tag(TAG_NAME_MAPPING);
         let mut rows = Vec::new();
         let mut iter = self.db.scan_prefix(&prefix).await?;
@@ -1009,7 +921,9 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: NameMappingRow = values::decode_value(&kv.value)?;
-            rows.push(row);
+            if visible_columns.is_empty() || visible_columns.contains(&row.column_id) {
+                rows.push(row);
+            }
         }
         Ok(rows)
     }
@@ -1068,7 +982,14 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: PartitionColumnRow = values::decode_value(&kv.value)?;
-            rows.push(row);
+            let visible = if let Some(tid) = row.table_id {
+                self.describe_table(tid).await?.is_some()
+            } else {
+                true
+            };
+            if visible {
+                rows.push(row);
+            }
         }
         rows.sort_by_key(|r| (r.partition_id, r.partition_key_index));
         Ok(rows)
@@ -1108,7 +1029,14 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: SortExpressionRow = values::decode_value(&kv.value)?;
-            rows.push(row);
+            let visible = if let Some(tid) = row.table_id {
+                self.describe_table(tid).await?.is_some()
+            } else {
+                true
+            };
+            if visible {
+                rows.push(row);
+            }
         }
         rows.sort_by_key(|r| (r.table_id.unwrap_or(0), r.sort_id, r.sort_key_index));
         Ok(rows)
@@ -1135,6 +1063,34 @@ impl CatalogReader {
         let from_snapshot: SnapshotId = from_snapshot.into();
         let to = to_snapshot.as_u64();
         let from = from_snapshot.as_u64();
+
+        if from > to {
+            return Err(CatalogError::InvalidInput(format!(
+                "from_snapshot ({from}) cannot exceed to_snapshot ({to})"
+            )));
+        }
+
+        let retain_from = crate::gc::read_retain_from(&self.db).await.unwrap_or(0);
+        if retain_from > 0 && from < retain_from {
+            return Err(CatalogError::SnapshotOutOfRetention {
+                requested: from,
+                retain_from,
+            });
+        }
+
+        let next_snap_key = keys::key_counter(rocklake_core::tags::COUNTER_NEXT_SNAPSHOT_ID);
+        let latest_committed = match self.db.get(&next_snap_key).await? {
+            Some(data) => rocklake_core::values::decode_counter(&data)
+                .unwrap_or(1)
+                .saturating_sub(1),
+            None => 0,
+        };
+        if to > latest_committed {
+            return Err(CatalogError::SnapshotNotFound {
+                requested: to,
+                latest_committed,
+            });
+        }
 
         let mut added_schemas: Vec<SchemaRow> = Vec::new();
         let mut retired_schemas: Vec<SchemaRow> = Vec::new();

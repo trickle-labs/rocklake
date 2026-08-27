@@ -283,6 +283,12 @@ pub(super) async fn execute_commit(
             } => {
                 needs_snapshot = true;
                 match table_name.as_str() {
+                    "ducklake_schema" => {
+                        writer
+                            .drop_schema(entity_id)
+                            .await
+                            .map_err(RockLakeError::from)?;
+                    }
                     "ducklake_table" => {
                         // Resolve schema_id by scanning for the live table row
                         // (F-04: do not hard-code schema_id = 0).
@@ -335,6 +341,20 @@ pub(super) async fn execute_commit(
                                 .await
                                 .map_err(RockLakeError::from)?;
                         }
+                    }
+                    "ducklake_view" => {
+                        let schema_id = 0; // Default schema 0
+                        writer
+                            .drop_view(schema_id, entity_id, begin_snapshot)
+                            .await
+                            .map_err(RockLakeError::from)?;
+                    }
+                    "ducklake_macro" => {
+                        let schema_id = 0; // Default schema 0
+                        writer
+                            .drop_macro(schema_id, entity_id, begin_snapshot)
+                            .await
+                            .map_err(RockLakeError::from)?;
                     }
                     _ => {
                         // Other end_snapshot updates accepted
@@ -1664,10 +1684,50 @@ pub(super) async fn execute_table_changes<'a>(
         });
     }
 
-    // Compute diff using SnapshotDiff
     let from_reader = store_lock
         .read_at(rocklake_core::mvcc::SnapshotId::new(start_snapshot))
         .map_err(RockLakeError::from)?;
+
+    let to_reader = store_lock
+        .read_at(rocklake_core::mvcc::SnapshotId::new(end_snapshot))
+        .map_err(RockLakeError::from)?;
+
+    // Resolve table_ref to stable table_id
+    let parts: Vec<&str> = table_ref.split('.').collect();
+    let (schema_filter, table_name) = match parts.as_slice() {
+        [s, t] => (Some(*s), *t),
+        [t] => (None, *t),
+        _ => (None, table_ref),
+    };
+
+    let mut target_table_id: Option<u64> = None;
+    // Check in to_reader first (latest snapshot), then from_reader
+    for reader in &[&to_reader, &from_reader] {
+        let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
+        for s in &schemas {
+            if let Some(expected_s) = schema_filter {
+                if s.schema_name != expected_s {
+                    continue;
+                }
+            }
+            let tables = reader
+                .list_tables(s.schema_id)
+                .await
+                .map_err(RockLakeError::from)?;
+            for t in &tables {
+                if t.table_name == table_name {
+                    target_table_id = Some(t.table_id);
+                    break;
+                }
+            }
+            if target_table_id.is_some() {
+                break;
+            }
+        }
+        if target_table_id.is_some() {
+            break;
+        }
+    }
 
     let diff = from_reader
         .snapshot_diff(
@@ -1677,48 +1737,86 @@ pub(super) async fn execute_table_changes<'a>(
         .await
         .map_err(RockLakeError::from)?;
 
-    // v0.27.1: Extract rows from Parquet data files using the catalog's object store.
-    // The object store root is shared between catalog metadata and data files
-    // when data files are registered with relative paths.
     let object_store = store_lock.object_store();
     drop(store_lock); // release lock before async I/O
 
     let mut added_rows = Vec::new();
-    let mut base_rowid = 0u64;
-    for file in &diff.added_data_files {
-        let rows = rocklake_sql::table_changes::extract_rows_from_parquet(
-            &object_store,
-            &file.path,
-            base_rowid,
-            Some(file.record_count),
-            rocklake_sql::DEFAULT_CDC_BATCH_SIZE,
-        )
-        .await
-        .map_err(|e| RockLakeError::SqlState {
-            code: e.sqlstate().to_string(),
-            message: e.to_string(),
-        })?;
-        base_rowid += rows.len() as u64;
-        added_rows.extend(rows);
-    }
-
     let mut removed_rows = Vec::new();
-    base_rowid = 0;
-    for file in &diff.retired_data_files {
-        let rows = rocklake_sql::table_changes::extract_rows_from_parquet(
-            &object_store,
-            &file.path,
-            base_rowid,
-            Some(file.record_count),
-            rocklake_sql::DEFAULT_CDC_BATCH_SIZE,
-        )
-        .await
-        .map_err(|e| RockLakeError::SqlState {
-            code: e.sqlstate().to_string(),
-            message: e.to_string(),
-        })?;
-        base_rowid += rows.len() as u64;
-        removed_rows.extend(rows);
+
+    if let Some(tid) = target_table_id {
+        // Process data files added for target table
+        for file in diff.added_data_files.iter().filter(|f| f.table_id == tid) {
+            let base_rowid = file.row_id_start.unwrap_or(0);
+            let rows = rocklake_sql::table_changes::extract_rows_from_parquet(
+                &object_store,
+                &file.path,
+                base_rowid,
+                Some(file.record_count),
+                rocklake_sql::DEFAULT_CDC_BATCH_SIZE,
+            )
+            .await
+            .map_err(|e| RockLakeError::SqlState {
+                code: e.sqlstate().to_string(),
+                message: e.to_string(),
+            })?;
+            added_rows.extend(rows);
+        }
+
+        // Process data files retired for target table
+        for file in diff.retired_data_files.iter().filter(|f| f.table_id == tid) {
+            let base_rowid = file.row_id_start.unwrap_or(0);
+            let rows = rocklake_sql::table_changes::extract_rows_from_parquet(
+                &object_store,
+                &file.path,
+                base_rowid,
+                Some(file.record_count),
+                rocklake_sql::DEFAULT_CDC_BATCH_SIZE,
+            )
+            .await
+            .map_err(|e| RockLakeError::SqlState {
+                code: e.sqlstate().to_string(),
+                message: e.to_string(),
+            })?;
+            removed_rows.extend(rows);
+        }
+
+        // Inlined inserts
+        let to_inlined = to_reader
+            .list_inlined_inserts(tid)
+            .await
+            .map_err(RockLakeError::from)?;
+        for ins in to_inlined {
+            if ins.begin_snapshot > start_snapshot && ins.begin_snapshot <= end_snapshot {
+                let columns_json = String::from_utf8_lossy(&ins.payload).to_string();
+                added_rows.push(rocklake_sql::table_changes::ParquetRowData {
+                    rowid: ins.row_id,
+                    columns_json,
+                });
+            }
+            if let Some(end) = ins.end_snapshot {
+                if end > start_snapshot && end <= end_snapshot {
+                    let columns_json = String::from_utf8_lossy(&ins.payload).to_string();
+                    removed_rows.push(rocklake_sql::table_changes::ParquetRowData {
+                        rowid: ins.row_id,
+                        columns_json,
+                    });
+                }
+            }
+        }
+
+        // Inlined deletes
+        let to_inlined_deletes = to_reader
+            .list_inlined_deletes(tid)
+            .await
+            .map_err(RockLakeError::from)?;
+        for del in to_inlined_deletes {
+            if del.begin_snapshot > start_snapshot && del.begin_snapshot <= end_snapshot {
+                removed_rows.push(rocklake_sql::table_changes::ParquetRowData {
+                    rowid: del.row_id,
+                    columns_json: "{}".to_string(),
+                });
+            }
+        }
     }
 
     let cdc_result = rocklake_sql::table_changes::compute_table_changes(
@@ -3318,10 +3416,31 @@ pub(super) fn make_file_variant_stats_response(
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
+                &Some(r.table_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
                 &Some(r.column_id.to_string()),
                 &Type::TEXT,
                 FieldFormat::Text,
             )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.variant_key.clone()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&r.shredded_type, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        let col_size = r.column_size_bytes.map(|v| v.to_string());
+        encoder
+            .encode_field_with_type_and_format(&col_size, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         let value_count = r.value_count.map(|v| v.to_string());
         encoder
@@ -3331,21 +3450,18 @@ pub(super) fn make_file_variant_stats_response(
         encoder
             .encode_field_with_type_and_format(&null_count, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
-        // bloom_filter_offset and bloom_filter_length are not in FileVariantStatsRow;
-        // default to NULL for now to match the current simplified schema.
         encoder
-            .encode_field_with_type_and_format(
-                &None as &Option<String>,
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
+            .encode_field_with_type_and_format(&r.min_value, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
-            .encode_field_with_type_and_format(
-                &None as &Option<String>,
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
+            .encode_field_with_type_and_format(&r.max_value, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        let contains_nan = r.contains_nan.map(|b| b.to_string());
+        encoder
+            .encode_field_with_type_and_format(&contains_nan, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&r.extra_stats, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
@@ -3365,6 +3481,13 @@ pub(super) fn make_column_mapping_response(
         let mut encoder = DataRowEncoder::new(schema.clone());
         encoder
             .encode_field_with_type_and_format(
+                &Some(r.mapping_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
                 &Some(r.table_id.to_string()),
                 &Type::TEXT,
                 FieldFormat::Text,
@@ -3373,14 +3496,6 @@ pub(super) fn make_column_mapping_response(
         let col_id = r.column_id.map(|c| c.to_string());
         encoder
             .encode_field_with_type_and_format(&col_id, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        // field_id is not directly in ColumnMappingRow; use mapping_id as a proxy for now.
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(r.mapping_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(&r.mapping_type, &Type::TEXT, FieldFormat::Text)
@@ -3401,12 +3516,19 @@ pub(super) fn make_name_mapping_response(
     let mut data_rows = Vec::new();
     for r in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        // Schema expects: table_id, field_name, field_id, column_id
-        // NameMappingRow has: mapping_id, column_id, name, source_name_hash, target_field_id, parent_column, is_partition
-        // Map available fields to schema order
         encoder
             .encode_field_with_type_and_format(
                 &Some(r.mapping_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&None::<String>, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.column_id.to_string()),
                 &Type::TEXT,
                 FieldFormat::Text,
             )
@@ -3422,12 +3544,13 @@ pub(super) fn make_name_mapping_response(
         encoder
             .encode_field_with_type_and_format(&target_field, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
+        let parent_col = r.parent_column.map(|id| id.to_string());
         encoder
-            .encode_field_with_type_and_format(
-                &Some(r.column_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
+            .encode_field_with_type_and_format(&parent_col, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        let is_part = r.is_partition.map(|b| b.to_string());
+        encoder
+            .encode_field_with_type_and_format(&is_part, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }

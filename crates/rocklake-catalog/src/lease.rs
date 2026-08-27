@@ -38,6 +38,27 @@ pub async fn hold_snapshot(
         ))
     })?;
 
+    let retain_from = crate::gc::read_retain_from(db).await.unwrap_or(0);
+    if retain_from > 0 && min_snapshot_id < retain_from {
+        return Err(CatalogError::SnapshotOutOfRetention {
+            requested: min_snapshot_id,
+            retain_from,
+        });
+    }
+    let next_snap_key = keys::key_counter(rocklake_core::tags::COUNTER_NEXT_SNAPSHOT_ID);
+    let latest_committed = match db.get(&next_snap_key).await? {
+        Some(data) => rocklake_core::values::decode_counter(&data)
+            .unwrap_or(1)
+            .saturating_sub(1),
+        None => 0,
+    };
+    if min_snapshot_id > latest_committed {
+        return Err(CatalogError::SnapshotNotFound {
+            requested: min_snapshot_id,
+            latest_committed,
+        });
+    }
+
     let row = SnapshotLeaseRow {
         consumer_id: consumer_id.to_string(),
         min_snapshot_id,

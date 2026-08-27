@@ -9,7 +9,6 @@ use rocklake_core::values;
 use slatedb::{Db, IsolationLevel};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::encryption::{AesGcmTransformer, EncryptionConfig};
 use crate::error::{CatalogError, CatalogResult};
@@ -41,6 +40,8 @@ pub struct CatalogStore {
     /// Updated eagerly on `open()` and after every `gc_apply()`.
     /// `read_at()` uses this atomically without holding the mutex.
     retain_from_cache: Arc<AtomicU64>,
+    /// In-memory cache of the latest committed snapshot ID.
+    latest_snapshot_cache: Arc<AtomicU64>,
     /// The object store used to back the SlateDB database.
     /// Exposed so callers (e.g. the PG-Wire executor) can read data files from
     /// the same storage root without requiring a separate configuration parameter.
@@ -71,9 +72,8 @@ impl CatalogStore {
     /// # });
     /// ```
     pub async fn open(opts: OpenOptions) -> CatalogResult<Self> {
-        // Clone before moving into Db::builder / Db::open so we can keep a
-        // reference for the `object_store` field added in v0.27.1.
         let object_store_ref = Arc::clone(&opts.object_store);
+
         let db = if let Some(ref enc) = opts.encryption {
             let transformer = Arc::new(AesGcmTransformer::new(enc));
             Db::builder(opts.path, opts.object_store)
@@ -84,34 +84,31 @@ impl CatalogStore {
             Db::open(opts.path, opts.object_store).await?
         };
 
-        // Initialize or verify
-        let counters = init::initialize_catalog(&db).await?;
-
-        // v0.20: Automatically migrate hash-encoded lease/extension keys to
-        // length-prefixed encoding. This is a no-op on already-migrated catalogs.
+        // Run key-encoding migration (no-op on already-migrated catalogs).
         crate::key_migration::migrate_key_encoding_if_needed(&db).await?;
 
-        // v0.28.0: CAS-protected monotonic writer epoch acquisition.
-        // The epoch is a persisted counter incremented by each successful open.
-        // A UUID nonce is stored alongside the epoch so two writers that race
-        // to the same counter value can still be distinguished at commit time.
+        // Initialize schema / counters if this is a fresh database.
+        let counters = crate::init::initialize_catalog(&db).await?;
+
+        // Acquire writer epoch via CAS loop (retry on conflict).
         let epoch_key = keys::key_system(SYSTEM_WRITER_EPOCH);
         let nonce_key = keys::key_system(SYSTEM_WRITER_NONCE);
-        let writer_nonce = Uuid::new_v4().to_string();
+        let writer_nonce = uuid::Uuid::new_v4().to_string();
 
-        let writer_epoch: u64 = loop {
+        let writer_epoch = loop {
             let tx = db
                 .begin(IsolationLevel::SerializableSnapshot)
                 .await
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
 
+            // Read the current epoch (0 if missing).
             let current_epoch: u64 = match tx
                 .get(&epoch_key)
                 .await
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?
             {
                 Some(data) => values::decode_counter(&data)?,
-                None => 0, // First open — counter starts at zero
+                None => 0,
             };
 
             let new_epoch = current_epoch.checked_add(1).ok_or_else(|| {
@@ -136,6 +133,12 @@ impl CatalogStore {
         // Seed the retain-from cache from SlateDB (single read at startup).
         let retain_from_initial = crate::gc::read_retain_from(&db).await.unwrap_or(0);
         let retain_from_cache = Arc::new(AtomicU64::new(retain_from_initial));
+        let latest_initial = if counters.peek_snapshot_id() > 1 {
+            counters.peek_snapshot_id() - 1
+        } else {
+            0
+        };
+        let latest_snapshot_cache = Arc::new(AtomicU64::new(latest_initial));
 
         Ok(Self {
             db,
@@ -144,6 +147,7 @@ impl CatalogStore {
             writer_nonce,
             schema_version,
             retain_from_cache,
+            latest_snapshot_cache,
             object_store: object_store_ref,
         })
     }
@@ -186,16 +190,19 @@ impl CatalogStore {
                 retain_from,
             });
         }
+        let latest = self.latest_snapshot_cache.load(Ordering::Acquire);
+        if dl_snapshot_id.as_u64() > latest {
+            return Err(CatalogError::SnapshotNotFound {
+                requested: dl_snapshot_id.as_u64(),
+                latest_committed: latest,
+            });
+        }
         Ok(CatalogReader::new(self.db.clone(), dl_snapshot_id))
     }
 
     /// Create a reader for the latest snapshot.
     pub fn read_latest(&self) -> CatalogReader {
-        let latest = if self.counters.peek_snapshot_id() > 1 {
-            self.counters.peek_snapshot_id() - 1
-        } else {
-            0
-        };
+        let latest = self.latest_snapshot_cache.load(Ordering::Acquire);
         CatalogReader::new(self.db.clone(), SnapshotId::new(latest))
     }
 
@@ -247,6 +254,7 @@ impl CatalogStore {
             self.writer_epoch,
             self.writer_nonce.clone(),
             self.schema_version,
+            self.latest_snapshot_cache.clone(),
         )
     }
 
@@ -268,6 +276,13 @@ impl CatalogStore {
             result.next_file_id,
         );
         self.schema_version = result.schema_version;
+        self.latest_snapshot_cache
+            .store(result.snapshot_id.as_u64(), Ordering::Release);
+    }
+
+    /// Return the latest committed snapshot ID.
+    pub fn latest_committed_snapshot_id(&self) -> u64 {
+        self.latest_snapshot_cache.load(Ordering::Acquire)
     }
 
     /// Close the catalog store.
@@ -307,6 +322,11 @@ impl CatalogStore {
         let counters = init::initialize_catalog(&db).await?;
         let schema_version = Self::load_schema_version(&db, &counters).await;
         let retain_from_initial = crate::gc::read_retain_from(&db).await.unwrap_or(0);
+        let latest_initial = if counters.peek_snapshot_id() > 1 {
+            counters.peek_snapshot_id() - 1
+        } else {
+            0
+        };
 
         Ok(Self {
             db,
@@ -315,6 +335,7 @@ impl CatalogStore {
             writer_nonce: "reader".to_string(),
             schema_version,
             retain_from_cache: Arc::new(AtomicU64::new(retain_from_initial)),
+            latest_snapshot_cache: Arc::new(AtomicU64::new(latest_initial)),
             object_store: object_store_ref,
         })
     }

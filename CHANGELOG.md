@@ -6,7 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
-## [0.47.12] — 2026-08-26
+## [0.47.13] — 2026-08-27
+
+### Added
+
+- `CatalogError::SnapshotNotFound` variant returned when a reader requests an uncommitted or future snapshot ID (`snapshot_id > latest_committed`).
+- Snapshot bounds validation across `CatalogStore::read_at()`, `ReadOnlyCatalog::read_at()`, and `lease_manager.hold_snapshot()`.
+- PG-wire transaction read isolation via `resolve_reader` resolving snapshot queries to transaction snapshot or latest committed snapshot.
+- Test suites for snapshot read correctness and metadata isolation in `rocklake-catalog` and `rocklake-pgwire`.
+
+### Changed
+
+- `prune_files()` conservatively retains files on missing, partial, stale, malformed, NaN, or null-only statistics.
+- Snapshot-bound metadata listing methods (`list_all_snapshot_changes`, `list_file_column_stats`, `list_file_variant_stats`, `list_all_tags`, `list_all_column_tags`, `list_all_sort_info`, `list_all_schema_versions`, `list_column_mappings`, `list_name_mappings`, `list_all_partition_columns`, `list_all_sort_expressions`) filter strictly at the requested snapshot ID.
+- Removed consolidation heuristics and row-range merge logs from `list_data_files()`.
+
+### Fixed
+
+- `CatalogWriter::drop_table` and `drop_column` cascade-delete secondary non-MVCC keys cleanly using `stage_delete` rather than empty bytes.
+- Secondary index `key_table_by_id` mapping is retained across table drop to enable O(1) historical `describe_table` lookups.
+- `import_catalog` now persists `SYSTEM_CATALOG_FORMAT_VERSION` and all counter keys on fresh import.
+- DuckLake v1.0 schema compliance for `ducklake_column_mapping`, `ducklake_name_mapping`, and `ducklake_file_variant_stats`.
 
 ### Added
 

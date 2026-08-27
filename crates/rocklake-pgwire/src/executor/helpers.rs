@@ -29,6 +29,38 @@ pub(super) fn get_snapshot_param(params: &ParamValues) -> u64 {
     params.get_u64(0).unwrap_or(u64::MAX)
 }
 
+pub(super) async fn resolve_reader(
+    store: &Arc<tokio::sync::Mutex<rocklake_catalog::CatalogStore>>,
+    session: &SessionState,
+    snap_id: u64,
+) -> Result<rocklake_catalog::reader::CatalogReader, RockLakeError> {
+    let s = store.lock().await;
+    if snap_id >= (i64::MAX as u64) {
+        if session.in_transaction {
+            if let Some(tx_snap) = session.transaction_snapshot_id {
+                return s
+                    .read_at(rocklake_core::mvcc::SnapshotId::new(tx_snap))
+                    .map_err(RockLakeError::from);
+            }
+        }
+        Ok(s.read_latest())
+    } else if session.in_transaction {
+        if let Some(tx_snap) = session.transaction_snapshot_id {
+            let effective_snap = snap_id.min(tx_snap);
+            s.read_at(rocklake_core::mvcc::SnapshotId::new(effective_snap))
+                .map_err(RockLakeError::from)
+        } else {
+            let effective_snap = snap_id.min(s.latest_committed_snapshot_id());
+            s.read_at(rocklake_core::mvcc::SnapshotId::new(effective_snap))
+                .map_err(RockLakeError::from)
+        }
+    } else {
+        let effective_snap = snap_id.min(s.latest_committed_snapshot_id());
+        s.read_at(rocklake_core::mvcc::SnapshotId::new(effective_snap))
+            .map_err(RockLakeError::from)
+    }
+}
+
 pub(super) fn get_show_value(var: &str, session: &SessionState) -> String {
     match var.to_lowercase().as_str() {
         "server_version" => "15.0".to_string(),

@@ -91,7 +91,11 @@ async fn exec_first(sql: &str, store: &Arc<Mutex<CatalogStore>>) -> Option<Respo
     match result {
         Ok(mut responses) if !responses.is_empty() => Some(responses.remove(0)),
         Ok(_) => None,
-        Err(_) => None,
+        Err(e) => Some(Response::Error(Box::new(pgwire::error::ErrorInfo::new(
+            "FATAL".to_string(),
+            "XX000".to_string(),
+            e.to_string(),
+        )))),
     }
 }
 
