@@ -11,7 +11,7 @@ use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_core::keys::MetadataScope;
 use rocklake_core::mvcc::SnapshotId;
-use rocklake_core::rows::DataFileRow;
+use rocklake_core::rows::{DataFileRow, DeleteFileRow, InlinedDeleteRow, InlinedInsertRow};
 use std::any::Any;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -410,12 +410,27 @@ impl SchemaProvider for RockLakeSchemaProvider {
                     .list_data_files(table.table_id)
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let delete_files = reader
+                    .list_delete_files(table.table_id)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let inlined_inserts = reader
+                    .list_inlined_inserts(table.table_id)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let inlined_deletes = reader
+                    .list_inlined_deletes(table.table_id)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let table_provider = RockLakeTableProvider::new(
                     table.table_name.clone(),
                     table.table_id,
                     columns,
                     data_files,
+                    delete_files,
+                    inlined_inserts,
+                    inlined_deletes,
                     self.data_root.clone(),
                 )?;
                 Ok(Some(Arc::new(table_provider)))
@@ -435,6 +450,9 @@ pub struct RockLakeTableProvider {
     schema: datafusion::arrow::datatypes::SchemaRef,
     /// F-15: data files registered in the catalog at the active snapshot.
     data_files: Vec<DataFileRow>,
+    delete_files: Vec<DeleteFileRow>,
+    inlined_inserts: Vec<InlinedInsertRow>,
+    inlined_deletes: Vec<InlinedDeleteRow>,
     /// F-15: root path of the object store for constructing absolute file URLs.
     data_root: Option<String>,
 }
@@ -445,6 +463,9 @@ impl RockLakeTableProvider {
         _table_id: u64,
         columns: Vec<rocklake_core::rows::ColumnRow>,
         data_files: Vec<DataFileRow>,
+        delete_files: Vec<DeleteFileRow>,
+        inlined_inserts: Vec<InlinedInsertRow>,
+        inlined_deletes: Vec<InlinedDeleteRow>,
         data_root: Option<String>,
     ) -> datafusion::error::Result<Self> {
         use datafusion::arrow::datatypes::{Field, Schema};
@@ -462,6 +483,9 @@ impl RockLakeTableProvider {
         Ok(Self {
             schema,
             data_files,
+            delete_files,
+            inlined_inserts,
+            inlined_deletes,
             data_root,
         })
     }
@@ -610,57 +634,70 @@ impl TableProvider for RockLakeTableProvider {
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         use datafusion::physical_plan::empty::EmptyExec;
 
-        // F-15: if there are Parquet data files and a known data root, use the
-        // real DataFusion Parquet reader.  Fall back to EmptyExec when either
-        // the data root is not set (non-local stores) or no files are registered.
-        let parquet_files: Vec<&DataFileRow> = self
-            .data_files
-            .iter()
-            .filter(|f| f.file_format.to_lowercase() == "parquet")
-            .collect();
-
-        if parquet_files.is_empty() {
-            return Ok(Arc::new(EmptyExec::new(self.schema.clone())));
+        if !self.delete_files.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DuckLake delete files are not supported by the DataFusion scan".to_string(),
+            ));
         }
-
-        if self.data_root.is_none() {
-            return Err(DataFusionError::Plan(
-                "data_root is not available for this object store type; \
-                 cannot scan registered Parquet files — ensure the catalog \
-                 metadata key 'data_path' is set"
-                    .to_string(),
+        if !self.inlined_deletes.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DuckLake inlined deletes are not supported by the DataFusion scan".to_string(),
+            ));
+        }
+        if !self.inlined_inserts.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DuckLake inlined inserts are not supported by the DataFusion scan".to_string(),
             ));
         }
 
-        let root = self.data_root.as_deref().unwrap();
+        if self.data_files.is_empty() {
+            return Ok(Arc::new(EmptyExec::new(self.schema.clone())));
+        }
+
+        if let Some(file) = self
+            .data_files
+            .iter()
+            .find(|file| !file.file_format.eq_ignore_ascii_case("parquet"))
+        {
+            return Err(DataFusionError::NotImplemented(format!(
+                "registered data-file format '{}' is not supported by the DataFusion scan",
+                file.file_format
+            )));
+        }
 
         use datafusion::datasource::file_format::parquet::ParquetFormat;
         use datafusion::datasource::listing::{
             ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
         };
 
-        let urls: Result<Vec<ListingTableUrl>, _> = parquet_files
+        let urls: Result<Vec<ListingTableUrl>, _> = self
+            .data_files
             .iter()
             .map(|f| {
-                // Construct an absolute path only for relative catalog entries.
-                let abs = if f.path_is_relative == Some(false) {
+                let relative = f
+                    .path_is_relative
+                    .unwrap_or_else(|| rocklake_core::path::is_path_relative(&f.path));
+                let path = if relative {
+                    let root = self.data_root.as_deref().ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "data_path is required for relative registered data files".to_string(),
+                        )
+                    })?;
+                    if f.path.split('/').any(|part| part == "..") {
+                        return Err(DataFusionError::Plan(format!(
+                            "relative data-file path escapes data_path: {}",
+                            f.path
+                        )));
+                    }
+                    format!(
+                        "{}/{}",
+                        root.trim_end_matches('/'),
+                        f.path.trim_start_matches('/')
+                    )
+                } else {
                     f.path.clone()
-                } else {
-                    format!("{}/{}", root.trim_end_matches('/'), f.path)
                 };
-
-                // Handle different URL schemes:
-                // - If root starts with a scheme (s3://, az://, gs://, etc.), use as-is
-                // - Otherwise, assume it's a local path and prepend file://
-                let url_str = if root.contains("://") {
-                    // Already a URI with scheme
-                    abs
-                } else {
-                    // Local filesystem path - prepend file://
-                    format!("file://{abs}")
-                };
-
-                ListingTableUrl::parse(url_str)
+                ListingTableUrl::parse(path)
             })
             .collect();
         let urls = urls?;
