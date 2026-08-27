@@ -26,6 +26,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::io::BufReader;
 
 use base64::Engine as _;
 use slatedb::{Db, WriteBatch};
@@ -70,6 +71,8 @@ pub struct MigrationReport {
     pub dry_run: bool,
     /// Source catalog DuckLake catalog_version (schema_version of the latest snapshot).
     pub source_catalog_version: u64,
+    /// Exact source snapshot used for the migration.
+    pub source_snapshot_id: u64,
 }
 
 impl MigrationReport {
@@ -90,6 +93,7 @@ impl MigrationReport {
 /// Implementations exist for:
 /// - [`InMemoryDuckLakeSource`] — for testing
 /// - [`SqliteDuckLakeSource`] — reads from a SQLite DuckLake catalog via `rusqlite`
+/// - [`PostgresDuckLakeSource`] — reads from a PostgreSQL DuckLake catalog
 pub trait DuckLakeSource {
     /// Return the DuckLake catalog schema version (e.g., 7 = V1_0, 8 = V1_1_DEV_1).
     ///
@@ -156,6 +160,7 @@ pub struct SqliteDuckLakeSource {
     version: u64,
 }
 
+#[allow(dead_code)]
 impl SqliteDuckLakeSource {
     /// Open a SQLite DuckLake catalog at `path`.
     ///
@@ -180,8 +185,18 @@ impl SqliteDuckLakeSource {
                     [],
                     |row| row.get::<_, Option<i64>>(0),
                 )
-                .map(|v| v.unwrap_or(0) as u64)
-                .unwrap_or(0),
+                .map_err(|e| CatalogError::MigrationSource(e.to_string()))?
+                .ok_or_else(|| {
+                    CatalogError::MigrationSource(
+                        "DuckLake source has no snapshot rows".to_string(),
+                    )
+                })?
+                .try_into()
+                .map_err(|_| {
+                    CatalogError::MigrationSource(
+                        "DuckLake snapshot_id must be a non-negative integer".to_string(),
+                    )
+                })?,
         };
 
         let version: u64 = conn
@@ -190,8 +205,16 @@ impl SqliteDuckLakeSource {
                 [],
                 |row| row.get::<_, Option<i64>>(0),
             )
-            .map(|v| v.unwrap_or(0) as u64)
-            .unwrap_or(0);
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?
+            .ok_or_else(|| {
+                CatalogError::MigrationSource("DuckLake source has no schema version".to_string())
+            })?
+            .try_into()
+            .map_err(|_| {
+                CatalogError::MigrationSource(
+                    "DuckLake schema_version must be a non-negative integer".to_string(),
+                )
+            })?;
 
         let mut src = Self {
             snapshot_id: sid,
@@ -204,25 +227,87 @@ impl SqliteDuckLakeSource {
     }
 
     fn load_all_tables(&mut self, conn: &rusqlite::Connection, sid: u64) -> CatalogResult<()> {
-        self.load_snapshots(conn, sid)?;
-        self.load_versioned_generic(conn, sid, "ducklake_schema")?;
-        self.load_versioned_generic(conn, sid, "ducklake_table")?;
-        self.load_versioned_generic(conn, sid, "ducklake_column")?;
-        self.load_data_files(conn, sid)?;
-        self.load_delete_files(conn, sid)?;
-        for &opt in &[
-            "ducklake_view",
-            "ducklake_macro",
-            "ducklake_tag",
-            "ducklake_column_tag",
-        ] {
-            if Self::table_exists(conn, opt) {
-                self.load_versioned_generic(conn, sid, opt)?;
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let source_tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        for table in source_tables {
+            if table.starts_with("sqlite_") {
+                continue;
+            }
+            if source_target_table(&table).is_none() {
+                return Err(CatalogError::MigrationSource(format!(
+                    "unsupported DuckLake source table '{table}'"
+                )));
             }
         }
-        if Self::table_exists(conn, "ducklake_snapshot_changes") {
-            self.load_snapshot_changes(conn, sid)?;
+        for &target in DUCKLAKE_TABLES {
+            let source = source_table_for_target(target);
+            if Self::table_exists(conn, source) {
+                self.load_table(conn, sid, source, target)?;
+            }
         }
+        Ok(())
+    }
+
+    fn load_table(
+        &mut self,
+        conn: &rusqlite::Connection,
+        sid: u64,
+        source: &str,
+        target: &str,
+    ) -> CatalogResult<()> {
+        let pragma = format!("PRAGMA table_info({source})");
+        let mut columns_stmt = conn
+            .prepare(&pragma)
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let columns: Vec<String> = columns_stmt
+            .query_map([], |row| row.get(1))
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let where_clause = if columns.iter().any(|c| c == "begin_snapshot") {
+            " WHERE (begin_snapshot IS NULL OR begin_snapshot <= ?1) \
+              AND (end_snapshot IS NULL OR end_snapshot > ?1)"
+        } else if columns.iter().any(|c| c == "snapshot_id") {
+            " WHERE snapshot_id <= ?1"
+        } else {
+            ""
+        };
+        let sql = format!("SELECT * FROM {source}{where_clause}");
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let names: Vec<String> = stmt
+            .column_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let params: &[&dyn rusqlite::ToSql] = if where_clause.is_empty() {
+            &[]
+        } else {
+            &[&(sid as i64)]
+        };
+        let rows = stmt
+            .query_map(params, |row| {
+                let mut object = serde_json::Map::new();
+                for (index, name) in names.iter().enumerate() {
+                    let value: rusqlite::types::Value = row.get(index)?;
+                    object.insert(name.clone(), rusqlite_value_to_json(value));
+                }
+                Ok(ExportedRow {
+                    table: target.to_string(),
+                    data: Value::Object(object),
+                })
+            })
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        self.rows.insert(target.to_string(), rows);
         Ok(())
     }
 
@@ -430,22 +515,210 @@ impl DuckLakeSource for SqliteDuckLakeSource {
     }
 }
 
+/// A DuckLake source that snapshots a PostgreSQL catalog into memory before
+/// migration. The connection stays out of the migration trait, so the target
+/// write remains one atomic operation after all source reads complete.
+pub struct PostgresDuckLakeSource {
+    /// The snapshot ID at which rows were read.
+    pub snapshot_id: u64,
+    rows: HashMap<String, Vec<ExportedRow>>,
+    version: u64,
+}
+
+impl PostgresDuckLakeSource {
+    /// Connect to PostgreSQL and read the complete supported DuckLake catalog.
+    pub async fn connect(connection_string: &str, snapshot_id: Option<u64>) -> CatalogResult<Self> {
+        let (client, connection) =
+            tokio_postgres::connect(connection_string, tokio_postgres::NoTls)
+                .await
+                .map_err(|e| CatalogError::MigrationSource(format!("PostgreSQL connect: {e}")))?;
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                tracing::warn!("DuckLake PostgreSQL connection closed: {error}");
+            }
+        });
+
+        let row = client
+            .query_one(
+                "SELECT COALESCE(MAX(snapshot_id), 0), \
+                        COALESCE(MAX(schema_version), 0) \
+                 FROM ducklake_snapshot",
+                &[],
+            )
+            .await
+            .map_err(|e| {
+                CatalogError::MigrationSource(format!("PostgreSQL snapshot query: {e}"))
+            })?;
+        let latest_snapshot = row
+            .try_get::<_, i64>(0)
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let version = row
+            .try_get::<_, i64>(1)
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let sid = snapshot_id.unwrap_or(latest_snapshot.max(0) as u64);
+
+        let names = client
+            .query(
+                "SELECT table_name FROM information_schema.tables \
+                 WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'",
+                &[],
+            )
+            .await
+            .map_err(|e| CatalogError::MigrationSource(format!("PostgreSQL table list: {e}")))?;
+        for row in names {
+            let name = row
+                .try_get::<_, String>(0)
+                .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+            if source_target_table(&name).is_none() {
+                return Err(CatalogError::MigrationSource(format!(
+                    "unsupported DuckLake source table '{name}'"
+                )));
+            }
+        }
+
+        let mut source = Self {
+            snapshot_id: sid,
+            rows: HashMap::new(),
+            version: version.max(0) as u64,
+        };
+        for &target in DUCKLAKE_TABLES {
+            let source_table = source_table_for_target(target);
+            let exists = client
+                .query_opt(
+                    "SELECT 1 FROM information_schema.tables \
+                     WHERE table_schema = current_schema() AND table_name = $1",
+                    &[&source_table],
+                )
+                .await
+                .map_err(|e| CatalogError::MigrationSource(e.to_string()))?
+                .is_some();
+            if exists {
+                source
+                    .load_table(&client, sid, source_table, target)
+                    .await?;
+            }
+        }
+        Ok(source)
+    }
+
+    async fn load_table(
+        &mut self,
+        client: &tokio_postgres::Client,
+        sid: u64,
+        source: &str,
+        target: &str,
+    ) -> CatalogResult<()> {
+        let columns = client
+            .query(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_schema = current_schema() AND table_name = $1 \
+                 ORDER BY ordinal_position",
+                &[&source],
+            )
+            .await
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let column_names: Vec<String> = columns
+            .iter()
+            .map(|row| row.try_get(0))
+            .collect::<Result<_, _>>()
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let where_clause = if column_names.iter().any(|c| c == "begin_snapshot") {
+            " WHERE (begin_snapshot IS NULL OR begin_snapshot <= $1) \
+                  AND (end_snapshot IS NULL OR end_snapshot > $1)"
+        } else if column_names.iter().any(|c| c == "snapshot_id") {
+            " WHERE snapshot_id <= $1"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json)::text \
+             FROM (SELECT * FROM {source}{where_clause}) t"
+        );
+        let row = if where_clause.is_empty() {
+            client.query_one(&sql, &[]).await
+        } else {
+            client.query_one(&sql, &[&(sid as i64)]).await
+        }
+        .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let json = row
+            .try_get::<_, String>(0)
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let data: Vec<Value> = serde_json::from_str(&json)
+            .map_err(|e| CatalogError::MigrationSource(format!("{source}: {e}")))?;
+        self.rows.insert(
+            target.to_string(),
+            data.into_iter()
+                .map(|data| ExportedRow {
+                    table: target.to_string(),
+                    data,
+                })
+                .collect(),
+        );
+        Ok(())
+    }
+}
+
+impl DuckLakeSource for PostgresDuckLakeSource {
+    fn catalog_version(&mut self) -> CatalogResult<u64> {
+        Ok(self.version)
+    }
+
+    fn read_table(&mut self, table: &str) -> CatalogResult<Vec<ExportedRow>> {
+        Ok(self.rows.get(table).cloned().unwrap_or_default())
+    }
+}
+
 // ── Core migration logic ──────────────────────────────────────────────────────
 
 /// All standard DuckLake spec tables (in import order).
 const DUCKLAKE_TABLES: &[&str] = &[
+    "ducklake_metadata",
     "ducklake_snapshot",
+    "ducklake_snapshot_changes",
     "ducklake_schema",
     "ducklake_table",
     "ducklake_column",
-    "ducklake_data_file",
-    "ducklake_delete_file",
     "ducklake_view",
     "ducklake_macro",
+    "ducklake_macro_impl",
+    "ducklake_macro_parameters",
+    "ducklake_data_file",
+    "ducklake_delete_file",
+    "ducklake_files_scheduled_for_deletion",
+    "ducklake_inlined_data_tables",
+    "ducklake_column_mapping",
+    "ducklake_name_mapping",
+    "ducklake_table_stats",
+    "ducklake_table_column_stats",
+    "ducklake_file_column_stats",
+    "ducklake_file_variant_stats",
+    "ducklake_partition_info",
+    "ducklake_partition_column",
+    "ducklake_file_partition_value",
+    "ducklake_sort_info",
+    "ducklake_sort_expression",
     "ducklake_tag",
     "ducklake_column_tag",
-    "ducklake_snapshot_changes",
+    "ducklake_schema_version",
 ];
+
+fn source_table_for_target(target: &str) -> &str {
+    if target == "ducklake_schema_version" {
+        "ducklake_schema_versions"
+    } else {
+        target
+    }
+}
+
+fn source_target_table(source: &str) -> Option<&'static str> {
+    if source == "ducklake_schema_versions" {
+        return Some("ducklake_schema_version");
+    }
+    DUCKLAKE_TABLES
+        .iter()
+        .copied()
+        .find(|target| *target == source)
+}
 
 /// Migrate from a DuckLake source into a fresh RockLake `Db`.
 ///
@@ -457,9 +730,8 @@ const DUCKLAKE_TABLES: &[&str] = &[
 ///
 /// # Atomicity
 ///
-/// Each table's rows are committed in a single `WriteBatch` so a crash between
-/// tables leaves at most one table partially written.  Callers should treat any
-/// `Err` result as an unrecoverable partial state and discard the target DB.
+/// All source rows are validated before the importer writes one atomic batch.
+/// An error leaves the target untouched.
 pub async fn migrate_from_source(
     source: &mut dyn DuckLakeSource,
     db: &Db,
@@ -491,56 +763,57 @@ pub async fn migrate_from_source(
         data_file_count: 0,
         dry_run,
         source_catalog_version: catalog_version,
+        source_snapshot_id: 0,
     };
 
-    if dry_run {
-        for &tbl in DUCKLAKE_TABLES {
-            let rows = source.read_table(tbl)?;
-            let stats = report.tables.entry(tbl.to_string()).or_default();
-            stats.rows_migrated = rows.len() as u64;
-            if tbl == "ducklake_data_file" {
-                report.data_file_count = rows.len() as u64;
-            }
-            for row in &rows {
-                if tbl == "ducklake_snapshot" {
-                    if let Some(sid) = row.data["snapshot_id"].as_u64() {
-                        report.snapshot_id_range = Some(match report.snapshot_id_range {
-                            None => (sid, sid),
-                            Some((min, max)) => (min.min(sid), max.max(sid)),
-                        });
-                    }
-                }
-            }
+    let mut all_rows = Vec::new();
+    for &tbl in DUCKLAKE_TABLES {
+        let rows = source.read_table(tbl)?;
+        let stats = report.tables.entry(tbl.to_string()).or_default();
+        stats.rows_migrated = rows.len() as u64;
+        if tbl == "ducklake_data_file" {
+            report.data_file_count = rows.len() as u64;
         }
+        for row in &rows {
+            let mut row = row.clone();
+            normalize_ducklake_row(tbl, &mut row.data);
+            crate::export::validate_import_data(tbl, &row.data, 0)?;
+            if tbl == "ducklake_snapshot" {
+                let sid = row.data["snapshot_id"].as_u64().ok_or_else(|| {
+                    CatalogError::MigrationSource("snapshot_id must be a u64".to_string())
+                })?;
+                report.source_snapshot_id = report.source_snapshot_id.max(sid);
+                report.snapshot_id_range = Some(match report.snapshot_id_range {
+                    None => (sid, sid),
+                    Some((min, max)) => (min.min(sid), max.max(sid)),
+                });
+            }
+            all_rows.push(row);
+        }
+    }
+    if report.snapshot_id_range.is_none() {
+        return Err(CatalogError::MigrationSource(
+            "DuckLake source has no snapshot rows".to_string(),
+        ));
+    }
+    if dry_run {
         return Ok(report);
     }
 
-    crate::init::initialize_catalog(db).await?;
-
-    for &tbl in DUCKLAKE_TABLES {
-        let rows = source.read_table(tbl)?;
-        let mut batch = WriteBatch::new();
-        let mut migrated = 0u64;
-        let mut skipped = 0u64;
-
-        for row in &rows {
-            match write_row_to_batch(&mut batch, tbl, &row.data, &mut report) {
-                Ok(()) => migrated += 1,
-                Err(e) => {
-                    tracing::warn!("Skipping row in {tbl}: {e}");
-                    skipped += 1;
-                }
-            }
-        }
-
-        if migrated > 0 {
-            db.write(batch).await?;
-        }
-        let stats = report.tables.entry(tbl.to_string()).or_default();
-        stats.rows_migrated += migrated;
-        stats.rows_skipped += skipped;
+    let mut ndjson = Vec::new();
+    for row in all_rows {
+        serde_json::to_writer(&mut ndjson, &row)
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        ndjson.push(b'\n');
     }
-
+    let imported = crate::export::import_catalog(db, BufReader::new(ndjson.as_slice())).await?;
+    if imported.rows_imported != report.total_migrated() {
+        return Err(CatalogError::MigrationSource(format!(
+            "imported {} rows but validated {} source rows",
+            imported.rows_imported,
+            report.total_migrated()
+        )));
+    }
     Ok(report)
 }
 
@@ -549,6 +822,7 @@ pub async fn migrate_from_source(
 /// Data files are written with both the primary key and the secondary
 /// `TAG_DATA_FILE_BY_SNAPSHOT` index in the same batch so they are committed
 /// atomically.
+#[allow(dead_code)]
 fn write_row_to_batch(
     batch: &mut WriteBatch,
     table: &str,
@@ -820,6 +1094,7 @@ fn write_row_to_batch(
 
 // ── Helper functions ──────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn req_u64(d: &Value, field: &str, table: &str) -> CatalogResult<u64> {
     d[field].as_u64().ok_or_else(|| CatalogError::Import {
         line: 0,
@@ -828,6 +1103,7 @@ fn req_u64(d: &Value, field: &str, table: &str) -> CatalogResult<u64> {
     })
 }
 
+#[allow(dead_code)]
 fn req_str(d: &Value, field: &str, table: &str) -> CatalogResult<String> {
     d[field]
         .as_str()
@@ -843,6 +1119,7 @@ fn req_str(d: &Value, field: &str, table: &str) -> CatalogResult<String> {
 ///
 /// Uses the same algorithm as the private `hash_tag_key` function in
 /// `rocklake_catalog::writer` for consistency across migration and write paths.
+#[allow(dead_code)]
 fn compute_hash_u64(s: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut hasher);
@@ -859,6 +1136,43 @@ fn rusqlite_value_to_json(val: rusqlite::types::Value) -> Value {
         rusqlite::types::Value::Text(s) => Value::String(s),
         rusqlite::types::Value::Blob(b) => {
             Value::String(base64::engine::general_purpose::STANDARD.encode(&b))
+        }
+    }
+}
+
+fn normalize_ducklake_row(table: &str, data: &mut Value) {
+    let Some(object) = data.as_object_mut() else {
+        return;
+    };
+    let aliases: &[(&str, &str)] = match table {
+        "ducklake_metadata" => &[("metadata_key", "key"), ("metadata_value", "value")],
+        "ducklake_table" => &[("data_path", "path")],
+        "ducklake_column" => &[
+            ("column_type", "data_type"),
+            ("column_order", "column_index"),
+            ("nulls_allowed", "is_nullable"),
+        ],
+        "ducklake_view" => &[("view_definition", "sql")],
+        "ducklake_data_file" => &[("row_count", "record_count")],
+        "ducklake_delete_file" => &[("row_count", "delete_count")],
+        _ => &[],
+    };
+    for (source, target) in aliases {
+        if !object.contains_key(*target) {
+            if let Some(value) = object.remove(*source) {
+                object.insert((*target).to_string(), value);
+            }
+        }
+    }
+    for field in [
+        "is_nullable",
+        "path_is_relative",
+        "contains_null",
+        "contains_nan",
+        "is_partition",
+    ] {
+        if let Some(value) = object.get(field).and_then(Value::as_i64) {
+            object.insert(field.to_string(), Value::Bool(value != 0));
         }
     }
 }
