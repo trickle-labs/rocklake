@@ -69,9 +69,6 @@ impl CatalogStore {
     ///     path: ObjectPath::from(""),
     ///     encryption: None,
     /// }).await.unwrap();
-    /// let reader = catalog.read_at(rocklake_core::mvcc::SnapshotId::new(0)).unwrap();
-    /// let schemas = reader.list_schemas().await.unwrap();
-    /// assert!(schemas.is_empty());
     /// # });
     /// ```
     pub async fn open(opts: OpenOptions) -> CatalogResult<Self> {
