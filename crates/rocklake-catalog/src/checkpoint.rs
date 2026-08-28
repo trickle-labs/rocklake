@@ -101,6 +101,11 @@ pub async fn create_checkpoint(db: &Db, label: Option<&str>) -> CatalogResult<Ch
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         }
 
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BeforeCheckpointCommit,
+        )
+        .await?;
+
         match tx.commit().await {
             Ok(_) => {
                 return Ok(CheckpointInfo {
@@ -247,6 +252,11 @@ pub async fn restore_checkpoint(db: &Db, checkpoint_id: u64) -> CatalogResult<Ch
             values::encode_counter(next_snapshot_id),
         )
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BeforeCheckpointRestoreCommit,
+        )
+        .await?;
 
         match tx.commit().await {
             Ok(_) => {

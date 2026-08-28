@@ -76,6 +76,8 @@ pub enum CatalogError {
     UnsupportedDuckLakeVersion { version: u64, message: String },
     #[error("migration source error: {0}")]
     MigrationSource(String),
+    #[error("injected fault at {point}: {message}")]
+    InjectedFault { point: String, message: String },
 }
 
 impl From<slatedb::Error> for CatalogError {

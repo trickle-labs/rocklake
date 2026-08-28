@@ -145,6 +145,10 @@ pub async fn orphaned_file_sweep(
             if file_age_secs >= grace_period_secs {
                 orphaned_files.push(path_str.clone());
                 if apply {
+                    crate::fault_injection::trigger(
+                        crate::fault_injection::WriteFaultPoint::BeforeCleanupObjectDelete,
+                    )
+                    .await?;
                     match object_store.delete(&obj.location).await {
                         Ok(_) => deleted_files.push(path_str),
                         Err(e) => deletion_failures.push((path_str, e.to_string())),
@@ -272,6 +276,10 @@ pub async fn process_scheduled_deletions_report_at(
             continue;
         }
         let path = canonical_object_path(data_prefix, &row.path, row.path_is_relative)?;
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BeforeCleanupObjectDelete,
+        )
+        .await?;
         let object_deleted = match object_store.delete(&path).await {
             Ok(_) => {
                 result.deleted += 1;
@@ -289,6 +297,10 @@ pub async fn process_scheduled_deletions_report_at(
             }
         };
         if object_deleted {
+            crate::fault_injection::trigger(
+                crate::fault_injection::WriteFaultPoint::BeforeCleanupCatalogDelete,
+            )
+            .await?;
             if let Err(e) = db.delete(&kv.key).await {
                 result
                     .catalog_failures

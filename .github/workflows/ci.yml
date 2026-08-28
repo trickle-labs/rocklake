@@ -291,6 +291,23 @@ jobs:
       - name: v0.40.0 fault injection tests
         run: cargo test -p rocklake-catalog --test v040_fault_injection_tests -- --test-threads=1
 
+  # v0.47.17: production-boundary failure certification.
+  production-failure-certification:
+    name: Production Failure Certification (v0.47.17)
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run real SlateDB failure-boundary certification
+        run: |
+          cargo test -p rocklake-catalog --test v04717_production_failure_tests \
+            -- --test-threads=1 --nocapture
+          cargo test -p rocklake-pgwire --test v04717_ducklake_value_conformance_tests \
+            -- --test-threads=1 --nocapture
+
   # Tier 8 v0.40.0: Security tests.
   security-v040:
     name: Security Tests (v0.40.0)
@@ -907,6 +924,7 @@ jobs:
       - drain-v047
       - datafusion-bridge-v047
       - bench-v047
+      - production-failure-certification
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -940,6 +958,14 @@ jobs:
           test -f benchmarks/v047-reader-fleet.json || \
             (echo "ERROR: benchmarks/v047-reader-fleet.json missing" && exit 1)
           echo "OK: benchmarks/v047-reader-fleet.json present"
+
+      - name: Verify v0.47.17 certification report
+        run: |
+          test -f docs/operations/v04717-certification.md || \
+            (echo "ERROR: v0.47.17 certification report missing" && exit 1)
+          grep -q '^# v0\.47\.17 Production Failure Certification$' \
+            docs/operations/v04717-certification.md
+          echo "OK: v0.47.17 certification report present"
 
   # ── v0.37.0: Engine Integration & Wire Protocol Hardening ────────────────────
 
@@ -995,4 +1021,3 @@ jobs:
             echo "OK: $GOLDEN exists"
           done
           echo "All golden fixtures verified."
-

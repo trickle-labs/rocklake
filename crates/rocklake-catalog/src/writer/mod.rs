@@ -1670,6 +1670,10 @@ impl CatalogWriter {
         record_count: u64,
         file_size_bytes: u64,
     ) -> CatalogResult<u64> {
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::AfterParquetWriteBeforeRegisterDataFile,
+        )
+        .await?;
         self.ensure_table_exists(table_id).await?;
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
@@ -1707,6 +1711,10 @@ impl CatalogWriter {
         // Also write the secondary index entry for O(log N) snapshot-bounded scans.
         let idx_key = keys::key_data_file_by_snapshot(table_id, snapshot_id, data_file_id);
         self.stage(key, encoded.clone());
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BetweenPrimaryAndSecondaryKeyWrite,
+        )
+        .await?;
         self.stage(idx_key, encoded);
         Ok(data_file_id)
     }
@@ -1724,6 +1732,10 @@ impl CatalogWriter {
         file_size_bytes: u64,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::AfterParquetWriteBeforeRegisterDataFile,
+        )
+        .await?;
         self.ensure_table_exists(table_id).await?;
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
@@ -1758,6 +1770,10 @@ impl CatalogWriter {
         let encoded = values::encode_value(&row);
         let idx_key = keys::key_data_file_by_snapshot(table_id, snapshot_id, data_file_id);
         self.stage(key, encoded.clone());
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BetweenPrimaryAndSecondaryKeyWrite,
+        )
+        .await?;
         self.stage(idx_key, encoded);
         Ok(data_file_id)
     }
@@ -1780,6 +1796,10 @@ impl CatalogWriter {
         mapping_id: Option<u64>,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::AfterParquetWriteBeforeRegisterDataFile,
+        )
+        .await?;
         self.ensure_table_exists(table_id).await?;
         if let Some(partition_id) = partition_id {
             self.ensure_partition_belongs(partition_id, Some(table_id))
@@ -1821,6 +1841,10 @@ impl CatalogWriter {
         let encoded = values::encode_value(&row);
         let idx_key = keys::key_data_file_by_snapshot(table_id, snapshot_id, data_file_id);
         self.stage(key, encoded.clone());
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BetweenPrimaryAndSecondaryKeyWrite,
+        )
+        .await?;
         self.stage(idx_key, encoded);
         Ok(data_file_id)
     }

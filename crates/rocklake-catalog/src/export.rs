@@ -2416,6 +2416,8 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
             batch.put(key, values::encode_counter(value));
         }
     }
+    crate::fault_injection::trigger(crate::fault_injection::WriteFaultPoint::BeforeImportCommit)
+        .await?;
     db.write(batch).await?;
 
     Ok(ImportResult {
