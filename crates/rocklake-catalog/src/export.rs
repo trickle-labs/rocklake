@@ -177,6 +177,7 @@ fn export_manifest(snapshot_id: u64) -> ExportManifest {
                 "path_is_relative",
                 "format",
                 "footer_size",
+                "encryption_key",
                 "partial_max",
             ],
             "ducklake_files_scheduled_for_deletion" => &[
@@ -724,6 +725,7 @@ pub async fn export_catalog<W: Write>(
                     "path_is_relative": row.path_is_relative,
                     "format": row.format,
                     "footer_size": row.footer_size,
+                    "encryption_key": row.encryption_key,
                     "partial_max": row.partial_max,
                 }),
             };
@@ -1838,6 +1840,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     format: d["format"].as_str().map(|s| s.to_string()),
                     footer_size: d["footer_size"].as_i64(),
                     partial_max: d["partial_max"].as_str().map(|s| s.to_string()),
+                    encryption_key: d["encryption_key"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_delete_file(data_file_id, delete_file_id);
                 put!(key, values::encode_value(&row));

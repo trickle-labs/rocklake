@@ -439,8 +439,8 @@ async fn golden_ducklake_macro() {
     let resp = exec("SELECT * FROM ducklake_macro", &store).await;
     let (cols, _) = inspect(resp).await;
     assert!(
-        cols.first().map(|s| s.as_str()) == Some("macro_id"),
-        "first column must be macro_id, got: {cols:?}"
+        cols.first().map(|s| s.as_str()) == Some("schema_id"),
+        "first column must be schema_id, got: {cols:?}"
     );
 }
 
@@ -488,9 +488,9 @@ async fn golden_ducklake_tag() {
     assert_cols_eq(
         &cols,
         &[
+            "object_id",
             "begin_snapshot",
             "end_snapshot",
-            "object_id",
             "key",
             "value",
         ],
@@ -508,9 +508,10 @@ async fn golden_ducklake_column_tag() {
     assert_cols_eq(
         &cols,
         &[
+            "table_id",
+            "column_id",
             "begin_snapshot",
             "end_snapshot",
-            "column_id",
             "key",
             "value",
         ],

@@ -419,7 +419,7 @@ impl SqliteDuckLakeSource {
         let mut stmt = conn
             .prepare(
                 "SELECT delete_file_id, data_file_id, path, delete_count, file_size_bytes, \
-                 snapshot_id, begin_snapshot, end_snapshot \
+                 snapshot_id, begin_snapshot, end_snapshot, encryption_key \
                  FROM ducklake_delete_file \
                  WHERE (begin_snapshot IS NULL OR begin_snapshot <= ?1) \
                  AND (end_snapshot IS NULL OR end_snapshot > ?1)",
@@ -437,6 +437,7 @@ impl SqliteDuckLakeSource {
                     "snapshot_id": row.get::<_, Option<i64>>(5).unwrap_or(None).unwrap_or(0) as u64,
                     "begin_snapshot": row.get::<_, Option<i64>>(6).unwrap_or(None).map(|v| v as u64),
                     "end_snapshot": row.get::<_, Option<i64>>(7).unwrap_or(None).map(|v| v as u64),
+                    "encryption_key": row.get::<_, Option<String>>(8).unwrap_or(None),
                 }))
             })
             .map_err(|e| CatalogError::MigrationSource(e.to_string()))?
@@ -979,6 +980,7 @@ fn write_row_to_batch(
                 format: d["format"].as_str().map(|s| s.to_string()),
                 footer_size: d["footer_size"].as_i64(),
                 partial_max: d["partial_max"].as_str().map(|s| s.to_string()),
+                encryption_key: d["encryption_key"].as_str().map(|s| s.to_string()),
             };
             batch.put(
                 keys::key_delete_file(data_file_id, delete_file_id),

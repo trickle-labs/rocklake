@@ -322,6 +322,9 @@ pub struct DeleteFileRow {
     /// v0.24: partial_max upper-bound for zone-map pruning.
     #[prost(string, optional, tag = "13")]
     pub partial_max: Option<String>,
+    /// v1.0: opaque delete-file encryption key material.
+    #[prost(string, optional, tag = "14")]
+    pub encryption_key: Option<String>,
 }
 
 /// Files scheduled for deletion row value.

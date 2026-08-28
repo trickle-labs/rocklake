@@ -56,6 +56,7 @@ pub enum BufferedOp {
         path_is_relative: Option<bool>,
         footer_size: Option<i64>,
         partial_max: Option<String>,
+        encryption_key: Option<String>,
     },
     InsertSnapshot {
         author: Option<String>,

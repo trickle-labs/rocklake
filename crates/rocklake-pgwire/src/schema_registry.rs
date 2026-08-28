@@ -113,15 +113,15 @@ pub fn schema_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_table ────────────────────────────────────────────────────────────
 
-/// `ducklake_table(table_id, begin_snapshot, end_snapshot, schema_id,
-/// table_name, table_uuid, path, path_is_relative)` — DuckLake v1.0 spec.
+/// `ducklake_table(table_id, table_uuid, begin_snapshot, end_snapshot,
+/// schema_id, table_name, path, path_is_relative)` — DuckLake v1.0 spec.
 pub fn table_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8b!("table_id"),
+        uuid_col!("table_uuid"),
         int8b!("begin_snapshot"),
         int8b!("end_snapshot"),
         int8b!("schema_id"),
-        uuid_col!("table_uuid"),
         text_col!("table_name"),
         text_col!("path"),
         bool_col!("path_is_relative"),
@@ -156,8 +156,8 @@ pub fn column_schema() -> Arc<Vec<FieldInfo>> {
 
 /// `ducklake_data_file(data_file_id, table_id, begin_snapshot, end_snapshot,
 /// file_order, path, path_is_relative, file_format, record_count,
-/// file_size_bytes, row_id_start, footer_size, encryption_key, partition_id,
-/// mapping_id, partial_max)` — DuckLake v1.0 spec (v0.27.12 extended fields).
+/// file_size_bytes, footer_size, row_id_start, partition_id, encryption_key,
+/// mapping_id, partial_max)` — DuckLake v1.0 spec.
 pub fn data_file_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("data_file_id"),
@@ -170,10 +170,10 @@ pub fn data_file_schema() -> Arc<Vec<FieldInfo>> {
         text_col!("file_format"),
         int8t!("record_count"),
         int8t!("file_size_bytes"),
-        int8t!("row_id_start"),
         int8t!("footer_size"),
-        text_col!("encryption_key"),
+        int8t!("row_id_start"),
         int8t!("partition_id"),
+        text_col!("encryption_key"),
         int8t!("mapping_id"),
         text_col!("partial_max"),
     ])
@@ -181,19 +181,23 @@ pub fn data_file_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_delete_file ──────────────────────────────────────────────────────
 
-/// `ducklake_delete_file` — DuckLake v1.0 spec presentation columns.
-/// Note: `delete_file_id` is a synthesized surrogate; `path` is the file path.
-/// v0.27.12: extended with `footer_size` and `partial_max`.
+/// `ducklake_delete_file(delete_file_id, table_id, begin_snapshot, end_snapshot,
+/// data_file_id, path, path_is_relative, format, delete_count, file_size_bytes,
+/// footer_size, encryption_key, partial_max)` — DuckLake v1.0 spec.
 pub fn delete_file_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("delete_file_id"),
         int8t!("table_id"),
-        text_col!("path"),
-        int8t!("delete_count"),
-        int8t!("file_size_bytes"),
         int8t!("begin_snapshot"),
         int8t!("end_snapshot"),
+        int8t!("data_file_id"),
+        text_col!("path"),
+        bool_col!("path_is_relative"),
+        text_col!("format"),
+        int8t!("delete_count"),
+        int8t!("file_size_bytes"),
         int8t!("footer_size"),
+        text_col!("encryption_key"),
         text_col!("partial_max"),
     ])
 }
@@ -214,8 +218,7 @@ pub fn table_stats_schema() -> Arc<Vec<FieldInfo>> {
 // ── ducklake_table_column_stats ───────────────────────────────────────────────
 
 /// `ducklake_table_column_stats(table_id, column_id, contains_null,
-/// contains_nan, min_value, max_value, extra_stats, value_count, null_count)`
-/// — DuckLake v1.0 spec plus compatibility aliases for newer consumers.
+/// contains_nan, min_value, max_value, extra_stats)` — DuckLake v1.0 spec.
 pub fn table_column_stats_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("table_id"),
@@ -225,8 +228,6 @@ pub fn table_column_stats_schema() -> Arc<Vec<FieldInfo>> {
         text_col!("min_value"),
         text_col!("max_value"),
         text_col!("extra_stats"),
-        int8t!("value_count"),
-        int8t!("null_count"),
     ])
 }
 
@@ -266,36 +267,35 @@ pub fn metadata_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_view ─────────────────────────────────────────────────────────────
 
-/// `ducklake_view(view_id, begin_snapshot, end_snapshot, schema_id, view_name,
-/// view_uuid, sql, dialect, column_aliases)` — DuckLake v1.0 spec
+/// `ducklake_view(view_id, view_uuid, begin_snapshot, end_snapshot, schema_id,
+/// view_name, dialect, sql, column_aliases)` — DuckLake v1.0 spec
 /// (Catalog Version 7).  `sql` is the canonical spec column name;
 /// earlier RockLake releases used `view_definition`.
 pub fn view_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("view_id"),
+        uuid_col!("view_uuid"),
         int8t!("begin_snapshot"),
         int8t!("end_snapshot"),
         int8t!("schema_id"),
         text_col!("view_name"),
-        uuid_col!("view_uuid"),
-        text_col!("sql"),
         text_col!("dialect"),
+        text_col!("sql"),
         text_col!("column_aliases"),
     ])
 }
 
 // ── ducklake_macro ────────────────────────────────────────────────────────────
 
-/// `ducklake_macro(macro_id, begin_snapshot, end_snapshot, schema_id,
-/// macro_name, macro_uuid)` — DuckLake v1.0 spec.
+/// `ducklake_macro(schema_id, macro_id, macro_name, begin_snapshot,
+/// end_snapshot)` — DuckLake v1.0 spec.
 pub fn macro_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
+        int8t!("schema_id"),
         int8t!("macro_id"),
+        text_col!("macro_name"),
         int8t!("begin_snapshot"),
         int8t!("end_snapshot"),
-        int8t!("schema_id"),
-        text_col!("macro_name"),
-        text_col!("macro_uuid"),
     ])
 }
 
@@ -331,15 +331,15 @@ pub fn macro_parameters_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_tag ──────────────────────────────────────────────────────────────
 
-/// `ducklake_tag(begin_snapshot, end_snapshot, object_id, key, value)` —
+/// `ducklake_tag(object_id, begin_snapshot, end_snapshot, key, value)` —
 /// DuckLake v1.0 spec (Catalog Version 7).  The synthesized `tag_id` surrogate
 /// has been removed per spec alignment; `key` and `value` are the canonical
 /// spec column names for the tag key and tag value respectively.
 pub fn tag_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
+        int8t!("object_id"),
         int8t!("begin_snapshot"),
         int8t!("end_snapshot"),
-        int8t!("object_id"),
         text_col!("key"),
         text_col!("value"),
     ])
@@ -347,15 +347,17 @@ pub fn tag_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_column_tag ───────────────────────────────────────────────────────
 
-/// `ducklake_column_tag(begin_snapshot, end_snapshot, column_id, key, value)` —
+/// `ducklake_column_tag(table_id, column_id, begin_snapshot, end_snapshot,
+/// key, value)` —
 /// DuckLake v1.0 spec (Catalog Version 7).  The synthesized `tag_id` surrogate
 /// has been removed per spec alignment; `key` and `value` are the canonical
 /// spec column names.
 pub fn column_tag_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
+        int8t!("table_id"),
+        int8t!("column_id"),
         int8t!("begin_snapshot"),
         int8t!("end_snapshot"),
-        int8t!("column_id"),
         text_col!("key"),
         text_col!("value"),
     ])
@@ -590,27 +592,22 @@ pub fn file_variant_stats_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_column_mapping ───────────────────────────────────────────────────
 
-/// `ducklake_column_mapping(mapping_id, table_id, column_id, type)` —
-/// DuckLake v1.0 spec: maps logical column IDs to physical
-/// field IDs for Iceberg-compatible column evolution.
+/// `ducklake_column_mapping(mapping_id, table_id, type)` — DuckLake v1.0 spec.
 pub fn column_mapping_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("mapping_id"),
         int8t!("table_id"),
-        int8t!("column_id"),
         text_col!("type"),
     ])
 }
 
 // ── ducklake_name_mapping ─────────────────────────────────────────────────────
 
-/// `ducklake_name_mapping(mapping_id, table_id, column_id, source_name, target_field_id, parent_column, is_partition)` —
-/// DuckLake v1.0 spec: maps physical field names to logical
-/// column IDs; required for by-name column evolution in Iceberg-format catalogs.
+/// `ducklake_name_mapping(mapping_id, column_id, source_name, target_field_id,
+/// parent_column, is_partition)` — DuckLake v1.0 spec.
 pub fn name_mapping_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("mapping_id"),
-        int8t!("table_id"),
         int8t!("column_id"),
         text_col!("source_name"),
         int8t!("target_field_id"),
@@ -623,8 +620,8 @@ pub fn name_mapping_schema() -> Arc<Vec<FieldInfo>> {
 
 /// Look up the canonical `FieldInfo` list for a named DuckLake metadata table.
 ///
-/// Returns `Some(schema)` for all 32 DuckLake v1.0 tables (28 core tables +
-/// 3 extension tables added in v0.27.11 + 1 extra); `None` for unknown names.
+/// Returns `Some(schema)` for the 28 DuckLake v1.0 tables and RockLake's
+/// retained extension tables; `None` for unknown names.
 pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
     match table_name {
         "ducklake_snapshot" => Some(snapshot_schema()),

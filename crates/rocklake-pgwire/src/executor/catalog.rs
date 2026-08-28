@@ -238,6 +238,7 @@ pub(super) async fn execute_commit(
                 path_is_relative,
                 footer_size,
                 partial_max,
+                encryption_key,
             } => {
                 needs_snapshot = true;
                 writer
@@ -251,6 +252,7 @@ pub(super) async fn execute_commit(
                         path_is_relative,
                         footer_size,
                         partial_max.as_deref(),
+                        encryption_key.as_deref(),
                     )
                     .await
                     .map_err(RockLakeError::from)?;
@@ -499,7 +501,12 @@ pub(super) async fn execute_commit(
                                 .map_err(RockLakeError::from)?;
                         }
                         "ducklake_name_mapping" => {
-                            let name = required_row_string(&row, "name")?;
+                            let name = row_map_string(&row, "source_name")
+                                .or_else(|| row_map_string(&row, "name"))
+                                .filter(|value| !value.is_empty())
+                                .ok_or_else(|| RockLakeError::MissingParam {
+                                    name: "source_name".to_string(),
+                                })?;
                             writer
                                 .add_name_mapping(
                                     row_map_u64(&row, "mapping_id"),
@@ -1052,6 +1059,9 @@ pub(super) fn make_tables_response(
             )
             .expect("pgwire field encoding is infallible");
         encoder
+            .encode_field_with_type_and_format(&t.table_uuid, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
             .encode_field_with_type_and_format(
                 &Some(t.begin_snapshot as i64),
                 &Type::INT8,
@@ -1068,9 +1078,6 @@ pub(super) fn make_tables_response(
                 &Type::INT8,
                 FieldFormat::Binary,
             )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&t.table_uuid, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
@@ -1251,21 +1258,20 @@ pub(super) fn make_data_files_response(
                 FieldFormat::Text,
             )
             .expect("pgwire field encoding is infallible");
-        let row_id_start = f.row_id_start.map(|r| r.to_string());
-        encoder
-            .encode_field_with_type_and_format(&row_id_start, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        // v0.27.12: extended DuckLake v1.0 data-file fields.
         let footer_size = f.footer_size.map(|s| s.to_string());
         encoder
             .encode_field_with_type_and_format(&footer_size, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
+        let row_id_start = f.row_id_start.map(|r| r.to_string());
         encoder
-            .encode_field_with_type_and_format(&f.encryption_key, &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(&row_id_start, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         let partition_id = f.partition_id.map(|p| p.to_string());
         encoder
             .encode_field_with_type_and_format(&partition_id, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&f.encryption_key, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         let mapping_id = f.mapping_id.map(|m| m.to_string());
         encoder
@@ -2226,18 +2232,6 @@ pub(super) fn make_table_column_stats_response(
         encoder
             .encode_field_with_type_and_format(&row.extra_stats, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
-        let value_count: Option<String> = None;
-        encoder
-            .encode_field_with_type_and_format(&value_count, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        let null_count = Some(if row.contains_null {
-            "1".to_string()
-        } else {
-            "0".to_string()
-        });
-        encoder
-            .encode_field_with_type_and_format(&null_count, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
     let count = data_rows.len();
@@ -2267,10 +2261,35 @@ pub(super) fn make_delete_files_response(
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
+                &f.begin_snapshot.map(|value| value.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        let end = f.end_snapshot.map(|value| value.to_string());
+        encoder
+            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(f.data_file_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
                 &Some(f.path.clone()),
                 &Type::TEXT,
                 FieldFormat::Text,
             )
+            .expect("pgwire field encoding is infallible");
+        let path_is_relative = f.path_is_relative.map(|value| value.to_string());
+        encoder
+            .encode_field_with_type_and_format(&path_is_relative, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&f.format, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
@@ -2286,18 +2305,12 @@ pub(super) fn make_delete_files_response(
                 FieldFormat::Text,
             )
             .expect("pgwire field encoding is infallible");
-        let begin = f.begin_snapshot.map(|b| b.to_string());
-        encoder
-            .encode_field_with_type_and_format(&begin, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        let end = f.end_snapshot.map(|e| e.to_string());
-        encoder
-            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        // v0.27.12: extended DuckLake v1.0 delete-file fields.
         let footer_size = f.footer_size.map(|s| s.to_string());
         encoder
             .encode_field_with_type_and_format(&footer_size, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&f.encryption_key, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(&f.partial_max, &Type::TEXT, FieldFormat::Text)
@@ -2398,6 +2411,9 @@ pub(super) fn make_views_response(views: Vec<rocklake_core::rows::ViewRow>) -> R
             )
             .expect("pgwire field encoding is infallible");
         encoder
+            .encode_field_with_type_and_format(&v.view_uuid, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
+        encoder
             .encode_field_with_type_and_format(
                 &Some(v.begin_snapshot.to_string()),
                 &Type::TEXT,
@@ -2423,13 +2439,10 @@ pub(super) fn make_views_response(views: Vec<rocklake_core::rows::ViewRow>) -> R
             )
             .expect("pgwire field encoding is infallible");
         encoder
-            .encode_field_with_type_and_format(&v.view_uuid, &Type::TEXT, FieldFormat::Text)
+            .encode_field_with_type_and_format(&v.dialect, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(&Some(v.sql.clone()), &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&v.dialect, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(&v.column_aliases, &Type::TEXT, FieldFormat::Text)
@@ -2452,7 +2465,21 @@ pub(super) fn make_macros_response(
         let mut encoder = DataRowEncoder::new(schema.clone());
         encoder
             .encode_field_with_type_and_format(
+                &Some(m.schema_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
                 &Some(m.macro_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(m.macro_name.clone()),
                 &Type::TEXT,
                 FieldFormat::Text,
             )
@@ -2467,23 +2494,6 @@ pub(super) fn make_macros_response(
         let end = m.end_snapshot.map(|e| e.to_string());
         encoder
             .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(m.schema_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(m.macro_name.clone()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&m.macro_uuid, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
@@ -2649,29 +2659,7 @@ pub(super) fn make_inlined_data_tables_response(
 pub(super) fn make_schema_versions_response(
     rows: Vec<rocklake_core::rows::SchemaVersionsRow>,
 ) -> Response<'static> {
-    let schema = Arc::new(vec![
-        FieldInfo::new(
-            "begin_snapshot".to_string(),
-            None,
-            None,
-            Type::INT8,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "schema_version".to_string(),
-            None,
-            None,
-            Type::INT8,
-            FieldFormat::Text,
-        ),
-        FieldInfo::new(
-            "table_id".to_string(),
-            None,
-            None,
-            Type::INT8,
-            FieldFormat::Text,
-        ),
-    ]);
+    let schema = crate::schema_registry::schema_versions_schema();
     let mut data_rows = Vec::new();
     for row in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
@@ -3139,63 +3127,8 @@ pub(super) fn make_sort_expressions_response(
 }
 
 pub(super) fn make_metadata_table_empty_response(table_name: &str) -> Response<'static> {
-    // Use the schema registry as the single source of truth for all registered
-    // DuckLake metadata tables.
-    if let Some(schema) = crate::schema_registry::fields_for_table(table_name) {
-        let mut resp = QueryResponse::new(schema, futures::stream::iter(vec![]));
-        resp.set_command_tag("SELECT 0");
-        return Response::Query(resp);
-    }
-
-    fn field(name: &str, datatype: Type) -> FieldInfo {
-        FieldInfo::new(name.to_string(), None, None, datatype, FieldFormat::Text)
-    }
-    fn int8(name: &str) -> FieldInfo {
-        field(name, Type::INT8)
-    }
-    fn text(name: &str) -> FieldInfo {
-        field(name, Type::TEXT)
-    }
-    fn bool_col(name: &str) -> FieldInfo {
-        field(name, Type::BOOL)
-    }
-
-    // Fall back to hard-coded schemas for tables not yet in the registry
-    // (internal or non-spec tables).
-    let schema: Vec<FieldInfo> = match table_name {
-        "ducklake_file_variant_stats" => vec![
-            int8("data_file_id"),
-            int8("table_id"),
-            int8("column_id"),
-            text("variant_path"),
-            text("shredded_type"),
-            int8("column_size_bytes"),
-            int8("value_count"),
-            int8("null_count"),
-            text("min_value"),
-            text("max_value"),
-            bool_col("contains_nan"),
-            text("extra_stats"),
-        ],
-        "ducklake_column_mapping" => {
-            vec![int8("mapping_id"), int8("table_id"), text("type")]
-        }
-        "ducklake_name_mapping" => vec![
-            int8("mapping_id"),
-            int8("column_id"),
-            text("source_name"),
-            int8("target_field_id"),
-            int8("parent_column"),
-            bool_col("is_partition"),
-        ],
-        "ducklake_schema_versions" => vec![
-            int8("begin_snapshot"),
-            int8("schema_version"),
-            int8("table_id"),
-        ],
-        _ => vec![],
-    };
-    let schema = Arc::new(schema);
+    let schema =
+        crate::schema_registry::fields_for_table(table_name).unwrap_or_else(|| Arc::new(vec![]));
     let mut resp = QueryResponse::new(schema, futures::stream::iter(vec![]));
     resp.set_command_tag("SELECT 0");
     Response::Query(resp)
@@ -3205,17 +3138,20 @@ pub(super) fn make_metadata_table_empty_response(table_name: &str) -> Response<'
 
 /// v0.27: Build a PgWire response for `SELECT * FROM ducklake_tag`.
 ///
-/// Spec column names: tag_id, begin_snapshot, end_snapshot, object_id,
-/// v0.27: Build a PgWire response for `SELECT * FROM ducklake_tag`.
-///
-/// Spec column names (v1.0 Catalog Version 7): begin_snapshot, end_snapshot,
-/// object_id, key, value.  The synthesized `tag_id` column has been removed
-/// per spec alignment; `key` and `value` carry the internal `tag_key`/`tag_value`.
+/// Spec column names (v1.0 Catalog Version 7): object_id, begin_snapshot,
+/// end_snapshot, key, value.
 pub(super) fn make_tags_response(rows: Vec<rocklake_core::rows::TagRow>) -> Response<'static> {
     let schema = crate::schema_registry::tag_schema();
     let mut data_rows = Vec::new();
     for r in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.object_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
                 &Some(r.begin_snapshot.to_string()),
@@ -3226,13 +3162,6 @@ pub(super) fn make_tags_response(rows: Vec<rocklake_core::rows::TagRow>) -> Resp
         let end = r.end_snapshot.map(|e| e.to_string());
         encoder
             .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(r.object_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
             .expect("pgwire field encoding is infallible");
         // `tag_key` exposed as spec column `key`.
         encoder
@@ -3260,9 +3189,8 @@ pub(super) fn make_tags_response(rows: Vec<rocklake_core::rows::TagRow>) -> Resp
 
 /// v0.27: Build a PgWire response for `SELECT * FROM ducklake_column_tag`.
 ///
-/// Spec column names (v1.0 Catalog Version 7): begin_snapshot, end_snapshot,
-/// column_id, key, value.  The synthesized `tag_id` column has been removed;
-/// `key` and `value` carry the internal `tag_key`/`tag_value`.
+/// Spec column names (v1.0 Catalog Version 7): table_id, column_id,
+/// begin_snapshot, end_snapshot, key, value.
 pub(super) fn make_column_tags_response(
     rows: Vec<rocklake_core::rows::ColumnTagRow>,
 ) -> Response<'static> {
@@ -3270,6 +3198,20 @@ pub(super) fn make_column_tags_response(
     let mut data_rows = Vec::new();
     for r in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.table_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
+                &Some(r.column_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
                 &Some(r.begin_snapshot.to_string()),
@@ -3280,13 +3222,6 @@ pub(super) fn make_column_tags_response(
         let end = r.end_snapshot.map(|e| e.to_string());
         encoder
             .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(r.column_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
             .expect("pgwire field encoding is infallible");
         // `tag_key` exposed as spec column `key`.
         encoder
@@ -3314,11 +3249,8 @@ pub(super) fn make_column_tags_response(
 
 /// v0.27: Build a PgWire response for `SELECT * FROM ducklake_sort_info`.
 ///
-/// Spec column names: sort_id, begin_snapshot, end_snapshot, table_id,
-/// sort_order, column_id.
+/// Spec column names: sort_id, table_id, begin_snapshot, end_snapshot.
 /// `SortInfoRow` carries `sort_id`, `table_id`, MVCC windows.
-/// `sort_order` and `column_id` default to 0 until sort-expression storage is
-/// implemented in a future version.
 pub(super) fn make_sort_info_response(
     rows: Vec<rocklake_core::rows::SortInfoRow>,
 ) -> Response<'static> {
@@ -3335,6 +3267,13 @@ pub(super) fn make_sort_info_response(
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(
+                &Some(r.table_id.to_string()),
+                &Type::TEXT,
+                FieldFormat::Text,
+            )
+            .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(
                 &Some(r.begin_snapshot.to_string()),
                 &Type::TEXT,
                 FieldFormat::Text,
@@ -3343,28 +3282,6 @@ pub(super) fn make_sort_info_response(
         let end = r.end_snapshot.map(|e| e.to_string());
         encoder
             .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(r.table_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        // sort_order and column_id: default to 0 until sort-expression rows are stored.
-        encoder
-            .encode_field_with_type_and_format(
-                &Some("0".to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some("0".to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
@@ -3493,10 +3410,6 @@ pub(super) fn make_column_mapping_response(
                 FieldFormat::Text,
             )
             .expect("pgwire field encoding is infallible");
-        let col_id = r.column_id.map(|c| c.to_string());
-        encoder
-            .encode_field_with_type_and_format(&col_id, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(&r.mapping_type, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
@@ -3522,9 +3435,6 @@ pub(super) fn make_name_mapping_response(
                 &Type::TEXT,
                 FieldFormat::Text,
             )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&None::<String>, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
         encoder
             .encode_field_with_type_and_format(

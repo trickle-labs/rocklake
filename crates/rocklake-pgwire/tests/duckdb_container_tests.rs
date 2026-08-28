@@ -30,6 +30,10 @@ async fn minio() -> &'static MinioHarness {
         .await
 }
 
+fn duckdb_version() -> String {
+    std::env::var("ROCKLAKE_DUCKDB_VERSION").unwrap_or_else(|_| "1.5.3".to_string())
+}
+
 fn test_prefix(name: &str) -> String {
     format!("duckdb-container-loop/{name}")
 }
@@ -46,7 +50,8 @@ async fn setup_catalog(name: &str) -> (CatalogHarness, PgWireHarness) {
 }
 
 async fn start_duckdb(data_dir: &TempDir) -> DuckDbContainerHarness {
-    DuckDbContainerHarness::start(data_dir.path())
+    let version = duckdb_version();
+    DuckDbContainerHarness::start_with_version(data_dir.path(), &version)
         .await
         .expect("DuckDB container should start")
 }
@@ -346,11 +351,13 @@ const METADATA_TABLES: &[&str] = &[
     "ducklake_column_tag",
     "ducklake_partition_info",
     "ducklake_partition_column",
+    "ducklake_file_partition_value",
     "ducklake_sort_info",
     "ducklake_sort_expression",
     "ducklake_files_scheduled_for_deletion",
     "ducklake_inlined_data_tables",
     "ducklake_schema_versions",
+    "ducklake_file_variant_stats",
     "ducklake_column_mapping",
     "ducklake_name_mapping",
 ];
@@ -994,7 +1001,6 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
     let duckdb = start_duckdb(&data_dir).await;
     let fixture = load_live_surface_fixture();
 
-    assert_eq!(fixture["duckdb_version"].as_str(), Some("1.5.3"));
     assert_eq!(fixture["ducklake_version"].as_str(), Some("1.0"));
     assert_eq!(fixture["catalog_version"].as_u64(), Some(7));
 

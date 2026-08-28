@@ -1871,6 +1871,7 @@ impl CatalogWriter {
             None,
             footer_size,
             partial_max,
+            None,
         )
         .await
     }
@@ -1888,6 +1889,7 @@ impl CatalogWriter {
         path_is_relative: Option<bool>,
         footer_size: Option<i64>,
         partial_max: Option<&str>,
+        encryption_key: Option<&str>,
     ) -> CatalogResult<u64> {
         if let Some(table_id) = table_id {
             if data_file_id != 0 {
@@ -1921,6 +1923,7 @@ impl CatalogWriter {
                 .or_else(|| Some("parquet".to_string())),
             footer_size,
             partial_max: partial_max.map(|s| s.to_string()),
+            encryption_key: encryption_key.map(|s| s.to_string()),
         };
 
         let key = keys::key_delete_file(data_file_id, delete_file_id);
@@ -1940,6 +1943,7 @@ impl CatalogWriter {
             path,
             delete_count,
             file_size_bytes,
+            None,
             None,
             None,
             None,

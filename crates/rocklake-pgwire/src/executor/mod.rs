@@ -2130,6 +2130,7 @@ async fn execute_classified<'a>(
                             path_is_relative: row_map_bool(&row, "path_is_relative"),
                             footer_size: optional_row_i64_value(&row, "footer_size")?,
                             partial_max: row_map_string(&row, "partial_max"),
+                            encryption_key: row_map_string(&row, "encryption_key"),
                         })
                     })
                     .collect::<Result<Vec<_>, RockLakeError>>()?;
@@ -2176,6 +2177,7 @@ async fn execute_classified<'a>(
                 path_is_relative: None,
                 footer_size: None,
                 partial_max: None,
+                encryption_key: None,
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;

@@ -21,7 +21,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 const DUCKDB_IMAGE: &str = "duckdb/duckdb";
-const DUCKDB_TAG: &str = "1.5.3";
 const DUCKDB_DATA_PATH: &str = "/duckdb-data";
 const DUCKDB_HOME: &str = "/tmp";
 const HOST_ALIAS: &str = "host.docker.internal";
@@ -72,6 +71,14 @@ pub enum DuckDbContainerError {
 impl DuckDbContainerHarness {
     /// Start a DuckDB container harness with persistent home and data mounts.
     pub async fn start(data_dir: impl AsRef<Path>) -> Result<Self, DuckDbContainerError> {
+        Self::start_with_version(data_dir, "1.5.3").await
+    }
+
+    /// Start a DuckDB container harness for an exact released DuckDB version.
+    pub async fn start_with_version(
+        data_dir: impl AsRef<Path>,
+        duckdb_version: &str,
+    ) -> Result<Self, DuckDbContainerError> {
         let docker = Docker::connect_with_local_defaults()
             .map_err(|e| DuckDbContainerError::Docker(e.to_string()))?;
 
@@ -81,7 +88,7 @@ impl DuckDbContainerHarness {
                     from_image: DUCKDB_IMAGE,
                     from_src: "",
                     repo: "",
-                    tag: DUCKDB_TAG,
+                    tag: duckdb_version,
                     platform: "",
                     changes: vec![],
                 }),
@@ -101,7 +108,7 @@ impl DuckDbContainerHarness {
         );
 
         let container = Config::<String> {
-            image: Some(format!("{DUCKDB_IMAGE}:{DUCKDB_TAG}")),
+            image: Some(format!("{DUCKDB_IMAGE}:{duckdb_version}")),
             entrypoint: Some(vec!["duckdb".to_string()]),
             cmd: Some(vec!["-batch".to_string()]),
             env: Some(vec![format!("HOME={DUCKDB_HOME}")]),

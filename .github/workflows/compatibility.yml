@@ -1,7 +1,7 @@
 name: DuckDB Compatibility Matrix
 
 # Pinned compatibility targets (v0.27.10):
-#   DuckDB:    v1.5.3  (primary supported client)
+#   DuckDB:    v1.5.3, v1.5.4, v1.5.5
 #   DuckLake:  1.0     (Catalog Version 7 / V1_0)
 #   DuckLake v1.1 (Catalog Version 8 / V1_1_DEV_1) is explicitly out of scope.
 
@@ -11,14 +11,15 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Nightly run against pinned DuckDB v1.5.3 / DuckLake 1.0.
+    # Nightly run against the supported DuckDB versions / DuckLake 1.0.
     - cron: '0 2 * * *'
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
-  # Pinned compatibility versions — update only via a versioned roadmap release.
-  DUCKLAKE_PINNED_DUCKDB_VERSION: "1.5.3"
+  # Minimum and current DuckDB compatibility targets.
+  DUCKLAKE_MIN_DUCKDB_VERSION: "1.5.3"
+  DUCKLAKE_CURRENT_DUCKDB_VERSION: "1.5.5"
   DUCKLAKE_PINNED_CATALOG_VERSION: "7"
 
 jobs:
@@ -105,6 +106,33 @@ jobs:
 
       - name: Run all catalog tests
         run: cargo test --package rocklake-catalog
+
+  ducklake-live:
+    name: Live DuckLake 1.0 (DuckDB ${{ matrix.duckdb-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        duckdb-version: ["1.5.3", "1.5.4", "1.5.5"]
+    env:
+      ROCKLAKE_DUCKDB_VERSION: ${{ matrix.duckdb-version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run live DuckDB compatibility tests
+        run: >-
+          cargo test --package rocklake-pgwire
+          --test duckdb_container_tests
+          --features minio-tests
+          -- --test-threads=1 --nocapture
+
+      - name: Verify DuckLake 1.0 schema manifest
+        run: >-
+          cargo test --package rocklake-pgwire
+          --test v0481_ducklake_1_0_compliance_tests
+          -- --exact schema_registry_matches_ducklake_1_0_manifest
 
   # ── DuckLake 1.0 compatibility corpus (v0.27.10) ──────────────────────────
   ducklake-corpus:

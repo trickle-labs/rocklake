@@ -1,7 +1,6 @@
-//! v0.48.0 DuckLake 1.0 Perfect Compliance Tests
+//! v0.48.0 DuckLake 1.0 compatibility tests
 //!
-//! Comprehensive compliance test suite for all 28+ DuckLake catalog tables,
-//! verifying exact schema compliance against DuckLake 1.0 spec and catalog correctness.
+//! Checks the DuckLake 1.0 catalog schema and the catalog operations used by DuckDB.
 
 use std::sync::Arc;
 
@@ -80,54 +79,355 @@ async fn inspect_query(resp: pgwire::api::results::Response<'static>) -> (Vec<St
 }
 
 #[test]
-fn schema_registry_covers_all_28_tables() {
-    // Verify schema registry has definitions for all 28 spec tables
-    let tables = vec![
-        "ducklake_snapshot",
-        "ducklake_snapshot_changes",
-        "ducklake_schema",
-        "ducklake_table",
-        "ducklake_column",
-        "ducklake_data_file",
-        "ducklake_delete_file",
-        "ducklake_table_stats",
-        "ducklake_table_column_stats",
-        "ducklake_file_column_stats",
-        "ducklake_metadata",
-        "ducklake_view",
-        "ducklake_macro",
-        "ducklake_macro_impl",
-        "ducklake_macro_parameters",
-        "ducklake_tag",
-        "ducklake_column_tag",
-        "ducklake_partition_info",
-        "ducklake_partition_column",
-        "ducklake_file_partition_value",
-        "ducklake_sort_info",
-        "ducklake_sort_expression",
-        "ducklake_files_scheduled_for_deletion",
-        "ducklake_inlined_data_tables",
-        "ducklake_schema_versions",
-        "ducklake_file_variant_stats",
-        "ducklake_column_mapping",
-        "ducklake_name_mapping",
+fn schema_registry_matches_ducklake_1_0_manifest() {
+    const MANIFEST: &[(&str, &[(&str, &str)])] = &[
+        (
+            "ducklake_column",
+            &[
+                ("column_id", "int8"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+                ("table_id", "int8"),
+                ("column_order", "int8"),
+                ("column_name", "text"),
+                ("column_type", "text"),
+                ("initial_default", "text"),
+                ("default_value", "text"),
+                ("nulls_allowed", "bool"),
+                ("parent_column", "int8"),
+                ("default_value_type", "text"),
+                ("default_value_dialect", "text"),
+            ],
+        ),
+        (
+            "ducklake_column_mapping",
+            &[
+                ("mapping_id", "int8"),
+                ("table_id", "int8"),
+                ("type", "text"),
+            ],
+        ),
+        (
+            "ducklake_column_tag",
+            &[
+                ("table_id", "int8"),
+                ("column_id", "int8"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+                ("key", "text"),
+                ("value", "text"),
+            ],
+        ),
+        (
+            "ducklake_data_file",
+            &[
+                ("data_file_id", "int8"),
+                ("table_id", "int8"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+                ("file_order", "int8"),
+                ("path", "text"),
+                ("path_is_relative", "bool"),
+                ("file_format", "text"),
+                ("record_count", "int8"),
+                ("file_size_bytes", "int8"),
+                ("footer_size", "int8"),
+                ("row_id_start", "int8"),
+                ("partition_id", "int8"),
+                ("encryption_key", "text"),
+                ("mapping_id", "int8"),
+                ("partial_max", "text"),
+            ],
+        ),
+        (
+            "ducklake_delete_file",
+            &[
+                ("delete_file_id", "int8"),
+                ("table_id", "int8"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+                ("data_file_id", "int8"),
+                ("path", "text"),
+                ("path_is_relative", "bool"),
+                ("format", "text"),
+                ("delete_count", "int8"),
+                ("file_size_bytes", "int8"),
+                ("footer_size", "int8"),
+                ("encryption_key", "text"),
+                ("partial_max", "text"),
+            ],
+        ),
+        (
+            "ducklake_file_column_stats",
+            &[
+                ("data_file_id", "int8"),
+                ("table_id", "int8"),
+                ("column_id", "int8"),
+                ("column_size_bytes", "int8"),
+                ("value_count", "int8"),
+                ("null_count", "int8"),
+                ("min_value", "text"),
+                ("max_value", "text"),
+                ("contains_nan", "bool"),
+                ("extra_stats", "text"),
+            ],
+        ),
+        (
+            "ducklake_file_partition_value",
+            &[
+                ("data_file_id", "int8"),
+                ("table_id", "int8"),
+                ("partition_key_index", "int8"),
+                ("partition_value", "text"),
+            ],
+        ),
+        (
+            "ducklake_file_variant_stats",
+            &[
+                ("data_file_id", "int8"),
+                ("table_id", "int8"),
+                ("column_id", "int8"),
+                ("variant_path", "text"),
+                ("shredded_type", "text"),
+                ("column_size_bytes", "int8"),
+                ("value_count", "int8"),
+                ("null_count", "int8"),
+                ("min_value", "text"),
+                ("max_value", "text"),
+                ("contains_nan", "bool"),
+                ("extra_stats", "text"),
+            ],
+        ),
+        (
+            "ducklake_files_scheduled_for_deletion",
+            &[
+                ("data_file_id", "int8"),
+                ("path", "text"),
+                ("path_is_relative", "bool"),
+                ("schedule_start", "timestamptz"),
+            ],
+        ),
+        (
+            "ducklake_inlined_data_tables",
+            &[
+                ("table_id", "int8"),
+                ("table_name", "text"),
+                ("schema_version", "int8"),
+            ],
+        ),
+        (
+            "ducklake_macro",
+            &[
+                ("schema_id", "int8"),
+                ("macro_id", "int8"),
+                ("macro_name", "text"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+            ],
+        ),
+        (
+            "ducklake_macro_impl",
+            &[
+                ("macro_id", "int8"),
+                ("impl_id", "int8"),
+                ("dialect", "text"),
+                ("sql", "text"),
+                ("type", "text"),
+            ],
+        ),
+        (
+            "ducklake_macro_parameters",
+            &[
+                ("macro_id", "int8"),
+                ("impl_id", "int8"),
+                ("column_id", "int8"),
+                ("parameter_name", "text"),
+                ("parameter_type", "text"),
+                ("default_value", "text"),
+                ("default_value_type", "text"),
+            ],
+        ),
+        (
+            "ducklake_metadata",
+            &[
+                ("key", "text"),
+                ("value", "text"),
+                ("scope", "text"),
+                ("scope_id", "int8"),
+            ],
+        ),
+        (
+            "ducklake_name_mapping",
+            &[
+                ("mapping_id", "int8"),
+                ("column_id", "int8"),
+                ("source_name", "text"),
+                ("target_field_id", "int8"),
+                ("parent_column", "int8"),
+                ("is_partition", "bool"),
+            ],
+        ),
+        (
+            "ducklake_partition_column",
+            &[
+                ("partition_id", "int8"),
+                ("table_id", "int8"),
+                ("partition_key_index", "int8"),
+                ("column_id", "int8"),
+                ("transform", "text"),
+            ],
+        ),
+        (
+            "ducklake_partition_info",
+            &[
+                ("partition_id", "int8"),
+                ("table_id", "int8"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+            ],
+        ),
+        (
+            "ducklake_schema",
+            &[
+                ("schema_id", "int8"),
+                ("schema_uuid", "uuid"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+                ("schema_name", "text"),
+                ("path", "text"),
+                ("path_is_relative", "bool"),
+            ],
+        ),
+        (
+            "ducklake_schema_versions",
+            &[
+                ("begin_snapshot", "int8"),
+                ("schema_version", "int8"),
+                ("table_id", "int8"),
+            ],
+        ),
+        (
+            "ducklake_snapshot",
+            &[
+                ("snapshot_id", "int8"),
+                ("snapshot_time", "timestamptz"),
+                ("schema_version", "int8"),
+                ("next_catalog_id", "int8"),
+                ("next_file_id", "int8"),
+            ],
+        ),
+        (
+            "ducklake_snapshot_changes",
+            &[
+                ("snapshot_id", "int8"),
+                ("changes_made", "text"),
+                ("author", "text"),
+                ("commit_message", "text"),
+                ("commit_extra_info", "text"),
+            ],
+        ),
+        (
+            "ducklake_sort_expression",
+            &[
+                ("sort_id", "int8"),
+                ("table_id", "int8"),
+                ("sort_key_index", "int8"),
+                ("expression", "text"),
+                ("dialect", "text"),
+                ("sort_direction", "text"),
+                ("null_order", "text"),
+            ],
+        ),
+        (
+            "ducklake_sort_info",
+            &[
+                ("sort_id", "int8"),
+                ("table_id", "int8"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+            ],
+        ),
+        (
+            "ducklake_table",
+            &[
+                ("table_id", "int8"),
+                ("table_uuid", "uuid"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+                ("schema_id", "int8"),
+                ("table_name", "text"),
+                ("path", "text"),
+                ("path_is_relative", "bool"),
+            ],
+        ),
+        (
+            "ducklake_table_column_stats",
+            &[
+                ("table_id", "int8"),
+                ("column_id", "int8"),
+                ("contains_null", "bool"),
+                ("contains_nan", "bool"),
+                ("min_value", "text"),
+                ("max_value", "text"),
+                ("extra_stats", "text"),
+            ],
+        ),
+        (
+            "ducklake_table_stats",
+            &[
+                ("table_id", "int8"),
+                ("record_count", "int8"),
+                ("next_row_id", "int8"),
+                ("file_size_bytes", "int8"),
+            ],
+        ),
+        (
+            "ducklake_tag",
+            &[
+                ("object_id", "int8"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+                ("key", "text"),
+                ("value", "text"),
+            ],
+        ),
+        (
+            "ducklake_view",
+            &[
+                ("view_id", "int8"),
+                ("view_uuid", "uuid"),
+                ("begin_snapshot", "int8"),
+                ("end_snapshot", "int8"),
+                ("schema_id", "int8"),
+                ("view_name", "text"),
+                ("dialect", "text"),
+                ("sql", "text"),
+                ("column_aliases", "text"),
+            ],
+        ),
     ];
 
-    for table in tables {
-        let schema = schema_registry::fields_for_table(table);
-        assert!(
-            schema.is_some(),
-            "table {} should have schema registered",
-            table
+    assert_eq!(MANIFEST.len(), 28);
+    for (table, expected_columns) in MANIFEST {
+        let schema = schema_registry::fields_for_table(table)
+            .unwrap_or_else(|| panic!("{table} should have a DuckLake 1.0 schema"));
+        let actual_columns: Vec<_> = schema
+            .iter()
+            .map(|field| {
+                (
+                    field.name().to_string(),
+                    field.datatype().name().to_string(),
+                )
+            })
+            .collect();
+        let expected_columns: Vec<_> = expected_columns
+            .iter()
+            .map(|(name, datatype)| ((*name).to_string(), (*datatype).to_string()))
+            .collect();
+        assert_eq!(
+            actual_columns, expected_columns,
+            "schema mismatch for {table}"
         );
-
-        if let Some(fields) = schema {
-            assert!(
-                !fields.is_empty(),
-                "table {} should have at least one column",
-                table
-            );
-        }
     }
 }
 
@@ -368,16 +668,7 @@ fn files_scheduled_for_deletion_has_data_file_id() {
 
 #[test]
 fn compliance_gap_summary() {
-    println!("\n=== DuckLake 1.0 Spec Compliance Gap Summary ===");
-    println!("P0 (Blocking): NONE FOUND");
-    println!("P1 (Important):");
-    println!("  - partition_column ✓ (has table_id)");
-    println!("  - sort_expression ✓ (has table_id, expression, dialect)");
-    println!("  - files_scheduled_for_deletion ✓ (has data_file_id)");
-    println!("  - file_variant_stats 6/12 columns (simplified schema)");
-    println!("  - column_mapping 4/3 columns (simplified schema)");
-    println!("  - name_mapping 4/6 columns (simplified schema)");
-    println!("\nAll 28 tables have registered schemas.");
+    println!("DuckLake 1.0 schema coverage is checked by the manifest test.");
 }
 
 // ── Phase 3: Comprehensive Catalog Correctness Tests ───────────────────────

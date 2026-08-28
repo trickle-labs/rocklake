@@ -294,7 +294,6 @@ async fn e2e_snapshot_and_metadata_tracking() {
 
 /// Test column-level stats and file variant stats.
 #[tokio::test]
-#[ignore]
 async fn e2e_column_stats_tracking() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
@@ -320,10 +319,11 @@ async fn e2e_column_stats_tracking() {
 
     // Add columns
     exec(
-        "INSERT INTO ducklake_column (table_id, column_name, column_type, column_order, nulls_allowed) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO ducklake_column (column_id, table_id, column_name, column_type, column_order, nulls_allowed) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
         &store,
         &ParamValues::new(vec![
+            Some("3".to_string()),
             Some("2".to_string()),
             Some("sale_id".to_string()),
             Some("BIGINT".to_string()),
@@ -334,10 +334,11 @@ async fn e2e_column_stats_tracking() {
     .await;
 
     exec(
-        "INSERT INTO ducklake_column (table_id, column_name, column_type, column_order, nulls_allowed) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO ducklake_column (column_id, table_id, column_name, column_type, column_order, nulls_allowed) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
         &store,
         &ParamValues::new(vec![
+            Some("4".to_string()),
             Some("2".to_string()),
             Some("amount".to_string()),
             Some("DECIMAL(10,2)".to_string()),
@@ -366,14 +367,18 @@ async fn e2e_column_stats_tracking() {
 
     // Record column-level stats
     exec(
-        "INSERT INTO ducklake_table_column_stats (table_id, column_id, null_count, value_count) \
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO ducklake_table_column_stats \
+         (table_id, column_id, contains_null, contains_nan, min_value, max_value, extra_stats) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
         &store,
         &ParamValues::new(vec![
             Some("2".to_string()),
-            Some("1".to_string()),
+            Some("3".to_string()),
+            Some("false".to_string()),
+            Some("false".to_string()),
             Some("0".to_string()),
             Some("50000".to_string()),
+            None,
         ]),
     )
     .await;
@@ -387,15 +392,12 @@ async fn e2e_column_stats_tracking() {
     .await;
     let (cols, count) = inspect_query(resp).await;
     assert!(count > 0, "should have column stats");
-    assert!(
-        cols.contains(&"null_count".to_string()),
-        "should have null_count"
-    );
+    assert!(cols.contains(&"contains_null".to_string()));
+    assert!(!cols.contains(&"null_count".to_string()));
 }
 
 /// Test multi-file scenarios with partition info.
 #[tokio::test]
-#[ignore]
 async fn e2e_partitioned_table_operations() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
@@ -421,10 +423,11 @@ async fn e2e_partitioned_table_operations() {
 
     // Add partition column
     exec(
-        "INSERT INTO ducklake_column (table_id, column_name, column_type, column_order, nulls_allowed) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO ducklake_column (column_id, table_id, column_name, column_type, column_order, nulls_allowed) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
         &store,
         &ParamValues::new(vec![
+            Some("3".to_string()),
             Some("2".to_string()),
             Some("hour".to_string()),
             Some("INT".to_string()),
@@ -436,9 +439,9 @@ async fn e2e_partitioned_table_operations() {
 
     // Add partition info
     exec(
-        "INSERT INTO ducklake_partition_info (table_id) VALUES ($1)",
+        "INSERT INTO ducklake_partition_info (partition_id, table_id) VALUES ($1, $2)",
         &store,
-        &ParamValues::new(vec![Some("2".to_string())]),
+        &ParamValues::new(vec![Some("4".to_string()), Some("2".to_string())]),
     )
     .await;
 
@@ -448,10 +451,10 @@ async fn e2e_partitioned_table_operations() {
          VALUES ($1, $2, $3, $4, $5)",
         &store,
         &ParamValues::new(vec![
-            Some("1".to_string()),
+            Some("4".to_string()),
             Some("2".to_string()),
             Some("0".to_string()),
-            Some("1".to_string()),
+            Some("3".to_string()),
             Some("identity".to_string()),
         ]),
     )
@@ -473,7 +476,7 @@ async fn e2e_partitioned_table_operations() {
                 Some("parquet".to_string()),
                 Some("3600".to_string()),
                 Some("262144".to_string()),
-                Some("1".to_string()),
+                Some("4".to_string()),
             ]),
         )
         .await;
@@ -514,7 +517,6 @@ async fn e2e_partitioned_table_operations() {
 
 /// Test delete file operations and merge-on-read semantics.
 #[tokio::test]
-#[ignore]
 async fn e2e_delete_file_operations() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
@@ -557,14 +559,15 @@ async fn e2e_delete_file_operations() {
     // Add delete file (for merge-on-read)
     exec(
         "INSERT INTO ducklake_delete_file \
-         (table_id, path, delete_count, file_size_bytes) \
-         VALUES ($1, $2, $3, $4)",
+         (table_id, path, delete_count, file_size_bytes, encryption_key) \
+         VALUES ($1, $2, $3, $4, $5)",
         &store,
         &ParamValues::new(vec![
             Some("2".to_string()),
             Some("data/docs/deletes/part-0001.parquet".to_string()),
             Some("50".to_string()),
             Some("4096".to_string()),
+            Some("delete-key".to_string()),
         ]),
     )
     .await;
@@ -595,6 +598,12 @@ async fn e2e_delete_file_operations() {
     assert!(
         cols.contains(&"delete_count".to_string()),
         "should have delete_count"
+    );
+    let reader = { store.lock().await.read_latest() };
+    let delete_files = reader.list_delete_files(2).await.unwrap();
+    assert_eq!(
+        delete_files[0].encryption_key.as_deref(),
+        Some("delete-key")
     );
 
     let resp = exec(
@@ -667,7 +676,6 @@ async fn e2e_view_operations() {
 
 /// Test sort expression operations.
 #[tokio::test]
-#[ignore]
 async fn e2e_sort_expression_operations() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
@@ -693,10 +701,11 @@ async fn e2e_sort_expression_operations() {
 
     // Add columns
     exec(
-        "INSERT INTO ducklake_column (table_id, column_name, column_type, column_order, nulls_allowed) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO ducklake_column (column_id, table_id, column_name, column_type, column_order, nulls_allowed) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
         &store,
         &ParamValues::new(vec![
+            Some("3".to_string()),
             Some("2".to_string()),
             Some("timestamp".to_string()),
             Some("TIMESTAMP".to_string()),
@@ -708,21 +717,26 @@ async fn e2e_sort_expression_operations() {
 
     // Add sort info
     exec(
-        "INSERT INTO ducklake_sort_info (table_id, begin_snapshot) VALUES ($1, $2)",
+        "INSERT INTO ducklake_sort_info (sort_id, table_id, begin_snapshot) VALUES ($1, $2, $3)",
         &store,
-        &ParamValues::new(vec![Some("2".to_string()), Some("1".to_string())]),
+        &ParamValues::new(vec![
+            Some("4".to_string()),
+            Some("2".to_string()),
+            Some("1".to_string()),
+        ]),
     )
     .await;
 
     // Add sort expression
     exec(
-        "INSERT INTO ducklake_sort_expression (sort_id, table_id, sort_key_index, expression, dialect, sort_direction, null_order) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO ducklake_sort_expression (sort_id, table_id, sort_key_index, column_id, expression, dialect, sort_direction, null_order) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         &store,
         &ParamValues::new(vec![
-            Some("1".to_string()),
+            Some("4".to_string()),
             Some("2".to_string()),
             Some("0".to_string()),
+            Some("3".to_string()),
             Some("timestamp".to_string()),
             Some("sql".to_string()),
             Some("asc".to_string()),

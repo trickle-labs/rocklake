@@ -263,6 +263,7 @@ fn delete_file_row_has_v024_fields() {
         format: Some("parquet".to_string()),
         footer_size: None,
         partial_max: None,
+        encryption_key: None,
     };
     assert_eq!(row.delete_count, 500);
     assert_eq!(row.table_id, Some(42));
