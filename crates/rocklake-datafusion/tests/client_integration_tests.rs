@@ -32,7 +32,7 @@ async fn datafusion_client_attach_empty_catalog() {
     let files = client.list_data_files(1, 0).await.expect("list_data_files");
     assert!(files.is_empty(), "fresh catalog has no data files");
 
-    client.close().await;
+    client.close().await.expect("close");
 }
 
 #[test]
@@ -50,5 +50,5 @@ fn datafusion_sync_client_attach_empty_catalog() {
     let files = client.list_data_files(1, 0).expect("list_data_files");
     assert!(files.is_empty());
 
-    client.close();
+    client.close().expect("close");
 }

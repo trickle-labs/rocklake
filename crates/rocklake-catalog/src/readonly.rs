@@ -7,7 +7,7 @@
 //!
 //! # Guarantees
 //!
-//! * Zero writes to SlateDB on open or refresh.
+//! * No RockLake catalog metadata writes on open or refresh.
 //! * `reader()` creates a `CatalogReader` bound to the most recently refreshed
 //!   snapshot; it never sees data past a snapshot that was committed *after*
 //!   the last `refresh()` call (snapshot isolation).
@@ -68,9 +68,7 @@ pub struct ReadOnlyCatalog {
 impl ReadOnlyCatalog {
     /// Open a read-only catalog.  No writer epoch is acquired or incremented.
     ///
-    /// The catalog is initialized if it does not yet exist so that reader
-    /// pods can tolerate racing against a writer that is still creating the
-    /// catalog for the first time.
+    /// The catalog must already be initialized by a writer.
     pub async fn open(opts: OpenOptions) -> CatalogResult<Self> {
         let object_store_ref = Arc::clone(&opts.object_store);
 
@@ -84,14 +82,14 @@ impl ReadOnlyCatalog {
             Db::open(opts.path, opts.object_store).await?
         };
 
-        // Run key-encoding migration (no-op on already-migrated catalogs).
-        crate::key_migration::migrate_key_encoding_if_needed(&db).await?;
+        crate::init::verify_format_version(&db).await?;
+        crate::init::verify_migrations_complete(&db).await?;
+        crate::init::load_counters_from_db(&db).await?;
 
-        // Read the latest snapshot ID without writing anything.
-        let current_snapshot_id = Self::read_latest_snapshot_id(&db).await;
+        let current_snapshot_id = Self::read_latest_snapshot_id(&db).await?;
 
         // Read the retain-from floor.
-        let retain_from_initial = crate::gc::read_retain_from(&db).await.unwrap_or(0);
+        let retain_from_initial = Self::read_retain_from(&db).await?;
 
         Ok(Self {
             db,
@@ -138,11 +136,16 @@ impl ReadOnlyCatalog {
     /// Re-reads the `next_snapshot_id` counter and the `retain_from` key from
     /// SlateDB.  Returns the newly observed snapshot ID.
     pub async fn refresh(&mut self) -> CatalogResult<SnapshotId> {
+        crate::init::verify_format_version(&self.db).await?;
+        crate::init::verify_migrations_complete(&self.db).await?;
+        crate::init::load_counters_from_db(&self.db).await?;
+
         // Refresh snapshot ID.
-        self.current_snapshot_id = Self::read_latest_snapshot_id(&self.db).await;
+        let current_snapshot_id = Self::read_latest_snapshot_id(&self.db).await?;
 
         // Refresh retain-from floor.
-        let retain_from = crate::gc::read_retain_from(&self.db).await.unwrap_or(0);
+        let retain_from = Self::read_retain_from(&self.db).await?;
+        self.current_snapshot_id = current_snapshot_id;
         self.retain_from.store(retain_from, Ordering::Release);
 
         Ok(self.current_snapshot_id)
@@ -189,15 +192,22 @@ impl ReadOnlyCatalog {
 
     // ── internal ───────────────────────────────────────────────────────────
 
-    async fn read_latest_snapshot_id(db: &Db) -> SnapshotId {
+    async fn read_latest_snapshot_id(db: &Db) -> CatalogResult<SnapshotId> {
         let key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
-        match db.get(&key).await {
-            Ok(Some(data)) => {
-                let next = values::decode_counter(&data).unwrap_or(1);
-                // next_snapshot_id is always 1 ahead of the committed snapshot.
-                SnapshotId::new(if next > 0 { next - 1 } else { 0 })
-            }
-            _ => SnapshotId::new(0),
+        let data = db.get(&key).await?.ok_or(CatalogError::NotInitialized)?;
+        let next = values::decode_counter(&data)?;
+        if next == 0 {
+            return Err(CatalogError::Corruption(
+                "next snapshot counter must be greater than zero".to_string(),
+            ));
         }
+        // next_snapshot_id is always 1 ahead of the committed snapshot.
+        Ok(SnapshotId::new(next - 1))
+    }
+
+    async fn read_retain_from(db: &Db) -> CatalogResult<u64> {
+        let key = keys::key_system(rocklake_core::tags::SYSTEM_RETAIN_FROM);
+        let data = db.get(&key).await?.ok_or(CatalogError::NotInitialized)?;
+        Ok(values::decode_counter(&data)?)
     }
 }

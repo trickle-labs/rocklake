@@ -7,14 +7,186 @@ use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::TableType;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use futures::{stream::BoxStream, StreamExt};
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_core::keys::MetadataScope;
 use rocklake_core::mvcc::SnapshotId;
-use rocklake_core::rows::DataFileRow;
+use rocklake_core::rows::{DataFileRow, DeleteFileRow, InlinedDeleteRow, InlinedInsertRow};
 use std::any::Any;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Read-only adapter for the object_store version used by DataFusion 45.
+/// SlateDB and RockLake use object_store 0.12, while DataFusion 45 still uses
+/// 0.11; keeping the adapter here avoids silently switching storage clients.
+#[derive(Debug)]
+struct DataFusionObjectStore {
+    inner: Arc<dyn object_store::ObjectStore>,
+}
+
+impl std::fmt::Display for DataFusionObjectStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DataFusionObjectStore({})", self.inner)
+    }
+}
+
+fn adapter_error(error: impl std::fmt::Display) -> datafusion_object_store::Error {
+    datafusion_object_store::Error::Generic {
+        store: "rocklake-datafusion",
+        source: std::io::Error::other(error.to_string()).into(),
+    }
+}
+
+fn unsupported_adapter_operation(name: &str) -> datafusion_object_store::Error {
+    datafusion_object_store::Error::NotSupported {
+        source: std::io::Error::other(format!("{name} is not supported by the read adapter"))
+            .into(),
+    }
+}
+
+fn adapter_meta(
+    meta: object_store::ObjectMeta,
+) -> Result<datafusion_object_store::ObjectMeta, datafusion_object_store::Error> {
+    let size = usize::try_from(meta.size).map_err(adapter_error)?;
+    Ok(datafusion_object_store::ObjectMeta {
+        location: datafusion_object_store::path::Path::from(meta.location.to_string()),
+        last_modified: meta.last_modified,
+        size,
+        e_tag: meta.e_tag,
+        version: meta.version,
+    })
+}
+
+#[async_trait]
+impl datafusion_object_store::ObjectStore for DataFusionObjectStore {
+    async fn put_opts(
+        &self,
+        _location: &datafusion_object_store::path::Path,
+        _payload: datafusion_object_store::PutPayload,
+        _options: datafusion_object_store::PutOptions,
+    ) -> Result<datafusion_object_store::PutResult, datafusion_object_store::Error> {
+        Err(unsupported_adapter_operation("put"))
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        _location: &datafusion_object_store::path::Path,
+        _options: datafusion_object_store::PutMultipartOpts,
+    ) -> Result<Box<dyn datafusion_object_store::MultipartUpload>, datafusion_object_store::Error>
+    {
+        Err(unsupported_adapter_operation("multipart upload"))
+    }
+
+    async fn get_opts(
+        &self,
+        location: &datafusion_object_store::path::Path,
+        options: datafusion_object_store::GetOptions,
+    ) -> Result<datafusion_object_store::GetResult, datafusion_object_store::Error> {
+        let range = options.range.map(|range| match range {
+            datafusion_object_store::GetRange::Bounded(range) => {
+                object_store::GetRange::Bounded(range.start as u64..range.end as u64)
+            }
+            datafusion_object_store::GetRange::Offset(offset) => {
+                object_store::GetRange::Offset(offset as u64)
+            }
+            datafusion_object_store::GetRange::Suffix(length) => {
+                object_store::GetRange::Suffix(length as u64)
+            }
+        });
+        let result = self
+            .inner
+            .get_opts(
+                &object_store::path::Path::from(location.to_string()),
+                object_store::GetOptions {
+                    if_match: options.if_match,
+                    if_none_match: options.if_none_match,
+                    if_modified_since: options.if_modified_since,
+                    if_unmodified_since: options.if_unmodified_since,
+                    range,
+                    version: options.version,
+                    head: options.head,
+                    extensions: Default::default(),
+                },
+            )
+            .await
+            .map_err(adapter_error)?;
+        let meta = adapter_meta(result.meta.clone()).map_err(adapter_error)?;
+        let range = result.range.clone();
+        let payload = result
+            .into_stream()
+            .map(|result| result.map_err(adapter_error))
+            .boxed();
+        Ok(datafusion_object_store::GetResult {
+            payload: datafusion_object_store::GetResultPayload::Stream(payload),
+            meta,
+            range: usize::try_from(range.start).map_err(adapter_error)?
+                ..usize::try_from(range.end).map_err(adapter_error)?,
+            attributes: Default::default(),
+        })
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&datafusion_object_store::path::Path>,
+    ) -> BoxStream<
+        'static,
+        Result<datafusion_object_store::ObjectMeta, datafusion_object_store::Error>,
+    > {
+        let prefix = prefix.map(|path| object_store::path::Path::from(path.to_string()));
+        self.inner
+            .list(prefix.as_ref())
+            .map(|result| result.map_err(adapter_error).and_then(adapter_meta))
+            .boxed()
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&datafusion_object_store::path::Path>,
+    ) -> Result<datafusion_object_store::ListResult, datafusion_object_store::Error> {
+        let prefix = prefix.map(|path| object_store::path::Path::from(path.to_string()));
+        let result = self
+            .inner
+            .list_with_delimiter(prefix.as_ref())
+            .await
+            .map_err(adapter_error)?;
+        Ok(datafusion_object_store::ListResult {
+            common_prefixes: result
+                .common_prefixes
+                .into_iter()
+                .map(|path| datafusion_object_store::path::Path::from(path.to_string()))
+                .collect(),
+            objects: result
+                .objects
+                .into_iter()
+                .map(adapter_meta)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
+    async fn delete(
+        &self,
+        _location: &datafusion_object_store::path::Path,
+    ) -> Result<(), datafusion_object_store::Error> {
+        Err(unsupported_adapter_operation("delete"))
+    }
+
+    async fn copy(
+        &self,
+        _from: &datafusion_object_store::path::Path,
+        _to: &datafusion_object_store::path::Path,
+    ) -> Result<(), datafusion_object_store::Error> {
+        Err(unsupported_adapter_operation("copy"))
+    }
+
+    async fn copy_if_not_exists(
+        &self,
+        _from: &datafusion_object_store::path::Path,
+        _to: &datafusion_object_store::path::Path,
+    ) -> Result<(), datafusion_object_store::Error> {
+        Err(unsupported_adapter_operation("copy"))
+    }
+}
 
 /// N-05: Thread-safe bridge between DataFusion's sync trait methods and async
 /// catalog I/O.
@@ -31,7 +203,13 @@ use tokio::sync::RwLock;
 /// called from within an async task (which would panic).
 #[derive(Debug)]
 struct AsyncBridge {
-    sender: std::sync::mpsc::SyncSender<AsyncTask>,
+    state: Arc<BridgeState>,
+}
+
+#[derive(Debug)]
+struct BridgeState {
+    sender: std::sync::Mutex<Option<std::sync::mpsc::SyncSender<AsyncTask>>>,
+    worker: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 type AsyncTask = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
@@ -55,7 +233,7 @@ impl AsyncBridge {
             .build()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let (sender, receiver) = std::sync::mpsc::sync_channel::<AsyncTask>(queue_depth);
-        std::thread::Builder::new()
+        let worker = std::thread::Builder::new()
             .name("rocklake-df-bridge".to_string())
             .spawn(move || {
                 while let Ok(task) = receiver.recv() {
@@ -68,7 +246,12 @@ impl AsyncBridge {
                     "datafusion async bridge thread spawn failed: {e}"
                 ))))
             })?;
-        Ok(Arc::new(Self { sender }))
+        Ok(Arc::new(Self {
+            state: Arc::new(BridgeState {
+                sender: std::sync::Mutex::new(Some(sender)),
+                worker: std::sync::Mutex::new(Some(worker)),
+            }),
+        }))
     }
 
     /// Submit an async closure to the persistent background thread and block
@@ -85,7 +268,24 @@ impl AsyncBridge {
             let result = rt.block_on(f());
             let _ = result_tx.send(result);
         });
-        self.sender.send(task).map_err(|_| {
+        let sender = self
+            .state
+            .sender
+            .lock()
+            .map_err(|_| {
+                DataFusionError::External(Box::new(std::io::Error::other(
+                    "datafusion async bridge sender lock poisoned",
+                )))
+            })?
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                DataFusionError::External(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "datafusion async bridge shut down",
+                )))
+            })?;
+        sender.send(task).map_err(|_| {
             DataFusionError::External(Box::new(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "datafusion async bridge thread disconnected",
@@ -105,7 +305,25 @@ impl AsyncBridge {
     fn new_disconnected() -> Arc<Self> {
         let (sender, _receiver_dropped) = std::sync::mpsc::sync_channel::<AsyncTask>(1);
         // _receiver_dropped is immediately dropped, disconnecting the channel.
-        Arc::new(Self { sender })
+        Arc::new(Self {
+            state: Arc::new(BridgeState {
+                sender: std::sync::Mutex::new(Some(sender)),
+                worker: std::sync::Mutex::new(None),
+            }),
+        })
+    }
+}
+
+impl Drop for BridgeState {
+    fn drop(&mut self) {
+        if let Ok(sender) = self.sender.get_mut() {
+            sender.take();
+        }
+        if let Ok(worker) = self.worker.get_mut() {
+            if let Some(worker) = worker.take() {
+                let _ = worker.join();
+            }
+        }
     }
 }
 
@@ -135,6 +353,7 @@ pub struct RockLakeCatalogProvider {
     /// F-15: root path of the object store for resolving data file URLs.
     /// When set, `RockLakeTableProvider::scan()` can read real Parquet files.
     data_root: Option<String>,
+    object_store: Arc<dyn object_store::ObjectStore>,
 }
 
 impl std::fmt::Debug for RockLakeCatalogProvider {
@@ -163,11 +382,13 @@ impl RockLakeCatalogProvider {
         snapshot_id: Option<SnapshotId>,
         queue_depth: usize,
     ) -> Result<Self, DataFusionError> {
+        let object_store = store.object_store();
         Ok(Self {
             store: Arc::new(RwLock::new(store)),
             snapshot_id,
             bridge: AsyncBridge::with_queue_depth(queue_depth)?,
             data_root: None,
+            object_store,
         })
     }
 
@@ -194,11 +415,13 @@ impl RockLakeCatalogProvider {
                 _ => None,
             }
         };
+        let object_store = store.read().await.object_store();
         Ok(Self {
             store,
             snapshot_id,
             bridge: AsyncBridge::new()?,
             data_root,
+            object_store,
         })
     }
 
@@ -213,6 +436,7 @@ impl RockLakeCatalogProvider {
         path: ObjectPath,
         snapshot_id: Option<SnapshotId>,
     ) -> Result<Self, DataFusionError> {
+        let object_store_ref = object_store.clone();
         let opts = OpenOptions {
             object_store,
             path,
@@ -240,6 +464,7 @@ impl RockLakeCatalogProvider {
             snapshot_id,
             bridge: AsyncBridge::new()?,
             data_root,
+            object_store: object_store_ref,
         })
     }
 }
@@ -287,6 +512,7 @@ impl CatalogProvider for RockLakeCatalogProvider {
         let snapshot_id = self.snapshot_id;
         let bridge = self.bridge.clone();
         let data_root = self.data_root.clone();
+        let object_store = self.object_store.clone();
 
         Some(Arc::new(RockLakeSchemaProvider {
             store,
@@ -294,6 +520,7 @@ impl CatalogProvider for RockLakeCatalogProvider {
             snapshot_id,
             bridge,
             data_root,
+            object_store,
         }))
     }
 }
@@ -307,6 +534,7 @@ pub struct RockLakeSchemaProvider {
     bridge: Arc<AsyncBridge>,
     /// F-15: inherited data root for resolving Parquet file paths.
     data_root: Option<String>,
+    object_store: Arc<dyn object_store::ObjectStore>,
 }
 
 impl std::fmt::Debug for RockLakeSchemaProvider {
@@ -410,13 +638,27 @@ impl SchemaProvider for RockLakeSchemaProvider {
                     .list_data_files(table.table_id)
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let delete_files = reader
+                    .list_delete_files(table.table_id)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let inlined_inserts = reader
+                    .list_inlined_inserts(table.table_id)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let inlined_deletes = reader
+                    .list_inlined_deletes(table.table_id)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let table_provider = RockLakeTableProvider::new(
-                    table.table_name.clone(),
-                    table.table_id,
                     columns,
                     data_files,
+                    delete_files,
+                    inlined_inserts,
+                    inlined_deletes,
                     self.data_root.clone(),
+                    self.object_store.clone(),
                 )?;
                 Ok(Some(Arc::new(table_provider)))
             }
@@ -435,17 +677,23 @@ pub struct RockLakeTableProvider {
     schema: datafusion::arrow::datatypes::SchemaRef,
     /// F-15: data files registered in the catalog at the active snapshot.
     data_files: Vec<DataFileRow>,
+    delete_files: Vec<DeleteFileRow>,
+    inlined_inserts: Vec<InlinedInsertRow>,
+    inlined_deletes: Vec<InlinedDeleteRow>,
     /// F-15: root path of the object store for constructing absolute file URLs.
     data_root: Option<String>,
+    object_store: Arc<dyn object_store::ObjectStore>,
 }
 
 impl RockLakeTableProvider {
     fn new(
-        _table_name: String,
-        _table_id: u64,
         columns: Vec<rocklake_core::rows::ColumnRow>,
         data_files: Vec<DataFileRow>,
+        delete_files: Vec<DeleteFileRow>,
+        inlined_inserts: Vec<InlinedInsertRow>,
+        inlined_deletes: Vec<InlinedDeleteRow>,
         data_root: Option<String>,
+        object_store: Arc<dyn object_store::ObjectStore>,
     ) -> datafusion::error::Result<Self> {
         use datafusion::arrow::datatypes::{Field, Schema};
 
@@ -462,7 +710,11 @@ impl RockLakeTableProvider {
         Ok(Self {
             schema,
             data_files,
+            delete_files,
+            inlined_inserts,
+            inlined_deletes,
             data_root,
+            object_store,
         })
     }
 
@@ -610,60 +862,85 @@ impl TableProvider for RockLakeTableProvider {
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         use datafusion::physical_plan::empty::EmptyExec;
 
-        // F-15: if there are Parquet data files and a known data root, use the
-        // real DataFusion Parquet reader.  Fall back to EmptyExec when either
-        // the data root is not set (non-local stores) or no files are registered.
-        let parquet_files: Vec<&DataFileRow> = self
-            .data_files
-            .iter()
-            .filter(|f| f.file_format.to_lowercase() == "parquet")
-            .collect();
-
-        if parquet_files.is_empty() {
-            return Ok(Arc::new(EmptyExec::new(self.schema.clone())));
+        if !self.delete_files.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DuckLake delete files are not supported by the DataFusion scan".to_string(),
+            ));
         }
-
-        if self.data_root.is_none() {
-            return Err(DataFusionError::Plan(
-                "data_root is not available for this object store type; \
-                 cannot scan registered Parquet files — ensure the catalog \
-                 metadata key 'data_path' is set"
-                    .to_string(),
+        if !self.inlined_deletes.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DuckLake inlined deletes are not supported by the DataFusion scan".to_string(),
+            ));
+        }
+        if !self.inlined_inserts.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DuckLake inlined inserts are not supported by the DataFusion scan".to_string(),
             ));
         }
 
-        let root = self.data_root.as_deref().unwrap();
+        if self.data_files.is_empty() {
+            return Ok(Arc::new(EmptyExec::new(self.schema.clone())));
+        }
+
+        if let Some(file) = self
+            .data_files
+            .iter()
+            .find(|file| !file.file_format.eq_ignore_ascii_case("parquet"))
+        {
+            return Err(DataFusionError::NotImplemented(format!(
+                "registered data-file format '{}' is not supported by the DataFusion scan",
+                file.file_format
+            )));
+        }
 
         use datafusion::datasource::file_format::parquet::ParquetFormat;
         use datafusion::datasource::listing::{
             ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
         };
 
-        let urls: Result<Vec<ListingTableUrl>, _> = parquet_files
+        let urls: Result<Vec<ListingTableUrl>, _> = self
+            .data_files
             .iter()
             .map(|f| {
-                // Construct an absolute path only for relative catalog entries.
-                let abs = if f.path_is_relative == Some(false) {
-                    f.path.clone()
+                let relative = f
+                    .path_is_relative
+                    .unwrap_or_else(|| rocklake_core::path::is_path_relative(&f.path));
+                let path = if relative {
+                    let root = self.data_root.as_deref().ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "data_path is required for relative registered data files".to_string(),
+                        )
+                    })?;
+                    rocklake_core::path::resolve_data_path(root, &f.path, f.path_is_relative)
+                        .map_err(|e| DataFusionError::Plan(e.to_string()))?
                 } else {
-                    format!("{}/{}", root.trim_end_matches('/'), f.path)
+                    rocklake_core::path::resolve_data_path(
+                        self.data_root.as_deref().unwrap_or(""),
+                        &f.path,
+                        f.path_is_relative,
+                    )
+                    .map_err(|e| DataFusionError::Plan(e.to_string()))?
                 };
-
-                // Handle different URL schemes:
-                // - If root starts with a scheme (s3://, az://, gs://, etc.), use as-is
-                // - Otherwise, assume it's a local path and prepend file://
-                let url_str = if root.contains("://") {
-                    // Already a URI with scheme
-                    abs
-                } else {
-                    // Local filesystem path - prepend file://
-                    format!("file://{abs}")
-                };
-
-                ListingTableUrl::parse(url_str)
+                ListingTableUrl::parse(path)
             })
             .collect();
         let urls = urls?;
+        let object_store: Arc<dyn datafusion_object_store::ObjectStore> =
+            Arc::new(DataFusionObjectStore {
+                inner: self.object_store.clone(),
+            });
+        for url in &urls {
+            let object_store_url = url.object_store();
+            let scheme = object_store_url
+                .as_str()
+                .split_once("://")
+                .map_or("", |(scheme, _)| scheme);
+            if matches!(scheme, "s3" | "gs" | "az" | "azure" | "abfs" | "abfss") {
+                state
+                    .runtime_env()
+                    .register_object_store(object_store_url.as_ref(), object_store.clone());
+            }
+        }
 
         let file_format = Arc::new(ParquetFormat::default());
         let listing_options = ListingOptions::new(file_format).with_file_extension(".parquet");

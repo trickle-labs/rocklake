@@ -163,3 +163,12 @@ pub async fn verify_format_version(db: &Db) -> CatalogResult<()> {
     }
     Ok(())
 }
+
+/// Verify that all writer-only key migrations have already completed.
+pub async fn verify_migrations_complete(db: &Db) -> CatalogResult<()> {
+    let key = keys::key_system(SYSTEM_KEY_ENCODING_V020_MIGRATED);
+    if db.get(&key).await?.is_none() {
+        return Err(CatalogError::NotInitialized);
+    }
+    Ok(())
+}

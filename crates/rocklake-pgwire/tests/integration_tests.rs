@@ -78,6 +78,36 @@ async fn test_select_version() {
 }
 
 #[tokio::test]
+async fn reader_mode_rejects_mutations_before_catalog_io() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(&dir).await;
+    let mut session = SessionState::new();
+    let params = ParamValues::default();
+
+    let result = executor::execute_sql_with_mode(
+        "INSERT INTO ducklake_schema (schema_name) VALUES ('blocked')",
+        &params,
+        &store,
+        &mut session,
+        &default_notify_manager(),
+        &default_extension_schemas(),
+        executor::AccessMode::Reader,
+    )
+    .await;
+
+    let error = match result {
+        Ok(_) => panic!("reader mode allowed a catalog mutation"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        rocklake_pgwire::RockLakeError::ReadOnlyReplica
+    ));
+    assert!(!session.in_transaction);
+}
+
+#[tokio::test]
 async fn test_select_current_schema() {
     let dir = tempfile::tempdir().unwrap();
     let store = setup_store(&dir).await;

@@ -29,6 +29,26 @@ use slatedb::{Db, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 
+fn validate_registered_path(path: &str, declared_relative: Option<bool>) -> CatalogResult<bool> {
+    if path.trim_matches('/').is_empty() {
+        return Err(CatalogError::InvalidInput(
+            "registered file path cannot be empty".to_string(),
+        ));
+    }
+    if path.split('/').any(|part| part == "..") {
+        return Err(CatalogError::InvalidInput(format!(
+            "registered file path contains traversal: '{path}'"
+        )));
+    }
+    let inferred = rocklake_core::path::is_path_relative(path);
+    if declared_relative.is_some_and(|value| value != inferred) {
+        return Err(CatalogError::InvalidInput(format!(
+            "registered file path '{path}' disagrees with path_is_relative"
+        )));
+    }
+    Ok(inferred)
+}
+
 /// Writes to the catalog, producing new snapshots atomically.
 ///
 /// Call `create_snapshot()` to commit all staged mutations in a single atomic
@@ -1661,7 +1681,7 @@ impl CatalogWriter {
             .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
-        let path_is_relative = rocklake_core::path::is_path_relative(path);
+        let path_is_relative = validate_registered_path(path, None)?;
 
         let row = DataFileRow {
             data_file_id,
@@ -1713,7 +1733,7 @@ impl CatalogWriter {
             .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
-        let path_is_relative = rocklake_core::path::is_path_relative(path);
+        let path_is_relative = validate_registered_path(path, None)?;
 
         let row = DataFileRow {
             data_file_id,
@@ -1776,7 +1796,7 @@ impl CatalogWriter {
             .await?;
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
-        let path_is_relative = rocklake_core::path::is_path_relative(path);
+        let path_is_relative = validate_registered_path(path, None)?;
 
         let row = DataFileRow {
             data_file_id,
@@ -1859,8 +1879,7 @@ impl CatalogWriter {
         let snapshot_id = self.counters.peek_snapshot_id();
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
-        let path_is_relative =
-            path_is_relative.unwrap_or_else(|| rocklake_core::path::is_path_relative(path));
+        let path_is_relative = validate_registered_path(path, path_is_relative)?;
 
         let row = DeleteFileRow {
             delete_file_id,

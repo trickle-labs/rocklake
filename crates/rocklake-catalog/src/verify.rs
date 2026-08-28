@@ -880,6 +880,19 @@ fn check_path(
     if path.is_some_and(str::is_empty) {
         result.errors.push(format!("{kind} {id} has an empty path"));
     }
+    if let Some(path) = path {
+        let inferred = rocklake_core::path::is_path_relative(path);
+        if relative.is_some_and(|value| value != inferred) {
+            result.errors.push(format!(
+                "{kind} {id} disagrees with path_is_relative for path '{path}'"
+            ));
+        }
+        if path.split('/').any(|part| part == "..") {
+            result
+                .errors
+                .push(format!("{kind} {id} path contains traversal: '{path}'"));
+        }
+    }
     if relative == Some(true) && path.is_some_and(|path| path.starts_with('/')) {
         result.errors.push(format!(
             "{kind} {id} marks an absolute path as path_is_relative"

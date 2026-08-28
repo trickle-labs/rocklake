@@ -25,7 +25,7 @@
 //! let schemas = client.list_schemas(snapshot).await.expect("list_schemas");
 //! println!("schemas: {schemas:?}");
 //!
-//! client.close().await;
+//! client.close().await.expect("close");
 //! # });
 //! ```
 
@@ -130,7 +130,7 @@ pub struct Column {
 ///     .build()
 ///     .await
 ///     .expect("build");
-/// client.close().await;
+/// client.close().await.expect("close");
 /// # });
 /// ```
 pub struct CatalogClientBuilder {
@@ -153,11 +153,12 @@ impl CatalogClientBuilder {
     /// client.  Fails if the URI scheme is unsupported or if the underlying
     /// store cannot be opened.
     pub async fn build(self) -> ClientResult<CatalogClient> {
+        let path = catalog_path(&self.uri)?;
         let object_store = build_object_store(&self.uri)?;
 
         let opts = OpenOptions {
             object_store,
-            path: ObjectPath::from("catalog"),
+            path,
             encryption: None,
         };
 
@@ -184,15 +185,16 @@ impl CatalogClientBuilder {
     ///     .await
     ///     .expect("build_readonly");
     /// let snapshot_id = client.current_snapshot_id();
-    /// client.close().await;
+    /// client.close().await.expect("close");
     /// # });
     /// ```
     pub async fn build_readonly(self) -> ClientResult<ReadOnlyClient> {
+        let path = catalog_path(&self.uri)?;
         let object_store = build_object_store(&self.uri)?;
 
         let opts = OpenOptions {
             object_store,
-            path: ObjectPath::from("catalog"),
+            path,
             encryption: None,
         };
 
@@ -269,6 +271,32 @@ fn split_bucket_prefix(without_scheme: &str) -> (&str, &str) {
     }
 }
 
+fn catalog_path(uri: &str) -> ClientResult<ObjectPath> {
+    let prefix = ["s3://", "gs://", "az://", "azure://", "abfs://", "abfss://"]
+        .iter()
+        .find_map(|scheme| {
+            uri.strip_prefix(scheme)
+                .map(split_bucket_prefix)
+                .map(|(_, p)| p)
+        });
+    match prefix {
+        Some(prefix) => {
+            let prefix = prefix.trim_matches('/');
+            rocklake_core::path::validate_object_prefix(prefix)
+                .map_err(|e| ClientError::Config(e.to_string()))?;
+            Ok(ObjectPath::from(if prefix.is_empty() {
+                "catalog".to_string()
+            } else {
+                format!("{prefix}/catalog")
+            }))
+        }
+        None if uri.contains("://") && !uri.starts_with("file://") => Err(ClientError::Config(
+            format!("unsupported URI scheme in '{uri}'"),
+        )),
+        None => Ok(ObjectPath::from("catalog")),
+    }
+}
+
 // ─── CatalogClient ─────────────────────────────────────────────────────────
 
 /// Async-first client for RockLake catalog operations.
@@ -315,7 +343,7 @@ impl CatalogClient {
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
     /// let snap = client.snapshot_id().await.expect("snapshot_id");
     /// assert_eq!(snap, 0); // fresh catalog
-    /// client.close().await;
+    /// client.close().await.expect("close");
     /// # });
     /// ```
     pub async fn snapshot_id(&self) -> ClientResult<u64> {
@@ -338,7 +366,7 @@ impl CatalogClient {
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
     /// let schemas = client.list_schemas(0).await.expect("list_schemas");
     /// assert!(schemas.is_empty());
-    /// client.close().await;
+    /// client.close().await.expect("close");
     /// # });
     /// ```
     pub async fn list_schemas(&self, snapshot_id: u64) -> ClientResult<Vec<Schema>> {
@@ -365,7 +393,7 @@ impl CatalogClient {
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
     /// let tables = client.list_tables(1, 0).await.expect("list_tables");
     /// assert!(tables.is_empty());
-    /// client.close().await;
+    /// client.close().await.expect("close");
     /// # });
     /// ```
     pub async fn list_tables(&self, schema_id: u64, snapshot_id: u64) -> ClientResult<Vec<Table>> {
@@ -395,7 +423,7 @@ impl CatalogClient {
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
     /// let cols = client.get_table(999, 0).await.expect("get_table");
     /// assert!(cols.is_none());
-    /// client.close().await;
+    /// client.close().await.expect("close");
     /// # });
     /// ```
     pub async fn get_table(
@@ -431,7 +459,7 @@ impl CatalogClient {
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
     /// let files = client.list_data_files(1, 0).await.expect("list_data_files");
     /// assert!(files.is_empty());
-    /// client.close().await;
+    /// client.close().await.expect("close");
     /// # });
     /// ```
     pub async fn list_data_files(
@@ -461,11 +489,12 @@ impl CatalogClient {
     ///
     /// After this call all methods return an error.  It is not an error to
     /// call `close()` more than once.
-    pub async fn close(self) {
+    pub async fn close(self) -> ClientResult<()> {
         let mut guard = self.store.write().await;
         if let Some(store) = guard.take() {
-            let _ = store.close().await;
+            store.close().await?;
         }
+        Ok(())
     }
 }
 
@@ -489,7 +518,7 @@ impl CatalogClient {
 ///     .expect("build_readonly");
 /// let snapshot_id = client.current_snapshot_id();
 /// let new_snap = client.refresh().await.expect("refresh");
-/// client.close().await;
+/// client.close().await.expect("close");
 /// # });
 /// ```
 pub struct ReadOnlyClient {
@@ -551,9 +580,9 @@ impl ReadOnlyClient {
     }
 
     /// Close the catalog and release all resources.
-    pub async fn close(self) {
+    pub async fn close(self) -> ClientResult<()> {
         let guard = self.inner.into_inner();
-        let _ = guard.close().await;
+        guard.close().await.map_err(ClientError::from)
     }
 }
 
@@ -574,7 +603,7 @@ impl ReadOnlyClient {
 /// let client = CatalogClientSync::open("file:///tmp/demo").expect("open");
 /// let snap = client.snapshot_id().expect("snapshot_id");
 /// assert_eq!(snap, 0);
-/// client.close();
+/// client.close().expect("close");
 /// ```
 pub struct CatalogClientSync {
     runtime: tokio::runtime::Runtime,
@@ -600,10 +629,11 @@ impl CatalogClientSync {
         // build_readonly returns a ReadOnlyClient; wrap it in a CatalogClient
         // via the underlying open_without_epoch path so we keep the same sync API.
         let uri_str = uri.into();
+        let path = catalog_path(&uri_str)?;
         let os = build_object_store(&uri_str)?;
         let opts = OpenOptions {
             object_store: os,
-            path: ObjectPath::from("catalog"),
+            path,
             encryption: None,
         };
         let object_store =
@@ -643,8 +673,8 @@ impl CatalogClientSync {
     }
 
     /// Close the catalog.
-    pub fn close(self) {
-        self.runtime.block_on(async { self.inner.close().await });
+    pub fn close(self) -> ClientResult<()> {
+        self.runtime.block_on(self.inner.close())
     }
 }
 
@@ -661,7 +691,7 @@ mod tests {
         let client = CatalogClientBuilder::new(&uri).build().await.unwrap();
         let snap = client.snapshot_id().await.unwrap();
         assert_eq!(snap, 0, "fresh catalog has no snapshots");
-        client.close().await;
+        client.close().await.unwrap();
     }
 
     #[tokio::test]
@@ -671,7 +701,7 @@ mod tests {
         let client = CatalogClientBuilder::new(uri).build().await.unwrap();
         let schemas = client.list_schemas(0).await.unwrap();
         assert!(schemas.is_empty(), "fresh catalog has no schemas");
-        client.close().await;
+        client.close().await.unwrap();
     }
 
     #[tokio::test]
@@ -681,7 +711,7 @@ mod tests {
         let client = CatalogClientBuilder::new(uri).build().await.unwrap();
         let tables = client.list_tables(1, 0).await.unwrap();
         assert!(tables.is_empty(), "fresh catalog has no tables");
-        client.close().await;
+        client.close().await.unwrap();
     }
 
     #[tokio::test]
@@ -691,7 +721,7 @@ mod tests {
         let client = CatalogClientBuilder::new(uri).build().await.unwrap();
         let cols = client.get_table(999, 0).await.unwrap();
         assert!(cols.is_none(), "non-existent table returns None");
-        client.close().await;
+        client.close().await.unwrap();
     }
 
     #[tokio::test]
@@ -701,7 +731,7 @@ mod tests {
         let client = CatalogClientBuilder::new(uri).build().await.unwrap();
         let files = client.list_data_files(1, 0).await.unwrap();
         assert!(files.is_empty(), "fresh catalog has no data files");
-        client.close().await;
+        client.close().await.unwrap();
     }
 
     #[test]
@@ -710,7 +740,7 @@ mod tests {
         let uri = format!("file://{}", dir.path().to_str().unwrap());
         let client = CatalogClientSync::open(&uri).unwrap();
         assert_eq!(client.snapshot_id().unwrap(), 0);
-        client.close();
+        client.close().unwrap();
     }
 
     #[test]
@@ -720,7 +750,7 @@ mod tests {
         let client = CatalogClientSync::open(uri).unwrap();
         let schemas = client.list_schemas(0).unwrap();
         assert!(schemas.is_empty());
-        client.close();
+        client.close().unwrap();
     }
 
     #[test]
@@ -728,7 +758,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let client = CatalogClientSync::open(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(client.snapshot_id().unwrap(), 0);
-        client.close();
+        client.close().unwrap();
     }
 
     // ─── Multi-URI builder scheme tests ────────────────────────────────────
@@ -739,7 +769,7 @@ mod tests {
         let uri = format!("file://{}", dir.path().to_str().unwrap());
         let client = CatalogClientSync::open(&uri).unwrap();
         assert_eq!(client.snapshot_id().unwrap(), 0);
-        client.close();
+        client.close().unwrap();
     }
 
     #[test]
@@ -752,6 +782,19 @@ mod tests {
             matches!(err, ClientError::Config(_)),
             "unknown scheme should return Config error, got: {err}"
         );
+    }
+
+    #[test]
+    fn cloud_catalog_path_preserves_nested_prefix() {
+        assert_eq!(
+            catalog_path("s3://bucket/tenant/warehouse").unwrap(),
+            ObjectPath::from("tenant/warehouse/catalog")
+        );
+        assert_eq!(
+            catalog_path("abfss://container/tenant/warehouse").unwrap(),
+            ObjectPath::from("tenant/warehouse/catalog")
+        );
+        assert!(catalog_path("s3://bucket/tenant/../outside").is_err());
     }
 
     #[tokio::test]
@@ -779,6 +822,7 @@ mod tests {
         std::sync::Arc::try_unwrap(client)
             .expect("single owner after tasks complete")
             .close()
-            .await;
+            .await
+            .unwrap();
     }
 }

@@ -268,3 +268,69 @@ async fn test_concurrent_writer_and_readers() {
     }
     w.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn readonly_open_rejects_uninitialized_catalog_without_catalog_state() {
+    let dir = TempDir::new().unwrap();
+
+    let err = match ReadOnlyCatalog::open(test_opts(&dir)).await {
+        Ok(_) => panic!("uninitialized catalog opened"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        rocklake_catalog::CatalogError::NotInitialized
+    ));
+
+    let db = slatedb::Db::open(
+        ObjectPath::from("catalog"),
+        Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir.path()).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert!(db
+        .get(&rocklake_core::keys::key_system(
+            rocklake_core::tags::SYSTEM_CATALOG_FORMAT_VERSION,
+        ))
+        .await
+        .unwrap()
+        .is_none());
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn open_without_epoch_rejects_uninitialized_catalog() {
+    let dir = TempDir::new().unwrap();
+
+    let err = match CatalogStore::open_without_epoch(test_opts(&dir)).await {
+        Ok(_) => panic!("uninitialized catalog opened"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        rocklake_catalog::CatalogError::NotInitialized
+    ));
+}
+
+#[tokio::test]
+async fn readonly_refresh_propagates_missing_state() {
+    let dir = TempDir::new().unwrap();
+    let db = slatedb::Db::open(
+        ObjectPath::from("catalog"),
+        Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir.path()).unwrap()),
+    )
+    .await
+    .unwrap();
+    let mut catalog = ReadOnlyCatalog::from_db_for_test(
+        db.clone(),
+        Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir.path()).unwrap()),
+    );
+
+    let err = catalog.refresh().await.unwrap_err();
+    assert!(matches!(
+        err,
+        rocklake_catalog::CatalogError::NotInitialized
+    ));
+    drop(catalog);
+    db.close().await.unwrap();
+}
