@@ -176,6 +176,11 @@ impl CatalogWriter {
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         }
 
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BeforeCounterWrite,
+        )
+        .await?;
+
         // Persist all counter values atomically with the snapshot.
         tx.put(
             keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID),
@@ -192,6 +197,15 @@ impl CatalogWriter {
             self.counters.encode_file_counter(),
         )
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BeforeSlateDbCommit,
+        )
+        .await?;
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BeforeSnapshotCommit,
+        )
+        .await?;
 
         tx.commit()
             .await

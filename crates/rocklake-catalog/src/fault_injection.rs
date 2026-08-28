@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 // ─── WriteFaultPoint ──────────────────────────────────────────────────────────
 
 /// Named write boundaries where fail points can be injected.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WriteFaultPoint {
     /// Before the SlateDB commit in `create_snapshot()`.
     BeforeSlateDbCommit,
@@ -28,6 +28,41 @@ pub enum WriteFaultPoint {
     /// Between writing the primary data-file key and the secondary
     /// `TAG_DATA_FILE_BY_SNAPSHOT` index key in `register_data_file`.
     BetweenPrimaryAndSecondaryKeyWrite,
+    /// Before the transaction writes the persistent counter values.
+    BeforeCounterWrite,
+    /// Before the snapshot transaction is committed.
+    BeforeSnapshotCommit,
+    /// Before a checkpoint creation transaction is committed.
+    BeforeCheckpointCommit,
+    /// Before a checkpoint restore transaction is committed.
+    BeforeCheckpointRestoreCommit,
+    /// Before an import batch is written to SlateDB.
+    BeforeImportCommit,
+    /// Before an object-store cleanup delete.
+    BeforeCleanupObjectDelete,
+    /// Before a cleanup schedule row is deleted from SlateDB.
+    BeforeCleanupCatalogDelete,
+    /// Before closing a catalog database handle.
+    BeforeCatalogClose,
+}
+
+impl WriteFaultPoint {
+    /// Return every production failure boundary covered by the injector.
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::BeforeSlateDbCommit,
+            Self::AfterParquetWriteBeforeRegisterDataFile,
+            Self::BetweenPrimaryAndSecondaryKeyWrite,
+            Self::BeforeCounterWrite,
+            Self::BeforeSnapshotCommit,
+            Self::BeforeCheckpointCommit,
+            Self::BeforeCheckpointRestoreCommit,
+            Self::BeforeImportCommit,
+            Self::BeforeCleanupObjectDelete,
+            Self::BeforeCleanupCatalogDelete,
+            Self::BeforeCatalogClose,
+        ]
+    }
 }
 
 impl std::fmt::Display for WriteFaultPoint {
@@ -40,6 +75,14 @@ impl std::fmt::Display for WriteFaultPoint {
             WriteFaultPoint::BetweenPrimaryAndSecondaryKeyWrite => {
                 "between-primary-secondary-key-write"
             }
+            WriteFaultPoint::BeforeCounterWrite => "before-counter-write",
+            WriteFaultPoint::BeforeSnapshotCommit => "before-snapshot-commit",
+            WriteFaultPoint::BeforeCheckpointCommit => "before-checkpoint-commit",
+            WriteFaultPoint::BeforeCheckpointRestoreCommit => "before-checkpoint-restore-commit",
+            WriteFaultPoint::BeforeImportCommit => "before-import-commit",
+            WriteFaultPoint::BeforeCleanupObjectDelete => "before-cleanup-object-delete",
+            WriteFaultPoint::BeforeCleanupCatalogDelete => "before-cleanup-catalog-delete",
+            WriteFaultPoint::BeforeCatalogClose => "before-catalog-close",
         };
         write!(f, "{name}")
     }
@@ -155,6 +198,25 @@ impl FaultInjector {
         if let Some(FaultAction::ReturnError(msg)) = self.check(point) {
             panic!("Injected fault at {point}: {msg}");
         }
+    }
+}
+
+/// Trigger a globally configured production fail point.
+///
+/// Fail points are inert unless a test explicitly configures the global
+/// [`FaultInjector`].  `Pause` uses async sleep so injected lifecycle delays do
+/// not block the executor thread.
+pub async fn trigger(point: WriteFaultPoint) -> crate::error::CatalogResult<()> {
+    match FaultInjector::new().check(&point) {
+        Some(FaultAction::ReturnError(message)) => Err(crate::error::CatalogError::InjectedFault {
+            point: point.to_string(),
+            message,
+        }),
+        Some(FaultAction::Pause(duration)) => {
+            tokio::time::sleep(duration).await;
+            Ok(())
+        }
+        None => Ok(()),
     }
 }
 

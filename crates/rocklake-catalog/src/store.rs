@@ -287,6 +287,10 @@ impl CatalogStore {
 
     /// Close the catalog store.
     pub async fn close(self) -> CatalogResult<()> {
+        crate::fault_injection::trigger(
+            crate::fault_injection::WriteFaultPoint::BeforeCatalogClose,
+        )
+        .await?;
         self.db.close().await?;
         Ok(())
     }

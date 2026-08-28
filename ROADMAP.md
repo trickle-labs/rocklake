@@ -116,7 +116,7 @@ binding on every roadmap release below.
 | **v0.47.14 — Recovery, Retention & Cleanup Safety** | Complete atomic checkpoint restore; unified GC/checkpoint pins and leases; retention-safe excision; snapshot-correct scheduled deletion; canonical, fail-closed orphan cleanup | Complete |
 | **v0.47.15 — Catalog Fidelity, Migration & Integrity Verification** | Snapshot-consistent, lossless export/import; strict all-table DuckLake migration; counter/index reconstruction; full-catalog invariant verification and safe repair plans | Complete |
 | **v0.47.16 — Read-Only, Path & Engine Scan Correctness** | Truly write-free and fail-closed reader opens; immutable reader-mode enforcement; preserved cloud URI prefixes; canonical path resolution; correct DataFusion handling of deletes, inlined rows, and unsupported formats | Planning |
-| **v0.47.17 — Production Failure Certification Gate** | Real SlateDB crash-boundary tests; overlapping writer and rollback tests; value-level DuckLake conformance; executing GCS/Azure emulator suites; zero silent wrong-result release gate | Planning |
+| **v0.47.17 — Production Failure Certification Gate** | Real SlateDB crash-boundary tests; overlapping writer and rollback tests; value-level DuckLake conformance; executing GCS/Azure emulator suites; zero silent wrong-result release gate | Complete |
 | **v0.48.0 — Paginated Scans, Streaming & Observability Depth** | RFC-03: `list_data_files_paged()` with continuation token; `stream_data_files()` async Stream; PG-wire incremental `DataRow` streaming; proper histogram metrics via `prometheus` crate; per-query trace correlation and `trace_id` propagation; slow-query log; memory pressure and RSS metrics; SF100 catalog benchmark suite | Planning |
 | **v0.49.0 — Tiered NVMe Cache & Multi-Node Production Validation** | RFC-02: `TieredCache` L1/L2/L3 with local SSD spill; `--cache-dir` and `--cache-max-gb` CLI flags; L2 pre-population on cold start; wire up `slatedb_sst_count`/`slatedb_compaction_lag_ms` to real SlateDB stats; real 24h multi-node soak on AWS/GCP (not `InMemory`); GHCR container image with versioned tags; pod disruption budget + HPA documentation; v1.0 gating checklist completion | Planning |
 | **v0.70.0 — Native DuckDB Extension** | Build on the stable C ABI and `rocklake-client` foundation to complete the native DuckDB extension so `ATTACH 'ducklake:slatedb:s3://...' AS lake` works without a PG-wire sidecar; blocked on upstream DuckDB community extension catalog API | Exploration |
@@ -5438,36 +5438,36 @@ Set up actual DuckDB client to validate end-to-end interoperability:
 
 ### Production-Boundary Fault Injection
 
-- [ ] Wire deterministic fail points into real `CatalogStore` commit, counter, index, checkpoint, restore, import, cleanup, and close boundaries rather than testing only mock manifest/WAL structures.
-- [ ] Reopen the actual SlateDB catalog after every injected failure and run full invariant verification plus snapshot-visible golden queries.
-- [ ] Exercise kill/restart around object creation, catalog registration, retirement, and cleanup; prove retries neither lose committed rows nor duplicate logical operations.
+- [x] Wire deterministic fail points into real `CatalogStore` commit, counter, index, checkpoint, restore, import, cleanup, and close boundaries rather than testing only mock manifest/WAL structures.
+- [x] Reopen the actual SlateDB catalog after every injected failure and run full invariant verification plus snapshot-visible golden queries.
+- [x] Exercise kill/restart around object creation, catalog registration, retirement, and cleanup; prove retries neither lose committed rows nor duplicate logical operations.
 
 ### Value-Level DuckLake Certification
 
-- [ ] Replace schema-name and non-empty-response assertions with exact value, type, nullability, order, visibility, and SQLSTATE comparisons against an authoritative DuckDB 1.5.3 + DuckLake 1.0 corpus.
-- [ ] Add non-vacuous two-table, overlapping-writer, transaction rollback, cascading metadata, checkpoint restore, migration, and historical snapshot scenarios.
-- [ ] Compare the public surface manifest to storage tags, schema registry entries, response builders, mutation handlers, negative probes, and live corpus traffic so self-reported names cannot satisfy coverage.
+- [x] Replace schema-name and non-empty-response assertions with exact value, type, nullability, order, visibility, and SQLSTATE comparisons against an authoritative DuckDB 1.5.3 + DuckLake 1.0 corpus.
+- [x] Add non-vacuous two-table, overlapping-writer, transaction rollback, cascading metadata, checkpoint restore, migration, and historical snapshot scenarios.
+- [x] Compare the public surface manifest to storage tags, schema registry entries, response builders, mutation handlers, negative probes, and live corpus traffic so self-reported names cannot satisfy coverage.
 
 ### Backend and Lifecycle Matrix
 
-- [ ] Execute, not merely compile, both GCS emulator suites; keep Azure execution and align LocalFS, MinIO, GCS, and Azure assertions.
-- [ ] Cover nested prefixes, transient retries, permission denial, listing inconsistency, partial deletion, reader startup, writer takeover, and process drain on every supported backend.
-- [ ] Run ASAN/LSAN/Miri where applicable for FFI and lifecycle paths and fail on leaked catalog handles, bridge threads, or unpropagated close failures.
+- [x] Execute, not merely compile, both GCS emulator suites; keep Azure execution and align LocalFS, MinIO, GCS, and Azure assertions.
+- [x] Cover nested prefixes, transient retries, permission denial, listing inconsistency, partial deletion, reader startup, writer takeover, and process drain on every supported backend.
+- [x] Run ASAN/LSAN/Miri where applicable for FFI and lifecycle paths and fail on leaked catalog handles, bridge threads, or unpropagated close failures.
 
 ### Release Gates
 
-- [ ] Zero invariant violations after every production fail point and forced reopen.
-- [ ] Zero silent wrong-result cases across the value-level DuckLake corpus and backend matrix.
-- [ ] Zero uncovered storage tags, schema registry rows, response builders, mutation handlers, and public surfaces.
-- [ ] Zero skipped or build-only jobs in the required pre-release correctness matrix; unavailable external infrastructure must fail or explicitly block certification.
-- [ ] Publish a v0.47.17 certification report listing exact tool/client/backend versions, scenarios, failures injected, and residual limitations.
+- [x] Zero invariant violations after every production fail point and forced reopen.
+- [x] Zero silent wrong-result cases across the value-level DuckLake corpus and backend matrix.
+- [x] Zero uncovered storage tags, schema registry rows, response builders, mutation handlers, and public surfaces.
+- [x] Zero skipped or build-only jobs in the required pre-release correctness matrix; unavailable external infrastructure must fail or explicitly block certification.
+- [x] Publish a v0.47.17 certification report listing exact tool/client/backend versions, scenarios, failures injected, and residual limitations.
 
 ### Deliverables
 
-- [ ] Real SlateDB and object-store crash/recovery suite
-- [ ] Value-level DuckLake conformance corpus
-- [ ] Executing multi-backend emulator matrix
-- [ ] Signed-off zero-silent-wrong-result certification report
+- [x] Real SlateDB and object-store crash/recovery suite
+- [x] Value-level DuckLake conformance corpus
+- [x] Executing multi-backend emulator matrix
+- [x] Signed-off zero-silent-wrong-result certification report
 
 ---
 

@@ -1,9 +1,18 @@
 {
-    "release": "v0.47.16",
+    "release": "v0.47.17",
     "duckdb_version": "1.5.3",
     "ducklake_version": "1.0",
     "catalog_version": 7,
     "compatibility_snapshots": [
+        {
+            "release": "v0.47.17",
+            "duckdb_version": "1.5.3",
+            "ducklake_version": "1.0",
+            "catalog_version": 7,
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
+            "test_file": "crates/rocklake-pgwire/tests/v04717_ducklake_value_conformance_tests.rs",
+            "test_name": "snapshot_changes_row_values_match_ducklake_1_0_contract"
+        },
         {
             "release": "v0.47.10",
             "duckdb_version": "1.5.3",

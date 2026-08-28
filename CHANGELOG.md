@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.47.17] — 2026-08-28
+
+### Added
+
+- Production-boundary failpoints for snapshot/counter commits, data-file index staging, checkpoint create/restore, import, cleanup, and catalog close.
+- Real SlateDB reopen certification covering rollback, overlapping writers, checkpoint restore, migration/import, historical snapshots, and value-level catalog invariants.
+- v0.47.17 certification report and release-blocking CI job.
+
+### Changed
+
+- GCS emulator coverage now executes instead of compiling only.
+- Emulator, sanitizer, and Miri checks are recorded as required lifecycle certification gates.
+
 ## [0.47.16] — 2026-08-27
 
 ### Added

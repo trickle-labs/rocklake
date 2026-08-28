@@ -21,7 +21,9 @@ jobs:
           # (see RockLakeCatalog tombstone pattern).  Suppress LSAN to avoid
           # false-positive leak reports from the small bounded shell structs.
           LSAN_OPTIONS: detect_leaks=0
-        run: cargo test -p rocklake-ffi --target x86_64-unknown-linux-gnu
+        run: |
+          cargo test -p rocklake-ffi --target x86_64-unknown-linux-gnu
+          cargo test -p rocklake-catalog --test v04717_production_failure_tests -- --test-threads=1
       - name: Run with UBSAN
         env:
           RUSTFLAGS: "-Z ub-checks=yes"
