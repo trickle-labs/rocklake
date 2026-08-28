@@ -963,7 +963,7 @@ jobs:
         run: |
           test -f docs/operations/v04717-certification.md || \
             (echo "ERROR: v0.47.17 certification report missing" && exit 1)
-          rg -q '^# v0\.47\.17 Production Failure Certification$' \
+          grep -q '^# v0\.47\.17 Production Failure Certification$' \
             docs/operations/v04717-certification.md
           echo "OK: v0.47.17 certification report present"
 

@@ -236,6 +236,7 @@ async fn data_file_index_failpoint_does_not_publish_partial_registration() {
 
 #[tokio::test]
 async fn historical_snapshot_values_remain_stable_after_later_commit() {
+    let _lock = fault_test_lock().await;
     let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut store = CatalogStore::open(options(Arc::clone(&object_store), "catalog"))
         .await
@@ -348,6 +349,7 @@ async fn overlapping_writers_fence_stale_commit() {
 
 #[tokio::test]
 async fn checkpoint_restore_recovers_exact_rows_and_counters() {
+    let _lock = fault_test_lock().await;
     let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut store = CatalogStore::open(options(Arc::clone(&object_store), "catalog"))
         .await
