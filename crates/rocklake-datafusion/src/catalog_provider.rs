@@ -652,8 +652,6 @@ impl SchemaProvider for RockLakeSchemaProvider {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let table_provider = RockLakeTableProvider::new(
-                    table.table_name.clone(),
-                    table.table_id,
                     columns,
                     data_files,
                     delete_files,
@@ -689,8 +687,6 @@ pub struct RockLakeTableProvider {
 
 impl RockLakeTableProvider {
     fn new(
-        _table_name: String,
-        _table_id: u64,
         columns: Vec<rocklake_core::rows::ColumnRow>,
         data_files: Vec<DataFileRow>,
         delete_files: Vec<DeleteFileRow>,
