@@ -2505,6 +2505,9 @@ pub(super) fn make_macros_response(
         encoder
             .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
             .expect("pgwire field encoding is infallible");
+        encoder
+            .encode_field_with_type_and_format(&m.macro_uuid, &Type::TEXT, FieldFormat::Text)
+            .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
     let count = data_rows.len();

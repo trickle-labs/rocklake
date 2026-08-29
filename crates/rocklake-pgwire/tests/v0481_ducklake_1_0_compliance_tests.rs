@@ -223,6 +223,7 @@ fn schema_registry_matches_ducklake_1_0_manifest() {
                 ("macro_name", "text"),
                 ("begin_snapshot", "int8"),
                 ("end_snapshot", "int8"),
+                ("macro_uuid", "text"),
             ],
         ),
         (

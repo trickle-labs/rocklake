@@ -641,8 +641,8 @@ async fn spec_ducklake_column_mapping_returns_empty_response() {
     let (cols, count) = inspect_query(resp).await;
     assert_eq!(count, 0, "no column mappings on fresh catalog");
     assert!(
-        cols.contains(&"column_id".to_string()),
-        "must have column_id, got: {cols:?}"
+        cols.contains(&"table_id".to_string()),
+        "must have table_id, got: {cols:?}"
     );
 }
 
@@ -658,8 +658,8 @@ async fn spec_ducklake_name_mapping_returns_empty_response() {
     let (cols, count) = inspect_query(resp).await;
     assert_eq!(count, 0, "no name mappings on fresh catalog");
     assert!(
-        cols.contains(&"table_id".to_string()),
-        "must have table_id, got: {cols:?}"
+        cols.contains(&"column_id".to_string()),
+        "must have column_id, got: {cols:?}"
     );
 }
 

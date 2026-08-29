@@ -288,7 +288,7 @@ pub fn view_schema() -> Arc<Vec<FieldInfo>> {
 // ── ducklake_macro ────────────────────────────────────────────────────────────
 
 /// `ducklake_macro(schema_id, macro_id, macro_name, begin_snapshot,
-/// end_snapshot)` — DuckLake v1.0 spec.
+/// end_snapshot, macro_uuid)` — DuckLake v1.0 spec.
 pub fn macro_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("schema_id"),
@@ -296,6 +296,7 @@ pub fn macro_schema() -> Arc<Vec<FieldInfo>> {
         text_col!("macro_name"),
         int8t!("begin_snapshot"),
         int8t!("end_snapshot"),
+        text_col!("macro_uuid"),
     ])
 }
 
