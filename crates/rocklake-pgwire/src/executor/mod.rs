@@ -396,23 +396,41 @@ fn row_ids_from_ctid_sql(sql: &str) -> Vec<u64> {
     ids
 }
 
+fn inlined_data_table_ids_from_ctid_sql(sql: &str) -> Vec<(u64, u64)> {
+    let mut ids = Vec::new();
+    let mut rest = sql;
+    while let Some(open) = rest.find("'(") {
+        rest = &rest[open + 2..];
+        let Some(comma) = rest.find(',') else { break };
+        let Some(close) = rest.find(")'") else { break };
+        let table_id = rest[..comma].trim().parse::<u64>().ok();
+        let schema_version = rest[comma + 1..close].trim().parse::<u64>().ok();
+        if let (Some(table_id), Some(schema_version)) = (table_id, schema_version) {
+            ids.push((table_id, schema_version));
+        }
+        rest = &rest[close + 2..];
+    }
+    ids
+}
+
 /// Extract file IDs from a DuckLake CHECKPOINT catalog DELETE:
 ///   `DELETE FROM "public".ducklake_data_file WHERE data_file_id IN (1, 2);`
 /// Handles various DuckLake catalog tables that need garbage collection.
 fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
     let mut ids = Vec::new();
-    let lower = sql.to_lowercase();
+    let normalized_sql = sql.replace(['\n', '\r', '\t'], " ");
+    let lower = normalized_sql.to_lowercase();
 
     // Find the WHERE clause
     let Some(where_idx) = lower.find(" where ") else {
         return ids;
     };
-    let after_where = &sql[where_idx + 7..];
+    let after_where = &normalized_sql[where_idx + 7..];
     let lower_after = after_where.to_lowercase();
 
     // Pattern 1: data_file_id IN (id1, id2, ...) or delete_file_id IN (...)
-    // Look for both " in(" and just "in(" patterns
-    let in_patterns = [" in(", "in("];
+    // Accept both `IN (...)` and `IN(...)` formatting.
+    let in_patterns = [" in (", "in (", " in(", "in("];
     for in_pattern in &in_patterns {
         if let Some(in_idx) = lower_after.find(in_pattern) {
             let after_in = &after_where[in_idx + in_pattern.len()..];
@@ -459,6 +477,31 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
     }
 
     ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql};
+
+    #[test]
+    fn parses_multiline_ducklake_gc_delete() {
+        assert_eq!(
+            file_ids_from_where_sql(
+                "DELETE FROM ducklake_data_file\nWHERE data_file_id IN (1, 2);"
+            ),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn parses_quoted_inlined_data_ctids() {
+        assert_eq!(
+            inlined_data_table_ids_from_ctid_sql(
+                "DELETE FROM ducklake_inlined_data_tables WHERE ctid IN ('(3,3)', '(3,4)')"
+            ),
+            vec![(3, 3), (3, 4)]
+        );
+    }
 }
 
 fn literal_insert_rows(sql: &str) -> Vec<Vec<Option<String>>> {
@@ -570,7 +613,7 @@ fn parse_insert_rows_map(
         sqlparser::ast::TableObject::TableName(name) => name.to_string().to_lowercase(),
         _ => String::new(),
     };
-    let table_name_normalized = table_name.trim_matches('"');
+    let table_name_normalized = normalize_table_ref(&table_name);
 
     let mut cols: Vec<String> = insert
         .columns
@@ -1640,12 +1683,16 @@ async fn execute_classified<'a>(
 
         StatementKind::SelectInlinedData => {
             let table_id = resolve_comparison_u64(_sql, "table_id", params);
+            let schema_version = resolve_comparison_u64(_sql, "schema_version", params);
             let reader = { store.lock().await.read_latest() };
-            let rows = reader
+            let mut rows = reader
                 .list_inlined_data_tables(table_id)
                 .await
                 .map_err(RockLakeError::from)?;
-            Ok(vec![make_inlined_data_tables_response(rows)])
+            if let Some(schema_version) = schema_version {
+                rows.retain(|row| row.schema_version == schema_version);
+            }
+            Ok(vec![make_inlined_data_tables_response(_sql, rows)])
         }
         StatementKind::SelectInlinedRows => {
             let Some(table_name) = inlined_table_name_from_sql(_sql) else {
@@ -2906,6 +2953,34 @@ async fn execute_classified<'a>(
         // DELETE FROM "public".ducklake_data_file WHERE data_file_id IN (...) or similar
         // Issued by DuckLake CHECKPOINT for garbage collection of old data files.
         StatementKind::DeleteDuckLakeCatalogRows { ref table_name } => {
+            if table_name == "ducklake_inlined_data_tables" {
+                let table_ids = inlined_data_table_ids_from_ctid_sql(_sql);
+                let row_count = table_ids.len();
+                if session.in_transaction {
+                    for (table_id, schema_version) in table_ids {
+                        session
+                            .pending_txn
+                            .push(BufferedOp::DeleteInlinedDataTable {
+                                table_id,
+                                schema_version,
+                            })?;
+                    }
+                } else if row_count > 0 {
+                    let ops = table_ids
+                        .into_iter()
+                        .map(
+                            |(table_id, schema_version)| BufferedOp::DeleteInlinedDataTable {
+                                table_id,
+                                schema_version,
+                            },
+                        )
+                        .collect();
+                    execute_commit(ops, store, notify_manager).await?;
+                }
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "DELETE {row_count}"
+                )))]);
+            }
             let file_ids = file_ids_from_where_sql(_sql);
             let row_count = file_ids.len();
             if !file_ids.is_empty() {

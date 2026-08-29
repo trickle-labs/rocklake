@@ -377,6 +377,12 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
         return Ok(StatementKind::UpdateInlinedRowEndSnapshot);
     }
 
+    // DuckDB drops superseded internal inlined tables after a schema change.
+    // They are represented by catalog rows here, not physical SQL tables.
+    if lower.trim_start().starts_with("drop table") && lower.contains("ducklake_inlined_data_") {
+        return Ok(StatementKind::CreateInlinedTable);
+    }
+
     // Pre-parse fast path for DELETE statements on DuckLake catalog tables
     if lower.trim_start().starts_with("delete")
         && lower.contains("from")
@@ -405,7 +411,9 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
                     .to_lowercase();
 
                 if table_name.contains("ducklake_") {
-                    if table_name.contains("inlined_data_") {
+                    if table_name.contains("inlined_data_")
+                        && table_name != "ducklake_inlined_data_tables"
+                    {
                         return Ok(StatementKind::DeleteInlinedDataRows { table_name });
                     } else {
                         return Ok(StatementKind::DeleteDuckLakeCatalogRows { table_name });

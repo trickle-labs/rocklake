@@ -2010,6 +2010,15 @@ impl CatalogWriter {
         Ok(())
     }
 
+    pub async fn delete_inlined_data_table(
+        &mut self,
+        table_id: u64,
+        schema_version: u64,
+    ) -> CatalogResult<()> {
+        self.stage_delete(keys::key_inlined_data_tables(table_id, schema_version));
+        Ok(())
+    }
+
     pub async fn register_schema_version(
         &mut self,
         begin_snapshot: u64,

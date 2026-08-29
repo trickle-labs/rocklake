@@ -1344,13 +1344,9 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
                 assert_eq!(rows.len(), 1, "table stats query should return one row");
             }
             "SELECT * FROM __ducklake_metadata_my_lake.ducklake_table_column_stats" => {
-                let expected_row_count = table_column_stats
-                    .iter()
-                    .filter(|row| row.table_id == table_id)
-                    .count();
                 assert_eq!(
                     rows.len(),
-                    expected_row_count,
+                    table_column_stats.len(),
                     "table column stats should match the catalog"
                 );
             }

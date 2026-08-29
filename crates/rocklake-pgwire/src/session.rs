@@ -119,6 +119,10 @@ pub enum BufferedOp {
         table_name: String,
         schema_version: u64,
     },
+    DeleteInlinedDataTable {
+        table_id: u64,
+        schema_version: u64,
+    },
     InsertSchemaVersions {
         begin_snapshot: u64,
         schema_version: u64,

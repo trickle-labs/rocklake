@@ -469,6 +469,16 @@ pub(super) async fn execute_commit(
                     .await
                     .map_err(RockLakeError::from)?;
             }
+            BufferedOp::DeleteInlinedDataTable {
+                table_id,
+                schema_version,
+            } => {
+                needs_snapshot = true;
+                writer
+                    .delete_inlined_data_table(table_id, schema_version)
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
             BufferedOp::InsertSchemaVersions {
                 begin_snapshot,
                 schema_version,
@@ -2610,6 +2620,7 @@ enum InlinedProjectionSource {
     RowId,
     BeginSnapshot,
     EndSnapshot,
+    Ctid,
     Column(usize),
 }
 
@@ -2621,9 +2632,25 @@ struct InlinedProjection {
 }
 
 pub(super) fn make_inlined_data_tables_response(
+    sql: &str,
     rows: Vec<InlinedDataTablesRow>,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::inlined_data_tables_schema();
+    let has_ctid = sql.to_ascii_lowercase().contains("ctid");
+    let schema = if has_ctid {
+        Arc::new(vec![
+            FieldInfo::new("table_id".into(), None, None, Type::INT8, FieldFormat::Text),
+            FieldInfo::new(
+                "schema_version".into(),
+                None,
+                None,
+                Type::INT8,
+                FieldFormat::Text,
+            ),
+            FieldInfo::new("ctid".into(), None, None, Type::TID, FieldFormat::Binary),
+        ])
+    } else {
+        crate::schema_registry::inlined_data_tables_schema()
+    };
     let mut data_rows = Vec::new();
     for row in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
@@ -2634,20 +2661,42 @@ pub(super) fn make_inlined_data_tables_response(
                 FieldFormat::Text,
             )
             .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(row.sql.clone()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(row.schema_version.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
+        if has_ctid {
+            encoder
+                .encode_field_with_type_and_format(
+                    &Some(row.schema_version.to_string()),
+                    &Type::TEXT,
+                    FieldFormat::Text,
+                )
+                .expect("pgwire field encoding is infallible");
+            let block = (row.table_id as u32).to_be_bytes();
+            let offset = (row.schema_version as u16).to_be_bytes();
+            let mut tid = [0u8; 6];
+            tid[..4].copy_from_slice(&block);
+            tid[4..].copy_from_slice(&offset);
+            encoder
+                .encode_field_with_type_and_format(
+                    &tid.as_slice(),
+                    &Type::BYTEA,
+                    FieldFormat::Binary,
+                )
+                .expect("pgwire field encoding is infallible");
+        } else {
+            encoder
+                .encode_field_with_type_and_format(
+                    &Some(row.sql.clone()),
+                    &Type::TEXT,
+                    FieldFormat::Text,
+                )
+                .expect("pgwire field encoding is infallible");
+            encoder
+                .encode_field_with_type_and_format(
+                    &Some(row.schema_version.to_string()),
+                    &Type::TEXT,
+                    FieldFormat::Text,
+                )
+                .expect("pgwire field encoding is infallible");
+        }
         data_rows.push(encoder.finish());
     }
     let count = data_rows.len();
@@ -2736,6 +2785,21 @@ pub(super) fn make_inlined_rows_response(
                     let value = row.end_snapshot.map(|snapshot| snapshot as i64);
                     encoder
                         .encode_field_with_type_and_format(&value, &Type::INT8, FieldFormat::Binary)
+                        .expect("pgwire field encoding is infallible");
+                }
+                InlinedProjectionSource::Ctid => {
+                    // PostgreSQL TID binary format is a 4-byte block number
+                    // followed by a 2-byte tuple offset. DuckLake uses the
+                    // row ID as the block number when it builds ctid filters.
+                    let value = (row.row_id as u32).to_be_bytes();
+                    let mut tid = [0u8; 6];
+                    tid[..4].copy_from_slice(&value);
+                    encoder
+                        .encode_field_with_type_and_format(
+                            &tid.as_slice(),
+                            &Type::BYTEA,
+                            FieldFormat::Binary,
+                        )
                         .expect("pgwire field encoding is infallible");
                 }
                 InlinedProjectionSource::Column(index) => {
@@ -2838,6 +2902,11 @@ fn inlined_projection_for_name(
             name: output_name,
             datatype: Type::INT8,
             source: InlinedProjectionSource::EndSnapshot,
+        }),
+        "ctid" => Some(InlinedProjection {
+            name: output_name,
+            datatype: Type::TID,
+            source: InlinedProjectionSource::Ctid,
         }),
         _ => columns
             .iter()

@@ -536,6 +536,48 @@ fn encode_binary_copy_field(value: &[u8], datatype: &Type) -> PgWireResult<Vec<u
         };
     }
 
+    if datatype == &Type::TIMESTAMP || datatype == &Type::TIMESTAMPTZ {
+        if value.len() == 8 {
+            return Ok(value.to_vec());
+        }
+        let timestamp = std::str::from_utf8(value)
+            .map_err(|_| copy_out_error("COPY TO STDOUT timestamp field is not valid UTF-8"))?
+            .trim();
+        const PG_EPOCH_SECONDS: i64 = 946_684_800;
+        let micros = if let Ok(unix_seconds) = timestamp.parse::<i64>() {
+            unix_seconds
+                .saturating_sub(PG_EPOCH_SECONDS)
+                .saturating_mul(1_000_000)
+        } else if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(timestamp) {
+            timestamp.timestamp_micros() - PG_EPOCH_SECONDS * 1_000_000
+        } else {
+            let timestamp =
+                chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.f")
+                    .or_else(|_| {
+                        chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S")
+                    })
+                    .map_err(|_| copy_out_error("COPY TO STDOUT timestamp field is invalid"))?;
+            timestamp.and_utc().timestamp_micros() - PG_EPOCH_SECONDS * 1_000_000
+        };
+        return Ok(micros.to_be_bytes().to_vec());
+    }
+
+    if datatype == &Type::DATE {
+        if value.len() == 4 {
+            return Ok(value.to_vec());
+        }
+        let date = std::str::from_utf8(value)
+            .map_err(|_| copy_out_error("COPY TO STDOUT date field is not valid UTF-8"))?
+            .trim();
+        let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| copy_out_error("COPY TO STDOUT date field is invalid"))?;
+        let epoch =
+            chrono::NaiveDate::from_ymd_opt(2000, 1, 1).expect("PostgreSQL epoch is a valid date");
+        return Ok((date.signed_duration_since(epoch).num_days() as i32)
+            .to_be_bytes()
+            .to_vec());
+    }
+
     Ok(value.to_vec())
 }
 
@@ -1271,7 +1313,15 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
         ),
         rocklake_sql::StatementKind::SelectInlinedData => project_described_fields(
             sql,
-            (*crate::schema_registry::inlined_data_tables_schema()).clone(),
+            if sql.to_ascii_lowercase().contains("ctid") {
+                vec![
+                    int8_col!("table_id"),
+                    int8_col!("schema_version"),
+                    FieldInfo::new("ctid".into(), None, None, Type::TID, FieldFormat::Binary),
+                ]
+            } else {
+                (*crate::schema_registry::inlined_data_tables_schema()).clone()
+            },
         ),
         // ── Additional catalog table schemas from registry ─────────────────
         rocklake_sql::StatementKind::SelectSnapshot
@@ -1373,6 +1423,13 @@ fn describe_inlined_row_fields(
                 None,
                 None,
                 Type::INT8,
+                FieldFormat::Binary,
+            )),
+            "ctid" => Some(FieldInfo::new(
+                name.to_string(),
+                None,
+                None,
+                Type::TID,
                 FieldFormat::Binary,
             )),
             _ => columns
