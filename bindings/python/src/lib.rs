@@ -8,15 +8,14 @@
 //! from rocklake import RockLakeCatalog
 //!
 //! cat = RockLakeCatalog.open("file:///path/to/catalog")
-//! snap = cat.snapshot_id()
-//! schemas = cat.list_schemas(snap)
+//! schemas = cat.list_schemas_latest()
 //! cat.close()
 //! ```
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use rocklake_client::{CatalogClientSync, ClientError};
+use rocklake_client::{CatalogClientSync, ClientError, SnapshotId, SnapshotRef};
 
 fn to_py(e: ClientError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
@@ -136,8 +135,7 @@ impl RockLakeDataFile {
 ///     from rocklake import RockLakeCatalog
 ///
 ///     cat = RockLakeCatalog.open("file:///tmp/my-catalog")
-///     snap = cat.snapshot_id()
-///     schemas = cat.list_schemas(snap)
+///     schemas = cat.list_schemas_latest()
 ///     print(schemas)
 ///     cat.close()
 #[pyclass]
@@ -182,9 +180,12 @@ impl RockLakeCatalog {
         Ok(RockLakeSnapshot { snapshot_id: id })
     }
 
-    /// List schemas visible at *snapshot_id* (0 = latest).
+    /// List schemas visible at the exact *snapshot_id*.
     pub fn list_schemas(&self, snapshot_id: u64) -> PyResult<Vec<RockLakeSchema>> {
-        let schemas = self.client()?.list_schemas(snapshot_id).map_err(to_py)?;
+        let schemas = self
+            .client()?
+            .list_schemas(SnapshotRef::At(SnapshotId::new(snapshot_id)))
+            .map_err(to_py)?;
         Ok(schemas
             .into_iter()
             .map(|s| RockLakeSchema {
@@ -194,11 +195,31 @@ impl RockLakeCatalog {
             .collect())
     }
 
-    /// List tables in *schema_id* at *snapshot_id*.
+    /// List schemas visible at the latest committed snapshot.
+    pub fn list_schemas_latest(&self) -> PyResult<Vec<RockLakeSchema>> {
+        let schemas = self
+            .client()?
+            .list_schemas(SnapshotRef::Latest)
+            .map_err(to_py)?;
+        Ok(schemas
+            .into_iter()
+            .map(|s| RockLakeSchema {
+                schema_id: s.schema_id,
+                schema_name: s.schema_name,
+            })
+            .collect())
+    }
+
+    /// List schemas visible at an exact snapshot ID.
+    pub fn list_schemas_at(&self, snapshot_id: u64) -> PyResult<Vec<RockLakeSchema>> {
+        self.list_schemas(snapshot_id)
+    }
+
+    /// List tables in *schema_id* at the exact *snapshot_id*.
     pub fn list_tables(&self, schema_id: u64, snapshot_id: u64) -> PyResult<Vec<RockLakeTable>> {
         let tables = self
             .client()?
-            .list_tables(schema_id, snapshot_id)
+            .list_tables(schema_id, SnapshotRef::At(SnapshotId::new(snapshot_id)))
             .map_err(to_py)?;
         Ok(tables
             .into_iter()
@@ -210,13 +231,34 @@ impl RockLakeCatalog {
             .collect())
     }
 
-    /// List data files for *table_id* at *snapshot_id*.
+    /// List tables in *schema_id* at the latest committed snapshot.
+    pub fn list_tables_latest(&self, schema_id: u64) -> PyResult<Vec<RockLakeTable>> {
+        let tables = self
+            .client()?
+            .list_tables(schema_id, SnapshotRef::Latest)
+            .map_err(to_py)?;
+        Ok(tables
+            .into_iter()
+            .map(|t| RockLakeTable {
+                table_id: t.table_id,
+                schema_id: t.schema_id,
+                table_name: t.table_name,
+            })
+            .collect())
+    }
+
+    /// List tables in *schema_id* at an exact snapshot ID.
+    pub fn list_tables_at(&self, schema_id: u64, snapshot_id: u64) -> PyResult<Vec<RockLakeTable>> {
+        self.list_tables(schema_id, snapshot_id)
+    }
+
+    /// List data files for *table_id* at the exact *snapshot_id*.
     ///
     /// Returns a list of :class:`RockLakeDataFile` objects. To create a
     /// ``polars.DataFrame``::
     ///
     ///     import polars as pl
-    ///     files = cat.list_data_files(table_id, 0)
+    ///     files = cat.list_data_files_latest(table_id)
     ///     df = pl.from_dicts([f.to_dict() for f in files])
     pub fn list_data_files(
         &self,
@@ -225,7 +267,7 @@ impl RockLakeCatalog {
     ) -> PyResult<Vec<RockLakeDataFile>> {
         let files = self
             .client()?
-            .list_data_files(table_id, snapshot_id)
+            .list_data_files(table_id, SnapshotRef::At(SnapshotId::new(snapshot_id)))
             .map_err(to_py)?;
         Ok(files
             .into_iter()
@@ -239,6 +281,35 @@ impl RockLakeCatalog {
                 snapshot_id: f.snapshot_id,
             })
             .collect())
+    }
+
+    /// List data files for *table_id* at the latest committed snapshot.
+    pub fn list_data_files_latest(&self, table_id: u64) -> PyResult<Vec<RockLakeDataFile>> {
+        let files = self
+            .client()?
+            .list_data_files(table_id, SnapshotRef::Latest)
+            .map_err(to_py)?;
+        Ok(files
+            .into_iter()
+            .map(|f| RockLakeDataFile {
+                data_file_id: f.data_file_id,
+                table_id: f.table_id,
+                path: f.path,
+                file_format: f.file_format,
+                row_count: f.row_count,
+                file_size_bytes: f.file_size_bytes,
+                snapshot_id: f.snapshot_id,
+            })
+            .collect())
+    }
+
+    /// List data files for *table_id* at an exact snapshot ID.
+    pub fn list_data_files_at(
+        &self,
+        table_id: u64,
+        snapshot_id: u64,
+    ) -> PyResult<Vec<RockLakeDataFile>> {
+        self.list_data_files(table_id, snapshot_id)
     }
 
     /// Close the catalog and release all resources.

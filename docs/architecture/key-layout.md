@@ -140,7 +140,7 @@ Returns column-level min/max statistics for all columns across all files in a ta
 
 **Scan prefix:** `0x02`
 
-Returns all snapshot records in chronological order (because snapshot_id increases monotonically). Used by `ducklake_snapshots()` to show catalog history.
+Returns all snapshot records in chronological order (because snapshot_id increases monotonically). Used by `ducklake_snapshots('lake')` to show catalog history.
 
 ## MVCC and Key Ordering
 

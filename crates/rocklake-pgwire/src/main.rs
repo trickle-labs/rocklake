@@ -38,491 +38,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // Parse with clap; this provides --help (exit 0), --version, and shell
-    // completions.  Fall back to the legacy hand-rolled dispatcher for full
-    // backward compatibility.
-    let parsed = cli::Cli::try_parse();
-    match parsed {
-        Ok(cli_args) => dispatch_clap(cli_args).await?,
-        Err(e) => {
-            // If clap emits --help / --version messages, honour its exit code.
-            if e.use_stderr() {
-                // Unknown command or bad flag — fall through to legacy dispatch
-                // for backward compatibility with scripts that use the old
-                // positional command style.
-                legacy_dispatch().await?;
-            } else {
-                // --help or --version: print and exit with the code clap chose.
-                e.print()?;
-                std::process::exit(0);
-            }
-        }
-    }
-
-    Ok(())
+    dispatch_clap(cli::Cli::parse()).await
 }
 
 /// Dispatch based on a successfully-parsed clap CLI.
 async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> {
     use cli::Commands;
 
-    // Build a synthetic args vec for the legacy handlers so we don't have to
-    // rewrite every handler right now.  Each branch translates the typed clap
-    // struct back into the `--flag value` format the handlers expect.
     match cli.command {
         Commands::Completions(args) => {
             let mut cmd = cli::Cli::command();
             generate(args.shell, &mut cmd, "rocklake", &mut io::stdout());
-            return Ok(());
         }
-        Commands::Serve(a) => {
-            let mut synthetic = vec!["rocklake".to_string(), "serve".to_string()];
-            synthetic.extend(["--catalog".to_string(), a.catalog]);
-            synthetic.extend(["--bind".to_string(), a.bind]);
-            synthetic.extend(["--max-sessions".to_string(), a.max_sessions.to_string()]);
-            if let Some(p) = a.metrics_port {
-                synthetic.extend(["--metrics-port".to_string(), p.to_string()]);
-            }
-            synthetic.extend(["--metrics-path".to_string(), a.metrics_path]);
-            if let Some(c) = a.tls_cert {
-                synthetic.extend(["--tls-cert".to_string(), c]);
-            }
-            if let Some(k) = a.tls_key {
-                synthetic.extend(["--tls-key".to_string(), k]);
-            }
-            if a.tls_required {
-                synthetic.push("--tls-required".to_string());
-            }
-            if let Some(u) = a.auth_user {
-                synthetic.extend(["--auth-user".to_string(), u]);
-            }
-            if let Some(p) = a.auth_password {
-                synthetic.extend(["--auth-password".to_string(), p]);
-            }
-            let mode = if a.read_only {
-                "reader".to_string()
-            } else {
-                a.mode
-            };
-            synthetic.extend(["--mode".to_string(), mode]);
-            synthetic.extend(["--cost-mode".to_string(), a.cost_mode]);
-            if let Some(e) = a.s3_endpoint {
-                synthetic.extend(["--s3-endpoint".to_string(), e]);
-            }
-            if a.s3_path_style {
-                synthetic.push("--s3-path-style".to_string());
-            }
-            if let Some(k) = a.encryption_key {
-                synthetic.extend(["--encryption-key".to_string(), k]);
-            }
-            if let Some(p) = a.datafusion_pg_wire {
-                synthetic.extend(["--datafusion-pg-wire".to_string(), p.to_string()]);
-            }
-            if !a.extension_schemas.is_empty() {
-                synthetic.extend([
-                    "--extension-schemas".to_string(),
-                    a.extension_schemas.join(","),
-                ]);
-            }
-            if let Some(o) = a.otlp_endpoint {
-                synthetic.extend(["--otlp-endpoint".to_string(), o]);
-            }
-            synthetic.extend([
-                "--idle-connection-timeout".to_string(),
-                a.idle_connection_timeout.to_string(),
-            ]);
-            synthetic.extend(["--drain-timeout".to_string(), a.drain_timeout.to_string()]);
-            synthetic.extend([
-                "--datafusion-bridge-queue-depth".to_string(),
-                a.datafusion_bridge_queue_depth.to_string(),
-            ]);
-            cmd_serve(&synthetic).await?;
-        }
-        Commands::Gc(sub) => {
-            use cli::GcSubcommand;
-            let (subcmd, args) = match sub {
-                GcSubcommand::Plan(a) => ("plan", a),
-                GcSubcommand::Apply(a) => ("apply", a),
-            };
-            let synthetic = vec![
-                "rocklake".to_string(),
-                "gc".to_string(),
-                subcmd.to_string(),
-                "--catalog".to_string(),
-                args.catalog,
-                "--retention-days".to_string(),
-                args.retention_days.to_string(),
-            ];
-            cmd_gc(&synthetic).await?;
-        }
-        Commands::Excise(sub) => {
-            use cli::ExciseSubcommand;
-            let (subcmd, args) = match sub {
-                ExciseSubcommand::Plan(a) => ("plan", a),
-                ExciseSubcommand::Apply(a) => ("apply", a),
-            };
-            let synthetic = vec![
-                "rocklake".to_string(),
-                "excise".to_string(),
-                subcmd.to_string(),
-                "--catalog".to_string(),
-                args.catalog,
-                "--before".to_string(),
-                args.before.to_string(),
-            ];
-            cmd_excise(&synthetic).await?;
-        }
-        Commands::Checkpoint(sub) => {
-            use cli::CheckpointSubcommand;
-            match sub {
-                CheckpointSubcommand::Create(a) => {
-                    let mut s = vec![
-                        "rocklake".to_string(),
-                        "checkpoint".to_string(),
-                        "create".to_string(),
-                        "--catalog".to_string(),
-                        a.catalog,
-                    ];
-                    if let Some(l) = a.label {
-                        s.extend(["--label".to_string(), l]);
-                    }
-                    cmd_checkpoint(&s).await?;
-                }
-                CheckpointSubcommand::List(a) => {
-                    let s = vec![
-                        "rocklake".to_string(),
-                        "checkpoint".to_string(),
-                        "list".to_string(),
-                        "--catalog".to_string(),
-                        a.catalog,
-                    ];
-                    cmd_checkpoint(&s).await?;
-                }
-                CheckpointSubcommand::Restore(a) => {
-                    let s = vec![
-                        "rocklake".to_string(),
-                        "checkpoint".to_string(),
-                        "restore".to_string(),
-                        "--catalog".to_string(),
-                        a.catalog,
-                        "--id".to_string(),
-                        a.id.to_string(),
-                    ];
-                    cmd_checkpoint(&s).await?;
-                }
-                CheckpointSubcommand::Pin(a) => {
-                    let s = vec![
-                        "rocklake".to_string(),
-                        "checkpoint".to_string(),
-                        "pin".to_string(),
-                        "--catalog".to_string(),
-                        a.catalog,
-                        "--name".to_string(),
-                        a.name,
-                        "--snapshot".to_string(),
-                        a.snapshot.to_string(),
-                    ];
-                    cmd_checkpoint(&s).await?;
-                }
-                CheckpointSubcommand::Unpin(a) => {
-                    let s = vec![
-                        "rocklake".to_string(),
-                        "checkpoint".to_string(),
-                        "unpin".to_string(),
-                        "--catalog".to_string(),
-                        a.catalog,
-                        "--name".to_string(),
-                        a.name,
-                    ];
-                    cmd_checkpoint(&s).await?;
-                }
-                CheckpointSubcommand::Pins(a) => {
-                    let s = vec![
-                        "rocklake".to_string(),
-                        "checkpoint".to_string(),
-                        "pins".to_string(),
-                        "--catalog".to_string(),
-                        a.catalog,
-                    ];
-                    cmd_checkpoint(&s).await?;
-                }
-            }
-        }
-        Commands::Export(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "export".to_string(),
-                a.catalog,
-                "--output".to_string(),
-                a.output,
-            ];
-            if let Some(id) = a.snapshot_id {
-                s.extend(["--snapshot-id".to_string(), id.to_string()]);
-            }
-            cmd_export(&s).await?;
-        }
-        Commands::Import(a) => {
-            let s = vec![
-                "rocklake".to_string(),
-                "import".to_string(),
-                a.catalog,
-                "--input".to_string(),
-                a.input,
-            ];
-            cmd_import(&s).await?;
-        }
-        Commands::PgMigrate(a) => {
-            let s = vec![
-                "rocklake".to_string(),
-                "pg-migrate".to_string(),
-                "--input".to_string(),
-                a.input,
-            ];
-            cmd_pg_migrate(&s).await?;
-        }
-        Commands::Rebuild(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "rebuild".to_string(),
-                "--catalog".to_string(),
-                a.catalog,
-            ];
-            if let Some(d) = a.data_root {
-                s.extend(["--data-root".to_string(), d]);
-            }
-            if let Some(e) = a.s3_endpoint {
-                s.extend(["--s3-endpoint".to_string(), e]);
-            }
-            if a.s3_path_style {
-                s.push("--s3-path-style".to_string());
-            }
-            cmd_rebuild(&s).await?;
-        }
-        Commands::Inspect(sub) => {
-            use cli::InspectSubcommand;
-            let (subcmd, args) = match sub {
-                InspectSubcommand::Snapshot(a) => ("snapshot", a),
-                InspectSubcommand::ApiCosts(a) => ("api-costs", a),
-                InspectSubcommand::CacheUtilization(a) => ("cache-utilization", a),
-            };
-            let s = vec![
-                "rocklake".to_string(),
-                "inspect".to_string(),
-                subcmd.to_string(),
-                "--catalog".to_string(),
-                args.catalog,
-            ];
-            cmd_inspect(&s).await?;
-        }
-        Commands::Verify(sub) => {
-            use cli::VerifySubcommand;
-            let (subcmd, args) = match sub {
-                VerifySubcommand::Catalog(a) => ("catalog", a),
-                VerifySubcommand::DataFiles(a) => ("data-files", a),
-            };
-            let s = vec![
-                "rocklake".to_string(),
-                "verify".to_string(),
-                subcmd.to_string(),
-                "--catalog".to_string(),
-                args.catalog,
-            ];
-            cmd_verify(&s).await?;
-        }
-        Commands::Repair(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "repair".to_string(),
-                "--catalog".to_string(),
-                a.catalog,
-            ];
-            if a.dry_run {
-                s.push("--dry-run".to_string());
-            }
-            if a.apply {
-                s.push("--apply".to_string());
-            }
-            cmd_repair(&s).await?;
-        }
-        Commands::Warmup(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "warmup".to_string(),
-                "--catalog".to_string(),
-                a.catalog,
-            ];
-            if let Some(t) = a.tables {
-                s.extend(["--tables".to_string(), t.to_string()]);
-            }
-            cmd_warmup(&s).await?;
-        }
-        Commands::Migrate(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "migrate".to_string(),
-                "--catalog".to_string(),
-                a.catalog,
-            ];
-            if a.dry_run {
-                s.push("--dry-run".to_string());
-            }
-            if a.apply {
-                s.push("--apply".to_string());
-            }
-            cmd_migrate(&s).await?;
-        }
-        Commands::Corpus(sub) => {
-            use cli::CorpusSubcommand;
-            match sub {
-                CorpusSubcommand::Diff(a) => {
-                    let s = vec![
-                        "rocklake".to_string(),
-                        "corpus".to_string(),
-                        "diff".to_string(),
-                        a.left,
-                        a.right,
-                    ];
-                    cmd_corpus(&s).await?;
-                }
-                CorpusSubcommand::Validate(a) => {
-                    let s = vec![
-                        "rocklake".to_string(),
-                        "corpus".to_string(),
-                        "validate".to_string(),
-                        "--catalog".to_string(),
-                        a.catalog,
-                        a.corpus,
-                    ];
-                    cmd_corpus(&s).await?;
-                }
-            }
-        }
-        Commands::Tune(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "tune".to_string(),
-                "--catalog".to_string(),
-                a.catalog,
-            ];
-            if let Some(c) = a.target_cost_usd {
-                s.extend(["--target-cost-usd".to_string(), c.to_string()]);
-            }
-            cmd_tune(&s).await?;
-        }
-        Commands::MigrateFromDucklake(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "migrate-from-ducklake".to_string(),
-                "--source".to_string(),
-                a.source,
-                "--catalog".to_string(),
-                a.catalog,
-            ];
-            if a.dry_run {
-                s.push("--dry-run".to_string());
-            }
-            for v in a.accept_versions {
-                s.extend(["--accept-version".to_string(), v]);
-            }
-            cmd_migrate_from_ducklake(&s).await?;
-        }
-        Commands::ExportCatalog(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "export-catalog".to_string(),
-                "--catalog".to_string(),
-                a.catalog,
-                "--out".to_string(),
-                a.out,
-            ];
-            if let Some(id) = a.at_snapshot {
-                s.extend(["--at-snapshot".to_string(), id.to_string()]);
-            }
-            cmd_export_catalog(&s).await?;
-        }
-        Commands::Diagnose(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "diagnose".to_string(),
-                "--catalog".to_string(),
-                a.catalog,
-            ];
-            if a.json {
-                s.push("--json".to_string());
-            }
-            if let Some(d) = a.data_root {
-                s.extend(["--data-root".to_string(), d]);
-            }
-            cmd_diagnose(&s).await?;
-        }
-        Commands::SweepOrphans(a) => {
-            let mut s = vec![
-                "rocklake".to_string(),
-                "sweep-orphans".to_string(),
-                "--catalog".to_string(),
-                a.catalog,
-                "--data-root".to_string(),
-                a.data_root,
-                "--grace-period-hours".to_string(),
-                a.grace_period_hours.to_string(),
-            ];
-            if a.apply {
-                s.push("--apply".to_string());
-            }
-            cmd_sweep_orphans(&s).await?;
-        }
+        Commands::Serve(args) => cmd_serve(*args).await?,
+        Commands::Gc(command) => cmd_gc(command).await?,
+        Commands::Excise(command) => cmd_excise(command).await?,
+        Commands::Checkpoint(command) => cmd_checkpoint(command).await?,
+        Commands::Export(args) => cmd_export(args).await?,
+        Commands::Import(args) => cmd_import(args).await?,
+        Commands::PgMigrate(args) => cmd_pg_migrate(args).await?,
+        Commands::Rebuild(args) => cmd_rebuild(args).await?,
+        Commands::Inspect(command) => cmd_inspect(command).await?,
+        Commands::Verify(command) => cmd_verify(command).await?,
+        Commands::Repair(args) => cmd_repair(args).await?,
+        Commands::Warmup(args) => cmd_warmup(args).await?,
+        Commands::Migrate(args) => cmd_migrate(args).await?,
+        Commands::Corpus(command) => cmd_corpus(command).await?,
+        Commands::Tune(args) => cmd_tune(args).await?,
+        Commands::MigrateFromDucklake(args) => cmd_migrate_from_ducklake(args).await?,
+        Commands::ExportCatalog(args) => cmd_export_catalog(args).await?,
+        Commands::Diagnose(args) => cmd_diagnose(args).await?,
+        Commands::SweepOrphans(args) => cmd_sweep_orphans(args).await?,
     }
-    Ok(())
-}
-
-/// Legacy dispatcher: handles the original positional command-name style for
-/// backward compatibility with scripts that do not yet use the clap path.
-async fn legacy_dispatch() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() < 2 {
-        // Delegate to clap for a nice help message.
-        cli::Cli::parse_from(["rocklake", "--help"]);
-        std::process::exit(1);
-    }
-
-    match args[1].as_str() {
-        "serve" => cmd_serve(&args).await?,
-        "gc" => cmd_gc(&args).await?,
-        "excise" => cmd_excise(&args).await?,
-        "checkpoint" => cmd_checkpoint(&args).await?,
-        "export" => cmd_export(&args).await?,
-        "import" => cmd_import(&args).await?,
-        "pg-migrate" => cmd_pg_migrate(&args).await?,
-        "rebuild" => cmd_rebuild(&args).await?,
-        "inspect" => cmd_inspect(&args).await?,
-        "verify" => cmd_verify(&args).await?,
-        "repair" => cmd_repair(&args).await?,
-        "warmup" => cmd_warmup(&args).await?,
-        "migrate" => cmd_migrate(&args).await?,
-        "corpus" => cmd_corpus(&args).await?,
-        "tune" => cmd_tune(&args).await?,
-        "migrate-from-ducklake" => cmd_migrate_from_ducklake(&args).await?,
-        "export-catalog" => cmd_export_catalog(&args).await?,
-        "diagnose" => cmd_diagnose(&args).await?,
-        "sweep-orphans" => cmd_sweep_orphans(&args).await?,
-        "--help" | "-h" => {
-            cli::Cli::parse_from(["rocklake", "--help"]);
-        }
-        other => {
-            eprintln!("Unknown command: {other}");
-            eprintln!("Run 'rocklake --help' for available commands.");
-            std::process::exit(1);
-        }
-    }
-
     Ok(())
 }
 
 // ─── serve ─────────────────────────────────────────────────────────────────
 
-async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let config = parse_serve_args(args)?;
+async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let mode = if args.read_only {
+        "reader".to_string()
+    } else {
+        args.mode
+    };
+    let config = ServeConfig {
+        catalog_url: args.catalog,
+        bind_addr: args
+            .bind
+            .parse()
+            .map_err(|e| format!("invalid bind address: {e}"))?,
+        max_sessions: args.max_sessions,
+        metrics_port: args.metrics_port,
+        metrics_path: args.metrics_path,
+        tls_cert: args.tls_cert,
+        tls_key: args.tls_key,
+        tls_required: args.tls_required,
+        auth_username: args.auth_user,
+        auth_password: args.auth_password,
+        mode,
+        cost_mode: args
+            .cost_mode
+            .parse()
+            .map_err(|e| format!("invalid cost mode: {e}"))?,
+        s3_endpoint: args.s3_endpoint,
+        s3_path_style: args.s3_path_style,
+        encryption_key: args.encryption_key,
+        datafusion_pg_wire_port: args.datafusion_pg_wire,
+        extension_schemas: if args.extension_schemas.is_empty() {
+            vec!["public".to_string(), "pgtrickle".to_string()]
+        } else {
+            args.extension_schemas
+        },
+        otlp_endpoint: args.otlp_endpoint,
+        idle_connection_timeout_secs: args.idle_connection_timeout,
+        drain_timeout_secs: args.drain_timeout,
+        datafusion_bridge_queue_depth: args.datafusion_bridge_queue_depth,
+    };
 
     // v0.39.0: Initialise OTLP tracing if --otlp-endpoint is set.
     let _telemetry = rocklake_pgwire::telemetry::TelemetryConfig {
@@ -695,332 +286,35 @@ struct ServeConfig {
     datafusion_bridge_queue_depth: usize,
 }
 
-fn parse_serve_args(args: &[String]) -> Result<ServeConfig, String> {
-    let mut catalog_url = String::new();
-    // SAFETY: "0.0.0.0:5432" is a compile-time constant that always parses correctly.
-    let mut bind_addr: SocketAddr = "0.0.0.0:5432"
-        .parse()
-        .expect("default bind address is always valid");
-    let mut max_sessions = 50;
-    let mut metrics_port = None;
-    // Metrics path: read from env first, CLI flag overrides.
-    let mut metrics_path: String =
-        std::env::var("ROCKLAKE_METRICS_PATH").unwrap_or_else(|_| "/metrics".to_string());
-    let mut tls_cert = None;
-    let mut tls_key = None;
-    let mut tls_required = false;
-    // Read auth from env vars first; CLI flags override.
-    let mut auth_username: Option<String> = std::env::var("ROCKLAKE_AUTH_USER").ok();
-    let mut auth_password: Option<String> = std::env::var("ROCKLAKE_AUTH_PASSWORD").ok();
-    // OTLP endpoint: read from env first, CLI flag overrides.
-    let mut otlp_endpoint: Option<String> = std::env::var("ROCKLAKE_OTLP_ENDPOINT").ok();
-    let mut mode = "writer".to_string();
-    let mut cost_mode = rocklake_catalog::CostMode::Balanced;
-    let mut s3_endpoint: Option<String> = None;
-    let mut s3_path_style = false;
-    let mut encryption_key: Option<String> = None;
-    let mut datafusion_pg_wire_port: Option<u16> = None;
-    // Extension schemas: read from env first (comma-separated), CLI flag overrides.
-    let mut extension_schemas: Vec<String> = std::env::var("ROCKLAKE_EXTENSION_SCHEMAS")
-        .ok()
-        .map(|s| {
-            s.split(',')
-                .map(|x| x.trim().to_string())
-                .filter(|x| !x.is_empty())
-                .collect()
-        })
-        .unwrap_or_else(|| vec!["public".to_string(), "pgtrickle".to_string()]);
-    let mut idle_connection_timeout_secs: u64 = 60;
-    let mut drain_timeout_secs: u64 = 30;
-    let mut datafusion_bridge_queue_depth: usize = 256;
-
-    let mut i = 2;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--catalog" | "-c" => {
-                i += 1;
-                catalog_url = args.get(i).cloned().ok_or("--catalog requires a value")?;
-            }
-            "--bind" | "-b" => {
-                i += 1;
-                let addr_str = args.get(i).ok_or("--bind requires a value")?;
-                bind_addr = addr_str
-                    .parse()
-                    .map_err(|e| format!("invalid bind address: {e}"))?;
-            }
-            "--max-sessions" => {
-                i += 1;
-                max_sessions = args
-                    .get(i)
-                    .ok_or("--max-sessions requires a value")?
-                    .parse()
-                    .map_err(|e| format!("invalid max-sessions: {e}"))?;
-            }
-            "--metrics-port" => {
-                i += 1;
-                metrics_port = Some(
-                    args.get(i)
-                        .ok_or("--metrics-port requires a value")?
-                        .parse()
-                        .map_err(|e| format!("invalid metrics-port: {e}"))?,
-                );
-            }
-            "--metrics-bind" => {
-                i += 1;
-                let bind_str = args.get(i).ok_or("--metrics-bind requires a value")?;
-                // Parse as <host:port> and extract port for the metrics server.
-                let port: u16 = bind_str
-                    .rsplit_once(':')
-                    .ok_or("--metrics-bind must be in <host:port> format")
-                    .and_then(|(_, p)| p.parse().map_err(|_| "--metrics-bind port is invalid"))?;
-                metrics_port = Some(port);
-            }
-            "--metrics-path" => {
-                i += 1;
-                metrics_path = args
-                    .get(i)
-                    .cloned()
-                    .ok_or("--metrics-path requires a value")?;
-            }
-            "--encryption-key" => {
-                i += 1;
-                encryption_key = Some(
-                    args.get(i)
-                        .cloned()
-                        .ok_or("--encryption-key requires a value")?,
-                );
-            }
-            "--tls-cert" => {
-                i += 1;
-                tls_cert = Some(args.get(i).cloned().ok_or("--tls-cert requires a value")?);
-            }
-            "--tls-key" => {
-                i += 1;
-                tls_key = Some(args.get(i).cloned().ok_or("--tls-key requires a value")?);
-            }
-            "--tls-required" => {
-                tls_required = true;
-            }
-            // New canonical names for auth flags.
-            "--auth-user" => {
-                i += 1;
-                auth_username = Some(args.get(i).cloned().ok_or("--auth-user requires a value")?);
-            }
-            "--auth-password" => {
-                i += 1;
-                auth_password = Some(
-                    args.get(i)
-                        .cloned()
-                        .ok_or("--auth-password requires a value")?,
-                );
-            }
-            // Legacy aliases kept for backward compatibility.
-            "--username" => {
-                i += 1;
-                auth_username = Some(args.get(i).cloned().ok_or("--username requires a value")?);
-            }
-            "--password" => {
-                i += 1;
-                auth_password = Some(args.get(i).cloned().ok_or("--password requires a value")?);
-            }
-            "--mode" => {
-                i += 1;
-                let m = args.get(i).cloned().ok_or("--mode requires a value")?;
-                if m != "writer" && m != "reader" {
-                    return Err(format!("--mode must be 'writer' or 'reader', got '{m}'"));
-                }
-                mode = m;
-            }
-            "--read-only" => {
-                mode = "reader".to_string();
-            }
-            "--cost-mode" => {
-                i += 1;
-                let m = args.get(i).ok_or("--cost-mode requires a value")?;
-                cost_mode = m.parse::<rocklake_catalog::CostMode>()?;
-            }
-            "--s3-endpoint" => {
-                i += 1;
-                s3_endpoint = Some(
-                    args.get(i)
-                        .cloned()
-                        .ok_or("--s3-endpoint requires a value")?,
-                );
-            }
-            "--s3-path-style" => {
-                s3_path_style = true;
-            }
-            "--datafusion-pg-wire" => {
-                i += 1;
-                datafusion_pg_wire_port = Some(
-                    args.get(i)
-                        .ok_or("--datafusion-pg-wire requires a port value")?
-                        .parse()
-                        .map_err(|e| format!("invalid --datafusion-pg-wire port: {e}"))?,
-                );
-            }
-            "--extension-schemas" => {
-                i += 1;
-                let schemas_str = args
-                    .get(i)
-                    .cloned()
-                    .ok_or("--extension-schemas requires a comma-separated list")?;
-                extension_schemas = schemas_str
-                    .split(',')
-                    .map(|x| x.trim().to_string())
-                    .filter(|x| !x.is_empty())
-                    .collect();
-            }
-            // v0.39.0: OTLP tracing endpoint.
-            "--otlp-endpoint" => {
-                i += 1;
-                otlp_endpoint = Some(
-                    args.get(i)
-                        .cloned()
-                        .ok_or("--otlp-endpoint requires a URL value")?,
-                );
-            }
-            // v0.39.0: --metrics-addr is a convenient alias for --metrics-bind.
-            "--metrics-addr" => {
-                i += 1;
-                let bind_str = args
-                    .get(i)
-                    .ok_or("--metrics-addr requires a <host:port> value")?;
-                let port: u16 = bind_str
-                    .rsplit_once(':')
-                    .ok_or("--metrics-addr must be in <host:port> format")
-                    .and_then(|(_, p)| p.parse().map_err(|_| "--metrics-addr port is invalid"))?;
-                metrics_port = Some(port);
-            }
-            // v0.47.0: connection management.
-            "--idle-connection-timeout" => {
-                i += 1;
-                idle_connection_timeout_secs = args
-                    .get(i)
-                    .ok_or("--idle-connection-timeout requires a value")?
-                    .parse()
-                    .map_err(|e| format!("invalid --idle-connection-timeout: {e}"))?;
-            }
-            "--drain-timeout" => {
-                i += 1;
-                drain_timeout_secs = args
-                    .get(i)
-                    .ok_or("--drain-timeout requires a value")?
-                    .parse()
-                    .map_err(|e| format!("invalid --drain-timeout: {e}"))?;
-            }
-            "--datafusion-bridge-queue-depth" => {
-                i += 1;
-                datafusion_bridge_queue_depth = args
-                    .get(i)
-                    .ok_or("--datafusion-bridge-queue-depth requires a value")?
-                    .parse()
-                    .map_err(|e| format!("invalid --datafusion-bridge-queue-depth: {e}"))?;
-            }
-            "--help" | "-h" => {
-                eprintln!(
-                    "Usage: rocklake serve --catalog <path> \
-                    [--bind <addr>] [--max-sessions <n>] \
-                    [--metrics-port <port>] [--metrics-bind <host:port>] [--metrics-path <path>] \
-                    [--tls-cert <path>] [--tls-key <path>] [--tls-required] \
-                    [--auth-user <user>] [--auth-password <pass>] \
-                    [--mode writer|reader] [--read-only] \
-                    [--cost-mode conservative|balanced|latency] \
-                    [--s3-endpoint <url>] [--s3-path-style] \
-                    [--encryption-key <hex>] \
-                    [--datafusion-pg-wire <port>] \
-                    [--extension-schemas <schema,...>]"
-                );
-                eprintln!(
-                    "\nEnvironment variables:\
-                    \n  ROCKLAKE_AUTH_USER           Username for authentication\
-                    \n  ROCKLAKE_AUTH_PASSWORD        Password for authentication\
-                    \n  ROCKLAKE_EXTENSION_SCHEMAS    Comma-separated allowed extension schema names\
-                    \n  ROCKLAKE_METRICS_PATH         HTTP path for the metrics endpoint (default: /metrics)"
-                );
-                eprintln!(
-                    "\nSupported catalog URLs:\
-                    \n  s3://bucket/path         Amazon S3 or compatible\
-                    \n  gs://bucket/path         Google Cloud Storage\
-                    \n  az://container/path      Azure Blob Storage\
-                    \n  /local/path              Local filesystem"
-                );
-                std::process::exit(0);
-            }
-            other => {
-                if catalog_url.is_empty() && !other.starts_with('-') {
-                    catalog_url = other.to_string();
-                }
-            }
-        }
-        i += 1;
-    }
-
-    if catalog_url.is_empty() {
-        return Err("--catalog is required".to_string());
-    }
-
-    Ok(ServeConfig {
-        catalog_url,
-        bind_addr,
-        max_sessions,
-        metrics_port,
-        metrics_path,
-        tls_cert,
-        tls_key,
-        tls_required,
-        auth_username,
-        auth_password,
-        mode,
-        cost_mode,
-        s3_endpoint,
-        s3_path_style,
-        encryption_key,
-        datafusion_pg_wire_port,
-        extension_schemas,
-        otlp_endpoint,
-        idle_connection_timeout_secs,
-        drain_timeout_secs,
-        datafusion_bridge_queue_depth,
-    })
-}
-
 // ─── gc ────────────────────────────────────────────────────────────────────
 
-async fn cmd_gc(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("plan");
-    let catalog_url = extract_catalog_arg(args, 3)?;
+async fn cmd_gc(command: cli::GcSubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    let (catalog_url, retention_days, apply) = match command {
+        cli::GcSubcommand::Plan(args) => (args.catalog, args.retention_days, false),
+        cli::GcSubcommand::Apply(args) => (args.catalog, args.retention_days, true),
+    };
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    let retention_days = extract_numeric_arg(args, "--retention-days").unwrap_or(30);
-
-    match subcmd {
-        "plan" => {
-            let plan = rocklake_catalog::gc::gc_plan(&db, retention_days).await?;
-            println!("GC Plan:");
-            println!("  Current retain-from: {}", plan.current_retain_from);
-            println!("  Proposed retain-from: {}", plan.proposed_retain_from);
-            println!("  Snapshots affected: {}", plan.snapshots_affected);
-            if !plan.pinned_snapshots.is_empty() {
-                println!("  Pinned snapshots: {:?}", plan.pinned_snapshots);
-            }
-            if !plan.leased_snapshots.is_empty() {
-                println!("  Leased snapshots: {:?}", plan.leased_snapshots);
-            }
+    if !apply {
+        let plan = rocklake_catalog::gc::gc_plan(&db, retention_days).await?;
+        println!("GC Plan:");
+        println!("  Current retain-from: {}", plan.current_retain_from);
+        println!("  Proposed retain-from: {}", plan.proposed_retain_from);
+        println!("  Snapshots affected: {}", plan.snapshots_affected);
+        if !plan.pinned_snapshots.is_empty() {
+            println!("  Pinned snapshots: {:?}", plan.pinned_snapshots);
         }
-        "apply" => {
-            let plan = rocklake_catalog::gc::gc_plan(&db, retention_days).await?;
-            let result = rocklake_catalog::gc::gc_apply(&db, plan.proposed_retain_from).await?;
-            println!("GC Applied:");
-            println!("  Previous retain-from: {}", result.previous_retain_from);
-            println!("  New retain-from: {}", result.new_retain_from);
-            println!("  Snapshots hidden: {}", result.snapshots_hidden);
+        if !plan.leased_snapshots.is_empty() {
+            println!("  Leased snapshots: {:?}", plan.leased_snapshots);
         }
-        _ => {
-            eprintln!("Usage: rocklake gc [plan|apply] --catalog <path> [--retention-days <n>]");
-            std::process::exit(1);
-        }
+    } else {
+        let plan = rocklake_catalog::gc::gc_plan(&db, retention_days).await?;
+        let result = rocklake_catalog::gc::gc_apply(&db, plan.proposed_retain_from).await?;
+        println!("GC Applied:");
+        println!("  Previous retain-from: {}", result.previous_retain_from);
+        println!("  New retain-from: {}", result.new_retain_from);
+        println!("  Snapshots hidden: {}", result.snapshots_hidden);
     }
 
     db.close().await?;
@@ -1029,49 +323,41 @@ async fn cmd_gc(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── excise ────────────────────────────────────────────────────────────────
 
-async fn cmd_excise(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("plan");
-    let catalog_url = extract_catalog_arg(args, 3)?;
+async fn cmd_excise(command: cli::ExciseSubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    let (catalog_url, before, apply) = match command {
+        cli::ExciseSubcommand::Plan(args) => (args.catalog, args.before, false),
+        cli::ExciseSubcommand::Apply(args) => (args.catalog, args.before, true),
+    };
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    let before = extract_numeric_arg(args, "--before")
-        .ok_or("--before <snapshot> is required for excise")?;
-
-    match subcmd {
-        "plan" => {
-            let plan = rocklake_catalog::excise::excise_plan(&db, before).await?;
-            println!("Excise Plan:");
-            println!("  Before snapshot: {}", plan.before_snapshot);
-            println!("  Version rows eligible: {}", plan.version_rows_eligible);
-            println!(
-                "  Inlined inserts eligible: {}",
-                plan.inlined_inserts_eligible
-            );
-            println!(
-                "  Inlined deletes eligible: {}",
-                plan.inlined_deletes_eligible
-            );
-            println!("  Data files eligible: {}", plan.data_files_eligible.len());
-            println!("  Safe: {}", if plan.is_safe { "yes" } else { "NO" });
-        }
-        "apply" => {
-            let result = rocklake_catalog::excise::excise_apply(&db, before, "operator").await?;
-            println!("Excise Applied:");
-            println!("  Keys deleted: {}", result.keys_deleted);
-            println!("  Keys failed: {}", result.keys_failed);
-            println!("  Audit entry ID: {}", result.audit_entry_id);
-            if result.keys_failed > 0 {
-                return Err(format!(
-                    "excision incomplete: {} catalog deletions failed",
-                    result.keys_failed
-                )
-                .into());
-            }
-        }
-        _ => {
-            eprintln!("Usage: rocklake excise [plan|apply] --catalog <path> --before <snapshot>");
-            std::process::exit(1);
+    if !apply {
+        let plan = rocklake_catalog::excise::excise_plan(&db, before).await?;
+        println!("Excise Plan:");
+        println!("  Before snapshot: {}", plan.before_snapshot);
+        println!("  Version rows eligible: {}", plan.version_rows_eligible);
+        println!(
+            "  Inlined inserts eligible: {}",
+            plan.inlined_inserts_eligible
+        );
+        println!(
+            "  Inlined deletes eligible: {}",
+            plan.inlined_deletes_eligible
+        );
+        println!("  Data files eligible: {}", plan.data_files_eligible.len());
+        println!("  Safe: {}", if plan.is_safe { "yes" } else { "NO" });
+    } else {
+        let result = rocklake_catalog::excise::excise_apply(&db, before, "operator").await?;
+        println!("Excise Applied:");
+        println!("  Keys deleted: {}", result.keys_deleted);
+        println!("  Keys failed: {}", result.keys_failed);
+        println!("  Audit entry ID: {}", result.audit_entry_id);
+        if result.keys_failed > 0 {
+            return Err(format!(
+                "excision incomplete: {} catalog deletions failed",
+                result.keys_failed
+            )
+            .into());
         }
     }
 
@@ -1081,15 +367,23 @@ async fn cmd_excise(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── checkpoint ────────────────────────────────────────────────────────────
 
-async fn cmd_checkpoint(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("list");
-    let catalog_url = extract_catalog_arg(args, 3)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_checkpoint(
+    command: cli::CheckpointSubcommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = match &command {
+        cli::CheckpointSubcommand::Create(args) => &args.catalog,
+        cli::CheckpointSubcommand::List(args) => &args.catalog,
+        cli::CheckpointSubcommand::Restore(args) => &args.catalog,
+        cli::CheckpointSubcommand::Pin(args) => &args.catalog,
+        cli::CheckpointSubcommand::Unpin(args) => &args.catalog,
+        cli::CheckpointSubcommand::Pins(args) => &args.catalog,
+    };
+    let (catalog_path, object_store) = resolve_catalog(catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    match subcmd {
-        "create" => {
-            let label = extract_string_arg(args, "--label");
+    match command {
+        cli::CheckpointSubcommand::Create(args) => {
+            let label = args.label;
             let info =
                 rocklake_catalog::checkpoint::create_checkpoint(&db, label.as_deref()).await?;
             println!("Checkpoint created:");
@@ -1097,7 +391,7 @@ async fn cmd_checkpoint(args: &[String]) -> Result<(), Box<dyn std::error::Error
             println!("  Snapshot ID: {}", info.snapshot_id);
             println!("  Created at: {}", info.created_at);
         }
-        "list" => {
+        cli::CheckpointSubcommand::List(_) => {
             let checkpoints = rocklake_catalog::checkpoint::list_checkpoints(&db).await?;
             if checkpoints.is_empty() {
                 println!("No checkpoints found.");
@@ -1114,10 +408,8 @@ async fn cmd_checkpoint(args: &[String]) -> Result<(), Box<dyn std::error::Error
                 }
             }
         }
-        "restore" => {
-            let id = extract_numeric_arg(args, "--id")
-                .ok_or("--id <checkpoint_id> is required for restore")?;
-            let info = rocklake_catalog::checkpoint::restore_checkpoint(&db, id).await?;
+        cli::CheckpointSubcommand::Restore(args) => {
+            let info = rocklake_catalog::checkpoint::restore_checkpoint(&db, args.id).await?;
             println!("Checkpoint restored:");
             println!("  ID: {}", info.id);
             println!(
@@ -1125,33 +417,22 @@ async fn cmd_checkpoint(args: &[String]) -> Result<(), Box<dyn std::error::Error
                 info.restore_snapshot_id.unwrap_or(info.snapshot_id)
             );
         }
-        "pin" => {
-            let name =
-                extract_string_arg(args, "--name").ok_or("--name <name> is required for pin")?;
-            let snapshot = extract_numeric_arg(args, "--snapshot")
-                .ok_or("--snapshot <snapshot_id> is required for pin")?;
-            let pin = rocklake_catalog::checkpoint::pin_checkpoint(&db, &name, snapshot).await?;
+        cli::CheckpointSubcommand::Pin(args) => {
+            let pin = rocklake_catalog::checkpoint::pin_checkpoint(&db, &args.name, args.snapshot)
+                .await?;
             println!("Checkpoint pin created:");
             println!("  Name: {}", pin.name);
             println!("  Snapshot ID: {}", pin.snapshot_id);
         }
-        "unpin" => {
-            let name =
-                extract_string_arg(args, "--name").ok_or("--name <name> is required for unpin")?;
-            rocklake_catalog::checkpoint::unpin_checkpoint(&db, &name).await?;
-            println!("Checkpoint pin removed: {name}");
+        cli::CheckpointSubcommand::Unpin(args) => {
+            rocklake_catalog::checkpoint::unpin_checkpoint(&db, &args.name).await?;
+            println!("Checkpoint pin removed: {}", args.name);
         }
-        "pins" => {
+        cli::CheckpointSubcommand::Pins(_) => {
             let pins = rocklake_catalog::checkpoint::list_checkpoint_pins(&db).await?;
             for pin in pins {
                 println!("{} {} {}", pin.name, pin.snapshot_id, pin.created_at);
             }
-        }
-        _ => {
-            eprintln!(
-                "Usage: rocklake checkpoint [create|list|restore|pin|unpin|pins] --catalog <path>"
-            );
-            std::process::exit(1);
         }
     }
 
@@ -1161,14 +442,12 @@ async fn cmd_checkpoint(args: &[String]) -> Result<(), Box<dyn std::error::Error
 
 // ─── export ────────────────────────────────────────────────────────────────
 
-async fn cmd_export(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_catalog_arg(args, 2)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_export(args: cli::ExportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    let output_path =
-        extract_string_arg(args, "--output").unwrap_or_else(|| "catalog.ndjson".to_string());
-    let snapshot_id = extract_numeric_arg(args, "--snapshot-id");
+    let output_path = args.output;
+    let snapshot_id = args.snapshot_id;
 
     let mut file = std::fs::File::create(&output_path)
         .map_err(|e| format!("Cannot create output file: {e}"))?;
@@ -1185,13 +464,11 @@ async fn cmd_export(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── import ────────────────────────────────────────────────────────────────
 
-async fn cmd_import(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_catalog_arg(args, 2)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_import(args: cli::ImportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    let input_path =
-        extract_string_arg(args, "--input").ok_or("--input <file> is required for import")?;
+    let input_path = args.input;
 
     let file =
         std::fs::File::open(&input_path).map_err(|e| format!("Cannot open input file: {e}"))?;
@@ -1208,9 +485,8 @@ async fn cmd_import(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── pg-migrate ────────────────────────────────────────────────────────────
 
-async fn cmd_pg_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let input_path =
-        extract_string_arg(args, "--input").ok_or("--input <file> is required for pg-migrate")?;
+async fn cmd_pg_migrate(args: cli::PgMigrateArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let input_path = args.input;
 
     let file =
         std::fs::File::open(&input_path).map_err(|e| format!("Cannot open input file: {e}"))?;
@@ -1225,13 +501,16 @@ async fn cmd_pg_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error
 
 // ─── rebuild ───────────────────────────────────────────────────────────────
 
-async fn cmd_rebuild(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_catalog_arg(args, 2)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_rebuild(args: cli::RebuildArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let data_path = args
+        .data_root
+        .ok_or("--data-root is required for rebuild")?;
+    let s3_opts = S3Options {
+        endpoint: args.s3_endpoint,
+        path_style: args.s3_path_style,
+    };
+    let (catalog_path, object_store) = resolve_catalog_with_opts(&args.catalog, &s3_opts)?;
     let db = slatedb::Db::open(catalog_path, object_store.clone()).await?;
-
-    let data_path =
-        extract_string_arg(args, "--data-path").ok_or("--data-path is required for rebuild")?;
 
     // List Parquet files in the data path
     let data_prefix = ObjectPath::from(data_path.as_str());
@@ -1260,13 +539,10 @@ async fn cmd_rebuild(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 
 // ─── inspect ───────────────────────────────────────────────────────────────
 
-async fn cmd_inspect(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("snapshot");
-
-    match subcmd {
-        "snapshot" | "--latest" => {
-            let catalog_url = extract_catalog_arg(args, 3)?;
-            let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_inspect(command: cli::InspectSubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        cli::InspectSubcommand::Snapshot(args) => {
+            let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
             let db = slatedb::Db::open(catalog_path, object_store).await?;
 
             let result = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
@@ -1288,9 +564,8 @@ async fn cmd_inspect(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 
             db.close().await?;
         }
-        "api-costs" => {
-            let catalog_url = extract_catalog_arg(args, 3)?;
-            let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+        cli::InspectSubcommand::ApiCosts(args) => {
+            let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
             let db = slatedb::Db::open(catalog_path, object_store).await?;
             let state = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
             db.close().await?;
@@ -1305,39 +580,18 @@ async fn cmd_inspect(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             };
             let report = rocklake_catalog::cost::ApiCostReport::from_snapshot(&snap);
 
-            let stream = args.iter().any(|a| a == "--stream");
-            if stream {
-                println!("Streaming mode: one report per minute. Press Ctrl+C to stop.");
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-                loop {
-                    interval.tick().await;
-                    report.print();
-                }
-            } else {
-                report.print();
-            }
+            report.print();
         }
-        "cache-utilization" => {
-            let catalog_url = extract_catalog_arg(args, 3)?;
-            let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+        cli::InspectSubcommand::CacheUtilization(args) => {
+            let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
             let db = slatedb::Db::open(catalog_path, object_store).await?;
             let state = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
             db.close().await?;
 
-            let cache_size_mb = extract_numeric_arg(args, "--cache-size-mb").unwrap_or(256);
-            let stats = rocklake_catalog::cache_utilization(
-                cache_size_mb,
-                state.data_file_count,
-                state.column_count,
-            )
-            .await;
+            let stats =
+                rocklake_catalog::cache_utilization(256, state.data_file_count, state.column_count)
+                    .await;
             stats.print();
-        }
-        _ => {
-            eprintln!(
-                "Usage: rocklake inspect [snapshot|api-costs|cache-utilization] --catalog <path>"
-            );
-            std::process::exit(1);
         }
     }
 
@@ -1346,14 +600,16 @@ async fn cmd_inspect(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 
 // ─── verify ────────────────────────────────────────────────────────────────
 
-async fn cmd_verify(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("catalog");
-    let catalog_url = extract_catalog_arg(args, 3)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = match &command {
+        cli::VerifySubcommand::Catalog(args) => &args.catalog,
+        cli::VerifySubcommand::DataFiles(args) => &args.catalog,
+    };
+    let (catalog_path, object_store) = resolve_catalog(catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store.clone()).await?;
 
-    match subcmd {
-        "catalog" => {
+    match command {
+        cli::VerifySubcommand::Catalog(_) => {
             let result = rocklake_catalog::verify::verify_catalog(&db).await?;
             println!("Catalog Verification:");
             println!("  Tables checked: {}", result.tables_checked);
@@ -1373,7 +629,7 @@ async fn cmd_verify(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        "data-files" => {
+        cli::VerifySubcommand::DataFiles(_) => {
             let result = rocklake_catalog::cleanup::verify_data_files(&db, &object_store).await?;
             println!("Data File Verification:");
             println!("  Files OK: {}", result.files_ok);
@@ -1387,10 +643,6 @@ async fn cmd_verify(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        _ => {
-            eprintln!("Usage: rocklake verify [catalog|data-files] --catalog <path>");
-            std::process::exit(1);
-        }
     }
 
     db.close().await?;
@@ -1399,12 +651,9 @@ async fn cmd_verify(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── repair ────────────────────────────────────────────────────────────────
 
-async fn cmd_repair(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_catalog_arg(args, 2)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_repair(args: cli::RepairArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
-
-    let apply = args.iter().any(|a| a == "--apply");
 
     let plan = rocklake_catalog::repair::repair_plan(&db).await?;
 
@@ -1422,12 +671,12 @@ async fn cmd_repair(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if apply && !plan.has_unrecoverable() {
+        if args.apply && !plan.has_unrecoverable() {
             let result = rocklake_catalog::repair::repair_apply(&db, &plan).await?;
             println!("Repair Applied:");
             println!("  Actions applied: {}", result.actions_applied);
             println!("  Actions failed: {}", result.actions_failed);
-        } else if !apply {
+        } else if !args.apply {
             println!("\nDry run. Use --apply to execute repairs.");
         }
     }
@@ -1438,12 +687,11 @@ async fn cmd_repair(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── warmup ────────────────────────────────────────────────────────────────
 
-async fn cmd_warmup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_catalog_arg(args, 2)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_warmup(args: cli::WarmupArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    let max_tables = extract_numeric_arg(args, "--tables").unwrap_or(20) as usize;
+    let max_tables = args.tables.unwrap_or(20) as usize;
     let result = rocklake_catalog::warmup_cache(&db, max_tables).await?;
 
     println!("Cache Warmup Complete:");
@@ -1463,14 +711,13 @@ async fn cmd_warmup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── migrate ───────────────────────────────────────────────────────────────
 
-async fn cmd_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_catalog_arg(args, 2)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_migrate(args: cli::MigrateArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    let target_version = extract_numeric_arg(args, "--target-version").unwrap_or(2) as u32;
-    let apply = args.iter().any(|a| a == "--apply");
-    let dry_run = args.iter().any(|a| a == "--dry-run") || !apply;
+    let target_version = 2;
+    let apply = args.apply;
+    let dry_run = args.dry_run || !apply;
 
     if dry_run {
         let result = rocklake_catalog::migrate::migrate_dry_run(&db, target_version).await?;
@@ -1486,10 +733,9 @@ async fn cmd_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
             println!("Run with --apply to execute the migration.");
         }
     } else {
-        let backup_dir =
-            extract_string_arg(args, "--backup-dir").unwrap_or_else(|| ".".to_string());
+        let backup_dir = ".";
         let result =
-            rocklake_catalog::migrate::migrate_apply(&db, target_version, &backup_dir).await?;
+            rocklake_catalog::migrate::migrate_apply(&db, target_version, backup_dir).await?;
         println!("Migration Complete:");
         println!("  Rows migrated:  {}", result.rows_migrated);
         println!("  New version:    {}", result.new_version);
@@ -1502,16 +748,11 @@ async fn cmd_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 
 // ─── corpus ────────────────────────────────────────────────────────────────
 
-async fn cmd_corpus(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or("validate");
-
-    match subcmd {
-        "diff" => {
-            let old_path = extract_string_arg(args, "--old")
-                .ok_or("--old <file> is required for corpus diff")?;
-            let new_path = extract_string_arg(args, "--new")
-                .ok_or("--new <file> is required for corpus diff")?;
-
+async fn cmd_corpus(command: cli::CorpusSubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        cli::CorpusSubcommand::Diff(args) => {
+            let old_path = args.left;
+            let new_path = args.right;
             let old_file = std::fs::File::open(&old_path)
                 .map_err(|e| format!("Cannot open old corpus: {e}"))?;
             let new_file = std::fs::File::open(&new_path)
@@ -1533,10 +774,8 @@ async fn cmd_corpus(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        "validate" => {
-            let corpus_path = extract_string_arg(args, "--corpus")
-                .ok_or("--corpus <file> is required for corpus validate")?;
-
+        cli::CorpusSubcommand::Validate(args) => {
+            let corpus_path = args.corpus;
             let path = std::path::Path::new(&corpus_path);
             let mut all_records = Vec::new();
             if path.is_dir() {
@@ -1560,10 +799,6 @@ async fn cmd_corpus(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             let result = rocklake_catalog::corpus_validate(&all_records);
             result.print();
         }
-        _ => {
-            eprintln!("Usage: rocklake corpus [diff|validate] [--old <file>] [--new <file>] [--corpus <file>]");
-            std::process::exit(1);
-        }
     }
 
     Ok(())
@@ -1571,16 +806,13 @@ async fn cmd_corpus(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── tune ──────────────────────────────────────────────────────────────────
 
-async fn cmd_tune(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_catalog_arg(args, 2)?;
-    let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
+async fn cmd_tune(args: cli::TuneArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
     let state = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
     db.close().await?;
 
-    let target_cost = extract_numeric_arg(args, "--target-cost-usd-per-month")
-        .map(|v| v as f64)
-        .unwrap_or(50.0);
+    let target_cost = args.target_cost_usd.unwrap_or(50.0);
 
     // Build a cost report from catalog metadata
     let snap = rocklake_catalog::cost::ApiCallSnapshot {
@@ -1623,41 +855,6 @@ async fn cmd_tune(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-fn extract_catalog_arg(args: &[String], start: usize) -> Result<String, String> {
-    for (i, arg) in args.iter().enumerate().skip(start) {
-        if arg == "--catalog" || arg == "-c" {
-            return args
-                .get(i + 1)
-                .cloned()
-                .ok_or_else(|| "--catalog requires a value".to_string());
-        }
-    }
-    for arg in args.iter().skip(start) {
-        if !arg.starts_with('-') {
-            return Ok(arg.clone());
-        }
-    }
-    Err("--catalog <path> is required".to_string())
-}
-
-fn extract_numeric_arg(args: &[String], flag: &str) -> Option<u64> {
-    for (i, arg) in args.iter().enumerate() {
-        if arg == flag {
-            return args.get(i + 1).and_then(|v| v.parse().ok());
-        }
-    }
-    None
-}
-
-fn extract_string_arg(args: &[String], flag: &str) -> Option<String> {
-    for (i, arg) in args.iter().enumerate() {
-        if arg == flag {
-            return args.get(i + 1).cloned();
-        }
-    }
-    None
-}
-
 /// Options for S3-compatible object store configuration.
 #[derive(Default)]
 struct S3Options {
@@ -1681,6 +878,7 @@ fn resolve_catalog_with_opts_mode(
     s3_opts: &S3Options,
     create_local_root: bool,
 ) -> Result<(ObjectPath, Arc<dyn object_store::ObjectStore>), String> {
+    let url = url.strip_prefix("file://").unwrap_or(url);
     if let Some(without_scheme) = url.strip_prefix("s3://") {
         let (bucket, prefix) = match without_scheme.find('/') {
             Some(idx) => (&without_scheme[..idx], &without_scheme[idx + 1..]),
@@ -1781,28 +979,13 @@ fn resolve_catalog_with_opts_mode(
 /// Example:
 ///   rocklake migrate-from-ducklake --source sqlite:./duck.db --catalog ./my-catalog
 ///   rocklake migrate-from-ducklake --source dump.ndjson --catalog ./my-catalog
-async fn cmd_migrate_from_ducklake(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let source = extract_string_arg(args, "--source").ok_or(
-        "--source <file|sqlite:path|postgres://...> is required for migrate-from-ducklake",
-    )?;
-    let catalog_url = extract_string_arg(args, "--catalog")
-        .ok_or("--catalog <path> is required for migrate-from-ducklake")?;
-    let dry_run = args.iter().any(|a| a == "--dry-run");
-
-    // Collect all --accept-version tokens.
-    let mut accept_versions: Vec<String> = Vec::new();
-    {
-        let mut i = 0;
-        while i < args.len() {
-            if args[i] == "--accept-version" {
-                if let Some(v) = args.get(i + 1) {
-                    accept_versions.push(v.clone());
-                }
-            }
-            i += 1;
-        }
-    }
-    let accept_refs: Vec<&str> = accept_versions.iter().map(|s| s.as_str()).collect();
+async fn cmd_migrate_from_ducklake(
+    args: cli::MigrateFromDucklakeArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = args.source;
+    let catalog_url = args.catalog;
+    let dry_run = args.dry_run;
+    let accept_refs: Vec<&str> = args.accept_versions.iter().map(String::as_str).collect();
 
     println!("migrate-from-ducklake: source={source}, catalog={catalog_url}, dry_run={dry_run}");
 
@@ -1892,14 +1075,12 @@ async fn cmd_migrate_from_ducklake(args: &[String]) -> Result<(), Box<dyn std::e
 /// Example:
 ///   rocklake export-catalog --catalog ./my-catalog --out catalog-dump.ndjson
 ///   rocklake export-catalog --catalog ./my-catalog --out snap1.ndjson --at-snapshot 1
-async fn cmd_export_catalog(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_string_arg(args, "--catalog")
-        .ok_or("--catalog <path> is required for export-catalog")?;
-    let output_path =
-        extract_string_arg(args, "--out").unwrap_or_else(|| "catalog-export.ndjson".to_string());
-    // Accept both --at-snapshot (preferred) and --snapshot-id (legacy)
-    let snapshot_id = extract_numeric_arg(args, "--at-snapshot")
-        .or_else(|| extract_numeric_arg(args, "--snapshot-id"));
+async fn cmd_export_catalog(
+    args: cli::ExportCatalogArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = args.catalog;
+    let output_path = args.out;
+    let snapshot_id = args.at_snapshot;
 
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
@@ -1926,11 +1107,10 @@ async fn cmd_export_catalog(args: &[String]) -> Result<(), Box<dyn std::error::E
 ///   rocklake diagnose --catalog ./my-catalog
 ///   rocklake diagnose --catalog s3://bucket/catalog/ --json
 ///   rocklake diagnose --catalog ./my-catalog --data-root ./data/
-async fn cmd_diagnose(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url =
-        extract_string_arg(args, "--catalog").ok_or("--catalog <path> is required for diagnose")?;
-    let json_output = args.iter().any(|a| a == "--json");
-    let data_root = extract_string_arg(args, "--data-root");
+async fn cmd_diagnose(args: cli::DiagnoseArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = args.catalog;
+    let json_output = args.json;
+    let data_root = args.data_root;
 
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store.clone()).await?;
@@ -1962,13 +1142,11 @@ async fn cmd_diagnose(args: &[String]) -> Result<(), Box<dyn std::error::Error>>
 ///   rocklake sweep-orphans --catalog ./my-catalog --data-root ./data/
 ///   rocklake sweep-orphans --catalog ./my-catalog --data-root s3://bucket/data/ --grace-period-hours 48
 ///   rocklake sweep-orphans --catalog ./my-catalog --data-root ./data/ --apply
-async fn cmd_sweep_orphans(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let catalog_url = extract_string_arg(args, "--catalog")
-        .ok_or("--catalog <path> is required for sweep-orphans")?;
-    let data_root = extract_string_arg(args, "--data-root")
-        .ok_or("--data-root <prefix> is required for sweep-orphans")?;
-    let grace_period_hours = extract_numeric_arg(args, "--grace-period-hours").unwrap_or(24);
-    let apply = args.iter().any(|a| a == "--apply");
+async fn cmd_sweep_orphans(args: cli::SweepOrphansArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = args.catalog;
+    let data_root = args.data_root;
+    let grace_period_hours = args.grace_period_hours;
+    let apply = args.apply;
 
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store.clone()).await?;

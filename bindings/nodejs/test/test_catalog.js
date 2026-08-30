@@ -42,7 +42,7 @@ test('snapshotId returns 0 for fresh catalog', () => {
 test('listSchemas returns empty array for fresh catalog', () => {
   const dir = tmpDir();
   const cat = Catalog.open(dir);
-  const schemas = cat.listSchemas(0n);
+  const schemas = cat.listSchemasLatest();
   assert.deepStrictEqual(schemas, []);
   cat.close();
 });
@@ -50,7 +50,7 @@ test('listSchemas returns empty array for fresh catalog', () => {
 test('listTables returns empty array for fresh catalog', () => {
   const dir = tmpDir();
   const cat = Catalog.open(dir);
-  const tables = cat.listTables(1n, 0n);
+  const tables = cat.listTablesAt(1n, 0n);
   assert.deepStrictEqual(tables, []);
   cat.close();
 });
@@ -58,7 +58,7 @@ test('listTables returns empty array for fresh catalog', () => {
 test('listDataFiles returns empty array for fresh catalog', () => {
   const dir = tmpDir();
   const cat = Catalog.open(dir);
-  const files = cat.listDataFiles(1n, 0n);
+  const files = cat.listDataFilesLatest(1n);
   assert.deepStrictEqual(files, []);
   cat.close();
 });

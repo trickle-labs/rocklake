@@ -78,7 +78,7 @@ let schemas = client.list_schemas().await?;
 from rocklake import RockLakeCatalog
 
 cat = RockLakeCatalog.open_readonly("/path/to/catalog")
-schemas = cat.list_schemas(0)
+schemas = cat.list_schemas_latest()
 ```
 
 ### Go

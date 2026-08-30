@@ -129,7 +129,7 @@ A write operation was attempted on a connection or instance that is configured a
 | Aspect | Detail |
 |--------|--------|
 | **When returned** | INSERT, UPDATE, DELETE, or DDL on a read-only instance |
-| **Common causes** | Connected to a read-only replica, ROCKLAKE_READ_ONLY=true |
+| **Common causes** | Connected to a read-only replica, or `rocklake serve --mode reader` |
 | **Client action** | Connect to the writer instance for write operations |
 | **Example message** | `"cannot execute INSERT in a read-only transaction"` |
 
@@ -267,7 +267,7 @@ An error occurred in the underlying object storage system. RockLake could not co
 | Detail | Meaning | Action |
 |--------|---------|--------|
 | `AccessDenied` | IAM credentials insufficient | Check IAM role/policy |
-| `NoSuchBucket` | Storage bucket does not exist | Verify ROCKLAKE_STORAGE path |
+| `NoSuchBucket` | Storage bucket does not exist | Verify the `--catalog` URL |
 | `RequestTimeout` | Storage did not respond in time | Retry (transient) |
 | `SlowDown` | Storage is throttling requests | Back off, retry later |
 | `ServiceUnavailable` | Storage service is down | Wait and retry |

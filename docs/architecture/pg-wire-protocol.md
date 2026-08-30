@@ -222,7 +222,7 @@ These limits are configurable via the server configuration. Exceeding a limit re
 TLS is configured via command-line arguments:
 
 ```bash
-rocklake \
+rocklake serve \
     --catalog s3://bucket/catalog/ \
     --bind 0.0.0.0:5432 \
     --tls-cert /path/to/certificate.pem \

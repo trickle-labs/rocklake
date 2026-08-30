@@ -148,13 +148,13 @@ Overflow is not a practical concern. The counter allocation code does not implem
 You can inspect the current counter values using the `inspect` command:
 
 ```bash
-rocklake inspect snapshot --latest --catalog s3://my-bucket/catalog/
+rocklake inspect snapshot --catalog s3://my-bucket/catalog/
 ```
 
 The output includes the latest snapshot ID. To see raw counter keys directly, use the `--key` flag:
 
 ```bash
-rocklake inspect snapshot --latest --catalog s3://my-bucket/catalog/ --format json
+rocklake inspect snapshot --catalog s3://my-bucket/catalog/
 ```
 
 For lower-level inspection, the `verify catalog` command checks counter consistency: it scans all catalog rows and verifies that no row has an ID ≥ the corresponding counter value (which would mean the counter has fallen behind the actual data).

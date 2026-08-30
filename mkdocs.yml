@@ -158,7 +158,7 @@ nav:
     - deployment/index.md
     - Binary: deployment/binary.md
     - Configuration: deployment/configuration.md
-    - Docker: deployment/docker.md
+    - Docker (unsupported): deployment/docker.md
     - Fly.io: deployment/fly-io.md
     - High Availability: deployment/high-availability.md
     - Kubernetes: deployment/kubernetes.md
@@ -196,7 +196,7 @@ nav:
     - DuckDB Compatibility: integration/duckdb-compatibility.md
     - pg-tide-relay: integration/pg-tide-relay.md
     - DataFusion: integration/datafusion.md
-    - Native Extension: integration/native-extension.md
+    - Native Extension (unsupported): integration/native-extension.md
     - Custom Clients: integration/custom-clients.md
     - Lambda Reader: integration/lambda-reader.md
     - CDN Caching: integration/cdn-caching.md
@@ -250,4 +250,3 @@ nav:
     - Glossary: reference/glossary.md
   - Roadmap:
     - roadmap/index.md
-    - Changelog: roadmap/changelog.md

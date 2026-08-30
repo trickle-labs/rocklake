@@ -11,7 +11,6 @@ language-neutral.
 |--------|----------|
 | **Strategy B — PG-wire Sidecar** | DuckDB, psql, any Postgres-compatible client |
 | **Embedded Client Library** *(this page)* | Rust, Python, Go, Node.js, any language with C FFI |
-| **Native DuckDB Extension** (v0.36.0) | `ATTACH 'ducklake:slatedb:...' AS lake` — no sidecar |
 
 The embedded library exposes a stable C ABI (`rocklake.h`) that all language
 bindings wrap.  See [docs/reference/c-api.md](../reference/c-api.md) for the
@@ -28,13 +27,13 @@ The `rocklake-client` crate is the idiomatic Rust entry point.  It wraps the
 
 ```toml
 [dependencies]
-rocklake-client = "0.35"
+rocklake-client = "0.48"
 ```
 
 ### Async API
 
 ```rust
-use rocklake_client::CatalogClientBuilder;
+use rocklake_client::{CatalogClientBuilder, SnapshotRef};
 
 #[tokio::main]
 async fn main() {
@@ -43,14 +42,14 @@ async fn main() {
         .await
         .unwrap();
 
-    let snap = client.snapshot_id().await.unwrap();
-    let schemas = client.list_schemas(snap).await.unwrap();
+    let snapshot = SnapshotRef::Latest;
+    let schemas = client.list_schemas(snapshot).await.unwrap();
 
     for schema in &schemas {
         println!("schema: {}", schema.schema_name);
-        let tables = client.list_tables(schema.schema_id, snap).await.unwrap();
+        let tables = client.list_tables(schema.schema_id, snapshot).await.unwrap();
         for table in &tables {
-            let files = client.list_data_files(table.table_id, snap).await.unwrap();
+            let files = client.list_data_files(table.table_id, snapshot).await.unwrap();
             println!("  table {} → {} data files", table.table_name, files.len());
         }
     }
@@ -64,10 +63,10 @@ async fn main() {
 For contexts that cannot use async Rust (C extensions, Python GIL-holding code):
 
 ```rust
-use rocklake_client::CatalogClientSync;
+use rocklake_client::{CatalogClientSync, SnapshotRef};
 
 let client = CatalogClientSync::open("file:///path/to/catalog").unwrap();
-let schemas = client.list_schemas(0).unwrap();
+let schemas = client.list_schemas(SnapshotRef::Latest).unwrap();
 println!("{} schemas", schemas.len());
 client.close();
 ```
@@ -76,13 +75,8 @@ client.close();
 
 ## Python
 
-Install the `rocklake` wheel from PyPI or build from source with `maturin`.
-
-### Install
-
-```sh
-pip install rocklake
-```
+The Python binding is built from this repository with `maturin`. v0.48.0 does
+not claim a PyPI publication.
 
 ### Build from source
 
@@ -99,13 +93,12 @@ from rocklake import RockLakeCatalog
 
 cat = RockLakeCatalog.open("/path/to/catalog")
 
-snap = cat.snapshot_id()
-schemas = cat.list_schemas(snap)
+schemas = cat.list_schemas_latest()
 
 for schema in schemas:
-    tables = cat.list_tables(schema.schema_id, snap)
+    tables = cat.list_tables_latest(schema.schema_id)
     for table in tables:
-        files = cat.list_data_files(table.table_id, snap)
+        files = cat.list_data_files_latest(table.table_id)
         print(f"{table.table_name}: {len(files)} data files")
 
 cat.close()
@@ -121,10 +114,8 @@ import polars as pl
 from rocklake import RockLakeCatalog
 
 cat = RockLakeCatalog.open("/path/to/catalog")
-snap = cat.snapshot_id()
-
 # Get data file list
-files = cat.list_data_files(table_id=1, snapshot_id=snap)
+files = cat.list_data_files_latest(table_id=1)
 
 # Build a DataFrame of catalog metadata
 meta_df = pl.from_dicts([f.to_dict() for f in files])
@@ -140,10 +131,12 @@ cat.close()
 
 ## Go
 
-Install via `go get`:
+Build the binding from the repository's `bindings/go` module. v0.48.0 does not
+claim a separately published Go module:
 
 ```sh
-go get github.com/trickle-labs/rocklake-go
+cd bindings/go
+go test ./...
 ```
 
 ### Prerequisites
@@ -171,21 +164,16 @@ func main() {
     }
     defer cat.Close()
 
-    snap, err := cat.SnapshotID()
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    schemas, err := cat.ListSchemas(snap)
+    schemas, err := cat.ListSchemasLatest()
     if err != nil {
         log.Fatal(err)
     }
 
     for _, s := range schemas {
         fmt.Printf("schema: %s\n", s.SchemaName)
-        tables, _ := cat.ListTables(s.SchemaID, snap)
+        tables, _ := cat.ListTablesLatest(s.SchemaID)
         for _, t := range tables {
-            files, _ := cat.ListDataFiles(t.TableID, snap)
+            files, _ := cat.ListDataFilesLatest(t.TableID)
             fmt.Printf("  table %s → %d files\n", t.TableName, len(files))
         }
     }
@@ -196,8 +184,13 @@ func main() {
 
 ## Node.js
 
+Build the Node.js package from `bindings/nodejs`; v0.48.0 does not claim an
+external npm publication.
+
 ```sh
-npm install @rocklake/client
+cd bindings/nodejs
+npm install
+npm run build
 ```
 
 ### Usage
@@ -207,13 +200,12 @@ const { Catalog } = require('@rocklake/client');
 
 const cat = Catalog.open('/path/to/catalog');
 
-const snap = cat.snapshotId();
-const schemas = cat.listSchemas(snap);
+const schemas = cat.listSchemasLatest();
 
 for (const schema of schemas) {
-    const tables = cat.listTables(schema.schemaId, snap);
+    const tables = cat.listTablesLatest(schema.schemaId);
     for (const table of tables) {
-        const files = cat.listDataFiles(table.tableId, snap);
+        const files = cat.listDataFilesLatest(table.tableId);
         console.log(`${table.tableName}: ${files.length} data files`);
     }
 }
@@ -241,8 +233,7 @@ from rocklake import RockLakeCatalog
 from pyspark.sql import SparkSession
 
 cat = RockLakeCatalog.open("/path/to/catalog")
-snap = cat.snapshot_id()
-files = cat.list_data_files(table_id=1, snapshot_id=snap)
+files = cat.list_data_files_latest(table_id=1)
 
 spark = SparkSession.builder.getOrCreate()
 df = spark.read.parquet(*[f.path for f in files])
@@ -289,4 +280,4 @@ alias for one release cycle before removal.
 
 - [C API Reference](../reference/c-api.md)
 - [Architecture: FFI Safety](../architecture/ffi-safety.md)
-- [Native DuckDB Extension (v0.36.0)](native-extension.md)
+- [Native DuckDB Extension (unsupported)](native-extension.md)

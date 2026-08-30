@@ -130,6 +130,17 @@ pub(super) fn classify_snapshot_select(
         return StatementKind::SelectMaxSnapshotAfter;
     }
 
+    // Full snapshot rows include snapshot_time.  Do not route them through
+    // the four-column latest-info response used by DuckDB's max probe.
+    if select
+        .projection
+        .iter()
+        .map(projection_item_name)
+        .any(|item| item == "snapshot_time")
+    {
+        return StatementKind::SelectSnapshot;
+    }
+
     if selects_latest_snapshot_tuple(select) {
         return StatementKind::SelectLatestSnapshotInfo;
     }

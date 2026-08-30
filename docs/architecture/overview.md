@@ -55,7 +55,7 @@ The architecture is layered with clear boundaries between concerns. Each layer h
 The outermost layer accepts TCP connections from PostgreSQL-compatible clients. It handles:
 
 - **TCP listener** — Binds to the configured address and port, accepts new connections, spawns a Tokio task per connection
-- **TLS termination** — Optional TLS using `rustls`, supporting both server certificates (for encryption) and client certificates (for mutual TLS authentication)
+- **TLS** — Optional server-side TLS using `rustls`; mutual TLS is not supported.
 - **Startup negotiation** — Implements the PostgreSQL v3 startup sequence: SSLRequest → StartupMessage → authentication → parameter status
 - **Authentication** — Optional username/password authentication using the PostgreSQL SCRAM-SHA-256 mechanism or cleartext password
 - **Protocol framing** — Reads length-prefixed frontend messages (Query, Parse, Bind, Execute, Sync, Terminate) and writes backend messages (RowDescription, DataRow, CommandComplete, ReadyForQuery, ErrorResponse)
@@ -232,22 +232,24 @@ graph LR
 
 Advantages: multiple DuckDB instances share one catalog, network isolation, independent scaling, independent failure domains.
 
-### In-Process Extension
+### Embedded C API
 
-For single-machine deployments where network latency is unacceptable, the FFI crate (`rocklake-ffi`) provides a DuckDB native extension that embeds RockLake directly in the DuckDB process:
+For embedded applications, the FFI crate (`rocklake-ffi`) provides a direct C
+catalog API. Its experimental DuckDB wrapper is not a supported v0.48.0
+deployment path:
 
 ```mermaid
 graph LR
     subgraph "Single Process"
-        DDB[DuckDB] --> FFI[RockLake FFI]
+        Client[Native Client] --> FFI[RockLake FFI]
         FFI --> SDB[SlateDB]
     end
     SDB -->|HTTPS| S3[(Object Storage)]
 ```
 
-Advantages: zero network round-trips (microsecond catalog operations), single binary deployment, no port management.
-
-Trade-offs: shares crash domain with DuckDB, cannot serve multiple DuckDB processes.
+The C API is useful for embedded catalog clients. The experimental DuckDB
+wrapper is not a supported v0.48.0 deployment path and is not covered by the
+release gates.
 
 ### DataFusion Integration
 

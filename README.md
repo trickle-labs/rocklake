@@ -79,25 +79,8 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-### Docker (quickest)
-
-The easiest way to run RockLake is with the official container image:
-
-```bash
-# Start a local-filesystem catalog (for testing)
-docker run -p 5432:5432 \
-  -e ROCKLAKE_CATALOG=/catalog \
-  -v /tmp/my-catalog:/catalog \
-  ghcr.io/trickle-labs/rocklake:0.46.0 serve
-
-# Against S3 (uses standard AWS_* environment variables)
-docker run -p 5432:5432 \
-  -e ROCKLAKE_CATALOG=s3://my-bucket/catalog \
-  -e AWS_ACCESS_KEY_ID=... \
-  -e AWS_SECRET_ACCESS_KEY=... \
-  -e AWS_DEFAULT_REGION=us-east-1 \
-  ghcr.io/trickle-labs/rocklake:0.46.0 serve
-```
+RockLake v0.48.0 is distributed and tested as a binary. There is no published
+Docker image; use the binary deployment path below.
 
 ### Prerequisites (build from source)
 
@@ -186,11 +169,8 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 |---|---|---|
 | v0.27.x | DuckLake v1.0 conformance, SQL facade, stats, external compatibility | Done |
 | v0.28–v0.35 | Writer fencing, recovery, protocol hardening, DataFusion, security, embedded client library | Done |
-| **v0.35.0** | Embedded catalog client library — universal C ABI, `rocklake-client`, Python/Go/Node.js bindings | **Current** |
-| v0.36–v0.38 | Foundation: SQL client testing, engine integration, release certification | Planning |
-| v0.39–v0.45 | Production hardening: observability, migration tooling, fault injection, benchmarks, scale, JVM bindings, GA readiness | Planning |
-| v0.70.0 | Native DuckDB extension (blocked on upstream DuckDB extension catalog API) | Exploration |
-| v1.0 | General Availability — TPC-H benchmarks, S3 Express validation, dogfood deployment complete | Planning |
+| **v0.48.0** | Surface reduction, truthful documentation, and executable quickstart gates | **Current** |
+| Next | See [ROADMAP.md](ROADMAP.md) for the live Now/Next/Later plan | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.
 

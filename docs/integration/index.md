@@ -1,6 +1,6 @@
 # Integration
 
-RockLake is designed as an open, interoperable component in the modern data stack. It speaks the PostgreSQL wire protocol, exposes its catalog through standard interfaces, and integrates with multiple query engines and tools. This section covers every integration point: how to connect DuckDB (the primary client), how to embed RockLake as a native DuckDB extension, how to use it as an Apache DataFusion catalog provider, and how to build custom clients in any language.
+RockLake is designed as an open, interoperable component in the modern data stack. It speaks the PostgreSQL wire protocol, exposes its catalog through standard interfaces, and integrates with multiple query engines and tools. This section covers the supported DuckDB sidecar, the C ABI and language bindings, the Apache DataFusion catalog provider, and custom clients.
 
 The integration philosophy is straightforward: RockLake manages metadata, everything else manages data. Query engines read and write Parquet files directly in object storage. RockLake tells them which files exist, what columns they contain, and what statistics are available for partition pruning. This clean separation means RockLake integrates with any tool that can read Parquet — it just needs to know where to look.
 
@@ -10,7 +10,6 @@ The integration philosophy is straightforward: RockLake manages metadata, everyt
 graph LR
     DuckDB[DuckDB + ducklake] -->|PG Wire| SD[RockLake]
     DF[DataFusion] -->|Rust API| SD
-    Ext[Native Extension] -->|FFI| SD
     Custom[Custom Clients] -->|PG Wire| SD
     Relay[pg-tide-relay] -->|PG Wire| SD
     
@@ -23,17 +22,14 @@ graph LR
 
 ## Integration Strategies
 
-RockLake supports three deployment strategies, each offering different trade-offs:
+RockLake v0.48.0 supports the following integration paths:
 
 | Strategy | Integration Method | Latency | Complexity | Maturity |
 |----------|-------------------|---------|------------|----------|
 | **B (Sidecar)** | PG wire protocol | 1–5ms per call | Low | Production-ready |
-| **C (Extension)** | Native FFI | <1ms (in-process) | Medium | Early stage |
 | **DataFusion** | Rust trait impl | <1ms (in-process) | Medium | Read-only |
 
 **Strategy B** is the recommended default. It works with any DuckDB instance, requires no recompilation, and provides clean process isolation. The sidecar (RockLake server) can be upgraded independently of DuckDB.
-
-**Strategy C** eliminates network overhead entirely by loading the catalog directly into DuckDB's process. Best for latency-sensitive interactive workloads where every millisecond counts. Currently supports a subset of catalog operations.
 
 **DataFusion** is for Rust applications that use Apache DataFusion as their query engine. It provides read-only catalog access through DataFusion's native trait system.
 
@@ -43,7 +39,7 @@ RockLake supports three deployment strategies, each offering different trade-off
 
 - **[DuckDB Compatibility](duckdb-compatibility.md)** — Complete SQL compatibility matrix between DuckDB's ducklake extension and RockLake. Covers every DDL and DML operation, version compatibility, known differences, and the wire corpus testing approach.
 
-- **[Native Extension](native-extension.md)** — Loading RockLake as a DuckDB extension (Strategy C). Covers building, loading, API surface, limitations, ABI stability, and when to choose this over the sidecar.
+- **[Native Extension](native-extension.md)** — Why the experimental wrapper is not a supported v0.48.0 deployment path.
 
 - **[DataFusion](datafusion.md)** — Using RockLake as a DataFusion catalog provider in Rust applications. Covers the trait implementations, usage patterns, supported operations, and dependency management.
 
@@ -60,8 +56,7 @@ flowchart TD
     B -->|Rust application| D{Need writes?}
     B -->|Other language| E[Custom Client via PG Wire]
     
-    C -->|Standard| F[Strategy B: PG Wire Sidecar]
-    C -->|Ultra-low| G[Strategy C: Native Extension]
+    C --> F[Strategy B: PG Wire Sidecar]
     
     D -->|Read-only| H[DataFusion Integration]
     D -->|Read + Write| I[rocklake-catalog crate directly]

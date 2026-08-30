@@ -1,5 +1,26 @@
 # Changelog
 
+All notable changes to RockLake are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.48.0] — 2026-08-30
+
+### Changed
+
+- Reworked product documentation around the supported binary, DuckLake 1.0,
+  local/cloud object storage, TLS, and password authentication paths.
+- Replaced the historical roadmap with a concise live roadmap.
+- Added an executable DuckDB quickstart gate and preserved v0.47.17
+  production-failure certification in CI.
+
+### Removed
+
+- Unsupported Docker image, configuration-file, mTLS, and certificate-reload
+  claims from the documentation.
+
 ## [0.47.17] — 2026-08-28
 
 ### Added
@@ -33,11 +54,6 @@
 - Lossless, snapshot-consistent catalog export/import with manifest validation.
 - Strict DuckLake migration and complete catalog verification/repair workflows.
 
-All notable changes to RockLake are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
 
 ## [0.47.14] — 2026-08-27
 

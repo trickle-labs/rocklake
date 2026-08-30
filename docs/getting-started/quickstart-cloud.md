@@ -143,7 +143,7 @@ On first start against an empty prefix, RockLake initializes a new catalog. This
 You should see output like:
 
 ```
-RockLake v0.8.0
+RockLake v0.48.0
 Catalog: s3://my-lakehouse-bucket/catalog/
 Listening: 0.0.0.0:5432
 Writer epoch: 1
@@ -153,7 +153,7 @@ On subsequent starts against the same prefix, RockLake reads the existing manife
 
 ### Choosing a Prefix
 
-The `--storage` path determines where all catalog data lives within the bucket. We recommend using a dedicated prefix (like `/catalog/`) rather than the bucket root. This keeps catalog files organized and makes IAM policies easier to scope:
+The `--catalog` URL determines where all catalog data lives within the bucket. We recommend using a dedicated prefix (like `/catalog/`) rather than the bucket root. This keeps catalog files organized and makes IAM policies easier to scope:
 
 ```
 s3://my-lakehouse-bucket/
@@ -309,7 +309,7 @@ rocklake \
     --tls-cert /etc/ssl/certs/rocklake.crt \
     --tls-key /etc/ssl/private/rocklake.key \
     --auth-user ducklake \
-    --auth-password "${ROCKLAKE_PASSWORD}"
+    --auth-password "${ROCKLAKE_AUTH_PASSWORD}"
 ```
 
 DuckDB connects with credentials in the connection string:
@@ -384,6 +384,6 @@ Another RockLake instance has taken over as the writer for this catalog. This ha
 Now that your catalog is running in the cloud, you are ready to build a real lakehouse workflow:
 
 - **[Your First Lakehouse](first-lakehouse.md)** — Schema evolution, data loading, time travel, and garbage collection in a complete end-to-end tutorial
-- **[Deployment Guide](../deployment/index.md)** — Production deployment patterns for Docker, Kubernetes, and serverless
+- **[Deployment Guide](../deployment/index.md)** — Supported binary and object-store deployment paths
 - **[Configuration Reference](../deployment/configuration.md)** — Full reference for all server options
 - **[TLS Configuration](../deployment/tls.md)** — Detailed TLS setup for production environments

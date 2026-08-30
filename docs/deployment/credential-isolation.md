@@ -297,7 +297,6 @@ spec:
       serviceAccountName: rocklake-sa  # Has catalog access
       containers:
         - name: rocklake
-          image: ghcr.io/rocklake/rocklake:latest
           args: [serve, --catalog, s3://my-lakehouse/catalog/, --bind, 0.0.0.0:5432]
 ---
 # DuckDB ingestion job with data writer credentials
@@ -321,7 +320,6 @@ spec:
 ```yaml
 services:
   rocklake:
-    image: ghcr.io/rocklake/rocklake:latest
     command: serve --catalog s3://bucket/catalog/ --bind 0.0.0.0:5432
     environment:
       # Catalog-only credentials

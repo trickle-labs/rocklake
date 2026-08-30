@@ -77,8 +77,8 @@ The optimal cache size depends on your catalog's total size and access patterns:
 ### Configuration
 
 ```bash
-# Set cache size to 256MB
-ROCKLAKE_CACHE_SIZE_MB=256 rocklake serve --catalog s3://bucket/catalog/
+# Start the server; cache sizing is managed by SlateDB in v0.48.0.
+rocklake serve --catalog s3://bucket/catalog/
 
 # Verify cache effectiveness via metrics
 # Look at cache_hit_ratio — should be > 0.9 in steady state
@@ -209,19 +209,10 @@ When RockLake accesses S3, the traffic can go through the public internet or thr
 # Verify with: aws s3 ls --debug 2>&1 | grep endpoint
 ```
 
-### Native Extension (Strategy C)
+### Native DuckDB extension
 
-For maximum performance, eliminate the network entirely by using RockLake as a native DuckDB extension. The extension embeds the catalog logic directly in DuckDB's process — there is no TCP connection, no protocol serialization, no network latency.
-
-Performance with the native extension:
-
-| Operation | Network (same AZ) | Native Extension | Improvement |
-|-----------|-------------------|-----------------|-------------|
-| Point read (cache hot) | 1.5ms | 0.3ms | 5x |
-| Scan 50 keys (cache hot) | 5ms | 1.2ms | 4x |
-| Write (S3 Standard) | 83ms | 81ms | 1.02x (negligible) |
-
-The native extension provides significant improvement for reads (eliminating 1–2ms of network round-trip) but negligible improvement for writes (dominated by S3 PUT latency, not network).
+The native DuckDB extension is not supported in v0.48.0. Use the PostgreSQL
+wire sidecar and co-locate DuckDB and RockLake when network latency matters.
 
 ## Compaction Tuning
 

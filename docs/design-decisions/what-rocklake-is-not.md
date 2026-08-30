@@ -139,14 +139,14 @@ RockLake provides optional password authentication for PostgreSQL wire protocol 
 
 **Access control requires an identity model.** Who is "the user"? In a typical RockLake deployment, "the user" is a DuckDB process running an ETL job on a compute cluster. That process does not have a human identity — it has a service account. Access control for service accounts is better handled at the infrastructure level (IAM roles, network policies, service mesh) than at the application level.
 
-**The threat model does not match.** RockLake's threat model is: "Prevent unauthorized network connections from mutating the catalog." Password authentication (or mTLS at the network layer) is sufficient for this threat. The threat model is NOT "allow multiple teams with different permissions to share one catalog instance" — that use case is better served by separate catalog instances per team.
+**The threat model does not match.** RockLake's threat model is: "Prevent unauthorized network connections from mutating the catalog." Password authentication is the supported application-level control. The threat model is NOT "allow multiple teams with different permissions to share one catalog instance" — that use case is better served by separate catalog instances per team.
 
 **Access control is hard to get right.** Permission systems have subtle interactions (role inheritance, default permissions, permission caching, privilege escalation paths). Getting them wrong creates security vulnerabilities that are worse than having no access control at all (because users trust the system's permissions are enforced correctly).
 
 ### What You Should Use Instead
 
 - **Network-level isolation:** VPCs, security groups, firewalls. Only authorized networks can reach RockLake.
-- **mTLS:** Mutual TLS ensures both client and server identity. Only clients with valid certificates can connect.
+- **mTLS:** Not supported by the RockLake listener.
 - **Separate instances:** Run one RockLake per team/environment. No cross-team access is possible because there is no shared instance.
 - **Proxy layer:** Run a reverse proxy (Envoy, HAProxy) in front of RockLake that implements authentication, rate limiting, and access logging.
 
@@ -206,7 +206,7 @@ RockLake is intentionally narrow. It does one thing: **serve DuckLake catalog me
 | Application data | Not supported | PostgreSQL, MySQL |
 | Distributed writes | Single writer only | CockroachDB, Spanner |
 | File lifecycle | Record existence only | Spark, dbt, S3 lifecycle |
-| Access control | Password auth only | IAM, mTLS, proxy |
+| Access control | Password auth only | IAM or a proxy |
 | Event streaming | Polling only | Kafka, SQS, EventBridge |
 | Multi-tenancy | One instance per tenant | Kubernetes isolation |
 

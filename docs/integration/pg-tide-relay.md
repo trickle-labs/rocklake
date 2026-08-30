@@ -60,7 +60,7 @@ Add authentication beyond RockLake's built-in options:
 |-------------|-------------|
 | LDAP/Active Directory | Validate credentials against corporate directory |
 | OAuth2/OIDC | Accept JWT tokens from identity providers |
-| mTLS (mutual TLS) | Require client certificates |
+| mTLS (mutual TLS) | Not provided by RockLake; terminate/authenticate with a separate proxy |
 | API keys | Custom token-based authentication |
 | IP allowlisting | Restrict by source network |
 

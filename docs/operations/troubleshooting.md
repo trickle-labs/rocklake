@@ -1,365 +1,90 @@
 # Troubleshooting
 
-This page provides a comprehensive guide to diagnosing and resolving problems with RockLake. It is organized by symptom — start with what you observe, then follow the diagnostic steps to identify root causes and apply fixes.
-
-## Quick Diagnostic Checklist
-
-Before diving into specific symptoms, run these three commands to establish baseline context:
+Start with a read-only diagnostic report and preserve its output:
 
 ```bash
-# 1. Can we reach the catalog at all?
-rocklake inspect --catalog s3://bucket/catalog/
-
-# 2. What does the error log say?
-rocklake logs --last 50 --level error
-
-# 3. Is there a network/permission issue?
-aws s3 ls s3://bucket/catalog/ --region us-east-1
+rocklake diagnose --catalog ./catalog --json > diagnose.json
+rocklake verify catalog --catalog ./catalog
+rocklake verify data-files --catalog ./catalog
 ```
 
-If `inspect` succeeds, the catalog is healthy and the problem is likely on the client side (DuckDB connection, query configuration, or application logic). If `inspect` fails, the problem is on the storage or server side.
+## The server does not start
 
-## Connection Errors
-
-### "connection refused" When DuckDB Tries to Connect
-
-**Symptom:** DuckDB reports `connection refused` when attempting to attach a DuckLake catalog via the PostgreSQL wire protocol.
-
-**Possible Causes:**
-
-1. RockLake is not running
-2. RockLake is listening on a different address or port
-3. A firewall or security group is blocking the connection
-4. The DuckDB extension is using the wrong host/port
-
-**Diagnostic Steps:**
+Check the catalog URL, object-store credentials, and listener address. The
+binary creates a local catalog directory when running in writer mode. A reader
+requires an existing catalog.
 
 ```bash
-# Is RockLake running?
-ps aux | grep rocklake
-
-# What address is it listening on?
-ss -tlnp | grep rocklake
-# or on macOS:
-lsof -i -P | grep rocklake
-
-# Can we reach the port from the client?
-nc -zv <hostname> 5432
-
-# Check RockLake's startup log for the actual bind address
-rocklake logs --last 10 | grep "listening"
+rocklake serve --catalog ./catalog --bind 127.0.0.1:5432
+rocklake serve --catalog ./catalog --mode reader --bind 127.0.0.1:5433
 ```
 
-**Solutions:**
+If startup reports a writer-fencing error, another writer owns the catalog.
+Stop the old writer before starting a replacement. Multiple read-only
+instances can share the catalog.
 
-- If RockLake is not running, start it: `rocklake serve --catalog s3://bucket/catalog/`
-- If it is listening on `127.0.0.1`, change to `0.0.0.0` for remote access: `--bind 0.0.0.0:5432`
-- If a security group blocks port 5432, add an inbound rule for the client's IP range
-- Verify the DuckDB connection string matches: `ATTACH 'dbname=ducklake host=<correct-host> port=<correct-port>' AS lake (TYPE ducklake)`
+## Clients cannot connect
 
-### "WriterFenced" Error (SQLSTATE 57P04)
-
-**Symptom:** DuckDB queries fail with `WriterFenced` error. RockLake logs show "fenced by newer epoch."
-
-**What This Means:**
-
-Another RockLake instance has taken over the writer role by incrementing the writer epoch in SlateDB. The fenced instance can no longer write — it is permanently blocked until restarted.
-
-**Common Causes:**
-
-1. **Intentional failover.** You deployed a new instance and the old one was fenced. Expected behavior.
-2. **Duplicate processes.** Two RockLake processes are pointing at the same catalog storage path.
-3. **Kubernetes pod restart.** A crashed pod restarted and the new pod fenced the old one (which hadn't fully terminated yet).
-4. **Misconfigured health check.** The orchestrator killed a "unhealthy" instance and started a replacement.
-
-**Diagnostic Steps:**
+Confirm the listener is reachable and that the client uses the configured
+address, port, TLS mode, and credentials:
 
 ```bash
-# Check the current epoch
-rocklake inspect --catalog s3://bucket/catalog/ --format json | jq '.writer_epoch'
-
-# Check how many RockLake processes exist
-ps aux | grep rocklake | grep -v grep
-
-# In Kubernetes
-kubectl get pods -l app=rocklake
+nc -z 127.0.0.1 5432
+psql -h 127.0.0.1 -p 5432 -c "SELECT 1"
 ```
 
-**Solutions:**
+When password authentication is configured, set both `--auth-user` and
+`--auth-password` (or the corresponding environment variables). TLS is
+server-side only; mutual TLS is not supported.
 
-- If this is an intentional failover: terminate the old instance. Clients will reconnect to the new one.
-- If duplicate processes: kill the older one (the one with the lower epoch).
-- If happening repeatedly: review your deployment configuration to ensure only ONE writer instance runs at a time. Use a Deployment with `replicas: 1` and `strategy: Recreate`.
+## Catalog verification fails
 
-### "FormatVersionMismatch" on Startup
-
-**Symptom:** RockLake refuses to start, logging `FormatVersionMismatch: catalog requires format version 2, binary supports version 1`.
-
-**What This Means:**
-
-The catalog was created or migrated by a newer version of RockLake that uses a format version your current binary does not understand.
-
-**Solutions:**
-
-- **Upgrade** to the RockLake version that created the catalog (check release notes for format version changes)
-- **If you recently downgraded:** you cannot downgrade across format version boundaries without restoring from an NDJSON backup taken before the upgrade
-
-### "ObjectStore: 403 Forbidden"
-
-**Symptom:** RockLake fails to start or intermittently fails with `ObjectStore: 403 Forbidden`.
-
-**Cause:** Insufficient IAM permissions for the configured storage path.
-
-**Required Permissions:**
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": [
-      "s3:GetObject",
-      "s3:PutObject",
-      "s3:DeleteObject",
-      "s3:ListBucket"
-    ],
-    "Resource": [
-      "arn:aws:s3:::bucket",
-      "arn:aws:s3:::bucket/catalog/*"
-    ]
-  }]
-}
-```
-
-**Diagnostic Steps:**
+Run the two verification commands separately to isolate catalog and data-file
+problems:
 
 ```bash
-# Test permissions directly
-aws s3 ls s3://bucket/catalog/ --region us-east-1
-aws s3 cp /dev/null s3://bucket/catalog/test-permissions --region us-east-1
-aws s3 rm s3://bucket/catalog/test-permissions --region us-east-1
-
-# Check which credentials are being used
-aws sts get-caller-identity
+rocklake verify catalog --catalog ./catalog
+rocklake verify data-files --catalog ./catalog
 ```
 
-### "ObjectStore: 429 Too Many Requests"
-
-**Symptom:** Intermittent 429 errors in logs during heavy activity (bulk imports, compaction bursts).
-
-**What This Means:**
-
-S3 is throttling requests. S3 supports 3,500 PUT/COPY/POST/DELETE and 5,500 GET/HEAD requests per second per partitioned prefix.
-
-**Solutions:**
-
-- RockLake retries automatically with exponential backoff (usually self-resolving)
-- If sustained: reduce concurrent readers, or restructure the catalog path to spread across prefixes
-- Consider S3 Express One Zone for higher throughput
-
-## Performance Issues
-
-### Slow Catalog Queries (> 500ms)
-
-**Symptom:** Queries that should be fast (SELECT * FROM a small table) take hundreds of milliseconds or seconds.
-
-**Diagnostic Steps:**
+Preview a repair before applying it:
 
 ```bash
-# Check network latency to object storage
-time aws s3api head-object --bucket bucket --key catalog/MANIFEST --region us-east-1
-
-# Check row counts (high superseded count = scan amplification)
-rocklake inspect --catalog s3://bucket/catalog/ --format json | jq '.counts'
-
-# Check if GC is needed
-rocklake inspect --catalog s3://bucket/catalog/ --format json | jq '.retention'
+rocklake repair --catalog ./catalog --dry-run
+rocklake repair --catalog ./catalog --apply
 ```
 
-**Common Causes and Solutions:**
-
-| Cause | Diagnostic Sign | Solution |
-|-------|----------------|----------|
-| High storage latency | `head-object` > 50ms | Use S3 Express One Zone or same-region deployment |
-| Scan amplification | Many superseded rows | Run GC: `rocklake gc --retain-days 7` |
-| Large table (many files) | Thousands of data files | Expected; consider table partitioning |
-| Compaction backlog | Many small SST files | Wait for compaction or trigger manual compaction |
-| Cold cache | First query after restart slow | Expected; subsequent queries are faster |
-
-### DuckDB Queries Slow After Connecting
-
-**Symptom:** DuckDB's planning phase takes seconds even for simple queries.
-
-**What This Means:**
-
-DuckDB's `ducklake` extension makes multiple catalog round-trips per query: list schemas, list tables, list columns, list files, get statistics. If each round-trip takes 50–100ms (typical for S3 Standard), a query with 10 catalog calls adds 500–1000ms of overhead before execution even begins.
-
-**Solutions:**
-
-| Approach | Latency Improvement | Trade-off |
-|----------|-------------------|-----------|
-| S3 Express One Zone | 5–10x faster | Higher per-request cost |
-| Co-located deployment | Minimal network hops | Must deploy in same AZ |
-| Native extension (Strategy C) | In-process, no network | Early-stage, fewer features |
-| Fewer data files per table | Fewer catalog entries to scan | Larger individual files |
-
-### Writer Throughput Too Low
-
-**Symptom:** Bulk operations (registering thousands of files) take minutes.
-
-**Diagnostic:**
+Create a catalog export before applying repairs or excision:
 
 ```bash
-# Check how many snapshots per second are being created
-START=$(rocklake inspect --catalog s3://bucket/catalog/ --format json | jq '.latest_snapshot')
-sleep 10
-END=$(rocklake inspect --catalog s3://bucket/catalog/ --format json | jq '.latest_snapshot')
-echo "Snapshots/sec: $(( (END - START) / 10 ))"
+rocklake export-catalog --catalog ./catalog --out before-change.ndjson
 ```
 
-**Solutions:**
+## Queries fail or return unexpected metadata
 
-- Batch operations: register multiple files in a single transaction (single snapshot)
-- Ensure object storage latency is low (same region, S3 Express)
-- Check for lock contention if multiple writers are competing (single-writer architecture means only one can proceed)
-
-## Data Integrity Issues
-
-### Verify Reports Errors
-
-**Symptom:** `rocklake verify` reports errors.
-
-**Steps:**
+RockLake implements the bounded SQL surface emitted by DuckDB's `ducklake`
+extension, not arbitrary PostgreSQL SQL. Check the client version and inspect
+the catalog state:
 
 ```bash
-# Run verify with verbose output
-rocklake verify --catalog s3://bucket/catalog/ --verbose
-
-# Preview repairs
-rocklake repair --catalog s3://bucket/catalog/ --dry-run
-
-# If repairs are available and safe, apply them
-rocklake repair --catalog s3://bucket/catalog/
+rocklake inspect snapshot --catalog ./catalog
+rocklake inspect cache-utilization --catalog ./catalog
+rocklake inspect api-costs --catalog ./catalog
 ```
 
-**If repair cannot fix the issue:**
+For historical catalog state, use an exact snapshot ID with
+`export-catalog --at-snapshot <id>`. Snapshot ID `0` is an exact ID where an
+API accepts an ID; it is not a latest sentinel.
 
-1. Restore from the most recent NDJSON backup
-2. If no backup: check if object storage versioning is enabled (you may recover previous SST files)
-3. Contact the RockLake maintainers with the verify output
+## Logging
 
-### Unexpected Empty Results
-
-**Symptom:** Queries return no rows for tables/schemas that should have data.
-
-**Diagnostic Steps:**
+Use `RUST_LOG` to increase detail without exposing raw SQL or credentials:
 
 ```bash
-# What snapshot is the catalog at?
-rocklake inspect --catalog s3://bucket/catalog/ --format json | jq '.latest_snapshot'
-
-# Is the table visible at the current snapshot?
-rocklake inspect --catalog s3://bucket/catalog/ --prefix "t/" | grep "table_name"
-
-# Has GC advanced past the creation snapshot?
-rocklake inspect --catalog s3://bucket/catalog/ --format json | jq '.retention.retain_from'
+RUST_LOG=info rocklake serve --catalog ./catalog
+RUST_LOG=rocklake_catalog=debug,rocklake_pgwire=debug \
+  rocklake serve --catalog ./catalog
 ```
 
-**Possible Causes:**
-
-1. **Reading at wrong snapshot:** The client is pinned to an old snapshot before the entities existed.
-2. **GC too aggressive:** `retain_from` has advanced past the target snapshot (data still exists but is inaccessible via time travel).
-3. **Writer fencing:** Writes went to a different catalog instance (check storage paths match).
-4. **Catalog path mismatch:** The client is connecting to a different catalog entirely.
-
-### Snapshot ID Not Advancing
-
-**Symptom:** The latest snapshot ID stays the same over time, even though writes should be occurring.
-
-**Possible Causes:**
-
-1. **Writer is fenced:** Check `rocklake inspect` for fencing status
-2. **Writer has crashed:** Check process status and logs
-3. **No writes happening:** The application may not be generating catalog mutations
-4. **Write errors:** The writer is attempting writes but they fail (check error logs)
-
-## Kubernetes-Specific Issues
-
-### Pod Restart Loop (CrashLoopBackOff)
-
-**Common Causes:**
-
-```bash
-# Check pod logs
-kubectl logs -l app=rocklake --previous
-
-# Check events
-kubectl describe pod <pod-name>
-```
-
-| Log Message | Cause | Solution |
-|------------|-------|----------|
-| `FormatVersionMismatch` | Wrong binary version | Update container image |
-| `ObjectStore: 403` | Missing IAM role | Check ServiceAccount/IRSA configuration |
-| `Address already in use` | Port conflict | Check for zombie processes or conflicting services |
-| `OOMKilled` | Insufficient memory | Increase memory limit in pod spec |
-
-### Leader Election Issues
-
-If using a Deployment with `replicas: 1`:
-
-```bash
-# Verify only one pod is running
-kubectl get pods -l app=rocklake
-
-# If multiple pods exist (during rollout), check rollout strategy
-kubectl get deployment rocklake -o yaml | grep -A5 strategy
-```
-
-**Solution:** Use `strategy: Recreate` to ensure the old pod is fully terminated before the new one starts.
-
-## Logging and Diagnostics
-
-### Enabling Debug Logging
-
-```bash
-# Set log level
-export ROCKLAKE_LOG=debug
-rocklake serve --catalog s3://bucket/catalog/
-
-# Or for specific modules
-export ROCKLAKE_LOG=rocklake_pgwire=debug,rocklake_catalog=trace
-```
-
-### Useful Log Patterns to Search For
-
-```bash
-# Find all errors in the last hour
-rocklake logs --since 1h --level error
-
-# Find writer fencing events
-rocklake logs | grep -i "fenced\|epoch"
-
-# Find slow operations
-rocklake logs | grep -i "slow\|timeout\|retry"
-
-# Find permission errors
-rocklake logs | grep -i "403\|forbidden\|permission"
-```
-
-## Getting Help
-
-If the troubleshooting steps above do not resolve your issue:
-
-1. Run `rocklake inspect --catalog <path> --format json` and save the output
-2. Run `rocklake verify --catalog <path>` and save the output
-3. Collect the last 100 lines of error logs
-4. Open an issue on GitHub with this information
-
-## Further Reading
-
-- **[Inspect](inspect.md)** — Detailed catalog state examination
-- **[Verify & Repair](verify-repair.md)** — Integrity checking and repair
-- **[Monitoring](monitoring.md)** — Proactive issue detection
-- **[Health Checks](health-checks.md)** — Automated health verification
-- **[Logging](logging.md)** — Log configuration and analysis
+See [Logging](logging.md), [Diagnostics](diagnostics.md), and
+[Verify & Repair](verify-repair.md) for the supported operational commands.

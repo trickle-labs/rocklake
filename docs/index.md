@@ -107,7 +107,7 @@ The separation of concerns is clean and deliberate. RockLake handles **metadata*
 
     ---
 
-    Step-by-step guides for AWS S3, Google Cloud Storage, Azure Blob, Docker, Kubernetes, and serverless functions. Each guide is self-contained and tested.
+    Binary deployment and object-store setup for the supported local and cloud paths.
 
     [:octicons-arrow-right-24: Deployment](deployment/index.md)
 

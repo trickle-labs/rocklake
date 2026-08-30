@@ -23,6 +23,6 @@ func main() {
 	}
 	defer cat.Close()
 	snap, _ := cat.SnapshotID()
-	schemas, _ := cat.ListSchemas(snap)
+	schemas, _ := cat.ListSchemasLatest()
 	fmt.Printf("Snapshot %d: %d schema(s)\n", snap, len(schemas))
 }

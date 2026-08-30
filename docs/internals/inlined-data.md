@@ -93,14 +93,14 @@ At 4 KB, you capture essentially all "single-row insert" patterns without bloati
 ### Configuration
 
 ```bash
-# Set inline threshold (bytes)
-ROCKLAKE_INLINE_THRESHOLD_BYTES=4096 rocklake serve --catalog s3://bucket/catalog/
+# Set the DuckDB row limit when attaching the catalog
+ATTACH 'ducklake:postgres:...' AS lake (DATA_INLINING_ROW_LIMIT 100);
 
 # Disable inlining entirely
-ROCKLAKE_INLINE_THRESHOLD_BYTES=0 rocklake serve --catalog s3://bucket/catalog/
+ATTACH 'ducklake:postgres:...' AS lake (DATA_INLINING_ROW_LIMIT 0);
 
 # Aggressive inlining (for workloads with many small files)
-ROCKLAKE_INLINE_THRESHOLD_BYTES=16384 rocklake serve --catalog s3://bucket/catalog/
+ATTACH 'ducklake:postgres:...' AS lake (DATA_INLINING_ROW_LIMIT 1000);
 ```
 
 ## Trade-offs
@@ -127,7 +127,7 @@ ROCKLAKE_INLINE_THRESHOLD_BYTES=16384 rocklake serve --catalog s3://bucket/catal
 
 ### When to Disable Inlining
 
-Consider disabling inlining (`ROCKLAKE_INLINE_THRESHOLD_BYTES=0`) when:
+Consider disabling inlining (`DATA_INLINING_ROW_LIMIT 0`) when:
 
 - Your ETL pipeline always produces large Parquet files (> 10 MB) — inlining never triggers anyway
 - You are optimizing for minimal catalog size (small cache, cost-sensitive storage)

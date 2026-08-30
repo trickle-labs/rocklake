@@ -1,5 +1,9 @@
 # S3 API Cost Analysis
 
+> Pricing examples on this page use 2024 S3 rates and are illustrative only.
+> They are not a v0.48.0 cost guarantee; check current provider pricing and
+> measure your workload before publishing an estimate.
+
 RockLake exposes three `--cost-mode` presets that trade write latency for
 object-storage API cost. This page explains the cost model, shows the
 crossover points, and gives guidance on choosing a mode.

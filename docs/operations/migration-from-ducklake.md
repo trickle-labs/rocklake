@@ -91,7 +91,7 @@ fresh target catalog.
 After migrating, validate the catalog with:
 
 ```sh
-rocklake catalog-verify --catalog s3://my-bucket/rocklake/
+rocklake verify catalog --catalog s3://my-bucket/rocklake/
 ```
 
 Then start RockLake in read-only mode to validate queries before enabling writes:

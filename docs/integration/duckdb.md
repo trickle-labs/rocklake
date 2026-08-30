@@ -237,7 +237,7 @@ For analytical queries scanning gigabytes of Parquet data (seconds to minutes of
 |----------|--------|-----------|
 | Co-locate in same AZ | Reduces round-trip to <1ms | Must deploy together |
 | S3 Express One Zone | Reduces SlateDB reads to <5ms | Higher storage cost |
-| Native extension (Strategy C) | Eliminates network entirely | Process coupling |
+| Native extension | Not supported in v0.48.0 | Use the PG-wire sidecar |
 | Fewer data files per table | Fewer entries to list | Larger individual files |
 
 ### Data Path Performance
@@ -439,7 +439,7 @@ As data accumulates over time, the catalog itself grows. Run GC regularly to adv
 
 ```bash
 # Monthly GC and excision
-rocklake gc apply --catalog s3://my-bucket/catalog/ --retain-days 90
+rocklake gc apply --catalog s3://my-bucket/catalog/ --retention-days 90
 rocklake excise plan --catalog s3://my-bucket/catalog/
 rocklake excise apply --catalog s3://my-bucket/catalog/ --yes
 ```
@@ -479,6 +479,6 @@ SELECT current_setting('ducklake.snapshot');
 ## Further Reading
 
 - **[DuckDB Compatibility](duckdb-compatibility.md)** — Full SQL compatibility matrix
-- **[Native Extension](native-extension.md)** — In-process alternative (Strategy C)
+- **[Native Extension](native-extension.md)** — Unsupported experimental wrapper
 - **[Configuration](../deployment/configuration.md)** — Server-side configuration
 - **[Troubleshooting](../operations/troubleshooting.md)** — Comprehensive problem resolution

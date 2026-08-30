@@ -64,7 +64,7 @@ func TestListSchemasEmpty(t *testing.T) {
 	}
 	defer cat.Close()
 
-	schemas, err := cat.ListSchemas(0)
+	schemas, err := cat.ListSchemasLatest()
 	if err != nil {
 		t.Fatalf("ListSchemas: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestListTablesEmpty(t *testing.T) {
 	}
 	defer cat.Close()
 
-	tables, err := cat.ListTables(1, 0)
+	tables, err := cat.ListTablesAt(1, 0)
 	if err != nil {
 		t.Fatalf("ListTables: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestListDataFilesEmpty(t *testing.T) {
 	}
 	defer cat.Close()
 
-	files, err := cat.ListDataFiles(1, 0)
+	files, err := cat.ListDataFilesLatest(1)
 	if err != nil {
 		t.Fatalf("ListDataFiles: %v", err)
 	}

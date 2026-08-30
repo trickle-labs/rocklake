@@ -19,6 +19,29 @@ public class RockLakeCatalog implements AutoCloseable {
     private String path;
     private volatile boolean closed = false;
 
+    /** Selects the latest committed snapshot or an exact snapshot ID. */
+    public static final class SnapshotRef {
+        private final Long snapshotId;
+
+        private SnapshotRef(Long snapshotId) {
+            this.snapshotId = snapshotId;
+        }
+
+        /** Select the latest committed snapshot. */
+        public static SnapshotRef latest() {
+            return new SnapshotRef(null);
+        }
+
+        /** Select an exact snapshot ID. Snapshot ID 0 is an exact ID. */
+        public static SnapshotRef at(long snapshotId) {
+            return new SnapshotRef(snapshotId);
+        }
+
+        private long resolve(RockLakeCatalog catalog) throws RockLakeException {
+            return snapshotId != null ? snapshotId : catalog.getSnapshot();
+        }
+    }
+
     /**
      * Opens or creates a RockLake catalog at the given path.
      * 
@@ -83,7 +106,7 @@ public class RockLakeCatalog implements AutoCloseable {
     }
 
     /**
-     * Lists all data files for a table at a specific snapshot.
+     * Lists all data files for a table at an exact snapshot ID.
      * 
      * @param tableId the table ID
      * @param snapshotId the snapshot ID
@@ -95,6 +118,15 @@ public class RockLakeCatalog implements AutoCloseable {
         return RockLakeNative.listDataFiles(handle, tableId, snapshotId);
     }
 
+    /** Lists all data files for a table at the selected snapshot. */
+    public List<DataFileRow> listDataFiles(String tableId, SnapshotRef snapshot)
+            throws RockLakeException {
+        if (snapshot == null) {
+            throw new IllegalArgumentException("snapshot cannot be null");
+        }
+        return listDataFiles(tableId, snapshot.resolve(this));
+    }
+
     /**
      * Lists all data files for a table at the current snapshot.
      * 
@@ -103,11 +135,11 @@ public class RockLakeCatalog implements AutoCloseable {
      * @throws RockLakeException if the operation fails
      */
     public List<DataFileRow> listDataFiles(String tableId) throws RockLakeException {
-        return listDataFiles(tableId, getSnapshot());
+        return listDataFiles(tableId, SnapshotRef.latest());
     }
 
     /**
-     * Describes a table schema (columns) at a specific snapshot.
+     * Describes a table schema (columns) at an exact snapshot ID.
      * 
      * @param tableId the table ID
      * @param snapshotId the snapshot ID
@@ -119,6 +151,15 @@ public class RockLakeCatalog implements AutoCloseable {
         return RockLakeNative.describeTable(handle, tableId, snapshotId);
     }
 
+    /** Describes a table schema at the selected snapshot. */
+    public List<ColumnRow> describeTable(String tableId, SnapshotRef snapshot)
+            throws RockLakeException {
+        if (snapshot == null) {
+            throw new IllegalArgumentException("snapshot cannot be null");
+        }
+        return describeTable(tableId, snapshot.resolve(this));
+    }
+
     /**
      * Describes a table schema at the current snapshot.
      * 
@@ -127,7 +168,7 @@ public class RockLakeCatalog implements AutoCloseable {
      * @throws RockLakeException if the operation fails
      */
     public List<ColumnRow> describeTable(String tableId) throws RockLakeException {
-        return describeTable(tableId, getSnapshot());
+        return describeTable(tableId, SnapshotRef.latest());
     }
 
     /**

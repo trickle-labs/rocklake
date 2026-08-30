@@ -12,17 +12,17 @@
 //!
 //! ```no_run
 //! # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
-//! use rocklake_client::{CatalogClient, CatalogClientBuilder};
+//! use rocklake_client::{CatalogClient, CatalogClientBuilder, SnapshotRef};
 //!
 //! let client = CatalogClientBuilder::new("file:///tmp/my-catalog")
 //!     .build()
 //!     .await
 //!     .expect("build");
 //!
-//! let snapshot = client.snapshot_id().await.expect("snapshot_id");
-//! println!("current snapshot: {snapshot}");
-//!
-//! let schemas = client.list_schemas(snapshot).await.expect("list_schemas");
+//! let schemas = client
+//!     .list_schemas(SnapshotRef::Latest)
+//!     .await
+//!     .expect("list_schemas");
 //! println!("schemas: {schemas:?}");
 //!
 //! client.close().await.expect("close");
@@ -36,7 +36,7 @@ use object_store::path::Path as ObjectPath;
 use thiserror::Error;
 
 use rocklake_catalog::{CatalogError, CatalogStore, OpenOptions};
-use rocklake_core::mvcc::SnapshotId;
+pub use rocklake_core::mvcc::SnapshotId;
 
 // Re-export so call sites can match on the new structured variants.
 pub use rocklake_catalog::error::{is_transient, with_transient_retry};
@@ -57,6 +57,27 @@ pub enum ClientError {
 
 /// Shorthand result type.
 pub type ClientResult<T> = Result<T, ClientError>;
+
+/// Select the latest committed snapshot or an exact snapshot ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotRef {
+    /// The latest committed snapshot when the operation starts.
+    Latest,
+    /// An exact snapshot ID.
+    At(SnapshotId),
+}
+
+impl From<u64> for SnapshotRef {
+    fn from(snapshot_id: u64) -> Self {
+        Self::At(SnapshotId::new(snapshot_id))
+    }
+}
+
+impl From<SnapshotId> for SnapshotRef {
+    fn from(snapshot_id: SnapshotId) -> Self {
+        Self::At(snapshot_id)
+    }
+}
 
 // ─── Schema / Table / DataFile value types ─────────────────────────────────
 
@@ -331,6 +352,16 @@ impl CatalogClient {
         Ok(guard)
     }
 
+    fn reader(
+        store: &CatalogStore,
+        snapshot: SnapshotRef,
+    ) -> rocklake_catalog::CatalogResult<rocklake_catalog::CatalogReader> {
+        match snapshot {
+            SnapshotRef::Latest => Ok(store.read_latest()),
+            SnapshotRef::At(snapshot_id) => store.read_at(snapshot_id),
+        }
+    }
+
     /// Return the current (latest committed) snapshot ID.
     ///
     /// Returns `0` when the catalog has no snapshots yet.
@@ -339,7 +370,7 @@ impl CatalogClient {
     ///
     /// ```no_run
     /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
-    /// use rocklake_client::CatalogClientBuilder;
+    /// use rocklake_client::{CatalogClientBuilder, SnapshotRef};
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
     /// let snap = client.snapshot_id().await.expect("snapshot_id");
     /// assert_eq!(snap, 0); // fresh catalog
@@ -354,25 +385,26 @@ impl CatalogClient {
         Ok(snap.map(|s| s.snapshot_id).unwrap_or(0))
     }
 
-    /// List all schemas visible at `snapshot_id`.
-    ///
-    /// Pass `0` to read the latest committed snapshot.
+    /// List all schemas visible at the selected snapshot.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
-    /// use rocklake_client::CatalogClientBuilder;
+    /// use rocklake_client::{CatalogClientBuilder, SnapshotRef};
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
-    /// let schemas = client.list_schemas(0).await.expect("list_schemas");
+    /// let schemas = client.list_schemas(SnapshotRef::Latest).await.expect("list_schemas");
     /// assert!(schemas.is_empty());
     /// client.close().await.expect("close");
     /// # });
     /// ```
-    pub async fn list_schemas(&self, snapshot_id: u64) -> ClientResult<Vec<Schema>> {
+    pub async fn list_schemas(
+        &self,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Vec<Schema>> {
         let guard = self.read().await?;
         let store = guard.as_ref().expect("checked by read()");
-        let reader = store.read_at(SnapshotId::new(snapshot_id))?;
+        let reader = Self::reader(store, snapshot.into())?;
         let rows = reader.list_schemas().await?;
         Ok(rows
             .into_iter()
@@ -383,23 +415,27 @@ impl CatalogClient {
             .collect())
     }
 
-    /// List all tables in `schema_id` visible at `snapshot_id`.
+    /// List all tables in `schema_id` visible at the selected snapshot.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
-    /// use rocklake_client::CatalogClientBuilder;
+    /// use rocklake_client::{CatalogClientBuilder, SnapshotRef};
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
-    /// let tables = client.list_tables(1, 0).await.expect("list_tables");
+    /// let tables = client.list_tables(1, SnapshotRef::Latest).await.expect("list_tables");
     /// assert!(tables.is_empty());
     /// client.close().await.expect("close");
     /// # });
     /// ```
-    pub async fn list_tables(&self, schema_id: u64, snapshot_id: u64) -> ClientResult<Vec<Table>> {
+    pub async fn list_tables(
+        &self,
+        schema_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Vec<Table>> {
         let guard = self.read().await?;
         let store = guard.as_ref().expect("checked by read()");
-        let reader = store.read_at(SnapshotId::new(snapshot_id))?;
+        let reader = Self::reader(store, snapshot.into())?;
         let rows = reader.list_tables(schema_id).await?;
         Ok(rows
             .into_iter()
@@ -411,7 +447,7 @@ impl CatalogClient {
             .collect())
     }
 
-    /// Describe the columns of `table_id` at `snapshot_id`.
+    /// Describe the columns of `table_id` at the selected snapshot.
     ///
     /// Returns `None` when no table with that ID exists at the given snapshot.
     ///
@@ -419,9 +455,9 @@ impl CatalogClient {
     ///
     /// ```no_run
     /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
-    /// use rocklake_client::CatalogClientBuilder;
+    /// use rocklake_client::{CatalogClientBuilder, SnapshotRef};
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
-    /// let cols = client.get_table(999, 0).await.expect("get_table");
+    /// let cols = client.get_table(999, SnapshotRef::Latest).await.expect("get_table");
     /// assert!(cols.is_none());
     /// client.close().await.expect("close");
     /// # });
@@ -429,11 +465,11 @@ impl CatalogClient {
     pub async fn get_table(
         &self,
         table_id: u64,
-        snapshot_id: u64,
+        snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Option<Vec<Column>>> {
         let guard = self.read().await?;
         let store = guard.as_ref().expect("checked by read()");
-        let reader = store.read_at(SnapshotId::new(snapshot_id))?;
+        let reader = Self::reader(store, snapshot.into())?;
         let result = reader.describe_table(table_id).await?;
         Ok(result.map(|(_table, cols)| {
             cols.into_iter()
@@ -449,15 +485,18 @@ impl CatalogClient {
         }))
     }
 
-    /// List data files for `table_id` visible at `snapshot_id`.
+    /// List data files for `table_id` visible at the selected snapshot.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # tokio::runtime::Runtime::new().expect("runtime").block_on(async {
-    /// use rocklake_client::CatalogClientBuilder;
+    /// use rocklake_client::{CatalogClientBuilder, SnapshotRef};
     /// let client = CatalogClientBuilder::new("file:///tmp/demo").build().await.expect("build");
-    /// let files = client.list_data_files(1, 0).await.expect("list_data_files");
+    /// let files = client
+    ///     .list_data_files(1, SnapshotRef::Latest)
+    ///     .await
+    ///     .expect("list_data_files");
     /// assert!(files.is_empty());
     /// client.close().await.expect("close");
     /// # });
@@ -465,11 +504,11 @@ impl CatalogClient {
     pub async fn list_data_files(
         &self,
         table_id: u64,
-        snapshot_id: u64,
+        snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<DataFile>> {
         let guard = self.read().await?;
         let store = guard.as_ref().expect("checked by read()");
-        let reader = store.read_at(SnapshotId::new(snapshot_id))?;
+        let reader = Self::reader(store, snapshot.into())?;
         let rows = reader.list_data_files(table_id).await?;
         Ok(rows
             .into_iter()
@@ -649,27 +688,39 @@ impl CatalogClientSync {
         self.runtime.block_on(self.inner.snapshot_id())
     }
 
-    /// List schemas at `snapshot_id`.
-    pub fn list_schemas(&self, snapshot_id: u64) -> ClientResult<Vec<Schema>> {
-        self.runtime.block_on(self.inner.list_schemas(snapshot_id))
+    /// List schemas at the selected snapshot.
+    pub fn list_schemas(&self, snapshot: impl Into<SnapshotRef>) -> ClientResult<Vec<Schema>> {
+        self.runtime.block_on(self.inner.list_schemas(snapshot))
     }
 
-    /// List tables in `schema_id` at `snapshot_id`.
-    pub fn list_tables(&self, schema_id: u64, snapshot_id: u64) -> ClientResult<Vec<Table>> {
+    /// List tables in `schema_id` at the selected snapshot.
+    pub fn list_tables(
+        &self,
+        schema_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Vec<Table>> {
         self.runtime
-            .block_on(self.inner.list_tables(schema_id, snapshot_id))
+            .block_on(self.inner.list_tables(schema_id, snapshot))
     }
 
-    /// Describe columns of `table_id` at `snapshot_id`.
-    pub fn get_table(&self, table_id: u64, snapshot_id: u64) -> ClientResult<Option<Vec<Column>>> {
+    /// Describe columns of `table_id` at the selected snapshot.
+    pub fn get_table(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Option<Vec<Column>>> {
         self.runtime
-            .block_on(self.inner.get_table(table_id, snapshot_id))
+            .block_on(self.inner.get_table(table_id, snapshot))
     }
 
-    /// List data files for `table_id` at `snapshot_id`.
-    pub fn list_data_files(&self, table_id: u64, snapshot_id: u64) -> ClientResult<Vec<DataFile>> {
+    /// List data files for `table_id` at the selected snapshot.
+    pub fn list_data_files(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Vec<DataFile>> {
         self.runtime
-            .block_on(self.inner.list_data_files(table_id, snapshot_id))
+            .block_on(self.inner.list_data_files(table_id, snapshot))
     }
 
     /// Close the catalog.
@@ -699,7 +750,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let uri = format!("file://{}", dir.path().to_str().unwrap());
         let client = CatalogClientBuilder::new(uri).build().await.unwrap();
-        let schemas = client.list_schemas(0).await.unwrap();
+        let schemas = client.list_schemas(SnapshotRef::Latest).await.unwrap();
         assert!(schemas.is_empty(), "fresh catalog has no schemas");
         client.close().await.unwrap();
     }
@@ -709,7 +760,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let uri = format!("file://{}", dir.path().to_str().unwrap());
         let client = CatalogClientBuilder::new(uri).build().await.unwrap();
-        let tables = client.list_tables(1, 0).await.unwrap();
+        let tables = client.list_tables(1, SnapshotRef::Latest).await.unwrap();
         assert!(tables.is_empty(), "fresh catalog has no tables");
         client.close().await.unwrap();
     }
@@ -719,7 +770,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let uri = format!("file://{}", dir.path().to_str().unwrap());
         let client = CatalogClientBuilder::new(uri).build().await.unwrap();
-        let cols = client.get_table(999, 0).await.unwrap();
+        let cols = client.get_table(999, SnapshotRef::Latest).await.unwrap();
         assert!(cols.is_none(), "non-existent table returns None");
         client.close().await.unwrap();
     }
@@ -729,7 +780,10 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let uri = format!("file://{}", dir.path().to_str().unwrap());
         let client = CatalogClientBuilder::new(uri).build().await.unwrap();
-        let files = client.list_data_files(1, 0).await.unwrap();
+        let files = client
+            .list_data_files(1, SnapshotRef::Latest)
+            .await
+            .unwrap();
         assert!(files.is_empty(), "fresh catalog has no data files");
         client.close().await.unwrap();
     }
@@ -748,7 +802,9 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let uri = format!("file://{}", dir.path().to_str().unwrap());
         let client = CatalogClientSync::open(uri).unwrap();
-        let schemas = client.list_schemas(0).unwrap();
+        let schemas = client
+            .list_schemas(SnapshotRef::At(SnapshotId::new(0)))
+            .unwrap();
         assert!(schemas.is_empty());
         client.close().unwrap();
     }
@@ -808,9 +864,9 @@ mod tests {
         let mut tasks = Vec::new();
         for _ in 0..8 {
             let c = client.clone();
-            tasks.push(tokio::spawn(
-                async move { c.list_schemas(0).await.unwrap() },
-            ));
+            tasks.push(tokio::spawn(async move {
+                c.list_schemas(SnapshotRef::Latest).await.unwrap()
+            }));
         }
 
         for task in tasks {

@@ -1,9 +1,18 @@
 {
-    "release": "v0.47.17",
+    "release": "v0.48.0",
     "duckdb_version": "1.5.3",
     "ducklake_version": "1.0",
     "catalog_version": 7,
     "compatibility_snapshots": [
+        {
+            "release": "v0.48.0",
+            "duckdb_version": "1.5.3",
+            "ducklake_version": "1.0",
+            "catalog_version": 7,
+            "fixture_path": "tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0-live-surface.json",
+            "test_file": "crates/rocklake-pgwire/tests/v0482_ducklake_end_to_end_tests.rs",
+            "test_name": "e2e_delete_file_operations"
+        },
         {
             "release": "v0.47.17",
             "duckdb_version": "1.5.3",

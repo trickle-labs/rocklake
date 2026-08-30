@@ -85,8 +85,7 @@ recommended cache size:
 
 ```
 rocklake inspect cache-utilization \
-    --catalog s3://my-bucket/catalog \
-    --cache-size-mb 256
+    --catalog s3://bucket/catalog/
 ```
 
 General guidelines:

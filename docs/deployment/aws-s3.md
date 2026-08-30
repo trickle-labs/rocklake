@@ -7,7 +7,7 @@ Amazon S3 is the most widely used object-store backend for RockLake in productio
 Before starting, you need:
 
 - An AWS account with permission to create S3 buckets and IAM roles/policies
-- The RockLake binary (see [Binary Deployment](binary.md) or [Docker](docker.md))
+- The RockLake binary (see [Binary Deployment](binary.md))
 - AWS credentials with sufficient permissions for the initial setup
 - The AWS CLI installed for bucket creation steps (or equivalent access through the AWS Console)
 
@@ -222,7 +222,7 @@ rocklake serve \
 Expected startup output:
 
 ```
-INFO  RockLake v0.8.0 starting
+INFO  RockLake v0.48.0 starting
 INFO  Storage backend: aws-s3
 INFO  Catalog path: s3://my-lakehouse/catalog/
 INFO  Opening SlateDB...
@@ -389,7 +389,6 @@ You should see SlateDB SST files (`.sst` extension) and WAL segments (`.wal`). I
 ## Further Reading
 
 - **[Credential Isolation](credential-isolation.md)** — Separate IAM identities for catalog and data plane access
-- **[Docker Deployment](docker.md)** — Running RockLake in containers on EC2 or ECS
 - **[Kubernetes Deployment](kubernetes.md)** — Running RockLake on EKS with IRSA
 - **[Object Store Durability](../concepts/object-store-durability.md)** — The conceptual basis for why object storage provides strong durability
 - **[Performance: Latency Model](../performance/latency-model.md)** — Expected latency numbers for S3 Standard vs. S3 Express

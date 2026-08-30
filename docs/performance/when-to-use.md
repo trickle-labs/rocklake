@@ -32,7 +32,8 @@ RockLake is designed specifically for DuckDB's `ducklake` extension. The integra
 **Why RockLake excels for DuckDB users:**
 
 - DuckDB + RockLake gives you a complete lakehouse with two components (no third-party coordination services)
-- The native extension (Strategy C) embeds RockLake directly in DuckDB — zero network overhead, single-process deployment
+- The supported integration is DuckDB's `ducklake` extension connected to the
+  RockLake PostgreSQL wire sidecar
 - RockLake's SQL dialect matches DuckLake's protocol exactly (no compatibility layer, no translation)
 - Both DuckDB and RockLake share the "do one thing well" philosophy — they compose cleanly
 
@@ -120,7 +121,8 @@ If your use case requires that catalog operations complete in under 1ms — cons
 
 - **SQLite** for single-machine deployments (sub-0.1ms, in-process)
 - **PostgreSQL with warm buffer pool** for multi-machine (1–3ms, stable)
-- **RockLake native extension** brings latency to 0.3ms for cache-hot reads (but cold reads still hit object storage)
+- **SQLite** or another embedded catalog is a better fit when in-process,
+  sub-millisecond catalog latency is mandatory
 
 **Mitigation if you still want RockLake:** Use S3 Express One Zone (3–10ms cold, < 1ms warm after cache hits) and ensure your working set fits in cache. After warm-up, most reads are under 2ms. But if you need guaranteed sub-millisecond — including the first read after a restart — RockLake cannot provide that.
 
