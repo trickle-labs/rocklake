@@ -562,14 +562,18 @@ fn list_schemas_impl(
                 Some(snapshot_id) => cat
                     .store
                     .as_ref()
-                    .unwrap()
+                    .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
                     .read_at(SnapshotId::new(snapshot_id))?,
-                None => cat.store.as_ref().unwrap().read_latest(),
+                None => cat
+                    .store
+                    .as_ref()
+                    .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
+                    .read_latest(),
             };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
                 .as_ref()
-                .unwrap()
+                .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
                 .block_on(reader.list_schemas())
         },
     );
@@ -653,14 +657,18 @@ fn list_tables_impl(
                 Some(snapshot_id) => cat
                     .store
                     .as_ref()
-                    .unwrap()
+                    .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
                     .read_at(SnapshotId::new(snapshot_id))?,
-                None => cat.store.as_ref().unwrap().read_latest(),
+                None => cat
+                    .store
+                    .as_ref()
+                    .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
+                    .read_latest(),
             };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
                 .as_ref()
-                .unwrap()
+                .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
                 .block_on(reader.list_tables(schema_id))
         },
     );
@@ -748,14 +756,18 @@ fn describe_table_impl(
                 Some(snapshot_id) => cat
                     .store
                     .as_ref()
-                    .unwrap()
+                    .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
                     .read_at(SnapshotId::new(snapshot_id))?,
-                None => cat.store.as_ref().unwrap().read_latest(),
+                None => cat
+                    .store
+                    .as_ref()
+                    .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
+                    .read_latest(),
             };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
                 .as_ref()
-                .unwrap()
+                .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
                 .block_on(reader.describe_table(table_id))
         },
     );
@@ -858,14 +870,18 @@ fn list_data_files_impl(
                 Some(snapshot_id) => cat
                     .store
                     .as_ref()
-                    .unwrap()
+                    .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
                     .read_at(SnapshotId::new(snapshot_id))?,
-                None => cat.store.as_ref().unwrap().read_latest(),
+                None => cat
+                    .store
+                    .as_ref()
+                    .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
+                    .read_latest(),
             };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
                 .as_ref()
-                .unwrap()
+                .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
                 .block_on(reader.list_data_files(table_id))
         },
     );
