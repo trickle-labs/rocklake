@@ -1,11 +1,11 @@
 {
-    "release": "v0.48.0",
+    "release": "v0.49.0",
     "duckdb_version": "1.5.3",
     "ducklake_version": "1.0",
     "catalog_version": 7,
     "compatibility_snapshots": [
         {
-            "release": "v0.48.0",
+            "release": "v0.49.0",
             "duckdb_version": "1.5.3",
             "ducklake_version": "1.0",
             "catalog_version": 7,

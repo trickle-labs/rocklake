@@ -222,7 +222,7 @@ rocklake serve \
 Expected startup output:
 
 ```
-INFO  RockLake v0.48.0 starting
+INFO  RockLake v0.49.0 starting
 INFO  Storage backend: aws-s3
 INFO  Catalog path: s3://my-lakehouse/catalog/
 INFO  Opening SlateDB...

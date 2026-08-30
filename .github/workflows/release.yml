@@ -38,76 +38,19 @@ jobs:
           fi
           echo "Workspace version ${CURRENT} matches tag v${VERSION}"
 
-  # Run the full quality gate before building release artifacts.
-  quality-gate:
-    name: Quality Gate
+  certification:
+    name: Release Certification
     needs: prepare
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-                      /usr/share/swift /opt/hostedtoolcache/CodeQL /usr/local/share/powershell \
-                      /usr/share/java
-          df -h
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features
-
-      - name: Test
-        run: cargo test --all
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-
-      - name: Security audit
-        run: cargo deny check advisories bans sources licenses
-
-  ducklake-compatibility:
-    name: DuckLake 1.0 Compatibility (DuckDB ${{ matrix.duckdb-version }})
-    needs: prepare
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        duckdb-version: ["1.5.3", "1.5.4", "1.5.5"]
-    env:
-      ROCKLAKE_DUCKDB_VERSION: ${{ matrix.duckdb-version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Run live DuckLake compatibility tests
-        run: >-
-          cargo test --package rocklake-pgwire
-          --test duckdb_container_tests
-          --features minio-tests
-          -- --test-threads=1 --nocapture
-
-      - name: Verify DuckLake 1.0 schema manifest
-        run: >-
-          cargo test --package rocklake-pgwire
-          --test v0481_ducklake_1_0_compliance_tests
-          -- --exact schema_registry_matches_ducklake_1_0_manifest
+    uses: ./.github/workflows/release-certification.yml
+    with:
+      certified-ref: ${{ github.sha }}
+    permissions:
+      contents: read
 
   # Build release binaries for each target platform.
   build:
     name: Build (${{ matrix.target }})
-    needs: [quality-gate, ducklake-compatibility]
+    needs: [certification, prepare]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -133,6 +76,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+
+      - name: Verify certified tagged SHA
+        run: test "$(git rev-parse HEAD)" = "${{ needs.certification.outputs.certified-sha }}"
 
       - name: Install cross (for aarch64 Linux)
         if: matrix.cross == true
@@ -168,6 +114,14 @@ jobs:
           $hash = (Get-FileHash "${{ matrix.artifact }}" -Algorithm SHA256).Hash.ToLower()
           "$hash  ${{ matrix.artifact }}" | Out-File -Encoding ascii "${{ matrix.artifact }}.sha256"
 
+      - name: Write build metadata
+        shell: bash
+        run: |
+          printf '{"version":"%s","tag":"%s","certified_sha":"%s","target":"%s","rustc":"%s"}\n' \
+            "${{ needs.prepare.outputs.version }}" "${GITHUB_REF_NAME}" \
+            "${{ needs.certification.outputs.certified-sha }}" "${{ matrix.target }}" "$(rustc -V)" \
+            > "${{ matrix.artifact }}.build-metadata.json"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -175,14 +129,37 @@ jobs:
           path: |
             ${{ matrix.artifact }}
             ${{ matrix.artifact }}.sha256
+            ${{ matrix.artifact }}.build-metadata.json
+
+  sbom:
+    name: SBOM
+    needs: [certification, prepare]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.certification.outputs.certified-sha }}
+      - name: Verify certified tagged SHA
+        run: test "$(git rev-parse HEAD)" = "${{ needs.certification.outputs.certified-sha }}"
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: rocklake-v${{ needs.prepare.outputs.version }}.sbom.spdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-sbom
+          path: rocklake-v${{ needs.prepare.outputs.version }}.sbom.spdx.json
 
   # Create a GitHub Release with all binaries and checksums.
   release:
     name: GitHub Release
-    needs: [build, prepare]
+    needs: [build, sbom, prepare, certification]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -193,6 +170,18 @@ jobs:
         with:
           path: artifacts/
           merge-multiple: true
+
+      - name: Verify release SHA and checksums
+        run: |
+          test "${GITHUB_SHA}" = "${{ needs.certification.outputs.certified-sha }}"
+          test -f artifacts/rocklake-v${{ needs.prepare.outputs.version }}.sbom.spdx.json
+          cd artifacts
+          for checksum in *.sha256; do sha256sum -c "$checksum" --status; done
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/rocklake-*
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -5,10 +5,13 @@ server, the risks of each configuration, and the recommended mitigations.
 
 ## Authentication
 
-RockLake supports password-based authentication for PG-Wire connections.
-Authentication is configured via the `--auth-user` and `--auth-password` flags
-(or the `ROCKLAKE_AUTH_USER` / `ROCKLAKE_AUTH_PASSWORD` environment
-variables).
+RockLake supports SCRAM-SHA-256 password authentication for PG-Wire
+connections.
+Authentication is configured with `--auth-user` and
+`ROCKLAKE_AUTH_PASSWORD`, or with the permission-restricted
+`ROCKLAKE_AUTH_PASSWORD_FILE` / `--auth-password-file` input. The
+`--auth-password` flag remains a development convenience; do not use it for
+production secrets.
 
 When no `--auth-user` is set, the server accepts all connections without
 authentication. This is appropriate for local development and single-host
@@ -22,20 +25,24 @@ refuses all non-TLS connections (including plain-text clients).
 
 ## Auth Without TLS — Security Risk
 
-> **Warning:** Enabling password authentication without TLS transmits
-> credentials in plaintext over the network.
+> **Warning:** TLS is still required for transport and server-identity
+> protection. Only the explicit cleartext compatibility path transmits
+> credentials in plaintext; the release binary uses SCRAM-SHA-256.
 
 When RockLake starts with `--auth-user` set but without `--tls-cert` /
-`--tls-key`, it emits a startup warning:
+`--tls-key`, it emits a startup warning. SCRAM and cleartext compatibility
+configurations use different warning text; the cleartext path is:
 
 ```
-WARN rocklake_pgwire::server: Password authentication is enabled without TLS.
-Credentials will be sent in plaintext. Use --tls-cert / --tls-key to enable
-TLS, or pass --insecure-no-tls-warning-suppress if this is intentional.
+WARN rocklake_pgwire::server: Cleartext password authentication is enabled
+without TLS. Credentials will be sent in plaintext. Use --tls-cert /
+--tls-key to enable TLS.
 ```
 
-Any passive network observer between the client and the server can read the
-username and password from the PG-Wire `PasswordMessage` packet.
+SCRAM prevents a passive observer from reading the password, but TLS is still
+needed to protect the connection and authenticate the server. A passive
+observer can read the username and traffic metadata. The explicit cleartext
+compatibility path exposes the password in the PG-Wire `PasswordMessage`.
 
 ### Mitigations
 
@@ -43,7 +50,7 @@ username and password from the PG-Wire `PasswordMessage` packet.
 |----------|--------------------|
 | Internet-facing or multi-tenant | **Always** enable TLS with `--tls-cert` and `--tls-key`. |
 | Private LAN / same host | Acceptable without TLS; consider firewall rules. |
-| Development / local loop | No TLS needed; omit `--auth-user` or use `--insecure-no-tls-warning-suppress`. |
+| Development / local loop | No TLS needed; omit `--auth-user` or keep the listener on loopback. |
 
 ### Enabling TLS
 
@@ -53,7 +60,7 @@ rocklake serve \
   --tls-key  /path/to/key.pem  \
   --tls-required               \
   --auth-user admin             \
-  --auth-password "$PASSWORD"
+  --auth-password-file /run/secrets/rocklake-auth-password
 ```
 
 Self-signed certificates work for development. For production, use a

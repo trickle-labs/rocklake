@@ -162,3 +162,24 @@ fn completions_bash() {
 fn invalid_subcommand_exits_nonzero() {
     command_exits_nonzero(&["frobnicate"]);
 }
+
+#[test]
+fn serve_defaults_to_loopback() {
+    let output = std::process::Command::new(rocklake_bin())
+        .args(["serve", "--help"])
+        .output()
+        .expect("run rocklake serve --help");
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("[default: 127.0.0.1:5432]"));
+}
+
+#[test]
+fn datafusion_pg_wire_flag_is_removed() {
+    command_exits_nonzero(&[
+        "serve",
+        "--catalog",
+        "catalog",
+        "--datafusion-pg-wire",
+        "5433",
+    ]);
+}

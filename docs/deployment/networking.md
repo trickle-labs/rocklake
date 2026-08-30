@@ -6,7 +6,9 @@ This page covers network topology options, firewall configuration, VPC endpoints
 
 ## Network Requirements
 
-RockLake requires precisely two network paths:
+RockLake requires precisely two network paths. The listener defaults to the
+loopback address `127.0.0.1:5432`; expose it only through an explicit bind and
+a controlled network boundary:
 
 ```mermaid
 flowchart LR

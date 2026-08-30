@@ -134,18 +134,18 @@ defaults to the `rustls::crypto::ring` provider, which enforces TLS 1.2+.
 | `--tls-cert <path>` | Path to PEM-encoded TLS certificate |
 | `--tls-key <path>` | Path to PEM-encoded TLS private key |
 | `--tls-required` | Reject plaintext connections |
-| `--insecure-no-tls-warning-suppress` | Suppress auth-without-TLS warning |
+| `--auth-password-file <path>` | Read the password from a permission-restricted file |
 
 ### Auth Without TLS Warning
 
-When `--auth-user` / `--auth-password` are configured without `--tls-cert` /
-`--tls-key`, the server emits this warning at startup:
+When `--auth-user` and a password input are configured without `--tls-cert` /
+`--tls-key`, the server emits a strong startup warning. Cleartext library
+configuration uses this warning:
 
 ```
-WARN Password authentication is enabled without TLS.
+WARN Cleartext password authentication is enabled without TLS.
      Credentials will be sent in plaintext.
-     Use --tls-cert / --tls-key to enable TLS, or pass
-     --insecure-no-tls-warning-suppress if this is intentional.
+     Use --tls-cert / --tls-key to enable TLS.
 ```
 
 ### TLS Version Gating
@@ -182,12 +182,17 @@ The `auth_timing_constant_time_comparison_no_early_exit` and
 
 ### SCRAM-SHA-256
 
-For production deployments, use `--auth-method scram-sha-256` (the default
-when TLS is enabled) instead of plaintext password comparison. SCRAM-SHA-256
-provides:
+For v0.49.0, RockLake selects SCRAM-SHA-256 for authenticated connections.
+SCRAM-SHA-256 provides:
 - Mutual authentication (server also proves identity to client)
 - Salted, iterated hashing (prevents offline dictionary attacks)
-- Channel binding (prevents MITM when combined with TLS)
+- Channel binding when combined with TLS
+
+The v0.49.0 release binary selects SCRAM-SHA-256, so clients must support
+SCRAM-SHA-256. The cleartext password path remains available to library users
+that configure it directly. Use TLS with that path outside trusted local use.
+Set `ROCKLAKE_AUTH_PASSWORD` from a secret manager or a permission-restricted
+file instead of passing a password as a command-line argument.
 
 ## Excision Audit Trail
 

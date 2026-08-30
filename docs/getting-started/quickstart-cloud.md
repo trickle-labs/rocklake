@@ -143,7 +143,7 @@ On first start against an empty prefix, RockLake initializes a new catalog. This
 You should see output like:
 
 ```
-RockLake v0.48.0
+RockLake v0.49.0
 Catalog: s3://my-lakehouse-bucket/catalog/
 Listening: 0.0.0.0:5432
 Writer epoch: 1
@@ -309,7 +309,7 @@ rocklake \
     --tls-cert /etc/ssl/certs/rocklake.crt \
     --tls-key /etc/ssl/private/rocklake.key \
     --auth-user ducklake \
-    --auth-password "${ROCKLAKE_AUTH_PASSWORD}"
+    --auth-password-file /run/secrets/rocklake-auth-password
 ```
 
 DuckDB connects with credentials in the connection string:

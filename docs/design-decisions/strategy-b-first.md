@@ -1,7 +1,7 @@
 # Strategy B First
 
 This historical decision record explains why RockLake built Strategy B (the
-PG-wire sidecar) first. In v0.48.0, the sidecar and embedded client APIs are
+PG-wire sidecar) first. In v0.49.0, the sidecar and embedded client APIs are
 supported; the native DuckDB extension wrapper remains experimental and is not
 a supported deployment path.
 
@@ -145,7 +145,7 @@ Sequential development also avoided the temptation to paper over protocol bugs w
 ## Strategy C Status Today
 
 The native extension wrapper is experimental and is not published or supported
-in v0.48.0. The stable embedded surface is the C ABI and its language
+in v0.49.0. The stable embedded surface is the C ABI and its language
 bindings; DuckDB should use the PostgreSQL wire sidecar.
 
 ## Lessons Learned

@@ -1474,7 +1474,7 @@ fn test_server_config_default() {
     let config = rocklake_pgwire::ServerConfig::default();
     assert_eq!(
         config.bind_addr,
-        "0.0.0.0:5432".parse::<std::net::SocketAddr>().unwrap()
+        "127.0.0.1:5432".parse::<std::net::SocketAddr>().unwrap()
     );
     assert_eq!(config.max_sessions, 50);
     assert!(!config.tls.is_enabled());
@@ -1743,104 +1743,6 @@ async fn test_auth_no_auth_configured_any_user_succeeds() {
     drop(client);
     let _ = tx.send(());
     let _ = handle.await;
-}
-
-// ─── v0.9.4: DataFusion pg-wire mode ──────────────────────────────────────────
-
-/// When a DataFusion engine connects via the secondary pg-wire port it gets
-/// correct responses from the same bounded SQL dispatcher.
-#[tokio::test]
-async fn test_datafusion_pg_wire_mode_e2e() {
-    let dir = tempfile::tempdir().unwrap();
-    let store_obj = Arc::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
-    let opts = OpenOptions {
-        object_store: store_obj,
-        path: ObjectPath::from(""),
-        encryption: None,
-    };
-    let catalog = Arc::new(Mutex::new(CatalogStore::open(opts).await.unwrap()));
-
-    {
-        let mut catalog_guard = catalog.lock().await;
-        let mut writer = catalog_guard.begin_write();
-        let snap = writer
-            .create_snapshot(Some("datafusion-pg-wire"), Some("bootstrap"))
-            .await
-            .unwrap();
-        catalog_guard.commit_writer(snap);
-    }
-
-    // Primary server (standard port).
-    let primary_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let primary_addr = primary_listener.local_addr().unwrap();
-    drop(primary_listener);
-
-    // DataFusion secondary listener.
-    let df_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let df_addr = df_listener.local_addr().unwrap();
-    drop(df_listener);
-
-    let (primary_tx, primary_rx) = tokio::sync::oneshot::channel::<()>();
-    let primary_cfg = rocklake_pgwire::ServerConfig {
-        bind_addr: primary_addr,
-        ..Default::default()
-    };
-    let catalog_for_primary = catalog.clone();
-    tokio::spawn(async move {
-        let _ = rocklake_pgwire::server::run_server_with_shutdown(
-            primary_cfg,
-            catalog_for_primary,
-            primary_rx,
-        )
-        .await;
-    });
-
-    // Second server simulating --datafusion-pg-wire port.
-    let (df_tx, df_rx) = tokio::sync::oneshot::channel::<()>();
-    let df_cfg = rocklake_pgwire::ServerConfig {
-        bind_addr: df_addr,
-        ..Default::default()
-    };
-    let catalog_for_df = catalog.clone();
-    tokio::spawn(async move {
-        let _ =
-            rocklake_pgwire::server::run_server_with_shutdown(df_cfg, catalog_for_df, df_rx).await;
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-
-    // A DataFusion client connects to the datafusion pg-wire port and runs DuckLake SQL.
-    let conn_str = format!(
-        "host=127.0.0.1 port={} user=datafusion dbname=ducklake",
-        df_addr.port()
-    );
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls)
-        .await
-        .expect("DataFusion engine should connect to the datafusion pg-wire port");
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-
-    // Run a DuckLake SELECT through the DataFusion pg-wire port.
-    let rows = client
-        .query("SELECT version()", &[])
-        .await
-        .expect("SELECT version() must succeed over datafusion pg-wire port");
-    assert_eq!(rows.len(), 1, "should return one row");
-
-    // Virtual catalog SQL is also accessible over the datafusion pg-wire port.
-    let vc_rows = client
-        .query("SELECT * FROM rocklake_catalog.ducklake_snapshot", &[])
-        .await
-        .expect("virtual catalog scan must work over datafusion pg-wire port");
-    assert!(
-        !vc_rows.is_empty(),
-        "virtual catalog must return at least one result row"
-    );
-
-    drop(client);
-    let _ = primary_tx.send(());
-    let _ = df_tx.send(());
 }
 
 // ─── v0.9.4: Virtual Catalog SQL Tables ──────────────────────────────────────

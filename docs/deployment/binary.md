@@ -53,7 +53,7 @@ Verify the installation:
 
 ```bash
 rocklake --version
-# RockLake v0.48.0
+# RockLake v0.49.0
 ```
 
 ### Building from Source
@@ -108,7 +108,7 @@ rocklake serve \
     --tls-cert /path/to/cert.pem \    # Optional: TLS certificate
     --tls-key /path/to/key.pem \      # Optional: TLS private key
     --auth-user ducklake \             # Optional: require username
-    --auth-password "$PASSWORD" \      # Optional: require password
+    --auth-password-file /run/secrets/rocklake-auth-password \
     --max-sessions 100 \              # Optional: max concurrent connections (default: 50)
 ```
 
@@ -141,7 +141,7 @@ ExecStart=/usr/local/bin/rocklake serve \
     --tls-cert /etc/rocklake/tls/cert.pem \
     --tls-key /etc/rocklake/tls/key.pem \
     --auth-user ducklake \
-    --auth-password ${ROCKLAKE_AUTH_PASSWORD}
+    --auth-password-file /run/secrets/rocklake-auth-password
 
 # Restart behavior
 Restart=always
@@ -417,6 +417,6 @@ Do not grant `s3:*` or full bucket access. RockLake does not need access to data
 ## Further Reading
 
 - **[Configuration](configuration.md)** — Full reference for all configuration options
-- Docker images are not published or supported in v0.48.0.
+- Docker images are not published or supported in v0.49.0.
 - **[High Availability](high-availability.md)** — Running with failover for uptime SLAs
 - **[Operations: Health Checks](../operations/health-checks.md)** — Detailed monitoring integration

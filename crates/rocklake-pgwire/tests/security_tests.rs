@@ -145,10 +145,9 @@ fn idle_connection_timeout() {
 fn auth_without_tls_warning_message_content() {
     // The warning message is defined in server.rs. Validate that the expected
     // keyword set is present so the message remains informative.
-    let warning_text = "Password authentication is enabled without TLS. \
+    let warning_text = "Cleartext password authentication is enabled without TLS. \
         Credentials will be sent in plaintext. \
-        Use --tls-cert / --tls-key to enable TLS, or pass \
-        --insecure-no-tls-warning-suppress if this is intentional.";
+        Use --tls-cert / --tls-key to enable TLS.";
 
     assert!(
         warning_text.contains("plaintext"),

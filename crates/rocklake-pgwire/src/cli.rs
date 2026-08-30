@@ -110,7 +110,7 @@ pub struct ServeArgs {
     pub catalog: String,
 
     /// Bind address for the PG-Wire listener.
-    #[arg(short = 'b', long, default_value = "0.0.0.0:5432")]
+    #[arg(short = 'b', long, default_value = "127.0.0.1:5432")]
     pub bind: String,
 
     /// Maximum concurrent sessions.
@@ -142,8 +142,21 @@ pub struct ServeArgs {
     pub auth_user: Option<String>,
 
     /// Password for PG-Wire authentication.
-    #[arg(long, env = "ROCKLAKE_AUTH_PASSWORD")]
+    #[arg(
+        long,
+        env = "ROCKLAKE_AUTH_PASSWORD",
+        hide_env_values = true,
+        conflicts_with = "auth_password_file"
+    )]
     pub auth_password: Option<String>,
+
+    /// Read the PG-Wire authentication password from a file.
+    #[arg(
+        long,
+        env = "ROCKLAKE_AUTH_PASSWORD_FILE",
+        conflicts_with = "auth_password"
+    )]
+    pub auth_password_file: Option<String>,
 
     /// Serving mode: `writer` (accepts writes) or `reader` (read-only).
     #[arg(long, default_value = "writer", value_parser = ["writer", "reader"])]
@@ -166,12 +179,16 @@ pub struct ServeArgs {
     pub s3_path_style: bool,
 
     /// AES-256 encryption key (64 hex digits).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "encryption_key_file", hide_env_values = true)]
     pub encryption_key: Option<String>,
 
-    /// Also start a DataFusion PG-Wire listener on this port.
-    #[arg(long)]
-    pub datafusion_pg_wire: Option<u16>,
+    /// Read the AES-256 encryption key from a file.
+    #[arg(
+        long,
+        env = "ROCKLAKE_ENCRYPTION_KEY_FILE",
+        conflicts_with = "encryption_key"
+    )]
+    pub encryption_key_file: Option<String>,
 
     /// Comma-separated allowed extension schema names.
     #[arg(long, env = "ROCKLAKE_EXTENSION_SCHEMAS", value_delimiter = ',')]
