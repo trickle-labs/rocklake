@@ -11,8 +11,9 @@ use std::ptr;
 
 use rocklake_ffi::{
     rocklake_abi_version, rocklake_close, rocklake_error_code, rocklake_error_free,
-    rocklake_error_message, rocklake_list_schemas, rocklake_open, rocklake_schema_list_free,
-    RockLakeError, RockLakeSchemaList, ROCKLAKE_ABI_VERSION,
+    rocklake_error_message, rocklake_list_schemas, rocklake_list_schemas_at,
+    rocklake_list_schemas_latest, rocklake_open, rocklake_schema_list_free, RockLakeError,
+    RockLakeSchemaList, ROCKLAKE_ABI_VERSION,
 };
 use tempfile::TempDir;
 
@@ -69,6 +70,21 @@ fn open_list_close_lifecycle() {
     assert_eq!(schemas.count, 0, "empty catalog must have 0 schemas");
     rocklake_schema_list_free(&mut schemas);
     rocklake_error_free(&mut list_err);
+
+    // Explicit latest and exact snapshot APIs on the same empty catalog.
+    let mut latest_err = blank_err();
+    let mut latest = rocklake_list_schemas_latest(cat, &mut latest_err);
+    assert_eq!(rocklake_error_code(&latest_err), 0);
+    assert_eq!(latest.count, 0);
+    rocklake_schema_list_free(&mut latest);
+    rocklake_error_free(&mut latest_err);
+
+    let mut at_err = blank_err();
+    let mut at_zero = rocklake_list_schemas_at(cat, 0, &mut at_err);
+    assert_eq!(rocklake_error_code(&at_err), 0);
+    assert_eq!(at_zero.count, 0);
+    rocklake_schema_list_free(&mut at_zero);
+    rocklake_error_free(&mut at_err);
 
     // Close
     rocklake_close(cat);

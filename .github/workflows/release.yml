@@ -10,22 +10,17 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
-  # Bump workspace version in Cargo.toml to match the pushed tag and
-  # commit the change back to main so subsequent jobs (and the codebase)
-  # reflect the correct version number.
+  # Verify that the tagged commit already contains the release version.
   prepare:
-    name: Bump Version
+    name: Verify Version
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # Fetch the full history so we can push back to main.
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.sha }}
 
       - name: Extract version from tag
         id: version
@@ -33,36 +28,15 @@ jobs:
           RAW="${GITHUB_REF#refs/tags/v}"
           echo "version=${RAW}" >> "$GITHUB_OUTPUT"
 
-      - name: Update workspace version in Cargo.toml
+      - name: Verify workspace version
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          # Only bump if tag version is newer than (or equal to) current version.
-          # This prevents accidentally downgrading main when re-releasing an older tag.
-          HIGHEST=$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -1)
-          if [ "$HIGHEST" = "$VERSION" ]; then
-            sed -i "s/^version = \".*\"$/version = \"${VERSION}\"/" Cargo.toml
-          else
-            echo "Skipping version bump: tag ${VERSION} <= current ${CURRENT} — no downgrade"
+          if [ "$CURRENT" != "$VERSION" ]; then
+            echo "ERROR: tag version ${VERSION} does not match Cargo.toml version ${CURRENT}" >&2
+            exit 1
           fi
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Regenerate Cargo.lock
-        run: cargo generate-lockfile
-
-      - name: Commit version bump
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
-          if git diff --staged --quiet; then
-            echo "No changes to commit — version already at ${VERSION}"
-          else
-            git commit -m "chore: bump workspace version to ${VERSION} [skip ci]"
-            git push origin main
-          fi
+          echo "Workspace version ${CURRENT} matches tag v${VERSION}"
 
   # Run the full quality gate before building release artifacts.
   quality-gate:
@@ -212,7 +186,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4

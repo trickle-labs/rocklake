@@ -9,17 +9,16 @@ This page covers the metrics endpoint configuration, the complete metrics catalo
 RockLake exposes metrics in Prometheus exposition format on a configurable HTTP endpoint:
 
 ```bash
-rocklake \
+rocklake serve \
     --catalog s3://bucket/catalog/ \
     --bind 0.0.0.0:5432 \
-    --metrics-bind 0.0.0.0:9090 \
+    --metrics-port 9090 \
     --metrics-path /metrics
 ```
 
 Or via environment variables:
 
 ```bash
-export ROCKLAKE_METRICS_BIND=0.0.0.0:9090
 export ROCKLAKE_METRICS_PATH=/metrics
 ```
 

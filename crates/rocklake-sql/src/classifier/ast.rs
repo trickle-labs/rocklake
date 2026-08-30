@@ -244,6 +244,8 @@ fn classify_derived_snapshot_select(select: &sqlparser::ast::Select) -> Option<S
     if inner_normalized == "ducklake_snapshot" {
         if outer_projection_looks_like_max(select) {
             Some(StatementKind::SelectMaxSnapshot)
+        } else if outer_projection_includes_snapshot_time(select) {
+            Some(StatementKind::SelectSnapshot)
         } else if outer_projection_looks_like_snapshot_tuple(select) {
             Some(StatementKind::SelectLatestSnapshotInfo)
         } else {
@@ -316,6 +318,13 @@ fn outer_projection_looks_like_snapshot_tuple(select: &sqlparser::ast::Select) -
             .iter()
             .any(|item| projection_item_name(item) == *name)
     })
+}
+
+fn outer_projection_includes_snapshot_time(select: &sqlparser::ast::Select) -> bool {
+    select
+        .projection
+        .iter()
+        .any(|item| projection_item_name(item) == "snapshot_time")
 }
 
 fn projection_item_name(item: &SelectItem) -> String {

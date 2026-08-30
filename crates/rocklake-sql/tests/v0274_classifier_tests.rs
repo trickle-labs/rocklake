@@ -271,6 +271,32 @@ fn classify_full_latest_snapshot_tuple_select() {
 }
 
 #[test]
+fn classify_full_snapshot_row_with_timestamp_select() {
+    let sql = r#"SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id
+        FROM ducklake_snapshot"#;
+
+    assert_eq!(
+        classify_statement(sql).unwrap(),
+        StatementKind::SelectSnapshot,
+        "snapshot rows with snapshot_time must use the full snapshot response"
+    );
+}
+
+#[test]
+fn classify_derived_full_snapshot_row_with_timestamp_select() {
+    let sql = r#"SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id
+        FROM (SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id
+              FROM ducklake_snapshot)
+        AS __unnamed_subquery"#;
+
+    assert_eq!(
+        classify_statement(sql).unwrap(),
+        StatementKind::SelectSnapshot,
+        "derived snapshot rows with snapshot_time must use the full snapshot response"
+    );
+}
+
+#[test]
 fn classify_derived_latest_snapshot_tuple_select() {
     let sql = r#"SELECT "snapshot_id", "schema_version", "next_catalog_id", "next_file_id"
         FROM (SELECT snapshot_id, schema_version, next_catalog_id, next_file_id

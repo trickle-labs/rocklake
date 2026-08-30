@@ -244,7 +244,6 @@ async fn execute_sql_inner<'a>(
     extension_schemas: &Arc<Vec<String>>,
     mode: AccessMode,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
-    println!("[SQL] execute_sql: {}", sql);
     let has_delete = sql.to_lowercase().contains("delete");
     let has_ducklake = sql.to_lowercase().contains("ducklake");
 
@@ -1041,6 +1040,7 @@ async fn execute_classified<'a>(
     mode: AccessMode,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
     ensure_access(mode, &kind, _sql)?;
+    tracing::debug!(statement_kind = ?kind, "executing classified SQL statement");
     match kind {
         // ─── Session / Introspection ───────────────────────────────────
         StatementKind::SelectVersion => Ok(vec![make_single_text_response(

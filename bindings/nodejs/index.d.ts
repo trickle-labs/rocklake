@@ -1,6 +1,6 @@
 // TypeScript declarations for @rocklake/client
 //
-// v0.46.0: All numeric ID fields are now `bigint` to avoid truncation of
+// All numeric ID fields are `bigint` to avoid truncation of
 // values above `u32::MAX` (~4 billion).  Use `Number(id)` only when you
 // are certain the value fits in a safe integer (< 2^53).
 
@@ -36,12 +36,24 @@ export declare class Catalog {
   snapshotId(): bigint;
   /** Return the current snapshot. */
   currentSnapshot(): Snapshot;
-  /** List schemas at *snapshotId* (0n = latest). */
+  /** List schemas at an exact snapshot ID. */
   listSchemas(snapshotId: bigint): Schema[];
-  /** List tables in *schemaId* at *snapshotId*. */
+  /** List schemas at the latest committed snapshot. */
+  listSchemasLatest(): Schema[];
+  /** List schemas at an exact snapshot ID. */
+  listSchemasAt(snapshotId: bigint): Schema[];
+  /** List tables in *schemaId* at an exact snapshot ID. */
   listTables(schemaId: bigint, snapshotId: bigint): Table[];
-  /** List data files for *tableId* at *snapshotId*. */
+  /** List tables in *schemaId* at the latest committed snapshot. */
+  listTablesLatest(schemaId: bigint): Table[];
+  /** List tables in *schemaId* at an exact snapshot ID. */
+  listTablesAt(schemaId: bigint, snapshotId: bigint): Table[];
+  /** List data files for *tableId* at an exact snapshot ID. */
   listDataFiles(tableId: bigint, snapshotId: bigint): DataFile[];
+  /** List data files for *tableId* at the latest committed snapshot. */
+  listDataFilesLatest(tableId: bigint): DataFile[];
+  /** List data files for *tableId* at an exact snapshot ID. */
+  listDataFilesAt(tableId: bigint, snapshotId: bigint): DataFile[];
   /** Close the catalog. */
   close(): void;
 }

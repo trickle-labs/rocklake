@@ -1,5 +1,9 @@
 # Benchmarks
 
+> Historical reference: the baseline tables below describe older benchmark
+> runs and are not v0.48.0 performance guarantees. Run the repository's
+> current benchmark suite before making a release or workload claim.
+
 Performance claims without reproducible measurements are marketing. This page documents RockLake's benchmarking methodology, presents baseline results from controlled environments, explains how to reproduce benchmarks in your own infrastructure, and provides guidance on interpreting results. Every number on this page comes from automated benchmark suites that you can run yourself.
 
 The goal of benchmarking is not to produce impressive numbers for a slide deck. The goal is to characterize the system's behavior so that operators can predict performance for their specific workload and deployment configuration. Accordingly, this page includes both best-case numbers (warm cache, co-located, S3 Express) and realistic numbers (mixed cache state, S3 Standard, typical production conditions).

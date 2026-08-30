@@ -85,7 +85,7 @@ RockLake provides three mechanisms for managing catalog growth without violating
 
 ### Visibility GC (Logical Deletion)
 
-The `rocklake gc advance` command moves the `retain-from` horizon forward. After advancement, queries at snapshot IDs older than the new horizon return a `snapshot-out-of-retention-window` error instead of results. However, the actual bytes are still in the object store — the GC only changes the visibility boundary, not the physical storage.
+The `rocklake gc apply` command moves the `retain-from` horizon forward. After advancement, queries at snapshot IDs older than the new horizon return a `snapshot-out-of-retention-window` error instead of results. However, the actual bytes are still in the object store — the GC only changes the visibility boundary, not the physical storage.
 
 This is safe and reversible: if you advance `retain-from` from snapshot 100 to snapshot 500, and then realize you need to query at snapshot 200, you can reset the horizon back to 200 (as long as excision has not been run) and the data is still there.
 
@@ -111,7 +111,7 @@ This consistency model is analogous to PostgreSQL's MVCC (which also uses begin/
 
 To summarize, RockLake makes the following binding commitment to its operators:
 
-1. **Committed catalog facts are never physically deleted by normal operation.** Normal operation includes all `rocklake serve` activity, all DuckDB client operations, and all `rocklake gc advance` operations.
+1. **Committed catalog facts are never physically deleted by normal operation.** Normal operation includes all `rocklake serve` activity, all DuckDB client operations, and all `rocklake gc apply` operations.
 
 2. **Physical deletion only occurs through explicit `rocklake excise` commands.** Excision requires operator authentication, a stated reason, safety-check validation, and produces a permanent audit entry.
 

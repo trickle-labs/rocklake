@@ -22,7 +22,7 @@ use std::convert::TryFrom;
 use napi::{Env, JsBigInt};
 use napi_derive::napi;
 
-use rocklake_client::CatalogClientSync;
+use rocklake_client::{CatalogClientSync, SnapshotId, SnapshotRef};
 
 // ─── Value types ───────────────────────────────────────────────────────────
 
@@ -68,8 +68,7 @@ pub struct DataFile {
 /// const { Catalog } = require('@rocklake/client');
 ///
 /// const cat = Catalog.open('/path/to/catalog');
-/// const snap = cat.snapshotId();
-/// const schemas = cat.listSchemas(snap);
+/// const schemas = cat.listSchemasLatest();
 /// cat.close();
 /// ```
 #[napi]
@@ -116,7 +115,7 @@ impl Catalog {
         })
     }
 
-    /// List schemas at *snapshotId* (0 = latest).
+    /// List schemas at the exact *snapshotId*.
     #[napi]
     pub fn list_schemas(&self, env: Env, snapshot_id: JsBigInt) -> napi::Result<Vec<Schema>> {
         let snapshot_id = u64::try_from(snapshot_id).map_err(|_| {
@@ -124,7 +123,7 @@ impl Catalog {
         })?;
         let schemas = self
             .client()?
-            .list_schemas(snapshot_id)
+            .list_schemas(SnapshotRef::At(SnapshotId::new(snapshot_id)))
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(schemas
             .into_iter()
@@ -135,9 +134,36 @@ impl Catalog {
             .collect())
     }
 
+    /// List schemas at the latest committed snapshot.
+    #[napi]
+    pub fn list_schemas_latest(&self, env: Env) -> napi::Result<Vec<Schema>> {
+        let schemas = self
+            .client()?
+            .list_schemas(SnapshotRef::Latest)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(schemas
+            .into_iter()
+            .map(|s| Schema {
+                schema_id: env.create_bigint_from_u64(s.schema_id).unwrap(),
+                schema_name: s.schema_name,
+            })
+            .collect())
+    }
+
+    /// List schemas at an exact *snapshotId*.
+    #[napi]
+    pub fn list_schemas_at(&self, env: Env, snapshot_id: JsBigInt) -> napi::Result<Vec<Schema>> {
+        self.list_schemas(env, snapshot_id)
+    }
+
     /// List tables in *schemaId* at *snapshotId*.
     #[napi]
-    pub fn list_tables(&self, env: Env, schema_id: JsBigInt, snapshot_id: JsBigInt) -> napi::Result<Vec<Table>> {
+    pub fn list_tables(
+        &self,
+        env: Env,
+        schema_id: JsBigInt,
+        snapshot_id: JsBigInt,
+    ) -> napi::Result<Vec<Table>> {
         let schema_id = u64::try_from(schema_id).map_err(|_| {
             napi::Error::from_reason("schema_id must be a non-negative, lossless BigInt")
         })?;
@@ -146,7 +172,7 @@ impl Catalog {
         })?;
         let tables = self
             .client()?
-            .list_tables(schema_id, snapshot_id)
+            .list_tables(schema_id, SnapshotRef::At(SnapshotId::new(snapshot_id)))
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(tables
             .into_iter()
@@ -158,9 +184,45 @@ impl Catalog {
             .collect())
     }
 
+    /// List tables in *schemaId* at the latest committed snapshot.
+    #[napi]
+    pub fn list_tables_latest(&self, env: Env, schema_id: JsBigInt) -> napi::Result<Vec<Table>> {
+        let schema_id = u64::try_from(schema_id).map_err(|_| {
+            napi::Error::from_reason("schema_id must be a non-negative, lossless BigInt")
+        })?;
+        let tables = self
+            .client()?
+            .list_tables(schema_id, SnapshotRef::Latest)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(tables
+            .into_iter()
+            .map(|t| Table {
+                table_id: env.create_bigint_from_u64(t.table_id).unwrap(),
+                schema_id: env.create_bigint_from_u64(t.schema_id).unwrap(),
+                table_name: t.table_name,
+            })
+            .collect())
+    }
+
+    /// List tables in *schemaId* at an exact *snapshotId*.
+    #[napi]
+    pub fn list_tables_at(
+        &self,
+        env: Env,
+        schema_id: JsBigInt,
+        snapshot_id: JsBigInt,
+    ) -> napi::Result<Vec<Table>> {
+        self.list_tables(env, schema_id, snapshot_id)
+    }
+
     /// List data files for *tableId* at *snapshotId*.
     #[napi]
-    pub fn list_data_files(&self, env: Env, table_id: JsBigInt, snapshot_id: JsBigInt) -> napi::Result<Vec<DataFile>> {
+    pub fn list_data_files(
+        &self,
+        env: Env,
+        table_id: JsBigInt,
+        snapshot_id: JsBigInt,
+    ) -> napi::Result<Vec<DataFile>> {
         let table_id = u64::try_from(table_id).map_err(|_| {
             napi::Error::from_reason("table_id must be a non-negative, lossless BigInt")
         })?;
@@ -169,7 +231,7 @@ impl Catalog {
         })?;
         let files = self
             .client()?
-            .list_data_files(table_id, snapshot_id)
+            .list_data_files(table_id, SnapshotRef::At(SnapshotId::new(snapshot_id)))
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(files
             .into_iter()
@@ -185,6 +247,45 @@ impl Catalog {
             .collect())
     }
 
+    /// List data files for *tableId* at the latest committed snapshot.
+    #[napi]
+    pub fn list_data_files_latest(
+        &self,
+        env: Env,
+        table_id: JsBigInt,
+    ) -> napi::Result<Vec<DataFile>> {
+        let table_id = u64::try_from(table_id).map_err(|_| {
+            napi::Error::from_reason("table_id must be a non-negative, lossless BigInt")
+        })?;
+        let files = self
+            .client()?
+            .list_data_files(table_id, SnapshotRef::Latest)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(files
+            .into_iter()
+            .map(|f| DataFile {
+                data_file_id: env.create_bigint_from_u64(f.data_file_id).unwrap(),
+                table_id: env.create_bigint_from_u64(f.table_id).unwrap(),
+                path: f.path,
+                file_format: f.file_format,
+                row_count: env.create_bigint_from_u64(f.row_count).unwrap(),
+                file_size_bytes: env.create_bigint_from_u64(f.file_size_bytes).unwrap(),
+                snapshot_id: env.create_bigint_from_u64(f.snapshot_id).unwrap(),
+            })
+            .collect())
+    }
+
+    /// List data files for *tableId* at an exact *snapshotId*.
+    #[napi]
+    pub fn list_data_files_at(
+        &self,
+        env: Env,
+        table_id: JsBigInt,
+        snapshot_id: JsBigInt,
+    ) -> napi::Result<Vec<DataFile>> {
+        self.list_data_files(env, table_id, snapshot_id)
+    }
+
     /// Close the catalog.
     #[napi]
     pub fn close(&mut self) {
@@ -196,8 +297,8 @@ impl Catalog {
 
 impl Catalog {
     fn client(&self) -> napi::Result<&CatalogClientSync> {
-        self.inner.as_ref().ok_or_else(|| {
-            napi::Error::from_reason("catalog has been closed".to_string())
-        })
+        self.inner
+            .as_ref()
+            .ok_or_else(|| napi::Error::from_reason("catalog has been closed".to_string()))
     }
 }

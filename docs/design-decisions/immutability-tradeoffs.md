@@ -84,7 +84,7 @@ For a much larger catalog (10,000 tables, 500,000 columns, 1,000 changes per day
 
 Still negligible. Storage costs become meaningful only at extreme scales (100,000+ tables with thousands of daily mutations for years without GC).
 
-**Mitigation:** Run `rocklake gc --retain-days 30` to advance the retention horizon. This makes old versions inaccessible via time travel but does not physically delete them. Run `rocklake excise` periodically to physically remove superseded rows beyond the retention horizon. For most catalogs, monthly GC with 30-day retention keeps storage growth well-bounded.
+**Mitigation:** Run `rocklake gc apply --retention-days 30` to advance the retention horizon. This makes old versions inaccessible via time travel but does not physically delete them. Run `rocklake excise apply --before N` only when physical removal is required.
 
 ### 2. Read Amplification (Scan Overhead)
 
@@ -112,8 +112,8 @@ At ~150 bytes per row, reading 500 rows means reading 75 KB from SlateDB. With a
 
 Operators must understand and manage the two-phase GC process:
 
-1. **Advance retention:** `rocklake gc --retain-days 30` moves the `retain_from` marker forward
-2. **Excise (optional):** `rocklake excise --before-snapshot N` physically removes old versions
+1. **Advance retention:** `rocklake gc apply --retention-days 30` moves the `retain_from` marker forward
+2. **Excise (optional):** `rocklake excise apply --before N` physically removes old versions
 
 This is an additional operational task that PostgreSQL-backed DuckLake does not require (PostgreSQL has automatic VACUUM).
 
@@ -127,11 +127,11 @@ This is an additional operational task that PostgreSQL-backed DuckLake does not 
 | Failure mode | Unbounded growth if GC never runs | Table bloat if vacuum is blocked |
 | Recovery from failure | Run GC (catches up instantly) | Vacuum may take hours for large tables |
 
-**Mitigation:** GC can be automated via a cron job or Kubernetes CronJob. A single daily command (`rocklake gc --retain-days 30`) is sufficient for most catalogs. The operational burden is comparable to (not worse than) managing PostgreSQL's autovacuum.
+**Mitigation:** GC can be automated with a host process supervisor. A single daily command (`rocklake gc apply --retention-days 30`) is sufficient for most catalogs.
 
 ### 4. No True Immediate Delete
 
-You cannot immediately and permanently remove a catalog entry. Even after `gc --retain-days 0 && excise`, there is a brief window where the data exists in SlateDB's WAL or SST files before compaction removes it.
+You cannot immediately and permanently remove a catalog entry. Even after `gc apply --retention-days 0` and `excise apply --before N`, there is a brief window where the data exists in SlateDB's WAL or SST files before compaction removes it.
 
 **Quantifying the window:**
 

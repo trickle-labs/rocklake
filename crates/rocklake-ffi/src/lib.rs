@@ -549,22 +549,23 @@ pub extern "C" fn rocklake_get_current_snapshot(
     }
 }
 
-/// List schemas at a given snapshot.
-#[no_mangle]
-pub extern "C" fn rocklake_list_schemas(
+fn list_schemas_impl(
     catalog: *mut RockLakeCatalog,
-    snapshot_id: u64,
+    snapshot_id: Option<u64>,
     err: *mut RockLakeError,
 ) -> RockLakeSchemaList {
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
             // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-            let reader = cat
-                .store
-                .as_ref()
-                .unwrap()
-                .read_at(SnapshotId::new(snapshot_id))?;
+            let reader = match snapshot_id {
+                Some(snapshot_id) => cat
+                    .store
+                    .as_ref()
+                    .unwrap()
+                    .read_at(SnapshotId::new(snapshot_id))?,
+                None => cat.store.as_ref().unwrap().read_latest(),
+            };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
                 .as_ref()
@@ -608,23 +609,54 @@ pub extern "C" fn rocklake_list_schemas(
     }
 }
 
-/// List tables in a schema at a given snapshot.
+/// List schemas at an exact snapshot ID.
 #[no_mangle]
-pub extern "C" fn rocklake_list_tables(
+pub extern "C" fn rocklake_list_schemas(
+    catalog: *mut RockLakeCatalog,
+    snapshot_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeSchemaList {
+    list_schemas_impl(catalog, Some(snapshot_id), err)
+}
+
+/// List schemas at an exact snapshot ID.
+#[no_mangle]
+pub extern "C" fn rocklake_list_schemas_at(
+    catalog: *mut RockLakeCatalog,
+    snapshot_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeSchemaList {
+    list_schemas_impl(catalog, Some(snapshot_id), err)
+}
+
+/// List schemas at the latest committed snapshot.
+#[no_mangle]
+pub extern "C" fn rocklake_list_schemas_latest(
+    catalog: *mut RockLakeCatalog,
+    err: *mut RockLakeError,
+) -> RockLakeSchemaList {
+    list_schemas_impl(catalog, None, err)
+}
+
+/// List tables in a schema at a given snapshot.
+fn list_tables_impl(
     catalog: *mut RockLakeCatalog,
     schema_id: u64,
-    snapshot_id: u64,
+    snapshot_id: Option<u64>,
     err: *mut RockLakeError,
 ) -> RockLakeTableList {
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
             // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-            let reader = cat
-                .store
-                .as_ref()
-                .unwrap()
-                .read_at(SnapshotId::new(snapshot_id))?;
+            let reader = match snapshot_id {
+                Some(snapshot_id) => cat
+                    .store
+                    .as_ref()
+                    .unwrap()
+                    .read_at(SnapshotId::new(snapshot_id))?,
+                None => cat.store.as_ref().unwrap().read_latest(),
+            };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
                 .as_ref()
@@ -669,23 +701,57 @@ pub extern "C" fn rocklake_list_tables(
     }
 }
 
-/// Describe a table (get columns) at a given snapshot.
+/// List tables in a schema at an exact snapshot ID.
 #[no_mangle]
-pub extern "C" fn rocklake_describe_table(
+pub extern "C" fn rocklake_list_tables(
+    catalog: *mut RockLakeCatalog,
+    schema_id: u64,
+    snapshot_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeTableList {
+    list_tables_impl(catalog, schema_id, Some(snapshot_id), err)
+}
+
+/// List tables in a schema at an exact snapshot ID.
+#[no_mangle]
+pub extern "C" fn rocklake_list_tables_at(
+    catalog: *mut RockLakeCatalog,
+    schema_id: u64,
+    snapshot_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeTableList {
+    list_tables_impl(catalog, schema_id, Some(snapshot_id), err)
+}
+
+/// List tables in a schema at the latest committed snapshot.
+#[no_mangle]
+pub extern "C" fn rocklake_list_tables_latest(
+    catalog: *mut RockLakeCatalog,
+    schema_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeTableList {
+    list_tables_impl(catalog, schema_id, None, err)
+}
+
+/// Describe a table (get columns) at a given snapshot.
+fn describe_table_impl(
     catalog: *mut RockLakeCatalog,
     table_id: u64,
-    snapshot_id: u64,
+    snapshot_id: Option<u64>,
     err: *mut RockLakeError,
 ) -> RockLakeColumnList {
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
             // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-            let reader = cat
-                .store
-                .as_ref()
-                .unwrap()
-                .read_at(SnapshotId::new(snapshot_id))?;
+            let reader = match snapshot_id {
+                Some(snapshot_id) => cat
+                    .store
+                    .as_ref()
+                    .unwrap()
+                    .read_at(SnapshotId::new(snapshot_id))?,
+                None => cat.store.as_ref().unwrap().read_latest(),
+            };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
                 .as_ref()
@@ -745,23 +811,57 @@ pub extern "C" fn rocklake_describe_table(
     }
 }
 
-/// List data files for a table at a given snapshot.
+/// Describe a table's columns at an exact snapshot ID.
 #[no_mangle]
-pub extern "C" fn rocklake_list_data_files(
+pub extern "C" fn rocklake_describe_table(
     catalog: *mut RockLakeCatalog,
     table_id: u64,
     snapshot_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeColumnList {
+    describe_table_impl(catalog, table_id, Some(snapshot_id), err)
+}
+
+/// Describe a table's columns at an exact snapshot ID.
+#[no_mangle]
+pub extern "C" fn rocklake_describe_table_at(
+    catalog: *mut RockLakeCatalog,
+    table_id: u64,
+    snapshot_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeColumnList {
+    describe_table_impl(catalog, table_id, Some(snapshot_id), err)
+}
+
+/// Describe a table's columns at the latest committed snapshot.
+#[no_mangle]
+pub extern "C" fn rocklake_describe_table_latest(
+    catalog: *mut RockLakeCatalog,
+    table_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeColumnList {
+    describe_table_impl(catalog, table_id, None, err)
+}
+
+/// List data files for a table at a given snapshot.
+fn list_data_files_impl(
+    catalog: *mut RockLakeCatalog,
+    table_id: u64,
+    snapshot_id: Option<u64>,
     err: *mut RockLakeError,
 ) -> RockLakeFileList {
     let inner = with_catalog(
         catalog,
         |cat| -> rocklake_catalog::error::CatalogResult<_> {
             // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-            let reader = cat
-                .store
-                .as_ref()
-                .unwrap()
-                .read_at(SnapshotId::new(snapshot_id))?;
+            let reader = match snapshot_id {
+                Some(snapshot_id) => cat
+                    .store
+                    .as_ref()
+                    .unwrap()
+                    .read_at(SnapshotId::new(snapshot_id))?,
+                None => cat.store.as_ref().unwrap().read_latest(),
+            };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
                 .as_ref()
@@ -808,6 +908,38 @@ pub extern "C" fn rocklake_list_data_files(
             }
         }
     }
+}
+
+/// List data files for a table at an exact snapshot ID.
+#[no_mangle]
+pub extern "C" fn rocklake_list_data_files(
+    catalog: *mut RockLakeCatalog,
+    table_id: u64,
+    snapshot_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeFileList {
+    list_data_files_impl(catalog, table_id, Some(snapshot_id), err)
+}
+
+/// List data files for a table at an exact snapshot ID.
+#[no_mangle]
+pub extern "C" fn rocklake_list_data_files_at(
+    catalog: *mut RockLakeCatalog,
+    table_id: u64,
+    snapshot_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeFileList {
+    list_data_files_impl(catalog, table_id, Some(snapshot_id), err)
+}
+
+/// List data files for a table at the latest committed snapshot.
+#[no_mangle]
+pub extern "C" fn rocklake_list_data_files_latest(
+    catalog: *mut RockLakeCatalog,
+    table_id: u64,
+    err: *mut RockLakeError,
+) -> RockLakeFileList {
+    list_data_files_impl(catalog, table_id, None, err)
 }
 
 // ─── Free Functions ────────────────────────────────────────────────────────

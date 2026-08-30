@@ -21,25 +21,45 @@ class RockLakeCatalogAsync(private val catalog: RockLakeCatalog) : AutoCloseable
     /**
      * Lists data files asynchronously.
      */
-    suspend fun listDataFiles(tableId: String, snapshotId: Long = -1L): List<DataFileRow> = 
+    suspend fun listDataFiles(tableId: String): List<DataFileRow> =
         withContext(Dispatchers.IO) {
-            if (snapshotId < 0) {
-                catalog.listDataFiles(tableId)
-            } else {
-                catalog.listDataFiles(tableId, snapshotId)
-            }
+            catalog.listDataFiles(tableId)
+        }
+
+    /** Lists data files asynchronously at the selected snapshot. */
+    suspend fun listDataFiles(
+        tableId: String,
+        snapshot: RockLakeCatalog.SnapshotRef
+    ): List<DataFileRow> = withContext(Dispatchers.IO) {
+        catalog.listDataFiles(tableId, snapshot)
+    }
+
+    /** Lists data files asynchronously at an exact snapshot ID. */
+    suspend fun listDataFilesAt(tableId: String, snapshotId: Long): List<DataFileRow> =
+        withContext(Dispatchers.IO) {
+            catalog.listDataFiles(tableId, snapshotId)
         }
 
     /**
      * Describes a table asynchronously.
      */
-    suspend fun describeTable(tableId: String, snapshotId: Long = -1L): List<ColumnRow> =
+    suspend fun describeTable(tableId: String): List<ColumnRow> =
         withContext(Dispatchers.IO) {
-            if (snapshotId < 0) {
-                catalog.describeTable(tableId)
-            } else {
-                catalog.describeTable(tableId, snapshotId)
-            }
+            catalog.describeTable(tableId)
+        }
+
+    /** Describes a table asynchronously at the selected snapshot. */
+    suspend fun describeTable(
+        tableId: String,
+        snapshot: RockLakeCatalog.SnapshotRef
+    ): List<ColumnRow> = withContext(Dispatchers.IO) {
+        catalog.describeTable(tableId, snapshot)
+    }
+
+    /** Describes a table asynchronously at an exact snapshot ID. */
+    suspend fun describeTableAt(tableId: String, snapshotId: Long): List<ColumnRow> =
+        withContext(Dispatchers.IO) {
+            catalog.describeTable(tableId, snapshotId)
         }
 
     /**

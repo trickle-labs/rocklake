@@ -8,8 +8,7 @@
 //	}
 //	defer cat.Close()
 //
-//	snapID, err := cat.SnapshotID()
-//	schemas, err := cat.ListSchemas(snapID)
+//	schemas, err := cat.ListSchemasLatest()
 //
 // The Go functions wrap the rocklake_* C functions declared in rocklake.h via
 // cgo.  Pre-built static libraries for each platform are distributed as GitHub
@@ -57,6 +56,22 @@ type DataFile struct {
 // Catalog is an open RockLake catalog handle.
 type Catalog struct {
 	ptr *C.rocklake_catalog_t
+}
+
+// SnapshotRef selects the latest committed snapshot or an exact snapshot ID.
+type SnapshotRef struct {
+	latest bool
+	id     uint64
+}
+
+// LatestSnapshot selects the latest committed snapshot.
+func LatestSnapshot() SnapshotRef {
+	return SnapshotRef{latest: true}
+}
+
+// AtSnapshot selects an exact snapshot ID. Snapshot ID 0 is an exact ID.
+func AtSnapshot(id uint64) SnapshotRef {
+	return SnapshotRef{id: id}
 }
 
 // Open opens (or creates) a RockLake catalog at uri.
@@ -120,10 +135,15 @@ func (c *Catalog) SnapshotID() (uint64, error) {
 	return uint64(snap.snapshot_id), nil
 }
 
-// ListSchemas returns all schemas visible at snapshotID.
-func (c *Catalog) ListSchemas(snapshotID uint64) ([]Schema, error) {
+// ListSchemas returns all schemas visible at snapshot.
+func (c *Catalog) ListSchemas(snapshot SnapshotRef) ([]Schema, error) {
 	var err C.rocklake_error_t
-	list := C.rocklake_list_schemas(c.ptr, C.uint64_t(snapshotID), &err)
+	var list C.rocklake_schema_list_t
+	if snapshot.latest {
+		list = C.rocklake_list_schemas_latest(c.ptr, &err)
+	} else {
+		list = C.rocklake_list_schemas_at(c.ptr, C.uint64_t(snapshot.id), &err)
+	}
 	defer C.rocklake_error_free(&err)
 	defer C.rocklake_schema_list_free(&list)
 
@@ -147,10 +167,25 @@ func (c *Catalog) ListSchemas(snapshotID uint64) ([]Schema, error) {
 	return schemas, nil
 }
 
-// ListTables returns all tables in schemaID visible at snapshotID.
-func (c *Catalog) ListTables(schemaID, snapshotID uint64) ([]Table, error) {
+// ListSchemasLatest returns all schemas visible at the latest snapshot.
+func (c *Catalog) ListSchemasLatest() ([]Schema, error) {
+	return c.ListSchemas(LatestSnapshot())
+}
+
+// ListSchemasAt returns all schemas visible at an exact snapshot ID.
+func (c *Catalog) ListSchemasAt(snapshotID uint64) ([]Schema, error) {
+	return c.ListSchemas(AtSnapshot(snapshotID))
+}
+
+// ListTables returns all tables in schemaID visible at snapshot.
+func (c *Catalog) ListTables(schemaID uint64, snapshot SnapshotRef) ([]Table, error) {
 	var err C.rocklake_error_t
-	list := C.rocklake_list_tables(c.ptr, C.uint64_t(schemaID), C.uint64_t(snapshotID), &err)
+	var list C.rocklake_table_list_t
+	if snapshot.latest {
+		list = C.rocklake_list_tables_latest(c.ptr, C.uint64_t(schemaID), &err)
+	} else {
+		list = C.rocklake_list_tables_at(c.ptr, C.uint64_t(schemaID), C.uint64_t(snapshot.id), &err)
+	}
 	defer C.rocklake_error_free(&err)
 	defer C.rocklake_table_list_free(&list)
 
@@ -175,10 +210,25 @@ func (c *Catalog) ListTables(schemaID, snapshotID uint64) ([]Table, error) {
 	return tables, nil
 }
 
-// ListDataFiles returns all data files for tableID visible at snapshotID.
-func (c *Catalog) ListDataFiles(tableID, snapshotID uint64) ([]DataFile, error) {
+// ListTablesLatest returns all tables in schemaID at the latest snapshot.
+func (c *Catalog) ListTablesLatest(schemaID uint64) ([]Table, error) {
+	return c.ListTables(schemaID, LatestSnapshot())
+}
+
+// ListTablesAt returns all tables in schemaID at an exact snapshot ID.
+func (c *Catalog) ListTablesAt(schemaID, snapshotID uint64) ([]Table, error) {
+	return c.ListTables(schemaID, AtSnapshot(snapshotID))
+}
+
+// ListDataFiles returns all data files for tableID visible at snapshot.
+func (c *Catalog) ListDataFiles(tableID uint64, snapshot SnapshotRef) ([]DataFile, error) {
 	var err C.rocklake_error_t
-	list := C.rocklake_list_data_files(c.ptr, C.uint64_t(tableID), C.uint64_t(snapshotID), &err)
+	var list C.rocklake_file_list_t
+	if snapshot.latest {
+		list = C.rocklake_list_data_files_latest(c.ptr, C.uint64_t(tableID), &err)
+	} else {
+		list = C.rocklake_list_data_files_at(c.ptr, C.uint64_t(tableID), C.uint64_t(snapshot.id), &err)
+	}
 	defer C.rocklake_error_free(&err)
 	defer C.rocklake_file_list_free(&list)
 
@@ -205,6 +255,16 @@ func (c *Catalog) ListDataFiles(tableID, snapshotID uint64) ([]DataFile, error) 
 		}
 	}
 	return files, nil
+}
+
+// ListDataFilesLatest returns all data files for tableID at the latest snapshot.
+func (c *Catalog) ListDataFilesLatest(tableID uint64) ([]DataFile, error) {
+	return c.ListDataFiles(tableID, LatestSnapshot())
+}
+
+// ListDataFilesAt returns all data files for tableID at an exact snapshot ID.
+func (c *Catalog) ListDataFilesAt(tableID, snapshotID uint64) ([]DataFile, error) {
+	return c.ListDataFiles(tableID, AtSnapshot(snapshotID))
 }
 
 // ABIVersion returns the compile-time ABI version constant from the library.

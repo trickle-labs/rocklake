@@ -1,6 +1,9 @@
 # Strategy B First
 
-RockLake supports three deployment strategies: Strategy B (PG-wire sidecar), Strategy C (native DuckDB extension via FFI), and DataFusion integration. The project chose to build and stabilize Strategy B first, even though Strategy C offers better raw performance. This decision reveals deep priorities about how we think about system development: correctness before speed, observability before optimization, and stability before flexibility.
+This historical decision record explains why RockLake built Strategy B (the
+PG-wire sidecar) first. In v0.48.0, the sidecar and embedded client APIs are
+supported; the native DuckDB extension wrapper remains experimental and is not
+a supported deployment path.
 
 This page explains the reasoning, examines the alternatives, and documents the long-term consequences of this prioritization.
 
@@ -141,14 +144,9 @@ Sequential development also avoided the temptation to paper over protocol bugs w
 
 ## Strategy C Status Today
 
-Strategy C (the native extension via `rocklake-ffi`) is implemented and functional. It provides the same catalog operations as Strategy B without network overhead. The implementation was significantly easier because:
-
-1. The catalog logic was already correct and well-tested (via Strategy B)
-2. The operation semantics were precisely defined (by the wire corpus)
-3. Error handling patterns were established (SQLSTATE codes, error categories)
-4. The FFI boundary only needed to wrap existing functionality, not implement new logic
-
-Strategy C is appropriate for deployments where latency is critical, DuckDB and RockLake share a lifecycle, and the operational simplicity of a single process outweighs the debugging benefits of separation.
+The native extension wrapper is experimental and is not published or supported
+in v0.48.0. The stable embedded surface is the C ABI and its language
+bindings; DuckDB should use the PostgreSQL wire sidecar.
 
 ## Lessons Learned
 

@@ -14,7 +14,7 @@ This page defines all terms used throughout the RockLake documentation. If you e
 
 ## B
 
-**Block Cache** — An in-memory cache maintained by SlateDB that stores recently-read SST blocks. Avoids repeated object storage fetches for frequently-accessed data. Configured via `ROCKLAKE_CACHE_SIZE_MB`. Distinct from the hot key cache (which caches specific high-frequency keys).
+**Block Cache** — An in-memory cache maintained by SlateDB that stores recently-read SST blocks. Avoids repeated object storage fetches for frequently-accessed data. Its sizing is managed by SlateDB in v0.48.0.
 
 **Bounded SQL** — RockLake's approach to SQL support: only a finite, enumerated set of SQL statement patterns are recognized. Statements outside this set are rejected with SQLSTATE 42601. This is intentional — RockLake implements the DuckLake protocol, not a general SQL engine. The bounded set covers all SQL patterns that DuckDB's ducklake extension emits.
 
@@ -72,7 +72,7 @@ This page defines all terms used throughout the RockLake documentation. If you e
 
 **Immutability** — The fundamental property that catalog rows, once written to SlateDB, are never modified in place. When an entity is updated (renamed, altered), a NEW row is written with the new values. The old row gets its end_snapshot set (in the same write batch) but is otherwise unchanged. This enables time travel and simplifies concurrency.
 
-**Inlined Data** — Small data (below the inline threshold) that is stored directly within a catalog value rather than as a separate object in storage. This avoids the overhead of a separate storage object for very small payloads. Controlled by `ROCKLAKE_INLINE_THRESHOLD_BYTES`.
+**Inlined Data** — Small data stored directly within a catalog value rather than as a separate object in storage. DuckDB controls this with the `DATA_INLINING_ROW_LIMIT` attach option.
 
 ---
 
@@ -130,13 +130,20 @@ This page defines all terms used throughout the RockLake documentation. If you e
 
 **SST (Sorted String Table)** — An immutable, sorted file containing key-value pairs in key order. Written by SlateDB during memtable flush and compaction. SST files are the "permanent" storage format (vs. WAL segments which are temporary). SST files are stored as individual objects in S3/GCS/Azure.
 
-**Strategy B** — One of two deployment strategies for RockLake. Strategy B runs RockLake as a standalone process (sidecar) that DuckDB connects to over the PostgreSQL wire protocol (TCP). This is the primary deployment mode.
+**Strategy B** — The primary supported deployment for RockLake. Strategy B
+runs RockLake as a standalone process (sidecar) that DuckDB connects to over
+the PostgreSQL wire protocol (TCP).
 
 **Strategy C** — The legacy name for the native DuckDB extension deployment strategy. Renamed to **Native DuckDB Extension** in v0.35.0. See *Native DuckDB Extension* and *Embedded Client Library*.
 
-**Native DuckDB Extension** — Deployment strategy (formerly Strategy C) where RockLake runs as a native DuckDB extension (`.duckdb_extension` shared library loaded into the DuckDB process). Catalog operations are in-process function calls rather than network round-trips. Lower latency but tighter coupling. Builds on the stable `rocklake.h` C ABI introduced in v0.35.0.
+**Native DuckDB Extension** — The former Strategy C deployment idea. The
+repository contains an experimental wrapper, but it is not a supported or
+published v0.48.0 deployment. Use the PostgreSQL wire sidecar instead.
 
-**Embedded Client Library** — A universal C ABI (`rocklake.h`) and language bindings (Rust via `rocklake-client`, Python via PyO3, Go via cgo, Node.js via napi-rs) for embedding the RockLake catalog client in any language ecosystem without a PG-wire sidecar. DuckDB is a consumer but not the only one. Introduced in v0.35.0; provides the foundation for the Native DuckDB Extension (v0.36.0).
+**Embedded Client Library** — A universal C ABI (`rocklake.h`) and language
+bindings (Rust via `rocklake-client`, Python via PyO3, Go via cgo, Node.js via
+napi-rs) for embedding the RockLake catalog client in an application without a
+PG-wire sidecar. It is a catalog client API, not a DuckDB extension.
 
 ---
 

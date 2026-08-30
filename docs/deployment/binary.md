@@ -53,7 +53,7 @@ Verify the installation:
 
 ```bash
 rocklake --version
-# RockLake v0.8.0
+# RockLake v0.48.0
 ```
 
 ### Building from Source
@@ -102,7 +102,7 @@ The process runs in the foreground by default, logging to stderr. For background
 ### Common Flags
 
 ```bash
-rocklake \
+rocklake serve \
     --catalog s3://bucket/catalog/ \   # Required: where to store catalog data
     --bind 0.0.0.0:5432 \             # Listen address and port (default: 127.0.0.1:5432)
     --tls-cert /path/to/cert.pem \    # Optional: TLS certificate
@@ -110,7 +110,6 @@ rocklake \
     --auth-user ducklake \             # Optional: require username
     --auth-password "$PASSWORD" \      # Optional: require password
     --max-sessions 100 \              # Optional: max concurrent connections (default: 50)
-    --log-level info                  # Optional: log verbosity (default: info)
 ```
 
 ## systemd Service (Linux Production)
@@ -136,13 +135,13 @@ Wants=network-online.target
 Type=simple
 User=rocklake
 Group=rocklake
-ExecStart=/usr/local/bin/rocklake \
+ExecStart=/usr/local/bin/rocklake serve \
     --catalog s3://my-lakehouse-bucket/catalog/ \
     --bind 0.0.0.0:5432 \
     --tls-cert /etc/rocklake/tls/cert.pem \
     --tls-key /etc/rocklake/tls/key.pem \
     --auth-user ducklake \
-    --auth-password ${ROCKLAKE_PASSWORD}
+    --auth-password ${ROCKLAKE_AUTH_PASSWORD}
 
 # Restart behavior
 Restart=always
@@ -191,7 +190,7 @@ Store sensitive configuration in `/etc/rocklake/env` with restricted permissions
 
 ```bash
 # /etc/rocklake/env (chmod 600, owned by root)
-ROCKLAKE_PASSWORD=your-secure-password-here
+ROCKLAKE_AUTH_PASSWORD=your-secure-password-here
 AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
 AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 ```
@@ -210,7 +209,8 @@ For macOS production or development servers, create a launchd plist at `~/Librar
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/rocklake</string>
-        <string>--storage</string>
+        <string>serve</string>
+        <string>--catalog</string>
         <string>s3://my-bucket/catalog/</string>
         <string>--bind</string>
         <string>127.0.0.1:5432</string>
@@ -417,6 +417,6 @@ Do not grant `s3:*` or full bucket access. RockLake does not need access to data
 ## Further Reading
 
 - **[Configuration](configuration.md)** — Full reference for all configuration options
-- **[Docker](docker.md)** — Container-based deployment as an alternative
+- Docker images are not published or supported in v0.48.0.
 - **[High Availability](high-availability.md)** — Running with failover for uptime SLAs
 - **[Operations: Health Checks](../operations/health-checks.md)** — Detailed monitoring integration

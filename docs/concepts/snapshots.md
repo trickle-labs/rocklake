@@ -105,7 +105,7 @@ While infinite time travel is the default, operators can choose to limit how far
 
 ```bash
 # Set the query horizon to 30 days ago
-rocklake gc advance --retain-days 30 --catalog s3://bucket/catalog/
+rocklake gc apply --retention-days 30 --catalog s3://bucket/catalog/
 ```
 
 After this command, queries at snapshots older than 30 days return an error:
@@ -131,13 +131,13 @@ Sometimes you need to prevent the retention horizon from advancing past a specif
 RockLake supports pinned snapshots for this use case:
 
 ```bash
-rocklake pin-snapshot --catalog s3://bucket/catalog/ --snapshot-id 42 --reason "Quarterly audit"
+rocklake checkpoint pin --catalog s3://bucket/catalog/ --snapshot 42 --name quarterly-audit
 ```
 
-A pinned snapshot prevents `gc advance` from moving `retain-from` past snapshot 42. The pin must be explicitly removed when no longer needed:
+A pinned snapshot prevents `gc apply` from moving `retain-from` past snapshot 42. The pin must be explicitly removed when no longer needed:
 
 ```bash
-rocklake unpin-snapshot --catalog s3://bucket/catalog/ --snapshot-id 42
+rocklake checkpoint unpin --catalog s3://bucket/catalog/ --name quarterly-audit
 ```
 
 Pinned snapshots also block excision: `rocklake excise` will refuse to remove data that a pinned snapshot might need. This ensures that pinned snapshots remain fully queryable regardless of GC activity.
@@ -148,11 +148,11 @@ To travel to a specific point in time, you need to know the snapshot ID. RockLak
 
 ```sql
 -- List all snapshots with their timestamps
-SELECT * FROM ducklake_snapshots();
+SELECT * FROM ducklake_snapshots('techmart');
 
 -- Find snapshots from a specific date range
 SELECT snapshot_id, snapshot_time
-FROM ducklake_snapshots()
+FROM ducklake_snapshots('techmart')
 WHERE snapshot_time BETWEEN '2024-06-01' AND '2024-06-30'
 ORDER BY snapshot_id;
 

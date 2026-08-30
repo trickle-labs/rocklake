@@ -16,7 +16,7 @@ Over the next several months, the business will evolve: new columns will be need
 
 ## Setting Up the Environment
 
-Start RockLake with local storage for this tutorial. Everything you learn here applies identically to cloud storage — the only difference is the `--storage` path:
+Start RockLake with local storage for this tutorial. Everything you learn here applies identically to cloud storage — the only difference is the `--catalog` URL:
 
 ```bash
 rocklake serve --catalog file:///tmp/techmart-lakehouse --bind 127.0.0.1:5432
@@ -86,7 +86,7 @@ CREATE TABLE raw.order_items (
 Each DDL statement creates a new snapshot. You can verify this:
 
 ```sql
-SELECT snapshot_id, snapshot_time FROM ducklake_snapshots() ORDER BY snapshot_id;
+SELECT snapshot_id, snapshot_time FROM ducklake_snapshots('techmart') ORDER BY snapshot_id;
 ```
 
 You should see 6 snapshots, each representing a state transition in the catalog. Snapshot 1 is the empty catalog, snapshot 2 has the schemas, and snapshots 3–6 each add a table.
@@ -216,7 +216,7 @@ The critical insight: nothing was overwritten. Every previous state of the catal
 Now let's use time travel to see the catalog at different points in history. First, find out what snapshots exist:
 
 ```sql
-SELECT snapshot_id, snapshot_time FROM ducklake_snapshots() ORDER BY snapshot_id;
+SELECT snapshot_id, snapshot_time FROM ducklake_snapshots('techmart') ORDER BY snapshot_id;
 ```
 
 ### Querying Before Schema Evolution
@@ -338,7 +338,7 @@ This shows you the current snapshot count, storage usage, and retention configur
 
 ```bash
 # Advance the retention horizon to 30 days
-rocklake gc advance --catalog file:///tmp/techmart-lakehouse --retain-days 30
+rocklake gc apply --catalog file:///tmp/techmart-lakehouse --retention-days 30
 ```
 
 After this command:
@@ -361,8 +361,8 @@ Excision deletes key-value pairs from SlateDB that are no longer needed — old 
 Before running GC, you might want to pin specific snapshots that should never be garbage collected — for example, the snapshot at the end of each fiscal quarter:
 
 ```bash
-rocklake pin-snapshot --catalog file:///tmp/techmart-lakehouse --snapshot-id 10 --reason "Q1 2024 close"
-rocklake pin-snapshot --catalog file:///tmp/techmart-lakehouse --snapshot-id 18 --reason "Q2 2024 close"
+rocklake checkpoint pin --catalog file:///tmp/techmart-lakehouse --snapshot 10 --name q1-2024-close
+rocklake checkpoint pin --catalog file:///tmp/techmart-lakehouse --snapshot 18 --name q2-2024-close
 ```
 
 Pinned snapshots are protected from both horizon advancement and excision. They remain queryable indefinitely until explicitly unpinned.
@@ -427,4 +427,4 @@ You now have a solid foundation for working with RockLake. Here are the recommen
 - **For architects:** [Concepts](../concepts/index.md) — Deep understanding of immutability, MVCC, time travel, and scale-out
 - **For operators:** [Operations](../operations/index.md) — Production operational procedures for GC, monitoring, backup, and troubleshooting
 - **For developers:** [Architecture](../architecture/index.md) — How the Rust crates fit together and where to contribute
-- **For deployers:** [Deployment](../deployment/index.md) — Docker, Kubernetes, Lambda, and multi-region patterns
+- **For deployers:** [Deployment](../deployment/index.md) — Supported binary, TLS, authentication, and object-store paths

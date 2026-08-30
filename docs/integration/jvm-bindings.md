@@ -1,44 +1,34 @@
 # JVM Bindings — Java & Kotlin APIs
 
-> RockLake JVM bindings enable native integration with Apache Spark, Flink, and other JVM-based analytics engines without a PG-wire sidecar.
+> RockLake JVM bindings provide a source-built embedded catalog client for Java
+> and Kotlin applications.
 
 ## Overview
 
-The `rocklake-java` Maven artifact exposes the complete `rocklake.h` C ABI via JNI, providing:
+The `rocklake-java` project wraps the `rocklake.h` C ABI via JNA, providing:
 
 - **Type-safe Java API** (`RockLakeCatalog`) for catalog operations
 - **Kotlin coroutine wrapper** (`RockLakeCatalogAsync`) for async operations
 - **Spark 3.5 integration** example for reading Parquet files into DataFrames
 - **Flink streaming source** stub for snapshot-diff-driven ingestion
-- **Multi-platform native libraries** (Linux x86-64/aarch64, macOS arm64, Windows x86-64)
+- **Multi-platform build targets** (Linux x86-64/aarch64, macOS arm64, Windows x86-64)
 
 ---
 
-## Installation
+## Build from source
 
-### Maven
+v0.48.0 does not claim a public Maven publication. Build the project from the
+repository and publish it to a local Maven repository when another local JVM
+project needs it:
 
-Add to your `pom.xml`:
-
-```xml
-<dependency>
-    <groupId>io.trickle</groupId>
-    <artifactId>rocklake-java</artifactId>
-    <version>0.44.0</version>
-</dependency>
+```bash
+cd bindings/java
+./gradlew build
+./gradlew publishToMavenLocal
 ```
 
-### Gradle
-
-Add to your `build.gradle` or `build.gradle.kts`:
-
-```gradle
-dependencies {
-    implementation("io.trickle:rocklake-java:0.44.0")
-}
-```
-
-The Maven artifact includes native libraries for all supported platforms. The `RockLakeNative` class automatically loads the correct library at runtime.
+Then use `io.trickle:rocklake-java:0.48.0` from that local repository. The
+`RockLakeNative` class loads the native library built for the current platform.
 
 ---
 
@@ -314,7 +304,7 @@ try {
 | Error | Cause | Solution |
 |-------|-------|----------|
 | `Catalog is closed` | Attempting operation on closed catalog | Check `isOpen()` before operations |
-| `Failed to load RockLake native library` | Native library not found for platform | Verify Maven artifact includes your platform |
+| `Failed to load RockLake native library` | Native library not found for platform | Verify the local build produced a library for your platform |
 | `Cannot find table` | Table ID does not exist | Use `listTables()` to discover available tables |
 | `Invalid snapshot ID` | Snapshot does not exist | Use `getSnapshot()` to get current snapshot ID |
 
@@ -322,7 +312,7 @@ try {
 
 ## Supported Platforms
 
-The Maven artifact includes native libraries for:
+The source build targets:
 
 | Platform | Architecture | Filename |
 |----------|-------------|----------|
@@ -337,7 +327,7 @@ The Maven artifact includes native libraries for:
 
 ### Prerequisites
 
-- Java Development Kit (JDK) 21 LTS or later
+- Java Development Kit (JDK) 17 or later
 - Rust toolchain (for building native libraries)
 - Gradle or Maven
 

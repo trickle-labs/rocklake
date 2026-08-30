@@ -103,14 +103,14 @@ rocklake/
 │   ├── rocklake-catalog/    # Persistence: read/write operations, GC
 │   ├── rocklake-sql/        # SQL classifier (pattern matching)
 │   ├── rocklake-pgwire/     # PG wire protocol server (binary lives here)
-│   ├── rocklake-ffi/        # C FFI for native DuckDB extension
+│   ├── rocklake-ffi/        # C ABI for embedded catalog clients
 │   ├── rocklake-datafusion/ # DataFusion catalog provider
 ├── tests/
 │   ├── fixtures/             # Wire corpus and test data
 │   └── golden/               # Golden test runner
 ├── docs/                     # Documentation source (MkDocs)
 ├── benchmarks/               # Benchmark results (JSON)
-└── extension/                # DuckDB native extension (C++)
+└── extension/                # Experimental C++ wrapper (not release-supported)
 ```
 
 ### Dependency Graph

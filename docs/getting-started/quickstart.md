@@ -193,7 +193,7 @@ This works because RockLake never overwrites or deletes catalog entries during n
 Stop the RockLake server (Ctrl+C in the first terminal), then inspect the internal state of the catalog using the RockLake CLI:
 
 ```bash
-rocklake inspect snapshot --latest --catalog /tmp/my-lakehouse
+rocklake inspect snapshot --catalog /tmp/my-lakehouse
 ```
 
 Expected output (approximately):

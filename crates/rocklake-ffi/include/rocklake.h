@@ -259,7 +259,7 @@ rocklake_snapshot_t rocklake_get_current_snapshot(
     rocklake_catalog_t *catalog, rocklake_error_t *err);
 
 /**
- * List schemas at a given snapshot.
+ * List schemas at an exact snapshot ID.
  *
  * Nullability: `catalog` must be non-NULL and open. `err` may be NULL.
  * Ownership: returns a heap-allocated `rocklake_schema_list_t`.
@@ -269,7 +269,19 @@ rocklake_schema_list_t rocklake_list_schemas(
     rocklake_catalog_t *catalog, uint64_t snapshot_id, rocklake_error_t *err);
 
 /**
- * List tables in a schema at a given snapshot.
+ * List schemas at an exact snapshot ID.
+ */
+rocklake_schema_list_t rocklake_list_schemas_at(
+    rocklake_catalog_t *catalog, uint64_t snapshot_id, rocklake_error_t *err);
+
+/**
+ * List schemas at the latest committed snapshot.
+ */
+rocklake_schema_list_t rocklake_list_schemas_latest(
+    rocklake_catalog_t *catalog, rocklake_error_t *err);
+
+/**
+ * List tables in a schema at an exact snapshot ID.
  *
  * Nullability: `catalog` must be non-NULL and open. `err` may be NULL.
  * Ownership: returns a heap-allocated `rocklake_table_list_t`.
@@ -280,7 +292,20 @@ rocklake_table_list_t rocklake_list_tables(
     rocklake_error_t *err);
 
 /**
- * Describe a table's columns at a given snapshot.
+ * List tables in a schema at an exact snapshot ID.
+ */
+rocklake_table_list_t rocklake_list_tables_at(
+    rocklake_catalog_t *catalog, uint64_t schema_id, uint64_t snapshot_id,
+    rocklake_error_t *err);
+
+/**
+ * List tables in a schema at the latest committed snapshot.
+ */
+rocklake_table_list_t rocklake_list_tables_latest(
+    rocklake_catalog_t *catalog, uint64_t schema_id, rocklake_error_t *err);
+
+/**
+ * Describe a table's columns at an exact snapshot ID.
  *
  * Nullability: `catalog` must be non-NULL and open. `err` may be NULL.
  * Ownership: returns a heap-allocated `rocklake_column_list_t`.
@@ -291,7 +316,20 @@ rocklake_column_list_t rocklake_describe_table(
     rocklake_error_t *err);
 
 /**
- * List data files for a table at a given snapshot.
+ * Describe a table's columns at an exact snapshot ID.
+ */
+rocklake_column_list_t rocklake_describe_table_at(
+    rocklake_catalog_t *catalog, uint64_t table_id, uint64_t snapshot_id,
+    rocklake_error_t *err);
+
+/**
+ * Describe a table's columns at the latest committed snapshot.
+ */
+rocklake_column_list_t rocklake_describe_table_latest(
+    rocklake_catalog_t *catalog, uint64_t table_id, rocklake_error_t *err);
+
+/**
+ * List data files for a table at an exact snapshot ID.
  *
  * Nullability: `catalog` must be non-NULL and open. `err` may be NULL.
  * Ownership: returns a heap-allocated `rocklake_file_list_t`.
@@ -300,6 +338,19 @@ rocklake_column_list_t rocklake_describe_table(
 rocklake_file_list_t rocklake_list_data_files(
     rocklake_catalog_t *catalog, uint64_t table_id, uint64_t snapshot_id,
     rocklake_error_t *err);
+
+/**
+ * List data files for a table at an exact snapshot ID.
+ */
+rocklake_file_list_t rocklake_list_data_files_at(
+    rocklake_catalog_t *catalog, uint64_t table_id, uint64_t snapshot_id,
+    rocklake_error_t *err);
+
+/**
+ * List data files for a table at the latest committed snapshot.
+ */
+rocklake_file_list_t rocklake_list_data_files_latest(
+    rocklake_catalog_t *catalog, uint64_t table_id, rocklake_error_t *err);
 
 /* ─── Free Functions ───────────────────────────────────────────────────── */
 

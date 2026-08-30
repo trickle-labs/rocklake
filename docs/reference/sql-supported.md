@@ -413,7 +413,7 @@ ROLLBACK
 ### Get Current Snapshot
 
 ```sql
-SELECT MAX(snapshot_id) FROM ducklake_snapshots
+SELECT MAX(snapshot_id) FROM ducklake_snapshots('lake')
 ```
 
 **Maps to:** `CatalogReader::current_snapshot()`
@@ -421,8 +421,8 @@ SELECT MAX(snapshot_id) FROM ducklake_snapshots
 ### List Snapshots
 
 ```sql
-SELECT snapshot_id, timestamp, author, message
-FROM ducklake_snapshots
+SELECT snapshot_id, snapshot_time, changes
+FROM ducklake_snapshots('lake')
 WHERE snapshot_id >= ?
 ORDER BY snapshot_id DESC
 ```

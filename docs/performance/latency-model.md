@@ -1,5 +1,9 @@
 # Latency Model
 
+> Historical reference: the measurements on this page are not a v0.48.0
+> support promise. Native DuckDB extension measurements are excluded because
+> that integration is not supported.
+
 Understanding RockLake's latency requires understanding the complete request path — every layer that a catalog operation passes through, what each layer contributes to total latency, and which layers dominate under different conditions. This page provides a detailed breakdown that will help you predict performance for your deployment configuration and identify optimization opportunities.
 
 The key insight is that RockLake's latency is not one number. It is a sum of components, and the dominant component changes depending on cache state, storage backend, network topology, and catalog size. A cache-hot read in a co-located deployment takes under 2ms. A cache-cold read from S3 Standard across availability zones takes 80ms. Both are "RockLake latency" — but they represent fundamentally different scenarios.
@@ -26,11 +30,10 @@ The first layer is the network between DuckDB and RockLake. DuckDB connects to R
 | Same availability zone | 0.5–2ms | Low |
 | Cross availability zone | 1–5ms | Moderate |
 | Cross region | 20–100ms | High |
-| Native extension (in-process) | 0 | Zero |
 
 **When this dominates:** Cross-region deployments. If DuckDB is in `us-east-1` and RockLake is in `eu-west-1`, every catalog operation pays 60–100ms of network latency regardless of whether the data is cached.
 
-**Optimization:** Co-locate DuckDB and RockLake in the same availability zone. For maximum performance, use the native extension (Strategy C) which eliminates network transport entirely by embedding RockLake in DuckDB's process.
+**Optimization:** Co-locate DuckDB and RockLake in the same availability zone.
 
 ### Layer 2: PostgreSQL Wire Protocol
 
@@ -259,7 +262,6 @@ In order of impact:
 | Switch to S3 Express One Zone | 5–10x on cold reads, 5–10x on writes | Low (config change) |
 | Increase block cache size | Eliminates cold reads (if catalog fits) | Low (config change) |
 | Co-locate in same AZ | 2–5x on network layer | Medium (deployment change) |
-| Use native extension (Strategy C) | Eliminates network entirely | Medium (build change) |
 | Run GC regularly | Reduces scan amplification 2–50x | Low (operational practice) |
 | Use local MinIO for dev | 10–50x on all I/O | Medium (infrastructure) |
 

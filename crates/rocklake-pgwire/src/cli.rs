@@ -149,7 +149,7 @@ pub struct ServeArgs {
     #[arg(long, default_value = "writer", value_parser = ["writer", "reader"])]
     pub mode: String,
 
-    /// Enable read-only mode (alias for `--mode reader`).
+    /// Deprecated compatibility alias for `--mode reader`.
     #[arg(long, action = ArgAction::SetTrue, conflicts_with = "mode")]
     pub read_only: bool,
 
@@ -314,7 +314,7 @@ pub struct CheckpointUnpinArgs {
 #[derive(Debug, Parser)]
 pub struct ExportArgs {
     /// Catalog URL.
-    #[arg(env = "ROCKLAKE_CATALOG")]
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
     pub catalog: String,
 
     /// Output file path.
@@ -331,7 +331,7 @@ pub struct ExportArgs {
 #[derive(Debug, Parser)]
 pub struct ImportArgs {
     /// Catalog URL.
-    #[arg(env = "ROCKLAKE_CATALOG")]
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
     pub catalog: String,
 
     /// Input NDJSON file path.

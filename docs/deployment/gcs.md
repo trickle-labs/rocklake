@@ -6,7 +6,7 @@ Google Cloud Storage (GCS) is a natural choice for RockLake deployments running 
 
 - A Google Cloud project with billing enabled
 - The `gcloud` CLI installed and authenticated (`gcloud auth login`)
-- RockLake binary or Docker image
+- RockLake v0.48.0 binary
 - IAM permissions to create GCS buckets and service accounts (typically `roles/storage.admin` and `roles/iam.admin`)
 
 ## Creating the Bucket
@@ -214,7 +214,6 @@ spec:
       serviceAccountName: rocklake  # The KSA with Workload Identity
       containers:
         - name: rocklake
-          image: ghcr.io/rocklake/rocklake:latest
           args:
             - serve
             - --catalog
@@ -231,7 +230,6 @@ Cloud Run automatically provides ADC credentials via the service account attache
 
 ```bash
 gcloud run deploy rocklake \
-  --image=ghcr.io/rocklake/rocklake:latest \
   --region=us-central1 \
   --service-account=rocklake-catalog@my-project.iam.gserviceaccount.com \
   --args="serve,--catalog,gs://my-lakehouse/catalog/,--bind,0.0.0.0:5432" \

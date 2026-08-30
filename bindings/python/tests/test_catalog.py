@@ -50,7 +50,7 @@ def test_current_snapshot(tmp_path):
 def test_list_schemas_empty(tmp_path):
     rl = import_rocklake()
     cat = rl.RockLakeCatalog.open(str(tmp_path))
-    schemas = cat.list_schemas(0)
+    schemas = cat.list_schemas_latest()
     assert schemas == [], f"expected empty, got {schemas}"
     cat.close()
 
@@ -58,7 +58,7 @@ def test_list_schemas_empty(tmp_path):
 def test_list_tables_empty(tmp_path):
     rl = import_rocklake()
     cat = rl.RockLakeCatalog.open(str(tmp_path))
-    tables = cat.list_tables(1, 0)
+    tables = cat.list_tables_at(1, 0)
     assert tables == []
     cat.close()
 
@@ -66,7 +66,7 @@ def test_list_tables_empty(tmp_path):
 def test_list_data_files_empty(tmp_path):
     rl = import_rocklake()
     cat = rl.RockLakeCatalog.open(str(tmp_path))
-    files = cat.list_data_files(1, 0)
+    files = cat.list_data_files_latest(1)
     assert files == []
     cat.close()
 
@@ -76,7 +76,7 @@ def test_data_file_to_dict(tmp_path):
     rl = import_rocklake()
     cat = rl.RockLakeCatalog.open(str(tmp_path))
     # No files — just verify the method exists and returns an empty list
-    files = cat.list_data_files(1, 0)
+    files = cat.list_data_files_latest(1)
     assert isinstance(files, list)
     cat.close()
 

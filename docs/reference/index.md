@@ -1,8 +1,15 @@
 # Reference
 
-This section provides lookup-oriented reference material for RockLake. Unlike the conceptual documentation (which explains WHY things work the way they do) or the architecture documentation (which explains HOW components fit together), reference pages are designed for quick answers to specific questions. You come here when you need to know what error code 42P01 means, what environment variable controls the cache size, what fields a table row contains, or what SQL patterns DuckDB sends.
+This section provides lookup-oriented reference material for RockLake. Unlike
+the conceptual documentation (which explains why things work the way they do)
+or the architecture documentation (which explains how components fit
+together), reference pages answer questions about the supported v0.48.0
+surface: error codes, catalog fields, environment variables, metrics, and SQL
+patterns.
 
-The reference section is exhaustive rather than instructive. Every supported SQL statement is listed. Every error code is documented. Every environment variable is described. Every metric is named and explained. This is the section you bookmark and return to repeatedly during development, debugging, and operations.
+The reference section is lookup-oriented rather than instructive. It documents
+the current supported surface; historical design notes and release reports
+remain separate from these pages.
 
 ## How to Use This Section
 
@@ -55,7 +62,7 @@ Each page covers a single reference domain:
 | What fields does a table row have? | [Catalog Tables](catalog-tables.md) |
 | What SQL creates a schema? | [Supported SQL](sql-supported.md) |
 | What does error 57P04 mean? | [Error Codes](error-codes.md) |
-| How do I set the cache size? | [Environment Variables](environment-vars.md) |
+| How do I configure metrics? | [Metrics](metrics.md) |
 | What metrics show read latency? | [Metrics](metrics.md) |
 | What is "excision"? | [Glossary](glossary.md) |
 
