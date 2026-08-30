@@ -79,7 +79,7 @@ impl AuthConfig {
 /// Server configuration.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    /// Bind address (default: 0.0.0.0:5432).
+    /// Bind address (default: 127.0.0.1:5432).
     pub bind_addr: SocketAddr,
     /// Maximum concurrent sessions (default: 50).
     pub max_sessions: usize,
@@ -103,7 +103,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind_addr: SocketAddr::from(([0, 0, 0, 0], 5432)),
+            bind_addr: SocketAddr::from(([127, 0, 0, 1], 5432)),
             max_sessions: 50,
             max_active_scans: 25,
             tls: TlsConfig::default(),
@@ -244,13 +244,21 @@ pub async fn run_server_with_shutdown_mode(
         None
     };
 
-    // Warn when auth is enabled but TLS is not: credentials sent in plaintext.
+    // Warn when authenticated connections are not protected by TLS. SCRAM
+    // protects the password, while the explicit cleartext compatibility path
+    // does not.
     if config.auth.is_enabled() && tls_acceptor.is_none() {
-        warn!(
-            "Password authentication is enabled without TLS. Credentials will be sent \
-             in plaintext. Use --tls-cert / --tls-key to enable TLS, or pass \
-             --insecure-no-tls-warning-suppress if this is intentional."
-        );
+        if config.auth.scram_sha256 {
+            warn!(
+                "SCRAM-SHA-256 authentication is enabled without TLS. Use --tls-cert / \
+                 --tls-key to protect the connection and server identity."
+            );
+        } else {
+            warn!(
+                "Cleartext password authentication is enabled without TLS. Credentials will \
+                 be sent in plaintext. Use --tls-cert / --tls-key to enable TLS."
+            );
+        }
     }
 
     let listener = TcpListener::bind(config.bind_addr).await?;

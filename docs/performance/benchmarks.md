@@ -1,7 +1,7 @@
 # Benchmarks
 
 > Historical reference: the baseline tables below describe older benchmark
-> runs and are not v0.48.0 performance guarantees. Run the repository's
+> runs and are not v0.49.0 performance guarantees. Run the repository's
 > current benchmark suite before making a release or workload claim.
 
 Performance claims without reproducible measurements are marketing. This page documents RockLake's benchmarking methodology, presents baseline results from controlled environments, explains how to reproduce benchmarks in your own infrastructure, and provides guidance on interpreting results. Every number on this page comes from automated benchmark suites that you can run yourself.

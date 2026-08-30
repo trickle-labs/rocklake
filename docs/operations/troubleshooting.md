@@ -33,9 +33,10 @@ nc -z 127.0.0.1 5432
 psql -h 127.0.0.1 -p 5432 -c "SELECT 1"
 ```
 
-When password authentication is configured, set both `--auth-user` and
-`--auth-password` (or the corresponding environment variables). TLS is
-server-side only; mutual TLS is not supported.
+When password authentication is configured, set `--auth-user` and
+`ROCKLAKE_AUTH_PASSWORD`, or use `--auth-password-file` /
+`ROCKLAKE_AUTH_PASSWORD_FILE`. TLS is server-side only; mutual TLS is not
+supported.
 
 ## Catalog verification fails
 

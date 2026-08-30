@@ -81,6 +81,16 @@ async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error
     } else {
         args.mode
     };
+    let auth_password = read_secret(
+        args.auth_password,
+        args.auth_password_file.as_deref(),
+        "ROCKLAKE_AUTH_PASSWORD_FILE",
+    )?;
+    let encryption_key = read_secret(
+        args.encryption_key,
+        args.encryption_key_file.as_deref(),
+        "ROCKLAKE_ENCRYPTION_KEY_FILE",
+    )?;
     let config = ServeConfig {
         catalog_url: args.catalog,
         bind_addr: args
@@ -94,7 +104,7 @@ async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error
         tls_key: args.tls_key,
         tls_required: args.tls_required,
         auth_username: args.auth_user,
-        auth_password: args.auth_password,
+        auth_password,
         mode,
         cost_mode: args
             .cost_mode
@@ -102,8 +112,7 @@ async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error
             .map_err(|e| format!("invalid cost mode: {e}"))?,
         s3_endpoint: args.s3_endpoint,
         s3_path_style: args.s3_path_style,
-        encryption_key: args.encryption_key,
-        datafusion_pg_wire_port: args.datafusion_pg_wire,
+        encryption_key,
         extension_schemas: if args.extension_schemas.is_empty() {
             vec!["public".to_string(), "pgtrickle".to_string()]
         } else {
@@ -207,7 +216,7 @@ async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error
         auth: rocklake_pgwire::server::AuthConfig {
             username: config.auth_username,
             password: config.auth_password,
-            scram_sha256: false,
+            scram_sha256: true,
         },
         extension_schemas: config.extension_schemas.clone(),
         idle_connection_timeout: std::time::Duration::from_secs(
@@ -216,35 +225,49 @@ async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error
         drain_timeout: std::time::Duration::from_secs(config.drain_timeout_secs),
     };
 
-    // If --datafusion-pg-wire <port> is set, also start a second listener on
-    // that port.  DataFusion clients connecting there are routed through the
-    // same bounded SQL dispatcher as every other DuckLake client.
-    if let Some(df_port) = config.datafusion_pg_wire_port {
-        let df_addr: SocketAddr = format!("0.0.0.0:{df_port}")
-            .parse()
-            .map_err(|e| format!("invalid DataFusion pg-wire address port {df_port}: {e}"))?;
-        let df_config = ServerConfig {
-            bind_addr: df_addr,
-            max_sessions: server_config.max_sessions,
-            max_active_scans: server_config.max_active_scans,
-            metrics: None,
-            tls: rocklake_pgwire::server::TlsConfig::default(),
-            auth: rocklake_pgwire::server::AuthConfig::default(),
-            extension_schemas: config.extension_schemas,
-            idle_connection_timeout: server_config.idle_connection_timeout,
-            drain_timeout: server_config.drain_timeout,
-        };
-        let df_catalog = catalog.clone();
-        tokio::spawn(async move {
-            if let Err(e) = run_server_with_mode(df_config, df_catalog, access_mode).await {
-                tracing::error!("DataFusion pg-wire listener error: {e}");
-            }
-        });
-        tracing::info!("DataFusion pg-wire listener started on port {df_port}");
-    }
-
     run_server_with_mode(server_config, catalog, access_mode).await?;
     Ok(())
+}
+
+fn read_secret(
+    value: Option<String>,
+    file: Option<&str>,
+    source_name: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    if let Some(value) = value {
+        return Ok(Some(value));
+    }
+    let Some(path) = file else {
+        return Ok(None);
+    };
+    std::fs::read_to_string(path)
+        .map(|secret| Some(secret.trim_end_matches(['\r', '\n']).to_owned()))
+        .map_err(|error| format!("failed to read {source_name} from {path}: {error}").into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_secret;
+
+    #[test]
+    fn read_secret_prefers_value_and_trims_file_newlines() {
+        let file = tempfile::NamedTempFile::new().expect("create secret file");
+        std::fs::write(file.path(), "from-file\n").expect("write secret file");
+        assert_eq!(
+            read_secret(None, Some(file.path().to_str().unwrap()), "TEST_SECRET")
+                .expect("read secret"),
+            Some("from-file".to_string())
+        );
+        assert_eq!(
+            read_secret(
+                Some("from-value".to_string()),
+                Some("missing"),
+                "TEST_SECRET"
+            )
+            .expect("prefer value"),
+            Some("from-value".to_string())
+        );
+    }
 }
 
 struct ServeConfig {
@@ -269,10 +292,6 @@ struct ServeConfig {
     s3_path_style: bool,
     /// Optional AES-256 encryption key (64 hex digits).
     encryption_key: Option<String>,
-    /// When set, also listen on this port for DataFusion pg-wire connections.
-    /// DataFusion clients connecting on this port are routed through the same
-    /// bounded SQL dispatcher as DuckDB/Spark/Trino clients.
-    datafusion_pg_wire_port: Option<u16>,
     /// Allowed extension schema names (default: ["pgtrickle"]).
     extension_schemas: Vec<String>,
     /// Optional OTLP HTTP endpoint for OpenTelemetry tracing (e.g. "http://jaeger:4318").

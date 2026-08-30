@@ -22,7 +22,7 @@ graph LR
 
 ## Integration Strategies
 
-RockLake v0.48.0 supports the following integration paths:
+RockLake v0.49.0 supports the following integration paths:
 
 | Strategy | Integration Method | Latency | Complexity | Maturity |
 |----------|-------------------|---------|------------|----------|
@@ -39,7 +39,7 @@ RockLake v0.48.0 supports the following integration paths:
 
 - **[DuckDB Compatibility](duckdb-compatibility.md)** — Complete SQL compatibility matrix between DuckDB's ducklake extension and RockLake. Covers every DDL and DML operation, version compatibility, known differences, and the wire corpus testing approach.
 
-- **[Native Extension](native-extension.md)** — Why the experimental wrapper is not a supported v0.48.0 deployment path.
+- **[Native Extension](native-extension.md)** — Why the experimental wrapper is not a supported v0.49.0 deployment path.
 
 - **[DataFusion](datafusion.md)** — Using RockLake as a DataFusion catalog provider in Rust applications. Covers the trait implementations, usage patterns, supported operations, and dependency management.
 

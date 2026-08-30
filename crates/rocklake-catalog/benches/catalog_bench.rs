@@ -23,8 +23,7 @@ use tokio::runtime::Runtime;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-fn open_catalog(dir: &TempDir) -> CatalogStore {
-    let rt = Runtime::new().unwrap();
+async fn open_catalog(dir: &TempDir) -> CatalogStore {
     let path = dir.path().to_str().unwrap().to_string();
     let store = Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&path).unwrap());
     let opts = OpenOptions {
@@ -32,7 +31,7 @@ fn open_catalog(dir: &TempDir) -> CatalogStore {
         path: ObjectPath::from("catalog"),
         encryption: None,
     };
-    rt.block_on(CatalogStore::open(opts)).unwrap()
+    CatalogStore::open(opts).await.unwrap()
 }
 
 /// Build a catalog with `n_files` data files and `n_cols` columns, returning
@@ -183,7 +182,7 @@ fn bench_get_current_snapshot_cold(c: &mut Criterion) {
     c.bench_function("get_current_snapshot_cold", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let catalog = open_catalog(&dir);
+                let catalog = open_catalog(&dir).await;
                 let reader = catalog.read_at(SnapshotId::new(1)).unwrap();
                 reader.get_snapshot().await.unwrap();
                 catalog.close().await.unwrap();
@@ -259,7 +258,8 @@ fn bench_create_snapshot(c: &mut Criterion) {
             let mut writer = catalog.begin_write();
             let sid = rt.block_on(writer.create_schema("main")).unwrap();
             let tid = rt.block_on(writer.create_table(sid, "t", None)).unwrap();
-            let _ = rt.block_on(writer.create_snapshot(None, None)).unwrap();
+            let result = rt.block_on(writer.create_snapshot(None, None)).unwrap();
+            catalog.commit_writer(result);
             let _ = tid;
             sid
         };
@@ -287,7 +287,8 @@ fn bench_create_snapshot(c: &mut Criterion) {
                         ))
                         .unwrap();
                     }
-                    let _ = rt.block_on(writer.create_snapshot(None, None)).unwrap();
+                    let result = rt.block_on(writer.create_snapshot(None, None)).unwrap();
+                    catalog.commit_writer(result);
                 });
             },
         );

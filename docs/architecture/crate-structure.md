@@ -139,7 +139,7 @@ The arrows point from dependency to dependent. `rocklake-core` is the leaf (depe
 
 ## rocklake-ffi
 
-**Role:** C foreign function interface for embedded catalog clients. Provides `extern "C"` functions with C-compatible types and opaque handle-based resource management. The experimental DuckDB wrapper is not a supported v0.48.0 deployment path.
+**Role:** C foreign function interface for embedded catalog clients. Provides `extern "C"` functions with C-compatible types and opaque handle-based resource management. The experimental DuckDB wrapper is not a supported v0.49.0 deployment path.
 
 **Why it exists:** The FFI crate gives Python, Go, Node.js, Java, and other native clients a direct catalog API without requiring a PG-wire sidecar.
 

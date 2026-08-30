@@ -3,7 +3,7 @@
 This section provides lookup-oriented reference material for RockLake. Unlike
 the conceptual documentation (which explains why things work the way they do)
 or the architecture documentation (which explains how components fit
-together), reference pages answer questions about the supported v0.48.0
+together), reference pages answer questions about the supported v0.49.0
 surface: error codes, catalog fields, environment variables, metrics, and SQL
 patterns.
 

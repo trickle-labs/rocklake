@@ -35,8 +35,8 @@ sequenceDiagram
     C->>S: StartupMessage (version=3.0, user, database, options)
     
     alt Authentication Required
-        S->>C: AuthenticationCleartextPassword
-        C->>S: PasswordMessage (password bytes)
+        S->>C: AuthenticationSASL (release binary) or AuthenticationCleartextPassword (explicit library mode)
+        C->>S: SASL exchange or PasswordMessage
         S->>C: AuthenticationOk
     else No Authentication
         S->>C: AuthenticationOk
@@ -94,10 +94,12 @@ RockLake supports two authentication modes:
 
 **No authentication (default).** The server sends `AuthenticationOk` immediately after parsing the `StartupMessage`. This is suitable for local development, environments where network-level access control (security groups, VPC) provides sufficient isolation, or when RockLake is used as an in-process sidecar.
 
-**Cleartext password.** When `--auth-user` and `--auth-password` are configured, the server sends `AuthenticationCleartextPassword`, waits for a `PasswordMessage` from the client, verifies the credentials using constant-time comparison (to prevent timing attacks), and responds with `AuthenticationOk` on success or `ErrorResponse` on failure.
+**SCRAM-SHA-256 (release binary default).** When `--auth-user` and a password input are configured, the release binary sends `AuthenticationSASL` and performs the SCRAM-SHA-256 exchange before responding with `AuthenticationOk` or `ErrorResponse`. Use `ROCKLAKE_AUTH_PASSWORD_FILE` or `--auth-password-file` for the password input in production.
+
+**Cleartext password (explicit library compatibility).** Direct library users can configure `AuthConfig` with `scram_sha256: false`. The server then sends `AuthenticationCleartextPassword`, waits for a `PasswordMessage`, verifies the credentials using constant-time comparison, and responds with `AuthenticationOk` on success or `ErrorResponse` on failure.
 
 !!! warning "Always use TLS with password authentication"
-    Cleartext password authentication sends the password in plain text over the wire. Without TLS, the password is visible to any network observer. Always enable TLS when using password authentication in any non-local deployment.
+    Cleartext password authentication sends the password in plain text over the wire. Without TLS, the password is visible to any network observer. Always enable TLS when using the explicit cleartext compatibility mode.
 
 ### Phase 4: Parameter Negotiation
 
@@ -247,7 +249,7 @@ RockLake intentionally does not implement several PostgreSQL protocol features:
 - **Notifications (LISTEN/NOTIFY)** — Async event channels
 - **Cancellation** — CancelRequest messages are accepted but ignored
 - **Streaming replication** — WAL-based replication protocol
-- **SASL authentication** — SCRAM-SHA-256 (planned for a future release)
+- **SASL authentication** — SCRAM-SHA-256 is supported in v0.49.0
 - **SSL session resumption** — Each connection performs a full TLS handshake
 
 These omissions are intentional: DuckDB's `ducklake` extension does not use any of these features. If a client sends an unexpected message type, RockLake responds with an `ErrorResponse` (SQLSTATE `0A000`, "feature not supported") rather than silently ignoring it.

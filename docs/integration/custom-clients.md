@@ -12,7 +12,7 @@ RockLake accepts standard PostgreSQL protocol connections:
 |----------|-------|
 | Protocol version | 3.0 (PostgreSQL v7.4+ wire protocol) |
 | Default port | 5432 |
-| Authentication | `AuthenticationOk` (no auth) or `AuthenticationCleartextPassword` |
+| Authentication | `AuthenticationOk` (no auth), `AuthenticationSASL` (release binary), or explicit `AuthenticationCleartextPassword` |
 | TLS | SSLRequest negotiation supported |
 | Database name | Any value accepted (single-catalog server) |
 | Username | Any value accepted (logged for audit) |

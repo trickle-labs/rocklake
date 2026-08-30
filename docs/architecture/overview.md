@@ -235,7 +235,7 @@ Advantages: multiple DuckDB instances share one catalog, network isolation, inde
 ### Embedded C API
 
 For embedded applications, the FFI crate (`rocklake-ffi`) provides a direct C
-catalog API. Its experimental DuckDB wrapper is not a supported v0.48.0
+catalog API. Its experimental DuckDB wrapper is not a supported v0.49.0
 deployment path:
 
 ```mermaid
@@ -248,7 +248,7 @@ graph LR
 ```
 
 The C API is useful for embedded catalog clients. The experimental DuckDB
-wrapper is not a supported v0.48.0 deployment path and is not covered by the
+wrapper is not a supported v0.49.0 deployment path and is not covered by the
 release gates.
 
 ### DataFusion Integration

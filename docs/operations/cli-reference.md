@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.48.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.49.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -63,10 +63,9 @@ rocklake serve \
   [--max-sessions <n>] \
   [--metrics-port <port>] [--metrics-path <path>] \
   [--tls-cert <path>] [--tls-key <path>] [--tls-required] \
-  [--auth-user <name>] [--auth-password <secret>] \
+  [--auth-user <name>] [--auth-password <secret> | --auth-password-file <path>] \
   [--s3-endpoint <url>] [--s3-path-style] \
-  [--encryption-key <64-hex-digits>] \
-  [--datafusion-pg-wire <port>] \
+  [--encryption-key <64-hex-digits> | --encryption-key-file <path>] \
   [--extension-schemas <name,...>] [--otlp-endpoint <url>]
 ```
 

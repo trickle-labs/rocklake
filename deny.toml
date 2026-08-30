@@ -18,16 +18,31 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # These advisories are from transitive dependencies we cannot directly control.
 # They are tracked; we will update when upstream provides a fix.
 ignore = [
-    # bincode: unmaintained (use bincode 2.x when upstream migrates)
-    "RUSTSEC-2025-0141",
-    # paste: unmaintained macro crate (transitive dep of several crates)
-    "RUSTSEC-2024-0436",
-    # rustls-pemfile: older API usage (transitive from tokio-rustls 0.26)
-    "RUSTSEC-2025-0134",
-    # quick-xml vulnerabilities in object_store 0.12.x transitive dependency
-    # tracked until object_store upgrades to quick-xml >= 0.41.0
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
+    # ID: RUSTSEC-2025-0141; dependency: bincode (transitive)
+    # reason: upstream migration is not yet available; mitigation: no direct
+    # bincode API is used by RockLake; upstream: bincode release tracker;
+    # review/expiry: 2026-12-31
+    { id = "RUSTSEC-2025-0141", reason = "Transitive bincode dependency. Revisit when upstream migrates to bincode 2.x." },
+    # ID: RUSTSEC-2024-0436; dependency: paste (transitive)
+    # reason: affected upstream crates have not removed it; mitigation: no
+    # RockLake code depends on paste directly; upstream: paste dependents'
+    # release trackers; review/expiry: 2026-12-31
+    { id = "RUSTSEC-2024-0436", reason = "Transitive paste dependency. Revisit when affected upstream crates remove it." },
+    # ID: RUSTSEC-2025-0134; dependency: rustls-pemfile (transitive)
+    # reason: current tokio-rustls compatibility still selects this API;
+    # mitigation: TLS parsing is isolated to startup; upstream: tokio-rustls
+    # release tracker; review/expiry: 2026-12-31
+    { id = "RUSTSEC-2025-0134", reason = "Transitive rustls-pemfile dependency from tokio-rustls 0.26. Revisit on the next compatible upgrade." },
+    # ID: RUSTSEC-2026-0194; dependency: quick-xml (transitive)
+    # reason: object_store 0.12.x has not upgraded; mitigation: RockLake does
+    # not parse untrusted XML directly; upstream: object_store release tracker;
+    # review/expiry: 2026-12-31
+    { id = "RUSTSEC-2026-0194", reason = "Transitive quick-xml dependency from object_store 0.12.x. Revisit when object_store upgrades quick-xml to at least 0.41.0." },
+    # ID: RUSTSEC-2026-0195; dependency: quick-xml (transitive)
+    # reason: object_store 0.12.x has not upgraded; mitigation: RockLake does
+    # not parse untrusted XML directly; upstream: object_store release tracker;
+    # review/expiry: 2026-12-31
+    { id = "RUSTSEC-2026-0195", reason = "Transitive quick-xml dependency from object_store 0.12.x. Revisit when object_store upgrades quick-xml to at least 0.41.0." },
 ]
 
 # ─── Licenses ─────────────────────────────────────────────────────────────────

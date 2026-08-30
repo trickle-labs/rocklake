@@ -1,0 +1,256 @@
+name: Release Certification
+
+on:
+  workflow_call:
+    inputs:
+      certified-ref:
+        description: Full commit SHA being certified.
+        required: true
+        type: string
+    outputs:
+      certified-sha:
+        description: SHA that passed every release certification gate.
+        value: ${{ jobs.release-certification.outputs.certified-sha }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  CERTIFIED_REF: ${{ inputs.certified-ref }}
+
+jobs:
+  quality:
+    name: Format, Clippy, Workspace Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features
+      - run: cargo test --workspace --lib --tests -- --test-threads=1
+
+  failure-certification:
+    name: v0.47.17 Failure Certification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: cargo test -p rocklake-catalog --test v04717_production_failure_tests -- --test-threads=1 --nocapture
+      - run: cargo test -p rocklake-pgwire --test v04717_ducklake_value_conformance_tests -- --test-threads=1 --nocapture
+
+  ducklake:
+    name: DuckLake 1.0 Conformance
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        duckdb-version: ["1.5.3", "1.5.4", "1.5.5"]
+    env:
+      ROCKLAKE_DUCKDB_VERSION: ${{ matrix.duckdb-version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: cargo test -p rocklake-pgwire --test duckdb_container_tests --features minio-tests -- --test-threads=1 --nocapture
+      - run: cargo test -p rocklake-pgwire --test v0481_ducklake_1_0_compliance_tests -- --exact schema_registry_matches_ducklake_1_0_manifest
+      - run: cargo test -p rocklake-pgwire --test v02710_corpus_tests -- --test-threads=1 --nocapture
+
+  public-surface:
+    name: Public Surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: cargo test -p rocklake-pgwire --test v0478_surface_manifest_tests -- --test-threads=1 --nocapture
+
+  backend-execution:
+    name: Backend Execution (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [localfs, minio, gcs, azure]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - name: Pull GCS emulator
+        if: matrix.backend == 'gcs'
+        run: docker pull fsouza/fake-gcs-server:latest
+      - name: Pull Azure emulator
+        if: matrix.backend == 'azure'
+        run: docker pull mcr.microsoft.com/azure-storage/azurite:latest
+      - name: Run supported backend tests
+        run: |
+          case "${{ matrix.backend }}" in
+            localfs) cargo test -p rocklake-catalog --test backend_compat -- --test-threads=1 ;;
+            minio) cargo test -p rocklake-catalog --test backend_compat --features minio-tests -- --test-threads=1 --nocapture ;;
+            gcs) cargo test -p rocklake-catalog --test backend_compat --features gcs-emulator -- --test-threads=1 --nocapture ;;
+            azure) cargo test -p rocklake-catalog --test backend_compat --features azure-emulator -- --test-threads=1 --nocapture ;;
+          esac
+
+  windows:
+    name: Windows Execution
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: if ((git rev-parse HEAD) -ne $env:CERTIFIED_REF) { exit 1 }
+        shell: pwsh
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features
+      - run: cargo test --workspace --lib --tests -- --test-threads=1
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: cargo install cargo-deny --locked
+      - run: cargo deny check advisories bans sources licenses
+      - run: cargo test -p rocklake-pgwire --test security_tests -- --test-threads=1
+
+  docs:
+    name: Documentation Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: pip install -r requirements-docs.txt
+      - run: mkdocs build --strict
+
+  quickstart:
+    name: Executable Quickstart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - name: Install DuckDB CLI
+        env:
+          DUCKDB_VERSION: "1.5.5"
+        run: |
+          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o "$RUNNER_TEMP/duckdb.zip"
+          unzip -q "$RUNNER_TEMP/duckdb.zip" -d "$RUNNER_TEMP/duckdb"
+          echo "$RUNNER_TEMP/duckdb" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/duckdb/duckdb" --version
+      - run: bash scripts/quickstart.sh
+
+  compatibility:
+    name: Compatibility Manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: python scripts/validate_compatibility_manifest.py
+
+  miri-sanitizers:
+    name: Miri and Sanitizers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: cargo miri test -p rocklake-core
+      - name: Address sanitizer execution
+        env:
+          RUSTFLAGS: -Z sanitizer=address
+          LSAN_OPTIONS: detect_leaks=0
+        run: cargo test -p rocklake-ffi --target x86_64-unknown-linux-gnu
+
+  release-certification:
+    name: Release Certification
+    if: always()
+    needs: [quality, failure-certification, ducklake, public-surface, backend-execution, windows, security, docs, quickstart, compatibility, miri-sanitizers]
+    runs-on: ubuntu-latest
+    env:
+      QUALITY_RESULT: ${{ needs.quality.result }}
+      FAILURE_RESULT: ${{ needs.failure-certification.result }}
+      DUCKLAKE_RESULT: ${{ needs.ducklake.result }}
+      PUBLIC_SURFACE_RESULT: ${{ needs.public-surface.result }}
+      BACKEND_RESULT: ${{ needs.backend-execution.result }}
+      WINDOWS_RESULT: ${{ needs.windows.result }}
+      SECURITY_RESULT: ${{ needs.security.result }}
+      DOCS_RESULT: ${{ needs.docs.result }}
+      QUICKSTART_RESULT: ${{ needs.quickstart.result }}
+      COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
+      MIRI_RESULT: ${{ needs.miri-sanitizers.result }}
+    outputs:
+      certified-sha: ${{ steps.certify.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - id: certify
+        run: |
+          test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+          test "$QUALITY_RESULT" = success
+          test "$FAILURE_RESULT" = success
+          test "$DUCKLAKE_RESULT" = success
+          test "$PUBLIC_SURFACE_RESULT" = success
+          test "$BACKEND_RESULT" = success
+          test "$WINDOWS_RESULT" = success
+          test "$SECURITY_RESULT" = success
+          test "$DOCS_RESULT" = success
+          test "$QUICKSTART_RESULT" = success
+          test "$COMPATIBILITY_RESULT" = success
+          test "$MIRI_RESULT" = success
+          printf '{"certified_sha":"%s","quality":"%s","failure_certification":"%s","ducklake":"%s","public_surface":"%s","backend_execution":"%s","windows":"%s","security":"%s","docs":"%s","quickstart":"%s","compatibility":"%s","miri_sanitizers":"%s"}\n' \
+            "$CERTIFIED_REF" "$QUALITY_RESULT" "$FAILURE_RESULT" "$DUCKLAKE_RESULT" \
+            "$PUBLIC_SURFACE_RESULT" "$BACKEND_RESULT" "$WINDOWS_RESULT" "$SECURITY_RESULT" \
+            "$DOCS_RESULT" "$QUICKSTART_RESULT" "$COMPATIBILITY_RESULT" "$MIRI_RESULT" \
+            > release-certification.json
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-certification
+          path: release-certification.json

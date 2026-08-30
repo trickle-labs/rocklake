@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.49.0] — 2026-08-30
+
+### Changed
+
+- Made loopback binding and SCRAM-SHA-256 the release-binary defaults, and
+  removed the insecure secondary DataFusion listener.
+- Removed request-path SQL printing and added permission-restricted secret-file
+  inputs for authentication and encryption keys.
+- Added a reusable full release-certification workflow with exact-SHA checks,
+  checksums, SBOM, build metadata, and provenance attestation.
+- Updated the workspace and language-binding release metadata to v0.49.0.
+- Documented the loopback listener default, SCRAM-SHA-256 release-binary
+  compatibility, and the cleartext path for direct library configuration.
+- Documented environment and permission-restricted file inputs for secrets.
+- Added the security reporting policy and dependency-advisory review fields.
+
 ## [0.48.0] — 2026-08-30
 
 ### Changed
