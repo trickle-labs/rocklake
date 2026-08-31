@@ -17,7 +17,7 @@ pub enum PathError {
 /// Returns `true` if the path is relative (should use `path_is_relative = true`),
 /// `false` if it is a URI or a local absolute path.
 pub fn is_path_relative(path: &str) -> bool {
-    !path.contains("://") && !std::path::Path::new(path).is_absolute()
+    !path.contains("://") && !path.starts_with('/') && !std::path::Path::new(path).is_absolute()
 }
 
 /// Validate a prefix that is relative to an object-store bucket or container.
