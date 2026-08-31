@@ -159,7 +159,7 @@ fn test_telemetry_with_endpoint_ok() {
 async fn test_diagnose_fresh_catalog_ok() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
-    drop(store); // close the CatalogStore; reopen as raw slatedb::Db
+    store.close().await.expect("close catalog");
 
     let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os = Arc::new(LocalFileSystem::new());
@@ -193,7 +193,7 @@ async fn test_diagnose_fresh_catalog_ok() {
 async fn test_diagnose_text_format() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
-    drop(store);
+    store.close().await.expect("close catalog");
 
     let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os = Arc::new(LocalFileSystem::new());
@@ -216,7 +216,7 @@ async fn test_diagnose_text_format() {
 async fn test_diagnose_json_serialisable() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
-    drop(store);
+    store.close().await.expect("close catalog");
 
     let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os = Arc::new(LocalFileSystem::new());
@@ -237,7 +237,7 @@ async fn test_diagnose_json_serialisable() {
 async fn test_sweep_orphans_empty_catalog_no_orphans() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
-    drop(store);
+    store.close().await.expect("close catalog");
 
     let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
@@ -272,7 +272,7 @@ async fn test_sweep_orphans_dry_run_does_not_delete() {
     std::fs::write(&orphan_path, b"PAR1stray").unwrap();
 
     let store = open_fresh_catalog(&dir).await;
-    drop(store);
+    store.close().await.expect("close catalog");
 
     let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
@@ -311,7 +311,7 @@ async fn test_sweep_orphans_apply_deletes_orphan() {
     std::fs::write(&orphan_path, b"PAR1stray").unwrap();
 
     let store = open_fresh_catalog(&dir).await;
-    drop(store);
+    store.close().await.expect("close catalog");
 
     let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
