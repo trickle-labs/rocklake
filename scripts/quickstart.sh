@@ -55,4 +55,4 @@ wait "$server_pid" || true
 grep -q '"snapshot_id":'"$snapshot" "$catalog_dir/historical.ndjson"
 grep -q '"table":"ducklake_data_file".*"record_count":2' "$catalog_dir/historical.ndjson"
 "$binary" diagnose --catalog "$catalog_dir/catalog" --json | grep -q 'overall_status.*ok'
-echo "quickstart passed (latest snapshot: $snapshot)"
+echo "v0.50.0 quickstart passed (latest snapshot: $snapshot)"

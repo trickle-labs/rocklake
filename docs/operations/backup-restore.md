@@ -1,5 +1,9 @@
 # Backup and Restore
 
+The v0.50.0 supported backup boundary is catalog export/import. The planned
+`backup create`, `backup inspect`, `restore plan`, and `restore apply` commands
+are not available in this release.
+
 RockLake keeps catalog history in object storage. A logical backup is a
 complete NDJSON export at an explicit snapshot; object-store versioning or a
 separate bucket can provide an additional recovery boundary.

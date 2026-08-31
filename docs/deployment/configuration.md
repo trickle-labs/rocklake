@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.49.0 is configured with typed `rocklake serve` flags and the environment
+RockLake v0.50.0 is configured with typed `rocklake serve` flags and the environment
 variables exposed by those flags. There is no TOML configuration-file format.
 
 ## Required option

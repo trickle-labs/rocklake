@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.50.0] — 2026-08-31
+
+### Changed
+
+- Updated the language-binding package metadata to v0.50.0.
+- Promoted the local DuckDB quickstart and release-certification gate to the
+  v0.50.0 operational flow: serve, attach, create/query data, inspect a
+  snapshot, export catalog metadata, and diagnose the catalog.
+- Clarified the supported operator workflow and retained the product boundary
+  that Docker images and TOML configuration are not shipped without executable
+  implementation and CI coverage.
+
 ## [0.49.0] — 2026-08-30
 
 ### Changed

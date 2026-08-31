@@ -143,7 +143,7 @@ On first start against an empty prefix, RockLake initializes a new catalog. This
 You should see output like:
 
 ```
-RockLake v0.49.0
+RockLake v0.50.0
 Catalog: s3://my-lakehouse-bucket/catalog/
 Listening: 0.0.0.0:5432
 Writer epoch: 1

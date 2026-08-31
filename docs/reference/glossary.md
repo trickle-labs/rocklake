@@ -14,7 +14,7 @@ This page defines all terms used throughout the RockLake documentation. If you e
 
 ## B
 
-**Block Cache** — An in-memory cache maintained by SlateDB that stores recently-read SST blocks. Avoids repeated object storage fetches for frequently-accessed data. Its sizing is managed by SlateDB in v0.49.0.
+**Block Cache** — An in-memory cache maintained by SlateDB that stores recently-read SST blocks. Avoids repeated object storage fetches for frequently-accessed data. Its sizing is managed by SlateDB in v0.50.0.
 
 **Bounded SQL** — RockLake's approach to SQL support: only a finite, enumerated set of SQL statement patterns are recognized. Statements outside this set are rejected with SQLSTATE 42601. This is intentional — RockLake implements the DuckLake protocol, not a general SQL engine. The bounded set covers all SQL patterns that DuckDB's ducklake extension emits.
 
@@ -138,7 +138,7 @@ the PostgreSQL wire protocol (TCP).
 
 **Native DuckDB Extension** — The former Strategy C deployment idea. The
 repository contains an experimental wrapper, but it is not a supported or
-published v0.49.0 deployment. Use the PostgreSQL wire sidecar instead.
+published v0.50.0 deployment. Use the PostgreSQL wire sidecar instead.
 
 **Embedded Client Library** — A universal C ABI (`rocklake.h`) and language
 bindings (Rust via `rocklake-client`, Python via PyO3, Go via cgo, Node.js via

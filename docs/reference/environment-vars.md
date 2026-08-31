@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-RockLake v0.49.0 reads the variables below through its typed CLI. Command-line
+RockLake v0.50.0 reads the variables below through its typed CLI. Command-line
 flags take precedence over environment variables. Run `rocklake serve --help`
 for the authoritative option list.
 
@@ -36,7 +36,7 @@ Cloud credentials use the provider SDK variables. For example, AWS uses
 `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
 `AWS_SESSION_TOKEN`. GCS and Azure use their standard SDK credential variables.
 
-The S3-compatible endpoint and path-style options are CLI-only in v0.49.0:
+The S3-compatible endpoint and path-style options are CLI-only in v0.50.0:
 `--s3-endpoint` and `--s3-path-style`.
 
 ## DuckLake data inlining

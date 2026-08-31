@@ -1,6 +1,6 @@
 # RockLake roadmap
 
-**Current release:** v0.49.0
+**Current release:** v0.50.0
 
 RockLake is a DuckLake 1.0 catalog sidecar backed by SlateDB and exposed over
 the PostgreSQL wire protocol. The supported product path is the `rocklake`
@@ -28,8 +28,11 @@ Detailed plans for the release sequence are in
 
 ## Next
 
-- Improve startup/readiness diagnostics without changing the catalog model.
-- Add operator output only where it answers a demonstrated automation need.
+- Use the supported operator flow: `serve`, DuckDB `ATTACH`, snapshot
+  inspection, catalog export, verification, and `diagnose --json`.
+- Improve startup/readiness diagnostics without changing the catalog model;
+  `doctor`, TOML configuration, and first-class backup/restore commands remain
+  roadmap work until executable implementations and CI coverage exist.
 - Measure large-catalog latency and memory before adding caching or streaming.
 
 ## Later

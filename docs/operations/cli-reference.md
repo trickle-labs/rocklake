@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.49.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.50.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -89,3 +89,31 @@ operations remain explicit in the command syntax.
 The supported RockLake variables are documented in
 [Environment Variables](../reference/environment-vars.md). Provider SDK
 variables such as `AWS_REGION` remain supported for object-store credentials.
+
+## v0.50 operator flow
+
+The supported release flow is deliberately small:
+
+```bash
+rocklake serve --catalog file:///path/to/catalog
+```
+
+Then attach from DuckDB, create or query data, and use the existing operator
+commands to inspect and validate the catalog:
+
+```sql
+LOAD ducklake;
+ATTACH 'ducklake:postgres:host=127.0.0.1 port=5432 dbname=rocklake'
+  AS lake (DATA_PATH '/path/to/data');
+```
+
+```bash
+rocklake inspect snapshot --catalog file:///path/to/catalog
+rocklake export-catalog --catalog file:///path/to/catalog --out catalog.ndjson
+rocklake verify catalog --catalog file:///path/to/catalog
+rocklake diagnose --catalog file:///path/to/catalog --json
+```
+
+`rocklake doctor`, `rocklake.toml`, `backup create`, `backup inspect`,
+`restore plan`, and `restore apply` are not v0.50.0 commands. Do not document
+or automate them until they have executable implementations and CI coverage.

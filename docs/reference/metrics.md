@@ -16,7 +16,7 @@ the configured path; other paths return 404.
 
 ## Exported metrics
 
-The v0.49.0 binary exports these counters and gauges:
+The v0.50.0 binary exports these counters and gauges:
 
 - Catalog: `rocklake_snapshots_created_total`, `rocklake_files_per_snapshot`.
 - Object store: `rocklake_object_store_requests_total`,
