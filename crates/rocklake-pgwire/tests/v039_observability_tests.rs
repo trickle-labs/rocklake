@@ -23,8 +23,8 @@ use rocklake_pgwire::telemetry::TelemetryConfig;
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 async fn open_fresh_catalog(dir: &TempDir) -> rocklake_catalog::CatalogStore {
-    let path = ObjectPath::from(dir.path().to_str().unwrap());
-    let store = Arc::new(LocalFileSystem::new());
+    let path = ObjectPath::from("");
+    let store = Arc::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
     let opts = OpenOptions {
         object_store: store,
         path,
@@ -223,12 +223,12 @@ async fn test_sweep_orphans_empty_catalog_no_orphans() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
 
-    let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
+    let os = store.object_store();
 
     let config = SweepOrphansConfig {
         grace_period_hours: 0, // sweep everything immediately
         apply: false,
-        data_root: dir.path().to_str().unwrap().to_string(),
+        data_root: String::new(),
     };
 
     let result = sweep_orphans(store.db(), os, &config).await.unwrap();
@@ -253,12 +253,12 @@ async fn test_sweep_orphans_dry_run_does_not_delete() {
 
     let store = open_fresh_catalog(&dir).await;
 
-    let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
+    let os = store.object_store();
 
     let config = SweepOrphansConfig {
         grace_period_hours: 0,
         apply: false, // DRY RUN
-        data_root: dir.path().to_str().unwrap().to_string(),
+        data_root: String::new(),
     };
 
     let result = sweep_orphans(store.db(), os, &config).await.unwrap();
@@ -287,12 +287,12 @@ async fn test_sweep_orphans_apply_deletes_orphan() {
 
     let store = open_fresh_catalog(&dir).await;
 
-    let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
+    let os = store.object_store();
 
     let config = SweepOrphansConfig {
         grace_period_hours: 0, // no grace, delete now
         apply: true,           // APPLY mode
-        data_root: dir.path().to_str().unwrap().to_string(),
+        data_root: String::new(),
     };
 
     let result = sweep_orphans(store.db(), os, &config).await.unwrap();
