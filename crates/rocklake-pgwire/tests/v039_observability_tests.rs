@@ -159,17 +159,12 @@ fn test_telemetry_with_endpoint_ok() {
 async fn test_diagnose_fresh_catalog_ok() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
-    store.close().await.expect("close catalog");
 
-    let path = ObjectPath::from(dir.path().to_str().unwrap());
-    let os = Arc::new(LocalFileSystem::new());
-    let db = slatedb::Db::open(path, os).await.expect("open slatedb");
-
-    let report = diagnose_catalog(&db, None)
+    let report = diagnose_catalog(store.db(), None)
         .await
         .expect("diagnose should not fail on a fresh catalog");
 
-    db.close().await.unwrap();
+    store.close().await.expect("close catalog");
 
     // A freshly initialised catalog should report ok or degraded (no P0).
     assert!(
@@ -193,14 +188,9 @@ async fn test_diagnose_fresh_catalog_ok() {
 async fn test_diagnose_text_format() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
+
+    let report = diagnose_catalog(store.db(), None).await.unwrap();
     store.close().await.expect("close catalog");
-
-    let path = ObjectPath::from(dir.path().to_str().unwrap());
-    let os = Arc::new(LocalFileSystem::new());
-    let db = slatedb::Db::open(path, os).await.expect("open slatedb");
-
-    let report = diagnose_catalog(&db, None).await.unwrap();
-    db.close().await.unwrap();
 
     let text = format_report_text(&report);
     assert!(
@@ -216,14 +206,9 @@ async fn test_diagnose_text_format() {
 async fn test_diagnose_json_serialisable() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
+
+    let report = diagnose_catalog(store.db(), None).await.unwrap();
     store.close().await.expect("close catalog");
-
-    let path = ObjectPath::from(dir.path().to_str().unwrap());
-    let os = Arc::new(LocalFileSystem::new());
-    let db = slatedb::Db::open(path, os).await.expect("open slatedb");
-
-    let report = diagnose_catalog(&db, None).await.unwrap();
-    db.close().await.unwrap();
 
     let json = serde_json::to_string(&report).expect("report must serialise to JSON");
     let parsed: DiagnoseReport = serde_json::from_str(&json).expect("JSON must round-trip");
@@ -237,13 +222,8 @@ async fn test_diagnose_json_serialisable() {
 async fn test_sweep_orphans_empty_catalog_no_orphans() {
     let dir = TempDir::new().unwrap();
     let store = open_fresh_catalog(&dir).await;
-    store.close().await.expect("close catalog");
 
-    let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
-    let db = slatedb::Db::open(path, os.clone())
-        .await
-        .expect("open slatedb");
 
     let config = SweepOrphansConfig {
         grace_period_hours: 0, // sweep everything immediately
@@ -251,8 +231,8 @@ async fn test_sweep_orphans_empty_catalog_no_orphans() {
         data_root: dir.path().to_str().unwrap().to_string(),
     };
 
-    let result = sweep_orphans(&db, os, &config).await.unwrap();
-    db.close().await.unwrap();
+    let result = sweep_orphans(store.db(), os, &config).await.unwrap();
+    store.close().await.expect("close catalog");
 
     // A fresh catalog has no data files and no orphans.
     assert_eq!(
@@ -272,13 +252,8 @@ async fn test_sweep_orphans_dry_run_does_not_delete() {
     std::fs::write(&orphan_path, b"PAR1stray").unwrap();
 
     let store = open_fresh_catalog(&dir).await;
-    store.close().await.expect("close catalog");
 
-    let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
-    let db = slatedb::Db::open(path, os.clone())
-        .await
-        .expect("open slatedb");
 
     let config = SweepOrphansConfig {
         grace_period_hours: 0,
@@ -286,8 +261,8 @@ async fn test_sweep_orphans_dry_run_does_not_delete() {
         data_root: dir.path().to_str().unwrap().to_string(),
     };
 
-    let result = sweep_orphans(&db, os, &config).await.unwrap();
-    db.close().await.unwrap();
+    let result = sweep_orphans(store.db(), os, &config).await.unwrap();
+    store.close().await.expect("close catalog");
 
     // The orphan file should be reported but NOT deleted.
     assert!(
@@ -311,13 +286,8 @@ async fn test_sweep_orphans_apply_deletes_orphan() {
     std::fs::write(&orphan_path, b"PAR1stray").unwrap();
 
     let store = open_fresh_catalog(&dir).await;
-    store.close().await.expect("close catalog");
 
-    let path = ObjectPath::from(dir.path().to_str().unwrap());
     let os: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
-    let db = slatedb::Db::open(path, os.clone())
-        .await
-        .expect("open slatedb");
 
     let config = SweepOrphansConfig {
         grace_period_hours: 0, // no grace, delete now
@@ -325,8 +295,8 @@ async fn test_sweep_orphans_apply_deletes_orphan() {
         data_root: dir.path().to_str().unwrap().to_string(),
     };
 
-    let result = sweep_orphans(&db, os, &config).await.unwrap();
-    db.close().await.unwrap();
+    let result = sweep_orphans(store.db(), os, &config).await.unwrap();
+    store.close().await.expect("close catalog");
 
     assert_eq!(result.deleted, 1, "Expected exactly 1 file deleted");
     assert!(
