@@ -241,6 +241,7 @@ fn cli_docs_import_flags_match_implementation() {
 
 /// Extract the markdown section starting at `heading` up to the next `---` separator.
 fn extract_section(content: &str, heading: &str) -> String {
+    let content = content.replace("\r\n", "\n");
     let start = content.find(heading).unwrap_or(0);
     let rest = &content[start..];
     // Sections are separated by `\n---\n`.
