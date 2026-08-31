@@ -100,7 +100,11 @@ fn classify_slatedb_error(e: slatedb::Error) -> CatalogError {
     let lower = msg.to_ascii_lowercase();
 
     // Transaction conflicts → TransactionConflict
-    if lower.contains("conflict") || lower.contains("concurrent") || lower.contains("cas") {
+    if lower.contains("conflict")
+        || lower.contains("concurrent")
+        || lower.contains("cas")
+        || lower.contains("newer db client")
+    {
         return CatalogError::TransactionConflict(msg);
     }
 

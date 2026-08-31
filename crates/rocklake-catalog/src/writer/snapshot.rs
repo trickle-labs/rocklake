@@ -246,11 +246,7 @@ impl CatalogWriter {
         let nonce_key = keys::key_system(SYSTEM_WRITER_NONCE);
 
         // Verify epoch value.
-        match tx
-            .get(&epoch_key)
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
+        match tx.get(&epoch_key).await.map_err(CatalogError::from)? {
             Some(data) => {
                 let stored_epoch = values::decode_counter(&data)?;
                 if stored_epoch != self.writer_epoch {
@@ -265,11 +261,7 @@ impl CatalogWriter {
         // v0.28.0: Also verify the nonce so two writers that raced to the same
         // epoch counter value (theoretically impossible with the CAS loop, but
         // belt-and-suspenders) are still distinguished.
-        match tx
-            .get(&nonce_key)
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
+        match tx.get(&nonce_key).await.map_err(CatalogError::from)? {
             Some(data) => {
                 let stored_nonce =
                     std::str::from_utf8(&data).map_err(|_| CatalogError::WriterEpochMismatch)?;
