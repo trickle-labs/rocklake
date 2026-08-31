@@ -10,13 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Changed
 
-- Updated the language-binding package metadata to v0.50.0.
-- Promoted the local DuckDB quickstart and release-certification gate to the
-  v0.50.0 operational flow: serve, attach, create/query data, inspect a
-  snapshot, export catalog metadata, and diagnose the catalog.
-- Clarified the supported operator workflow and retained the product boundary
-  that Docker images and TOML configuration are not shipped without executable
-  implementation and CI coverage.
+- Added read-only `rocklake doctor` preflight checks with stable human and JSON
+  output.
+- Added typed `rocklake.toml` configuration with strict validation, precedence,
+  secret-file support, and redacted effective configuration output.
+- Added startup summaries, positional local serving (`rocklake serve ./lake`),
+  and first-class versioned backup/restore commands.
+- Updated the language-binding package metadata and release quickstart to
+  v0.50.0.
 
 ## [0.49.0] — 2026-08-30
 

@@ -1,9 +1,19 @@
 # Configuration
 
-RockLake v0.50.0 is configured with typed `rocklake serve` flags and the environment
-variables exposed by those flags. There is no TOML configuration-file format.
+RockLake v0.50.0 accepts typed `rocklake.toml` configuration alongside the
+environment variables and command-line flags exposed by `rocklake serve`.
+Precedence is built-in defaults, TOML, environment, then command-line flags.
 
-## Required option
+## Minimal local setup
+
+```bash
+rocklake serve ./lake
+```
+
+Generate a complete example with `rocklake config example` and validate a file
+with `rocklake config check --file rocklake.toml`.
+
+## Cloud catalog
 
 ```bash
 rocklake serve --catalog <file://...,s3://...,gs://...,az://...>

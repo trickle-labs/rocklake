@@ -5,8 +5,9 @@ command -v duckdb >/dev/null || { echo "duckdb is required" >&2; exit 1; }
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 catalog_dir=$(mktemp -d)
-data_dir="$catalog_dir/data"
-mkdir -p "$data_dir"
+data_dir=data
+mkdir -p "$catalog_dir/$data_dir"
+cd "$catalog_dir"
 port=${ROCKLAKE_QUICKSTART_PORT:-$((50000 + $$ % 10000))}
 binary=${ROCKLAKE_BINARY:-"$repo_dir/target/debug/rocklake"}
 
@@ -54,5 +55,12 @@ wait "$server_pid" || true
 "$binary" export-catalog --catalog "$catalog_dir/catalog" --at-snapshot "$snapshot" --out "$catalog_dir/historical.ndjson" >/dev/null
 grep -q '"snapshot_id":'"$snapshot" "$catalog_dir/historical.ndjson"
 grep -q '"table":"ducklake_data_file".*"record_count":2' "$catalog_dir/historical.ndjson"
+"$binary" doctor --catalog "$catalog_dir/catalog" --output json | grep '"ready": true' >/dev/null
+"$binary" backup create --catalog "$catalog_dir/catalog" --out "$catalog_dir/backup" >/dev/null
+"$binary" backup inspect "$catalog_dir/backup" --output json | grep '"version": 1' >/dev/null
+"$binary" restore plan --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --output json | grep '"target_empty": true' >/dev/null
+"$binary" restore apply --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --output json | grep '"verified":true\|"verified": true' >/dev/null
+"$binary" restore apply --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --overwrite --output json | grep '"verified":true\|"verified": true' >/dev/null
+"$binary" inspect snapshot --catalog "$catalog_dir/restored" --output json | grep '"latest_snapshot_id"' >/dev/null
 "$binary" diagnose --catalog "$catalog_dir/catalog" --json | grep -q 'overall_status.*ok'
 echo "v0.50.0 quickstart passed (latest snapshot: $snapshot)"

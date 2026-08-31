@@ -9,7 +9,14 @@
 //! The module is deliberately kept separate from the command implementations
 //! so that the structs can be unit-tested independently.
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+pub enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
 
 /// RockLake — serverless lakehouse catalog backed by SlateDB.
 ///
@@ -23,6 +30,10 @@ use clap::{ArgAction, Parser, Subcommand};
     long_about = None,
 )]
 pub struct Cli {
+    /// Optional TOML configuration file (defaults to ./rocklake.toml when present).
+    #[arg(long, global = true, env = "ROCKLAKE_CONFIG")]
+    pub config: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -31,6 +42,21 @@ pub struct Cli {
 pub enum Commands {
     /// Start the PG-Wire sidecar server.
     Serve(Box<ServeArgs>),
+
+    /// Run a read-only startup preflight.
+    Doctor(DoctorArgs),
+
+    /// Validate or print configuration.
+    #[command(subcommand)]
+    Config(ConfigSubcommand),
+
+    /// Create and inspect portable catalog backups.
+    #[command(subcommand)]
+    Backup(BackupSubcommand),
+
+    /// Plan or apply a backup restore.
+    #[command(subcommand)]
+    Restore(RestoreSubcommand),
 
     /// Visibility GC — advance the retain-from watermark.
     #[command(subcommand)]
@@ -106,24 +132,28 @@ pub enum Commands {
 #[derive(Debug, Parser)]
 pub struct ServeArgs {
     /// Catalog URL (`file:///…`, `s3://…`, `gs://…`, `az://…`).
-    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
-    pub catalog: String,
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG", conflicts_with = "path")]
+    pub catalog: Option<String>,
+
+    /// Local catalog directory (equivalent to `--catalog ./lake`).
+    #[arg(value_name = "PATH", conflicts_with = "catalog")]
+    pub path: Option<String>,
 
     /// Bind address for the PG-Wire listener.
-    #[arg(short = 'b', long, default_value = "127.0.0.1:5432")]
-    pub bind: String,
+    #[arg(short = 'b', long, help = "Bind address [default: 127.0.0.1:5432]")]
+    pub bind: Option<String>,
 
     /// Maximum concurrent sessions.
-    #[arg(long, default_value = "50")]
-    pub max_sessions: usize,
+    #[arg(long)]
+    pub max_sessions: Option<usize>,
 
     /// Port for the Prometheus `/metrics` HTTP endpoint.
     #[arg(long)]
     pub metrics_port: Option<u16>,
 
     /// HTTP path for the metrics endpoint.
-    #[arg(long, env = "ROCKLAKE_METRICS_PATH", default_value = "/metrics")]
-    pub metrics_path: String,
+    #[arg(long)]
+    pub metrics_path: Option<String>,
 
     /// Path to TLS certificate file.
     #[arg(long)]
@@ -135,40 +165,31 @@ pub struct ServeArgs {
 
     /// Require TLS for all connections.
     #[arg(long, action = ArgAction::SetTrue)]
-    pub tls_required: bool,
+    pub tls_required: Option<bool>,
 
     /// Username for PG-Wire authentication.
     #[arg(long, env = "ROCKLAKE_AUTH_USER")]
     pub auth_user: Option<String>,
 
     /// Password for PG-Wire authentication.
-    #[arg(
-        long,
-        env = "ROCKLAKE_AUTH_PASSWORD",
-        hide_env_values = true,
-        conflicts_with = "auth_password_file"
-    )]
+    #[arg(long, hide_env_values = true, conflicts_with = "auth_password_file")]
     pub auth_password: Option<String>,
 
     /// Read the PG-Wire authentication password from a file.
-    #[arg(
-        long,
-        env = "ROCKLAKE_AUTH_PASSWORD_FILE",
-        conflicts_with = "auth_password"
-    )]
+    #[arg(long, conflicts_with = "auth_password")]
     pub auth_password_file: Option<String>,
 
     /// Serving mode: `writer` (accepts writes) or `reader` (read-only).
-    #[arg(long, default_value = "writer", value_parser = ["writer", "reader"])]
-    pub mode: String,
+    #[arg(long, value_parser = ["writer", "reader"])]
+    pub mode: Option<String>,
 
     /// Deprecated compatibility alias for `--mode reader`.
     #[arg(long, action = ArgAction::SetTrue, conflicts_with = "mode")]
-    pub read_only: bool,
+    pub read_only: Option<bool>,
 
     /// Cost/latency preset.
-    #[arg(long, default_value = "balanced", value_parser = ["conservative", "balanced", "latency"])]
-    pub cost_mode: String,
+    #[arg(long, value_parser = ["conservative", "balanced", "latency"])]
+    pub cost_mode: Option<String>,
 
     /// S3-compatible endpoint URL (e.g. for MinIO).
     #[arg(long)]
@@ -176,7 +197,7 @@ pub struct ServeArgs {
 
     /// Use S3 path-style addressing.
     #[arg(long, action = ArgAction::SetTrue)]
-    pub s3_path_style: bool,
+    pub s3_path_style: Option<bool>,
 
     /// AES-256 encryption key (64 hex digits).
     #[arg(long, conflicts_with = "encryption_key_file", hide_env_values = true)]
@@ -192,23 +213,135 @@ pub struct ServeArgs {
 
     /// Comma-separated allowed extension schema names.
     #[arg(long, env = "ROCKLAKE_EXTENSION_SCHEMAS", value_delimiter = ',')]
-    pub extension_schemas: Vec<String>,
+    pub extension_schemas: Option<Vec<String>>,
 
     /// OTLP HTTP endpoint for OpenTelemetry tracing.
     #[arg(long, env = "ROCKLAKE_OTLP_ENDPOINT")]
     pub otlp_endpoint: Option<String>,
 
     /// Close idle connections after this many seconds (default: 60).
-    #[arg(long, default_value = "60")]
-    pub idle_connection_timeout: u64,
+    #[arg(long)]
+    pub idle_connection_timeout: Option<u64>,
 
     /// Maximum seconds to wait for in-flight queries during SIGTERM drain (default: 30).
-    #[arg(long, default_value = "30")]
-    pub drain_timeout: u64,
+    #[arg(long)]
+    pub drain_timeout: Option<u64>,
 
     /// Capacity of the DataFusion AsyncBridge channel (default: 256).
-    #[arg(long, default_value = "256")]
-    pub datafusion_bridge_queue_depth: usize,
+    #[arg(long)]
+    pub datafusion_bridge_queue_depth: Option<usize>,
+}
+
+#[derive(Debug, Parser)]
+pub struct DoctorArgs {
+    /// Catalog URL or local path to preflight.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+
+    /// Serving mode to validate.
+    #[arg(long, value_parser = ["writer", "reader"])]
+    pub mode: Option<String>,
+
+    /// Listener address to validate for unsafe exposure.
+    #[arg(long)]
+    pub bind: Option<String>,
+
+    /// TLS certificate path used by the intended server.
+    #[arg(long)]
+    pub tls_cert: Option<String>,
+
+    /// TLS private key path used by the intended server.
+    #[arg(long)]
+    pub tls_key: Option<String>,
+
+    /// Authentication username used by the intended server.
+    #[arg(long, env = "ROCKLAKE_AUTH_USER")]
+    pub auth_user: Option<String>,
+
+    /// Encryption key or file to validate without printing its contents.
+    #[arg(long, hide_env_values = true, conflicts_with = "encryption_key_file")]
+    pub encryption_key: Option<String>,
+
+    /// Encryption key file to validate.
+    #[arg(long, conflicts_with = "encryption_key")]
+    pub encryption_key_file: Option<String>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigSubcommand {
+    /// Validate the selected configuration file.
+    Check(ConfigCheckArgs),
+    /// Print a complete example configuration.
+    Example,
+}
+
+#[derive(Debug, Parser)]
+pub struct ConfigCheckArgs {
+    /// Configuration file to validate instead of the global --config path.
+    #[arg(long)]
+    pub file: Option<std::path::PathBuf>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BackupSubcommand {
+    /// Create a snapshot-consistent backup directory.
+    Create(BackupCreateArgs),
+    /// Validate and inspect a backup directory.
+    Inspect(BackupInspectArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct BackupCreateArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+    /// Output backup directory.
+    #[arg(long)]
+    pub out: std::path::PathBuf,
+    /// Snapshot to back up (latest by default).
+    #[arg(long)]
+    pub snapshot_id: Option<u64>,
+}
+
+#[derive(Debug, Parser)]
+pub struct BackupInspectArgs {
+    /// Backup directory containing manifest.json and catalog.ndjson.
+    pub backup: std::path::PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RestoreSubcommand {
+    /// Validate a backup and show its proposed target changes.
+    Plan(RestoreArgs),
+    /// Validate and import a backup into an empty target catalog.
+    Apply(RestoreArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct RestoreArgs {
+    /// Backup directory containing manifest.json and catalog.ndjson.
+    #[arg(long)]
+    pub backup: std::path::PathBuf,
+    /// Destination catalog URL or local path.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+    /// Explicitly allow replacing a target catalog after validation.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub overwrite: bool,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
 }
 
 // ─── gc ────────────────────────────────────────────────────────────────────
@@ -230,6 +363,10 @@ pub struct GcArgs {
     /// Retention period in days (snapshots older than this are eligible for GC).
     #[arg(long, default_value = "30")]
     pub retention_days: u64,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
 }
 
 // ─── excise ────────────────────────────────────────────────────────────────
@@ -251,6 +388,10 @@ pub struct ExciseArgs {
     /// Delete facts for all snapshots strictly before this ID.
     #[arg(long)]
     pub before: u64,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
 }
 
 // ─── checkpoint ────────────────────────────────────────────────────────────
@@ -405,6 +546,10 @@ pub struct InspectArgs {
     /// Catalog URL.
     #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
     pub catalog: String,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
 }
 
 // ─── verify ────────────────────────────────────────────────────────────────
@@ -423,6 +568,10 @@ pub struct VerifyArgs {
     /// Catalog URL.
     #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
     pub catalog: String,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
 }
 
 // ─── repair ────────────────────────────────────────────────────────────────
@@ -440,6 +589,10 @@ pub struct RepairArgs {
     /// Apply repairs.
     #[arg(long, action = ArgAction::SetTrue)]
     pub apply: bool,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
 }
 
 // ─── warmup ────────────────────────────────────────────────────────────────
@@ -563,6 +716,10 @@ pub struct DiagnoseArgs {
     #[arg(long, action = ArgAction::SetTrue)]
     pub json: bool,
 
+    /// Output format. `--json` remains as a compatibility alias.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+
     /// Object-store root containing the data files (enables data-file checks).
     #[arg(long)]
     pub data_root: Option<String>,
@@ -587,6 +744,10 @@ pub struct SweepOrphansArgs {
     /// Delete orphan files (default: dry-run only).
     #[arg(long, action = ArgAction::SetTrue)]
     pub apply: bool,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
 }
 
 // ─── completions ───────────────────────────────────────────────────────────

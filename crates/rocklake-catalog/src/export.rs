@@ -1675,15 +1675,11 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                 }
                 let next_cat = d["next_catalog_id"].as_u64();
                 if let Some(nc) = next_cat {
-                    if nc > max_catalog_id {
-                        max_catalog_id = nc;
-                    }
+                    max_catalog_id = max_catalog_id.max(nc.saturating_sub(1));
                 }
                 let next_file = d["next_file_id"].as_u64();
                 if let Some(nf) = next_file {
-                    if nf > max_file_id {
-                        max_file_id = nf;
-                    }
+                    max_file_id = max_file_id.max(nf.saturating_sub(1));
                 }
                 let row = SnapshotRow {
                     snapshot_id,

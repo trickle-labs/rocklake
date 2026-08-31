@@ -3,6 +3,7 @@
 #![deny(missing_docs)]
 
 pub mod audit;
+pub mod backup;
 pub mod cache;
 pub mod cdc;
 pub mod checkpoint;
@@ -39,6 +40,9 @@ pub mod warmup;
 pub mod writer;
 
 pub use audit::{AuditChange, AuditEntry};
+pub use backup::{
+    create_backup, inspect_backup, BackupInfo, BackupManifest, BACKUP_FORMAT_VERSION,
+};
 pub use cache::{cache_utilization, CacheStats};
 pub use cdc::{CdcChangeKind, CdcEvent, CdcSnapshot, CdcTailer, WebhookPayload};
 pub use corpus::{corpus_diff, corpus_validate, parse_corpus, CorpusRecord, ValidateResult};

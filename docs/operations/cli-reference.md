@@ -8,6 +8,10 @@ binary or a command for the complete generated reference.
 
 ```text
 serve
+doctor
+config check|example
+backup create|inspect
+restore plan|apply
 gc plan|apply
 excise plan|apply
 checkpoint create|list|restore|pin|unpin|pins
@@ -55,9 +59,31 @@ rocklake import --catalog <path> --input <path>
 
 ## Server options
 
+The fastest local path is:
+
+~~~bash
+rocklake serve ./lake
+~~~
+
+`rocklake serve ./lake` creates a local catalog directory when needed. A
+`rocklake.toml` file can provide the same settings; precedence is built-in
+defaults, TOML, environment, then command-line flags.
+
+## Operational commands
+
+~~~bash
+rocklake doctor --catalog ./lake [--output human|json]
+rocklake config check [--file rocklake.toml] [--output human|json]
+rocklake config example
+rocklake backup create --catalog ./lake --out ./lake-backup
+rocklake backup inspect ./lake-backup --output json
+rocklake restore plan --backup ./lake-backup --catalog ./restored
+rocklake restore apply --backup ./lake-backup --catalog ./restored
+~~~
+
 ```bash
 rocklake serve \
-  --catalog <file://...,s3://...,gs://...,az://...> \
+  [PATH | --catalog <file://...,s3://...,gs://...,az://...>] \
   [--bind <host:port>] \
   [--mode writer|reader] [--read-only] \
   [--max-sessions <n>] \
@@ -112,8 +138,6 @@ rocklake inspect snapshot --catalog file:///path/to/catalog
 rocklake export-catalog --catalog file:///path/to/catalog --out catalog.ndjson
 rocklake verify catalog --catalog file:///path/to/catalog
 rocklake diagnose --catalog file:///path/to/catalog --json
+rocklake backup create --catalog file:///path/to/catalog --out catalog-backup
+rocklake restore plan --backup catalog-backup --catalog file:///path/to/restored
 ```
-
-`rocklake doctor`, `rocklake.toml`, `backup create`, `backup inspect`,
-`restore plan`, and `restore apply` are not v0.50.0 commands. Do not document
-or automate them until they have executable implementations and CI coverage.
