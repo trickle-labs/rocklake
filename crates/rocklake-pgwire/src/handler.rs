@@ -1034,6 +1034,7 @@ fn copy_out_error(message: &str) -> PgWireError {
 pub struct RockLakeStartupHandler {
     auth: Arc<AuthConfig>,
     tls_required: bool,
+    lifecycle: Arc<ConnectionActivity>,
     /// Per-connection SCRAM state (None until the client-first-message
     /// is received; Some during the challenge-response phase).
     scram_state: Mutex<Option<crate::scram::ScramState>>,
@@ -1041,17 +1042,26 @@ pub struct RockLakeStartupHandler {
 
 impl RockLakeStartupHandler {
     pub fn new(auth: Arc<AuthConfig>) -> Self {
-        Self {
-            auth,
-            tls_required: false,
-            scram_state: Mutex::new(None),
-        }
+        Self::new_with_tls_required_and_lifecycle(auth, false, ConnectionActivity::standalone())
     }
 
     pub fn new_with_tls_required(auth: Arc<AuthConfig>, tls_required: bool) -> Self {
+        Self::new_with_tls_required_and_lifecycle(
+            auth,
+            tls_required,
+            ConnectionActivity::standalone(),
+        )
+    }
+
+    pub(crate) fn new_with_tls_required_and_lifecycle(
+        auth: Arc<AuthConfig>,
+        tls_required: bool,
+        lifecycle: Arc<ConnectionActivity>,
+    ) -> Self {
         Self {
             auth,
             tls_required,
+            lifecycle,
             scram_state: Mutex::new(None),
         }
     }
@@ -1069,6 +1079,7 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        self.lifecycle.touch();
         match message {
             PgWireFrontendMessage::Startup(ref startup) => {
                 // Reject plaintext connections when TLS is required.
@@ -1928,7 +1939,7 @@ impl RockLakeServerHandlers {
                 max_response_bytes,
                 slow_operation_threshold,
                 metrics,
-                lifecycle,
+                lifecycle.clone(),
             ),
         );
         let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
@@ -1937,9 +1948,10 @@ impl RockLakeServerHandlers {
         ));
         Self {
             handler,
-            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required(
+            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required_and_lifecycle(
                 auth,
                 tls_required,
+                lifecycle,
             )),
             copy_handler,
             error_handler: Arc::new(NoopErrorHandler),

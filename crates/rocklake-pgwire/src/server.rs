@@ -126,7 +126,7 @@ impl ConnectionActivity {
         self.touch();
     }
 
-    fn touch(&self) {
+    pub(crate) fn touch(&self) {
         *self
             .last_activity
             .lock()
