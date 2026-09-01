@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
-use tracing::{error, info, info_span, warn, Instrument};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
@@ -289,7 +289,6 @@ pub async fn run_server_with_shutdown_mode(
     // Active-session tracking for graceful drain.
     let active_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let metrics_ref = config.metrics.clone();
-    let slow_operation_threshold = config.slow_operation_threshold;
     let max_active_scans = config.max_active_scans;
     if let Some(ref metrics) = metrics_ref {
         metrics.set_resource_limits(
@@ -331,10 +330,6 @@ pub async fn run_server_with_shutdown_mode(
                         m.set_active_sessions(active_ref.load(Ordering::Relaxed) as u64);
                     }
 
-                    let request_id = crate::telemetry::request_id();
-                    let span = info_span!("pgwire_connection", request_id = %request_id);
-                    info!(request_id = %request_id, peer = %addr, "New connection");
-                    let started = std::time::Instant::now();
                     let handlers = RockLakeServerHandlers::new_with_config_mode_and_limits(
                         catalog,
                         auth,
@@ -349,17 +344,17 @@ pub async fn run_server_with_shutdown_mode(
                         config.slow_operation_threshold,
                         metrics_task.clone(),
                     );
+                    let connection_id = handlers.handler.connection_id();
+                    let span = info_span!("pgwire_connection", connection_id = %connection_id);
+                    info!(connection_id = %connection_id, peer = %addr, "New connection");
 
                     if let Err(e) = pgwire::tokio::process_socket(socket, tls, handlers)
                         .instrument(span)
                         .await
                     {
-                        error!(request_id = %request_id, peer = %addr, "Connection error: {e}");
+                        error!(connection_id = %connection_id, peer = %addr, "Connection error: {e}");
                     }
-                    let elapsed = started.elapsed();
-                    if elapsed >= slow_operation_threshold {
-                        warn!(request_id = %request_id, operation = "pgwire_connection", elapsed_ms = elapsed.as_millis() as u64, "slow operation");
-                    }
+                    debug!(connection_id = %connection_id, peer = %addr, "connection closed");
 
                     counters_ref.idle_sessions.fetch_sub(1, Ordering::Relaxed);
                     active_ref.fetch_sub(1, Ordering::AcqRel);

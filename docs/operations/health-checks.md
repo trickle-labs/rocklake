@@ -1,6 +1,6 @@
 # Health Checks
 
-v0.51.0 does not publish a separate health HTTP endpoint. Use the PostgreSQL
+v0.51.1 does not publish a separate health HTTP endpoint. Use the PostgreSQL
 wire listener for a liveness check and the read-only diagnostic commands for
 catalog health.
 

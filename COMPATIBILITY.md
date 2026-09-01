@@ -25,7 +25,15 @@ backend versions that CI covers.
 
 | Catalog format | Current read support | Current write support |
 |---|---|---|
-| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.51.0 | v0.51.0 |
+| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.51.1 | v0.51.1 |
+
+## Metrics
+
+The PG-wire query-duration histogram uses cumulative buckets. The `+Inf`
+bucket equals `rocklake_pgwire_queries_total`. Query timing starts before SQL
+classification and ends after response completion. Query logs and child
+catalog spans carry a unique `query_id` and the connection's stable
+`connection_id`.
 
 ## Upgrade and restore contract
 

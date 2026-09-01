@@ -75,7 +75,7 @@ client.close();
 
 ## Python
 
-The Python binding is built from this repository with `maturin`. v0.51.0 does
+The Python binding is built from this repository with `maturin`. v0.51.1 does
 not claim a PyPI publication.
 
 ### Build from source
@@ -131,7 +131,7 @@ cat.close()
 
 ## Go
 
-Build the binding from the repository's `bindings/go` module. v0.51.0 does not
+Build the binding from the repository's `bindings/go` module. v0.51.1 does not
 claim a separately published Go module:
 
 ```sh
@@ -184,7 +184,7 @@ func main() {
 
 ## Node.js
 
-Build the Node.js package from `bindings/nodejs`; v0.51.0 does not claim an
+Build the Node.js package from `bindings/nodejs`; v0.51.1 does not claim an
 external npm publication.
 
 ```sh

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.51.1] — 2026-09-01
+
+### Fixed
+
+- Corrected cumulative Prometheus histogram buckets and the `+Inf` bucket.
+- Timed PG-wire requests from classification through response completion.
+- Added phase timing metrics and stable connection and query correlation IDs.
+- Recorded first-row timing after the first row flushes to the client.
+- Logged healthy connection closes as lifecycle events instead of slow operations.
+
 ## [0.51.0] — 2026-09-01
 
 ### Added

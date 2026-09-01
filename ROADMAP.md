@@ -1,7 +1,7 @@
 # RockLake roadmap
 
 - **Status:** Active
-- **Current release:** v0.51.0
+- **Current release:** v0.51.1
 - **Planning horizon:** v0.51.1 through v0.53.x
 - **v1.0:** Deferred intentionally
 

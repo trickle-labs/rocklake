@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.51.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.51.1 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
