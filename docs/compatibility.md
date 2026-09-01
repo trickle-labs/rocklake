@@ -1,6 +1,8 @@
-# Compatibility Matrix
+# Tested compatibility matrix
 
-This page describes the tested compatibility between RockLake and various ecosystem components.
+This page lists the component and backend versions covered by CI. The public
+policy for format, upgrade, deprecation, support, and scale claims is in the
+root [`COMPATIBILITY.md`](https://github.com/trickle-labs/rocklake/blob/main/COMPATIBILITY.md).
 
 ## DuckLake v1.0 Compatibility Claim
 
@@ -70,15 +72,15 @@ and not applied.
 |--------------|--------|----------|-------|
 | 3.5.x | ✅ Supported | pg-wire | Full wire-corpus validated in CI |
 | 3.4.x | ⚠️ Untested | pg-wire | Expected to work; not tested |
-| 3.3.x | ❌ Not supported | — | Extended query protocol required |
+| 3.3.x | ❌ Not supported | Not applicable | Extended query protocol required |
 
 ## Trino / Presto
 
 | Version | Status | Protocol | Notes |
 |---------|--------|----------|-------|
 | Trino 432+ | ✅ Supported | pg-wire | Full wire-corpus validated in CI |
-| Trino 400–431 | ⚠️ Untested | pg-wire | Expected to work |
-| Presto | ❌ Not tested | — | May work; contributions welcome |
+| Trino 400-431 | ⚠️ Untested | pg-wire | Expected to work |
+| Presto | ❌ Not tested | Not applicable | May work; contributions welcome |
 
 ## Apache DataFusion
 
@@ -91,11 +93,11 @@ and not applied.
 
 | Backend | Version | Status | Notes |
 |---------|---------|--------|-------|
-| AWS S3 | — | ✅ Supported | Via `object_store` 0.12 |
-| Google Cloud Storage | — | ✅ Supported | Via `object_store` 0.12; v0.36.0: GcsEmulatorHarness + backend_compat suite |
-| Azure Blob Storage | — | ✅ Supported | Via `object_store` 0.12; v0.36.0: AzureEmulatorHarness + backend_compat suite |
+| AWS S3 | Not specified | ✅ Supported | Via `object_store` 0.12 |
+| Google Cloud Storage | Not specified | ✅ Supported | Via `object_store` 0.12; v0.36.0: GcsEmulatorHarness + backend_compat suite |
+| Azure Blob Storage | Not specified | ✅ Supported | Via `object_store` 0.12; v0.36.0: AzureEmulatorHarness + backend_compat suite |
 | MinIO | RELEASE.2024+ | ✅ Supported | S3-compatible endpoint |
-| Local filesystem | — | ✅ Supported | Development / testing; v0.36.0: LocalFS backend_compat suite |
+| Local filesystem | Not specified | ✅ Supported | Development / testing; v0.36.0: LocalFS backend_compat suite |
 
 ## SlateDB
 
