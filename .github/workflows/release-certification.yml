@@ -206,10 +206,22 @@ jobs:
           LSAN_OPTIONS: detect_leaks=0
         run: cargo test -p rocklake-ffi --target x86_64-unknown-linux-gnu
 
+  connection-lifecycle:
+    name: v0.51.2 Connection Lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - run: cargo test -p rocklake-pgwire --test v0512_connection_lifecycle_tests -- --test-threads=1 --nocapture
+
   release-certification:
     name: Release Certification
     if: always()
-    needs: [quality, failure-certification, ducklake, public-surface, backend-execution, windows, security, docs, quickstart, compatibility, miri-sanitizers]
+    needs: [quality, failure-certification, ducklake, public-surface, backend-execution, windows, security, docs, quickstart, compatibility, miri-sanitizers, connection-lifecycle]
     runs-on: ubuntu-latest
     env:
       QUALITY_RESULT: ${{ needs.quality.result }}
@@ -223,6 +235,7 @@ jobs:
       QUICKSTART_RESULT: ${{ needs.quickstart.result }}
       COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
       MIRI_RESULT: ${{ needs.miri-sanitizers.result }}
+      LIFECYCLE_RESULT: ${{ needs.connection-lifecycle.result }}
     outputs:
       certified-sha: ${{ steps.certify.outputs.sha }}
     steps:
@@ -243,10 +256,11 @@ jobs:
           test "$QUICKSTART_RESULT" = success
           test "$COMPATIBILITY_RESULT" = success
           test "$MIRI_RESULT" = success
-          printf '{"certified_sha":"%s","quality":"%s","failure_certification":"%s","ducklake":"%s","public_surface":"%s","backend_execution":"%s","windows":"%s","security":"%s","docs":"%s","quickstart":"%s","compatibility":"%s","miri_sanitizers":"%s"}\n' \
+          test "$LIFECYCLE_RESULT" = success
+          printf '{"certified_sha":"%s","quality":"%s","failure_certification":"%s","ducklake":"%s","public_surface":"%s","backend_execution":"%s","windows":"%s","security":"%s","docs":"%s","quickstart":"%s","compatibility":"%s","miri_sanitizers":"%s","connection_lifecycle":"%s"}\n' \
             "$CERTIFIED_REF" "$QUALITY_RESULT" "$FAILURE_RESULT" "$DUCKLAKE_RESULT" \
             "$PUBLIC_SURFACE_RESULT" "$BACKEND_RESULT" "$WINDOWS_RESULT" "$SECURITY_RESULT" \
-            "$DOCS_RESULT" "$QUICKSTART_RESULT" "$COMPATIBILITY_RESULT" "$MIRI_RESULT" \
+            "$DOCS_RESULT" "$QUICKSTART_RESULT" "$COMPATIBILITY_RESULT" "$MIRI_RESULT" "$LIFECYCLE_RESULT" \
             > release-certification.json
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4

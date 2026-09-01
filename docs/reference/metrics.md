@@ -16,7 +16,7 @@ the configured path; other paths return 404.
 
 ## Exported metrics
 
-The v0.51.1 binary exports these Prometheus metrics:
+The v0.51.2 binary exports these Prometheus metrics:
 
 - Catalog: `rocklake_snapshots_created_total`, `rocklake_files_per_snapshot`.
 - Object store: `rocklake_object_store_requests_total`,
@@ -24,8 +24,8 @@ The v0.51.1 binary exports these Prometheus metrics:
   `rocklake_object_store_bytes_written_total`,
   `rocklake_object_store_throttles_total`,
   `rocklake_object_store_retries_total`.
-- Sessions: `rocklake_active_sessions`, `rocklake_idle_sessions`,
-  `rocklake_max_sessions`.
+- Sessions: `rocklake_connections_open`, `rocklake_connections_idle`,
+  `rocklake_queries_in_flight`, `rocklake_max_sessions`.
 - Queries: `rocklake_last_query_keys_scanned`,
   `rocklake_pgwire_queries_total`,
   `rocklake_pgwire_query_duration_seconds` (histogram, total request duration),
@@ -46,11 +46,16 @@ The v0.51.1 binary exports these Prometheus metrics:
   `rocklake_slatedb_compaction_lag_ms`, `rocklake_slatedb_memtable_bytes`.
 - DataFusion: `rocklake_datafusion_bridge_queue_depth`.
 - Resource limits: `rocklake_active_scans`, `rocklake_max_active_scans`,
-  `rocklake_stream_queue_depth`, `rocklake_max_buffered_rows`,
+  `rocklake_stream_queue_depth`, `rocklake_max_buffered_rows` (legacy configured
+  values with no independent runtime effect),
   `rocklake_pgwire_peak_buffered_rows`, `rocklake_max_response_bytes`,
   `rocklake_process_rss_bytes`, `rocklake_process_peak_rss_bytes`,
   `rocklake_resource_limit_exhaustions_total`,
   `rocklake_stream_backpressure_total`.
+
+The configuration keys `stream_queue_depth` and `max_buffered_rows` remain
+accepted for compatibility. They have no independent runtime effect, and
+RockLake emits one warning when either key is configured.
 
 Operation latency is exported as `_sum` and `_count` series under
 `rocklake_catalog_op_duration_seconds` with an `op` label.
@@ -61,6 +66,16 @@ catalog work, and response delivery covers encoding and socket delivery. The
 query-duration histogram starts before classification and ends after the
 request's final completion message. Its buckets are cumulative, and its
 `+Inf` bucket equals the query count.
+
+### Lifecycle metric aliases
+
+The v0.51.2 lifecycle names replace these older names. The old names remain
+available as aliases through v0.53.x. Do not remove them before v0.54.0.
+
+| Current metric | Deprecated alias |
+|----------------|------------------|
+| `rocklake_connections_open` | `rocklake_active_sessions` |
+| `rocklake_connections_idle` | `rocklake_idle_sessions` |
 
 ## Prometheus scrape configuration
 

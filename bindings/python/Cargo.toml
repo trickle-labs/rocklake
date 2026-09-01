@@ -1,6 +1,6 @@
 [package]
 name = "rocklake-py"
-version = "0.51.1"
+version = "0.51.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Python bindings for RockLake catalog (PyO3)"

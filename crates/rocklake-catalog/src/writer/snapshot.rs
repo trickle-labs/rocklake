@@ -238,7 +238,7 @@ impl CatalogWriter {
         self.db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))
+            .map_err(CatalogError::from)
     }
 
     pub(super) async fn check_epoch(&self, tx: &DbTransaction) -> CatalogResult<()> {

@@ -871,6 +871,17 @@ jobs:
       - name: v0.47.0 graceful drain tests
         run: cargo test -p rocklake-pgwire --test v047_drain_tests -- --test-threads=1 --nocapture
 
+  connection-lifecycle-v0512:
+    name: Connection Lifecycle Tests (v0.51.2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: v0.51.2 connection lifecycle tests
+        run: cargo test -p rocklake-pgwire --test v0512_connection_lifecycle_tests -- --test-threads=1 --nocapture
+
   # v0.47.0: DataFusion AsyncBridge backpressure tests.
   # Fires 128 concurrent DataFusion catalog queries with queue_depth=256 and
   # asserts none block beyond the configured bridge capacity.
@@ -944,6 +955,7 @@ jobs:
       - rocklake-client-v043
       - readonly-v047
       - drain-v047
+      - connection-lifecycle-v0512
       - datafusion-bridge-v047
       - bench-v047
       - production-failure-certification

@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.51.2] — 2026-09-01
+
+### Fixed
+
+- Reserved session capacity before creating connection tasks and rejected
+  excess connections promptly with SQLSTATE `53300`.
+- Enforced `idle_connection_timeout` and shutdown behavior for new work,
+  in-flight queries, and idle sockets.
+- Added `connections_open`, `connections_idle`, and `queries_in_flight` metrics
+  while retaining the previous session names as deprecated aliases.
+- Marked `stream_queue_depth` and `max_buffered_rows` as compatibility settings
+  with a startup or config-check warning and no independent runtime effect.
+
 ## [0.51.1] — 2026-09-01
 
 ### Fixed
