@@ -1008,11 +1008,6 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
         bootstrap_analytics_events(&catalog, &pgwire, &duckdb, "live surface bootstrap barrier")
             .await;
     let initial_objects = catalog_object_count(&prefix).await;
-    let client = pgwire
-        .connect()
-        .await
-        .expect("PG-Wire client should connect");
-
     duckdb.stop().await;
 
     let smoke_duckdb = start_duckdb(&data_dir).await;
@@ -1092,6 +1087,10 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
         .list_delete_files(table_id)
         .await
         .expect("list_delete_files should work");
+    let client = pgwire
+        .connect()
+        .await
+        .expect("PG-Wire client should connect");
 
     for &table_name in METADATA_TABLES {
         let query = format!("SELECT * FROM __ducklake_metadata_my_lake.{table_name} LIMIT 0");
