@@ -18,7 +18,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ ! -x "$binary" ]]; then
-  cargo build -p rocklake-pgwire --bin rocklake
+  cargo build --manifest-path "$repo_dir/Cargo.toml" -p rocklake-pgwire --bin rocklake
 fi
 
 "$binary" serve --catalog "file://$catalog_dir/catalog" --bind "127.0.0.1:$port" >"$catalog_dir/server.log" 2>&1 &
