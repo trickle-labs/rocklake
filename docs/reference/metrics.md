@@ -16,7 +16,7 @@ the configured path; other paths return 404.
 
 ## Exported metrics
 
-The v0.51.0 binary exports these Prometheus metrics:
+The v0.51.1 binary exports these Prometheus metrics:
 
 - Catalog: `rocklake_snapshots_created_total`, `rocklake_files_per_snapshot`.
 - Object store: `rocklake_object_store_requests_total`,
@@ -28,13 +28,16 @@ The v0.51.0 binary exports these Prometheus metrics:
   `rocklake_max_sessions`.
 - Queries: `rocklake_last_query_keys_scanned`,
   `rocklake_pgwire_queries_total`,
-  `rocklake_pgwire_query_duration_seconds` (histogram),
+  `rocklake_pgwire_query_duration_seconds` (histogram, total request duration),
+  `rocklake_pgwire_admission_seconds`,
+  `rocklake_pgwire_sql_classification_seconds`,
+  `rocklake_pgwire_execution_seconds`,
+  `rocklake_pgwire_response_delivery_seconds`,
   `rocklake_pgwire_response_rows_total`,
   `rocklake_pgwire_response_bytes_total`,
   `rocklake_pgwire_response_rows_per_second`,
   `rocklake_pgwire_response_bytes_per_second`,
   `rocklake_pgwire_time_to_first_row_seconds`,
-  `rocklake_pgwire_sql_classification_seconds`,
   `rocklake_pgwire_errors_total`.
 - Lifecycle: `rocklake_gc_retain_from_snapshot`,
   `rocklake_excision_bytes_deleted_total`,
@@ -51,6 +54,13 @@ The v0.51.0 binary exports these Prometheus metrics:
 
 Operation latency is exported as `_sum` and `_count` series under
 `rocklake_catalog_op_duration_seconds` with an `op` label.
+
+The PG-wire phase metrics use `_sum` and `_count` series. Admission covers the
+scan permit decision, classification covers SQL dispatch, execution covers
+catalog work, and response delivery covers encoding and socket delivery. The
+query-duration histogram starts before classification and ends after the
+request's final completion message. Its buckets are cumulative, and its
+`+Inf` bucket equals the query count.
 
 ## Prometheus scrape configuration
 

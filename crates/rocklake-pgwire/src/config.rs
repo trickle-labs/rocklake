@@ -52,7 +52,7 @@ pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), St
 }
 
 pub fn example() -> &'static str {
-    r#"# RockLake v0.51.0 configuration
+    r#"# RockLake v0.51.1 configuration
 catalog = "./lake"
 bind = "127.0.0.1:5432"
 mode = "writer"

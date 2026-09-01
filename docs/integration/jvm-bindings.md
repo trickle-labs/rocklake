@@ -17,7 +17,7 @@ The `rocklake-java` project wraps the `rocklake.h` C ABI via JNA, providing:
 
 ## Build from source
 
-v0.51.0 does not claim a public Maven publication. Build the project from the
+v0.51.1 does not claim a public Maven publication. Build the project from the
 repository and publish it to a local Maven repository when another local JVM
 project needs it:
 
@@ -27,7 +27,7 @@ cd bindings/java
 ./gradlew publishToMavenLocal
 ```
 
-Then use `io.trickle:rocklake-java:0.51.0` from that local repository. The
+Then use `io.trickle:rocklake-java:0.51.1` from that local repository. The
 `RockLakeNative` class loads the native library built for the current platform.
 
 ---

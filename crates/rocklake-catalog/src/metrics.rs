@@ -113,6 +113,18 @@ pub struct CatalogMetrics {
     pub pgwire_ttfr_count: AtomicU64,
     pub pgwire_sql_classification_us_total: AtomicU64,
     pub pgwire_sql_classification_count: AtomicU64,
+    /// Accumulated PG-wire admission latency in microseconds.
+    pub pgwire_admission_us_total: AtomicU64,
+    /// Number of PG-wire admission observations.
+    pub pgwire_admission_count: AtomicU64,
+    /// Accumulated PG-wire execution latency in microseconds.
+    pub pgwire_execution_us_total: AtomicU64,
+    /// Number of PG-wire execution observations.
+    pub pgwire_execution_count: AtomicU64,
+    /// Accumulated PG-wire response delivery latency in microseconds.
+    pub pgwire_response_delivery_us_total: AtomicU64,
+    /// Number of PG-wire response delivery observations.
+    pub pgwire_response_delivery_count: AtomicU64,
     pub pgwire_peak_buffered_rows: AtomicU64,
     pub active_scans: AtomicU64,
     pub max_active_scans: AtomicU64,
@@ -176,6 +188,12 @@ impl CatalogMetrics {
             pgwire_ttfr_count: AtomicU64::new(0),
             pgwire_sql_classification_us_total: AtomicU64::new(0),
             pgwire_sql_classification_count: AtomicU64::new(0),
+            pgwire_admission_us_total: AtomicU64::new(0),
+            pgwire_admission_count: AtomicU64::new(0),
+            pgwire_execution_us_total: AtomicU64::new(0),
+            pgwire_execution_count: AtomicU64::new(0),
+            pgwire_response_delivery_us_total: AtomicU64::new(0),
+            pgwire_response_delivery_count: AtomicU64::new(0),
             pgwire_peak_buffered_rows: AtomicU64::new(0),
             active_scans: AtomicU64::new(0),
             max_active_scans: AtomicU64::new(25),
@@ -376,6 +394,25 @@ impl CatalogMetrics {
         self.pgwire_sql_classification_us_total
             .fetch_add(us, Ordering::Relaxed);
         self.pgwire_sql_classification_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn observe_pgwire_admission_us(&self, us: u64) {
+        self.pgwire_admission_us_total
+            .fetch_add(us, Ordering::Relaxed);
+        self.pgwire_admission_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn observe_pgwire_execution_us(&self, us: u64) {
+        self.pgwire_execution_us_total
+            .fetch_add(us, Ordering::Relaxed);
+        self.pgwire_execution_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn observe_pgwire_response_delivery_us(&self, us: u64) {
+        self.pgwire_response_delivery_us_total
+            .fetch_add(us, Ordering::Relaxed);
+        self.pgwire_response_delivery_count
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -589,20 +626,19 @@ impl CatalogMetrics {
         out.push_str(&format!(
             "rocklake_pgwire_query_duration_seconds_sum {pgwire_sum_secs:.6}\n"
         ));
-        let mut cumulative = 0;
         for (bucket, limit) in self
             .pgwire_query_duration_buckets
             .iter()
             .zip(QUERY_BUCKETS_US)
         {
-            cumulative += bucket.load(Ordering::Relaxed);
+            let count = bucket.load(Ordering::Relaxed);
             let le = if limit == u64::MAX {
                 "+Inf".to_string()
             } else {
                 format!("{:.3}", limit as f64 / 1_000_000.0)
             };
             out.push_str(&format!(
-                "rocklake_pgwire_query_duration_seconds_bucket{{le=\"{le}\"}} {cumulative}\n"
+                "rocklake_pgwire_query_duration_seconds_bucket{{le=\"{le}\"}} {count}\n"
             ));
         }
         out.push_str(&format!(
@@ -664,6 +700,34 @@ impl CatalogMetrics {
             "rocklake_pgwire_sql_classification_seconds_count {}\n",
             self.pgwire_sql_classification_count.load(Ordering::Relaxed)
         ));
+        for (name, total, count) in [
+            (
+                "admission",
+                self.pgwire_admission_us_total.load(Ordering::Relaxed),
+                self.pgwire_admission_count.load(Ordering::Relaxed),
+            ),
+            (
+                "execution",
+                self.pgwire_execution_us_total.load(Ordering::Relaxed),
+                self.pgwire_execution_count.load(Ordering::Relaxed),
+            ),
+            (
+                "response_delivery",
+                self.pgwire_response_delivery_us_total
+                    .load(Ordering::Relaxed),
+                self.pgwire_response_delivery_count.load(Ordering::Relaxed),
+            ),
+        ] {
+            let sum_secs = total as f64 / 1_000_000.0;
+            out.push_str(&format!(
+                "# HELP rocklake_pgwire_{name}_seconds Accumulated PG-wire {name} latency.\n"
+            ));
+            out.push_str(&format!("# TYPE rocklake_pgwire_{name}_seconds summary\n"));
+            out.push_str(&format!(
+                "rocklake_pgwire_{name}_seconds_sum {sum_secs:.6}\n"
+            ));
+            out.push_str(&format!("rocklake_pgwire_{name}_seconds_count {count}\n"));
+        }
         out.push_str("# HELP rocklake_pgwire_errors_total Total PG-wire errors.\n");
         out.push_str("# TYPE rocklake_pgwire_errors_total counter\n");
         out.push_str(&format!(

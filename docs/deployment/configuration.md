@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.51.0 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.51.1 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 

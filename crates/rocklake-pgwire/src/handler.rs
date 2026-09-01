@@ -4,6 +4,7 @@
 //! Supports optional password authentication (cleartext with constant-time comparison).
 
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,9 @@ use pgwire::api::auth::{
 };
 use pgwire::api::copy::CopyHandler;
 use pgwire::api::portal::Portal;
-use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
+use pgwire::api::query::{
+    send_execution_response, send_ready_for_query, ExtendedQueryHandler, SimpleQueryHandler,
+};
 use pgwire::api::results::FieldInfo;
 use pgwire::api::results::{
     DescribePortalResponse, DescribeStatementResponse, QueryResponse, Response,
@@ -28,14 +31,15 @@ use pgwire::api::{
     Type, METADATA_USER,
 };
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
-use pgwire::messages::response::ErrorResponse;
+use pgwire::messages::data::RowDescription;
+use pgwire::messages::response::{CommandComplete, EmptyQueryResponse, ErrorResponse};
 use pgwire::messages::startup::Authentication;
 use pgwire::messages::{copy::CopyOutResponse, PgWireBackendMessage, PgWireFrontendMessage};
 use sqlparser::ast::{Expr, SelectItem, SetExpr, Statement};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
-use tracing::warn;
+use tracing::{info_span, warn, Instrument, Span};
 
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
@@ -212,6 +216,7 @@ pub struct RockLakeHandler {
     max_response_bytes: usize,
     slow_operation_threshold: Duration,
     metrics: Option<Arc<CatalogMetrics>>,
+    connection_id: uuid::Uuid,
 }
 
 struct ScanPermit {
@@ -221,13 +226,94 @@ struct ScanPermit {
     metrics: Option<Arc<CatalogMetrics>>,
 }
 
+#[derive(Clone)]
+struct QueryTelemetry {
+    connection_id: uuid::Uuid,
+    query_id: uuid::Uuid,
+    started: Instant,
+    span: Span,
+    finished: Arc<AtomicBool>,
+    slow_operation_threshold: Duration,
+    metrics: Option<Arc<CatalogMetrics>>,
+}
+
+impl QueryTelemetry {
+    fn new(
+        connection_id: uuid::Uuid,
+        slow_operation_threshold: Duration,
+        metrics: Option<Arc<CatalogMetrics>>,
+    ) -> Self {
+        let query_id = crate::telemetry::request_id();
+        let span = info_span!(
+            "pgwire_query",
+            connection_id = %connection_id,
+            query_id = %query_id,
+        );
+        Self {
+            connection_id,
+            query_id,
+            started: Instant::now(),
+            span,
+            finished: Arc::new(AtomicBool::new(false)),
+            slow_operation_threshold,
+            metrics,
+        }
+    }
+
+    fn record_admission(&self, started: Instant) {
+        if let Some(metrics) = &self.metrics {
+            metrics.observe_pgwire_admission_us(started.elapsed().as_micros() as u64);
+        }
+    }
+
+    fn record_execution(&self, started: Instant) {
+        if let Some(metrics) = &self.metrics {
+            metrics.observe_pgwire_execution_us(started.elapsed().as_micros() as u64);
+        }
+    }
+
+    fn record_response(&self, rows: u64, bytes: u64, first_row: Option<Instant>, started: Instant) {
+        if let Some(metrics) = &self.metrics {
+            let elapsed = started.elapsed();
+            let ttfr = first_row
+                .map(|first| first.duration_since(self.started).as_micros() as u64)
+                .unwrap_or(0);
+            metrics.record_pgwire_response_with_timing(
+                rows,
+                bytes,
+                ttfr,
+                elapsed.as_micros() as u64,
+            );
+            metrics.observe_pgwire_response_delivery_us(elapsed.as_micros() as u64);
+        }
+    }
+
+    fn finish(&self) {
+        if self.finished.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let elapsed = self.started.elapsed();
+        if let Some(metrics) = &self.metrics {
+            metrics.record_pgwire_query(elapsed.as_micros() as u64);
+        }
+        if elapsed >= self.slow_operation_threshold {
+            warn!(
+                query_id = %self.query_id,
+                connection_id = %self.connection_id,
+                operation = "pgwire_query",
+                elapsed_ms = elapsed.as_millis() as u64,
+                "slow operation"
+            );
+        }
+    }
+}
+
 struct ResponseObservation {
+    query: QueryTelemetry,
     started: Instant,
     first_row: Option<Instant>,
     rows: u64,
     bytes: u64,
-    slow_operation_threshold: Duration,
-    metrics: Option<Arc<CatalogMetrics>>,
 }
 
 impl ResponseObservation {
@@ -239,28 +325,9 @@ impl ResponseObservation {
 
 impl Drop for ResponseObservation {
     fn drop(&mut self) {
-        let elapsed = self.started.elapsed();
-        if let Some(metrics) = &self.metrics {
-            metrics.record_pgwire_query(elapsed.as_micros() as u64);
-            let ttfr = self
-                .first_row
-                .map(|started| started.duration_since(self.started).as_micros() as u64)
-                .unwrap_or(0);
-            metrics.record_pgwire_response_with_timing(
-                self.rows,
-                self.bytes,
-                ttfr,
-                elapsed.as_micros() as u64,
-            );
-        }
-        if elapsed >= self.slow_operation_threshold {
-            warn!(
-                operation = "pgwire_query",
-                elapsed_ms = elapsed.as_millis() as u64,
-                rows = self.rows,
-                "slow operation"
-            );
-        }
+        self.query
+            .record_response(self.rows, self.bytes, self.first_row, self.started);
+        self.query.finish();
     }
 }
 
@@ -269,27 +336,25 @@ fn wrap_query_response<'a>(
     permit: Option<ScanPermit>,
     max_buffered_rows: usize,
     max_response_bytes: usize,
-    slow_operation_threshold: Duration,
-    metrics: Option<Arc<CatalogMetrics>>,
+    query: QueryTelemetry,
 ) -> Response<'a> {
-    let Response::Query(query) = response else {
+    let Response::Query(query_response) = response else {
         return response;
     };
 
-    let schema = query.row_schema();
-    let command_tag = query.command_tag().to_string();
-    let rows = query.data_rows();
+    let schema = query_response.row_schema();
+    let command_tag = query_response.command_tag().to_string();
+    let rows = query_response.data_rows();
     let state = (
         rows,
         permit,
         0usize,
         ResponseObservation {
+            query,
             started: Instant::now(),
             first_row: None,
             rows: 0,
             bytes: 0,
-            slow_operation_threshold,
-            metrics,
         },
     );
     let rows = futures::stream::unfold(
@@ -300,7 +365,7 @@ fn wrap_query_response<'a>(
             let item = match item {
                 Ok(row) => {
                     if max_buffered_rows < 1 {
-                        if let Some(metrics) = &observation.metrics {
+                        if let Some(metrics) = &observation.query.metrics {
                             metrics.increment_resource_limit_exhaustions();
                         }
                         return Some((
@@ -310,7 +375,7 @@ fn wrap_query_response<'a>(
                     }
                     next_bytes = bytes.saturating_add(row.data.len());
                     if next_bytes > max_response_bytes {
-                        if let Some(metrics) = &observation.metrics {
+                        if let Some(metrics) = &observation.query.metrics {
                             metrics.increment_resource_limit_exhaustions();
                         }
                         Err(resource_limit_error("response byte limit exhausted"))
@@ -374,6 +439,7 @@ impl RockLakeHandler {
             max_response_bytes: 16 * 1024 * 1024,
             slow_operation_threshold: Duration::from_secs(1),
             metrics: None,
+            connection_id: crate::telemetry::request_id(),
         }
     }
 
@@ -400,6 +466,7 @@ impl RockLakeHandler {
             max_response_bytes: 16 * 1024 * 1024,
             slow_operation_threshold: Duration::from_secs(1),
             metrics: None,
+            connection_id: crate::telemetry::request_id(),
         }
     }
 
@@ -468,25 +535,55 @@ impl RockLakeHandler {
             max_response_bytes,
             slow_operation_threshold,
             metrics,
+            connection_id: crate::telemetry::request_id(),
         }
     }
 
-    async fn acquire_scan(&self, sql: &str) -> PgWireResult<Option<ScanPermit>> {
+    fn query_telemetry(&self) -> QueryTelemetry {
+        QueryTelemetry::new(
+            self.connection_id,
+            self.slow_operation_threshold,
+            self.metrics.clone(),
+        )
+    }
+
+    pub(crate) fn connection_id(&self) -> uuid::Uuid {
+        self.connection_id
+    }
+
+    fn classify_sql(&self, sql: &str, query: &QueryTelemetry) -> StatementKind {
         let classification_started = Instant::now();
         let kind = classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
         if let Some(metrics) = &self.metrics {
             metrics
                 .observe_sql_classification_us(classification_started.elapsed().as_micros() as u64);
         }
+        tracing::debug!(
+            query_id = %query.query_id,
+            connection_id = %query.connection_id,
+            statement_kind = ?kind,
+            "classified SQL statement"
+        );
+        kind
+    }
+
+    async fn acquire_scan(
+        &self,
+        kind: &StatementKind,
+        query: &QueryTelemetry,
+    ) -> PgWireResult<Option<ScanPermit>> {
+        let admission_started = Instant::now();
         if !matches!(
             kind,
             StatementKind::SelectDataFiles | StatementKind::SelectDataFilesWithLimit
         ) {
+            query.record_admission(admission_started);
             return Ok(None);
         }
         let permit = match self.scan_semaphore.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
+                query.record_admission(admission_started);
                 if let Some(metrics) = &self.metrics {
                     metrics.increment_resource_limit_exhaustions();
                 }
@@ -499,6 +596,7 @@ impl RockLakeHandler {
                     .saturating_sub(self.scan_semaphore.available_permits()) as u64,
             );
         }
+        query.record_admission(admission_started);
         Ok(Some(ScanPermit {
             _permit: permit,
             semaphore: self.scan_semaphore.clone(),
@@ -512,25 +610,26 @@ impl RockLakeHandler {
     async fn try_stream_copy_to_stdout<C>(
         &self,
         client: &mut C,
-        sql: &str,
+        kind: &StatementKind,
+        query: &QueryTelemetry,
     ) -> PgWireResult<Option<usize>>
     where
         C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let StatementKind::CopyToStdout { query } =
-            classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()))
-        else {
+        let StatementKind::CopyToStdout { query: inner_sql } = kind else {
             return Ok(None);
         };
 
-        let _scan_permit = self.acquire_scan(&query).await?;
+        let inner_kind = self.classify_sql(inner_sql, query);
+        let _scan_permit = self.acquire_scan(&inner_kind, query).await?;
 
         let params = ParamValues::default();
+        let execution_started = Instant::now();
         let mut session = self.session.lock().await;
-        let mut responses = executor::execute_sql_with_mode(
-            &query,
+        let result = executor::execute_sql_with_mode(
+            inner_sql,
             &params,
             &self.catalog,
             &mut session,
@@ -538,8 +637,9 @@ impl RockLakeHandler {
             &self.extension_schemas,
             self.access_mode,
         )
-        .await
-        .map_err(|e| -> PgWireError { e.into() })?;
+        .await;
+        query.record_execution(execution_started);
+        let mut responses = result.map_err(|e| -> PgWireError { e.into() })?;
 
         let response = responses.pop().ok_or_else(|| {
             PgWireError::UserError(Box::new(ErrorInfo::new(
@@ -558,8 +658,10 @@ impl RockLakeHandler {
         };
 
         let row_schema = query_response.row_schema();
-        let projected_indices = projected_copy_indices(&query, row_schema.as_ref());
+        let projected_indices = projected_copy_indices(inner_sql, row_schema.as_ref());
         let columns = projected_indices.len();
+        let response_started = Instant::now();
+        let mut first_row = None;
         client
             .send(PgWireBackendMessage::CopyOutResponse(CopyOutResponse::new(
                 1,
@@ -596,6 +698,7 @@ impl RockLakeHandler {
                         pgwire::messages::copy::CopyData::new(payload.split().freeze()),
                     ))
                     .await?;
+                first_row.get_or_insert_with(Instant::now);
             }
         }
 
@@ -608,6 +711,9 @@ impl RockLakeHandler {
                     pgwire::messages::copy::CopyData::new(payload.freeze()),
                 ))
                 .await?;
+            if row_count > 0 {
+                first_row.get_or_insert_with(Instant::now);
+            }
         }
 
         client
@@ -615,6 +721,13 @@ impl RockLakeHandler {
                 pgwire::messages::copy::CopyDone::new(),
             ))
             .await?;
+
+        query.record_response(
+            row_count as u64,
+            response_bytes as u64,
+            first_row,
+            response_started,
+        );
 
         Ok(Some(row_count))
     }
@@ -1082,29 +1195,64 @@ where
     Ok(())
 }
 
-#[async_trait]
-impl SimpleQueryHandler for RockLakeHandler {
-    async fn do_query<'a, 'b: 'a, C>(
-        &'b self,
-        _client: &mut C,
-        query: &'a str,
-    ) -> PgWireResult<Vec<Response<'a>>>
+impl RockLakeHandler {
+    fn record_error_info(&self, query: &QueryTelemetry, info: &ErrorInfo) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_pgwire_error(&info.code);
+        }
+        tracing::error!(
+            query_id = %query.query_id,
+            connection_id = %query.connection_id,
+            sqlstate = %info.code,
+            error = %info.message,
+            "query failed"
+        );
+    }
+
+    fn record_query_error(&self, query: &QueryTelemetry, error: &PgWireError) {
+        let sqlstate = match error {
+            PgWireError::UserError(info) => Some(info.code.as_str()),
+            _ => None,
+        };
+        if let (Some(metrics), Some(sqlstate)) = (&self.metrics, sqlstate) {
+            metrics.record_pgwire_error(sqlstate);
+        }
+        tracing::error!(
+            query_id = %query.query_id,
+            connection_id = %query.connection_id,
+            sqlstate = sqlstate.unwrap_or("XX000"),
+            error = %error,
+            "query failed"
+        );
+    }
+
+    async fn execute_simple_query<'a, C>(
+        &self,
+        client: &mut C,
+        sql: &'a str,
+        query: &QueryTelemetry,
+    ) -> PgWireResult<(Vec<Response<'a>>, Option<ScanPermit>)>
     where
         C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        if let Some(rows) = self.try_stream_copy_to_stdout(_client, query).await? {
-            return Ok(vec![Response::Execution(
-                pgwire::api::results::Tag::new("COPY").with_rows(rows),
-            )]);
+        let kind = self.classify_sql(sql, query);
+        if let Some(rows) = self.try_stream_copy_to_stdout(client, &kind, query).await? {
+            return Ok((
+                vec![Response::Execution(
+                    pgwire::api::results::Tag::new("COPY").with_rows(rows),
+                )],
+                None,
+            ));
         }
 
-        let mut scan_permit = self.acquire_scan(query).await?;
+        let scan_permit = self.acquire_scan(&kind, query).await?;
         let params = ParamValues::default();
+        let execution_started = Instant::now();
         let mut session = self.session.lock().await;
-        match executor::execute_sql_with_mode(
-            query,
+        let result = executor::execute_sql_with_mode(
+            sql,
             &params,
             &self.catalog,
             &mut session,
@@ -1112,79 +1260,40 @@ impl SimpleQueryHandler for RockLakeHandler {
             &self.extension_schemas,
             self.access_mode,
         )
-        .await
-        {
-            Ok(responses) => Ok(responses
-                .into_iter()
-                .map(|response| {
-                    wrap_query_response(
-                        response,
-                        scan_permit.take(),
-                        self.max_buffered_rows,
-                        self.max_response_bytes,
-                        self.slow_operation_threshold,
-                        self.metrics.clone(),
-                    )
-                })
-                .collect()),
-            Err(e) => Err(e.into()),
-        }
-    }
-}
-
-/// Query parser that stores SQL strings.
-#[derive(Debug, Clone)]
-pub struct RockLakeQueryParser;
-
-#[async_trait]
-impl QueryParser for RockLakeQueryParser {
-    type Statement = String;
-
-    async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
-        Ok(sql.to_owned())
-    }
-}
-
-#[async_trait]
-impl ExtendedQueryHandler for RockLakeHandler {
-    type Statement = String;
-    type QueryParser = RockLakeQueryParser;
-
-    fn query_parser(&self) -> Arc<Self::QueryParser> {
-        self.parser.clone()
+        .await;
+        query.record_execution(execution_started);
+        Ok((
+            result.map_err(|error| -> PgWireError { error.into() })?,
+            scan_permit,
+        ))
     }
 
-    async fn do_query<'a, 'b: 'a, C>(
-        &'b self,
-        _client: &mut C,
-        portal: &'a Portal<Self::Statement>,
-        _max_rows: usize,
-    ) -> PgWireResult<Response<'a>>
+    async fn execute_extended_query<'a, C>(
+        &self,
+        client: &mut C,
+        portal: &'a Portal<String>,
+        query: &QueryTelemetry,
+    ) -> PgWireResult<(Option<Response<'a>>, Option<ScanPermit>)>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
-        C::PortalStore: PortalStore<Statement = Self::Statement>,
+        C::PortalStore: PortalStore<Statement = String>,
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         let sql = &portal.statement.statement;
-
-        if let Some(rows) = self.try_stream_copy_to_stdout(_client, sql).await? {
-            return Ok(Response::Execution(
-                pgwire::api::results::Tag::new("COPY").with_rows(rows),
+        let kind = self.classify_sql(sql, query);
+        if let Some(rows) = self.try_stream_copy_to_stdout(client, &kind, query).await? {
+            return Ok((
+                Some(Response::Execution(
+                    pgwire::api::results::Tag::new("COPY").with_rows(rows),
+                )),
+                None,
             ));
         }
 
-        let mut scan_permit = self.acquire_scan(sql).await?;
+        let scan_permit = self.acquire_scan(&kind, query).await?;
 
-        // Extract parameters from portal, handling binary-encoded integers.
-        // tokio-postgres (and DuckDB) always send parameters in binary format;
-        // for integer types we must decode the big-endian bytes to decimal
-        // strings so that the string-based ParamValues can parse them.
-        //
-        // The stored `portal.statement.parameter_types` reflects what the client
-        // declared in its Parse message (usually UNKNOWN because tokio-postgres
-        // relies on DescribeStatement to learn types). We use `describe_params_for_sql`
-        // as an authoritative fallback so binary INT8 bytes are always decoded correctly.
+        // Extract parameters from the portal, including binary-encoded integers.
         let inferred_types = describe_params_for_sql(sql);
         let param_values: Vec<Option<String>> = portal
             .parameters
@@ -1193,7 +1302,6 @@ impl ExtendedQueryHandler for RockLakeHandler {
             .map(|(i, p)| {
                 p.as_ref().map(|b| {
                     if portal.parameter_format.is_binary(i) {
-                        // Prefer a non-UNKNOWN stored type; fall back to inferred type.
                         let pg_type = portal
                             .statement
                             .parameter_types
@@ -1224,8 +1332,9 @@ impl ExtendedQueryHandler for RockLakeHandler {
             .collect();
         let params = ParamValues::new(param_values);
 
+        let execution_started = Instant::now();
         let mut session = self.session.lock().await;
-        match executor::execute_sql_with_mode(
+        let result = executor::execute_sql_with_mode(
             sql,
             &params,
             &self.catalog,
@@ -1234,24 +1343,354 @@ impl ExtendedQueryHandler for RockLakeHandler {
             &self.extension_schemas,
             self.access_mode,
         )
-        .await
-        {
-            Ok(mut responses) => {
-                if let Some(resp) = responses.pop() {
-                    Ok(wrap_query_response(
-                        resp,
-                        scan_permit.take(),
+        .await;
+        query.record_execution(execution_started);
+        let mut responses = result.map_err(|error| -> PgWireError { error.into() })?;
+        Ok((responses.pop(), scan_permit))
+    }
+
+    async fn send_query_response_with_telemetry<'a, C>(
+        &self,
+        client: &mut C,
+        results: QueryResponse<'a>,
+        send_describe: bool,
+        query: &QueryTelemetry,
+    ) -> PgWireResult<()>
+    where
+        C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let response_started = Instant::now();
+        let row_schema = results.row_schema();
+        if send_describe {
+            client
+                .send(PgWireBackendMessage::RowDescription(RowDescription::new(
+                    row_schema.iter().map(Into::into).collect(),
+                )))
+                .await?;
+        }
+
+        let command_tag = results.command_tag().to_owned();
+        let mut rows = results.data_rows();
+        let mut row_count = 0u64;
+        let mut response_bytes = 0u64;
+        let mut first_row = None;
+        while let Some(row_result) = rows.next().await {
+            let row = row_result?;
+            if self.max_buffered_rows < 1 {
+                if let Some(metrics) = &self.metrics {
+                    metrics.increment_resource_limit_exhaustions();
+                }
+                return Err(resource_limit_error("buffered row limit exhausted"));
+            }
+            let next_bytes = response_bytes.saturating_add(row.data.len() as u64);
+            if next_bytes > self.max_response_bytes as u64 {
+                if let Some(metrics) = &self.metrics {
+                    metrics.increment_resource_limit_exhaustions();
+                }
+                return Err(resource_limit_error("response byte limit exhausted"));
+            }
+            response_bytes = next_bytes;
+            row_count += 1;
+            client.feed(PgWireBackendMessage::DataRow(row)).await?;
+            if row_count == 1 {
+                client.flush().await?;
+                first_row = Some(Instant::now());
+            }
+        }
+
+        client
+            .send(PgWireBackendMessage::CommandComplete(
+                CommandComplete::from(
+                    pgwire::api::results::Tag::new(&command_tag).with_rows(row_count as usize),
+                ),
+            ))
+            .await?;
+        query.record_response(row_count, response_bytes, first_row, response_started);
+        Ok(())
+    }
+
+    async fn send_response<'a, C>(
+        &self,
+        client: &mut C,
+        response: Response<'a>,
+        send_describe: bool,
+        extended: bool,
+        transaction_status: &mut pgwire::messages::response::TransactionStatus,
+        query: &QueryTelemetry,
+    ) -> PgWireResult<()>
+    where
+        C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let response_started = Instant::now();
+        match response {
+            Response::EmptyQuery => {
+                client
+                    .feed(PgWireBackendMessage::EmptyQueryResponse(
+                        EmptyQueryResponse::new(),
+                    ))
+                    .await?;
+            }
+            Response::Query(results) => {
+                self.send_query_response_with_telemetry(client, results, send_describe, query)
+                    .await?;
+                return Ok(());
+            }
+            Response::Execution(tag) => {
+                send_execution_response(client, tag).await?;
+            }
+            Response::TransactionStart(tag) => {
+                send_execution_response(client, tag).await?;
+                *transaction_status = transaction_status.to_in_transaction_state();
+            }
+            Response::TransactionEnd(tag) => {
+                send_execution_response(client, tag).await?;
+                *transaction_status = transaction_status.to_idle_state();
+            }
+            Response::Error(error) => {
+                self.record_error_info(query, &error);
+                client
+                    .feed(PgWireBackendMessage::ErrorResponse((*error).into()))
+                    .await?;
+                *transaction_status = transaction_status.to_error_state();
+            }
+            Response::CopyIn(result) => {
+                client.set_state(PgWireConnectionState::CopyInProgress(extended));
+                pgwire::api::copy::send_copy_in_response(client, result).await?;
+            }
+            Response::CopyOut(result) => {
+                client.set_state(PgWireConnectionState::CopyInProgress(extended));
+                pgwire::api::copy::send_copy_out_response(client, result).await?;
+            }
+            Response::CopyBoth(result) => {
+                client.set_state(PgWireConnectionState::CopyInProgress(extended));
+                pgwire::api::copy::send_copy_both_response(client, result).await?;
+            }
+        }
+        query.record_response(0, 0, None, response_started);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SimpleQueryHandler for RockLakeHandler {
+    async fn on_query<C>(
+        &self,
+        client: &mut C,
+        message: pgwire::messages::simplequery::Query,
+    ) -> PgWireResult<()>
+    where
+        C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let query = self.query_telemetry();
+        let result = async {
+            if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
+                return Err(PgWireError::NotReadyForQuery);
+            }
+            let mut transaction_status = client.transaction_status();
+            client.set_state(PgWireConnectionState::QueryInProgress);
+            let sql = message.query;
+            if sql.trim().is_empty() || sql.trim() == ";" {
+                client
+                    .feed(PgWireBackendMessage::EmptyQueryResponse(
+                        EmptyQueryResponse::new(),
+                    ))
+                    .await?;
+            } else {
+                let (responses, permit) = self.execute_simple_query(client, &sql, &query).await?;
+                for response in responses {
+                    self.send_response(
+                        client,
+                        response,
+                        true,
+                        false,
+                        &mut transaction_status,
+                        &query,
+                    )
+                    .await?;
+                }
+                drop(permit);
+            }
+            if !matches!(client.state(), PgWireConnectionState::CopyInProgress(_)) {
+                client.set_state(PgWireConnectionState::ReadyForQuery);
+                client.set_transaction_status(transaction_status);
+                send_ready_for_query(client, transaction_status).await?;
+            }
+            query.finish();
+            Ok(())
+        }
+        .instrument(query.span.clone())
+        .await;
+        if let Err(error) = &result {
+            self.record_query_error(&query, error);
+            query.finish();
+        }
+        result
+    }
+
+    async fn do_query<'a, 'b: 'a, C>(
+        &'b self,
+        client: &mut C,
+        query: &'a str,
+    ) -> PgWireResult<Vec<Response<'a>>>
+    where
+        C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let telemetry = self.query_telemetry();
+        let result = async {
+            let (responses, mut permit) =
+                self.execute_simple_query(client, query, &telemetry).await?;
+            let has_query = responses
+                .iter()
+                .any(|response| matches!(response, Response::Query(_)));
+            let responses = responses
+                .into_iter()
+                .map(|response| {
+                    wrap_query_response(
+                        response,
+                        permit.take(),
                         self.max_buffered_rows,
                         self.max_response_bytes,
-                        self.slow_operation_threshold,
-                        self.metrics.clone(),
-                    ))
-                } else {
-                    Ok(Response::EmptyQuery)
-                }
+                        telemetry.clone(),
+                    )
+                })
+                .collect();
+            if !has_query {
+                telemetry.finish();
             }
-            Err(e) => Err(e.into()),
+            Ok(responses)
         }
+        .instrument(telemetry.span.clone())
+        .await;
+        if let Err(error) = &result {
+            self.record_query_error(&telemetry, error);
+            telemetry.finish();
+        }
+        result
+    }
+}
+
+/// Query parser that stores SQL strings.
+#[derive(Debug, Clone)]
+pub struct RockLakeQueryParser;
+
+#[async_trait]
+impl QueryParser for RockLakeQueryParser {
+    type Statement = String;
+
+    async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
+        Ok(sql.to_owned())
+    }
+}
+
+#[async_trait]
+impl ExtendedQueryHandler for RockLakeHandler {
+    type Statement = String;
+    type QueryParser = RockLakeQueryParser;
+
+    fn query_parser(&self) -> Arc<Self::QueryParser> {
+        self.parser.clone()
+    }
+
+    async fn on_execute<C>(
+        &self,
+        client: &mut C,
+        message: pgwire::messages::extendedquery::Execute,
+    ) -> PgWireResult<()>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = Self::Statement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let query = self.query_telemetry();
+        let result = async {
+            if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
+                return Err(PgWireError::NotReadyForQuery);
+            }
+            let mut transaction_status = client.transaction_status();
+            client.set_state(PgWireConnectionState::QueryInProgress);
+            let portal_name = message.name.as_deref().unwrap_or(pgwire::api::DEFAULT_NAME);
+            let portal = client
+                .portal_store()
+                .get_portal(portal_name)
+                .ok_or_else(|| PgWireError::PortalNotFound(portal_name.to_owned()))?;
+            let (response, permit) = self.execute_extended_query(client, &portal, &query).await?;
+            if let Some(response) = response {
+                self.send_response(
+                    client,
+                    response,
+                    false,
+                    true,
+                    &mut transaction_status,
+                    &query,
+                )
+                .await?;
+            }
+            drop(permit);
+            if !matches!(client.state(), PgWireConnectionState::CopyInProgress(_)) {
+                client.set_state(PgWireConnectionState::ReadyForQuery);
+                client.set_transaction_status(transaction_status);
+            }
+            query.finish();
+            Ok(())
+        }
+        .instrument(query.span.clone())
+        .await;
+        if let Err(error) = &result {
+            self.record_query_error(&query, error);
+            query.finish();
+        }
+        result
+    }
+
+    async fn do_query<'a, 'b: 'a, C>(
+        &'b self,
+        client: &mut C,
+        portal: &'a Portal<Self::Statement>,
+        _max_rows: usize,
+    ) -> PgWireResult<Response<'a>>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = Self::Statement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let telemetry = self.query_telemetry();
+        let result = async {
+            let (response, mut permit) = self
+                .execute_extended_query(client, portal, &telemetry)
+                .await?;
+            let Some(response) = response else {
+                telemetry.finish();
+                return Ok(Response::EmptyQuery);
+            };
+            let response = wrap_query_response(
+                response,
+                permit.take(),
+                self.max_buffered_rows,
+                self.max_response_bytes,
+                telemetry.clone(),
+            );
+            if permit.is_none() && !matches!(response, Response::Query(_)) {
+                telemetry.finish();
+            }
+            Ok(response)
+        }
+        .instrument(telemetry.span.clone())
+        .await;
+        if let Err(error) = &result {
+            self.record_query_error(&telemetry, error);
+            telemetry.finish();
+        }
+        result
     }
 
     async fn do_describe_statement<C>(

@@ -92,11 +92,14 @@ These track interactions with the underlying object store (S3/GCS/Azure/local):
 | Metric | Type | Description |
 |--------|------|-------------|
 | `rocklake_pgwire_query_duration_seconds` | Histogram | PG-wire query duration with bounded latency buckets |
+| `rocklake_pgwire_admission_seconds` | Summary | Time spent deciding scan admission |
+| `rocklake_pgwire_execution_seconds` | Summary | Time spent in catalog execution |
+| `rocklake_pgwire_response_delivery_seconds` | Summary | Time spent encoding and delivering a response |
 | `rocklake_pgwire_response_rows_total` | Counter | Rows delivered to clients |
 | `rocklake_pgwire_response_bytes_total` | Counter | Response bytes delivered to clients |
 | `rocklake_pgwire_response_rows_per_second` | Gauge | Rows/sec for the last response |
 | `rocklake_pgwire_response_bytes_per_second` | Gauge | Bytes/sec for the last response |
-| `rocklake_pgwire_time_to_first_row_seconds` | Summary | Time from response start to first row |
+| `rocklake_pgwire_time_to_first_row_seconds` | Summary | Time from request start to first delivered row |
 | `rocklake_pgwire_sql_classification_seconds` | Summary | SQL classifier latency |
 | `rocklake_active_scans` | Gauge | Catalog scans currently holding a permit |
 | `rocklake_max_active_scans` | Gauge | Maximum concurrent catalog scans |

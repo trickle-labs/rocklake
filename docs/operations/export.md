@@ -5,7 +5,7 @@ RockLake provides two NDJSON export commands:
 - `export` writes the catalog rows understood by the general catalog export
   path.
 - `export-catalog` writes the complete DuckLake catalog export used by the
-  v0.51.0 quickstart and restore workflow.
+  v0.51.1 quickstart and restore workflow.
 
 Both commands are read-only. Snapshot selection is explicit: omit the option
 for the latest state, or pass an exact ID.
