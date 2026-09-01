@@ -79,7 +79,7 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.49.0 is distributed and tested as a binary. There is no published
+RockLake v0.50.0 is distributed and tested as a binary. There is no published
 Docker image; use the binary deployment path below.
 
 ### Prerequisites (build from source)
@@ -101,8 +101,9 @@ The default listener is `127.0.0.1:5432`. Use an explicit bind address only
 when a network boundary, TLS, and authentication are configured.
 
 ```bash
-# Start with a local catalog directory
-./target/release/rocklake serve --catalog /path/to/catalog
+# Preflight and start a local catalog directory
+./target/release/rocklake doctor --catalog ./lake
+./target/release/rocklake serve ./lake
 
 # Expose a public listener only with TLS and authentication
 ./target/release/rocklake serve --catalog /path/to/catalog \
@@ -175,7 +176,7 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 |---|---|---|
 | v0.27.x | DuckLake v1.0 conformance, SQL facade, stats, external compatibility | Done |
 | v0.28–v0.35 | Writer fencing, recovery, protocol hardening, DataFusion, security, embedded client library | Done |
-| **v0.49.0** | Secure defaults, authentication compatibility, and release policy | **Current** |
+| **v0.50.0** | Operational UX, typed configuration, and deployment simplicity | **Current** |
 | Next | See [ROADMAP.md](ROADMAP.md) for the live Now/Next/Later plan | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.

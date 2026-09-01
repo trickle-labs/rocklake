@@ -66,6 +66,20 @@ fn help_serve() {
 }
 
 #[test]
+fn help_v050_operator_commands() {
+    for args in [
+        ["doctor", "--help"].as_slice(),
+        ["config", "check", "--help"].as_slice(),
+        ["backup", "create", "--help"].as_slice(),
+        ["backup", "inspect", "--help"].as_slice(),
+        ["restore", "plan", "--help"].as_slice(),
+        ["restore", "apply", "--help"].as_slice(),
+    ] {
+        help_exits_zero(args);
+    }
+}
+
+#[test]
 fn help_gc_plan() {
     help_exits_zero(&["gc", "plan", "--help"]);
 }

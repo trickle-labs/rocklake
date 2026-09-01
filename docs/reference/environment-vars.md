@@ -1,8 +1,8 @@
 # Environment Variables Reference
 
-RockLake v0.49.0 reads the variables below through its typed CLI. Command-line
-flags take precedence over environment variables. Run `rocklake serve --help`
-for the authoritative option list.
+RockLake v0.50.0 reads the variables below through its typed CLI. Command-line
+flags take precedence over environment variables, which take precedence over
+`rocklake.toml`. Run `rocklake serve --help` for the authoritative option list.
 
 ## RockLake variables
 
@@ -28,7 +28,7 @@ rocklake serve
 
 Keep secrets out of command-line arguments. Inject `ROCKLAKE_AUTH_PASSWORD`
 from a secret manager or a permission-restricted file, and do not commit the
-file. RockLake does not read a TOML or YAML configuration file.
+file. `rocklake config check` redacts secret values in JSON output.
 
 ## Object-store variables
 
@@ -36,8 +36,8 @@ Cloud credentials use the provider SDK variables. For example, AWS uses
 `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
 `AWS_SESSION_TOKEN`. GCS and Azure use their standard SDK credential variables.
 
-The S3-compatible endpoint and path-style options are CLI-only in v0.49.0:
-`--s3-endpoint` and `--s3-path-style`.
+The S3-compatible endpoint and path-style options can also be set as
+`s3_endpoint` and `s3_path_style` in `rocklake.toml`.
 
 ## DuckLake data inlining
 

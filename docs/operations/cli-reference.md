@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.49.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.50.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -8,6 +8,10 @@ binary or a command for the complete generated reference.
 
 ```text
 serve
+doctor
+config check|example
+backup create|inspect
+restore plan|apply
 gc plan|apply
 excise plan|apply
 checkpoint create|list|restore|pin|unpin|pins
@@ -55,9 +59,31 @@ rocklake import --catalog <path> --input <path>
 
 ## Server options
 
+The fastest local path is:
+
+~~~bash
+rocklake serve ./lake
+~~~
+
+`rocklake serve ./lake` creates a local catalog directory when needed. A
+`rocklake.toml` file can provide the same settings; precedence is built-in
+defaults, TOML, environment, then command-line flags.
+
+## Operational commands
+
+~~~bash
+rocklake doctor --catalog ./lake [--output human|json]
+rocklake config check [--file rocklake.toml] [--output human|json]
+rocklake config example
+rocklake backup create --catalog ./lake --out ./lake-backup
+rocklake backup inspect ./lake-backup --output json
+rocklake restore plan --backup ./lake-backup --catalog ./restored
+rocklake restore apply --backup ./lake-backup --catalog ./restored
+~~~
+
 ```bash
 rocklake serve \
-  --catalog <file://...,s3://...,gs://...,az://...> \
+  [PATH | --catalog <file://...,s3://...,gs://...,az://...>] \
   [--bind <host:port>] \
   [--mode writer|reader] [--read-only] \
   [--max-sessions <n>] \
@@ -89,3 +115,29 @@ operations remain explicit in the command syntax.
 The supported RockLake variables are documented in
 [Environment Variables](../reference/environment-vars.md). Provider SDK
 variables such as `AWS_REGION` remain supported for object-store credentials.
+
+## v0.50 operator flow
+
+The supported release flow is deliberately small:
+
+```bash
+rocklake serve --catalog file:///path/to/catalog
+```
+
+Then attach from DuckDB, create or query data, and use the existing operator
+commands to inspect and validate the catalog:
+
+```sql
+LOAD ducklake;
+ATTACH 'ducklake:postgres:host=127.0.0.1 port=5432 dbname=rocklake'
+  AS lake (DATA_PATH '/path/to/data');
+```
+
+```bash
+rocklake inspect snapshot --catalog file:///path/to/catalog
+rocklake export-catalog --catalog file:///path/to/catalog --out catalog.ndjson
+rocklake verify catalog --catalog file:///path/to/catalog
+rocklake diagnose --catalog file:///path/to/catalog --json
+rocklake backup create --catalog file:///path/to/catalog --out catalog-backup
+rocklake restore plan --backup catalog-backup --catalog file:///path/to/restored
+```

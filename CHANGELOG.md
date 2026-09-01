@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.50.0] — 2026-08-31
+
+### Changed
+
+- Added read-only `rocklake doctor` preflight checks with stable human and JSON
+  output.
+- Added typed `rocklake.toml` configuration with strict validation, precedence,
+  secret-file support, and redacted effective configuration output.
+- Added startup summaries, positional local serving (`rocklake serve ./lake`),
+  and first-class versioned backup/restore commands.
+- Updated the language-binding package metadata and release quickstart to
+  v0.50.0.
+
 ## [0.49.0] — 2026-08-30
 
 ### Changed

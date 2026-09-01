@@ -10,6 +10,7 @@
 //! Run `rocklake --help` or `rocklake <command> --help` for full usage.
 
 mod cli;
+mod config;
 
 use std::io;
 use std::net::SocketAddr;
@@ -44,13 +45,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Dispatch based on a successfully-parsed clap CLI.
 async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> {
     use cli::Commands;
+    let config_path = cli.config.clone();
 
     match cli.command {
         Commands::Completions(args) => {
             let mut cmd = cli::Cli::command();
             generate(args.shell, &mut cmd, "rocklake", &mut io::stdout());
         }
-        Commands::Serve(args) => cmd_serve(*args).await?,
+        Commands::Serve(args) => cmd_serve(*args, config_path.as_deref()).await?,
+        Commands::Doctor(args) => cmd_doctor(args, config_path.as_deref()).await?,
+        Commands::Config(command) => cmd_config(command, config_path.as_deref()).await?,
+        Commands::Backup(command) => cmd_backup(command).await?,
+        Commands::Restore(command) => cmd_restore(command).await?,
         Commands::Gc(command) => cmd_gc(command).await?,
         Commands::Excise(command) => cmd_excise(command).await?,
         Commands::Checkpoint(command) => cmd_checkpoint(command).await?,
@@ -75,54 +81,232 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
 
 // ─── serve ─────────────────────────────────────────────────────────────────
 
-async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let mode = if args.read_only {
+async fn cmd_serve(
+    args: cli::ServeArgs,
+    config_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, file_config) = config::load(config_path)?;
+    let catalog_url = setting(
+        args.catalog.or(args.path),
+        "ROCKLAKE_CATALOG",
+        file_config.catalog.clone(),
+        None,
+        "catalog",
+    )?
+    .ok_or("a catalog path is required (use `serve ./lake` or --catalog)")?;
+    let mode = if args.read_only.unwrap_or(false) {
         "reader".to_string()
     } else {
-        args.mode
+        setting(
+            args.mode,
+            "ROCKLAKE_MODE",
+            file_config.mode.clone(),
+            Some("writer".to_string()),
+            "mode",
+        )?
+        .unwrap_or_else(|| "writer".to_string())
     };
+    if mode != "writer" && mode != "reader" {
+        return Err(format!("invalid mode '{mode}' (expected writer or reader)").into());
+    }
     let auth_password = read_secret(
-        args.auth_password,
-        args.auth_password_file.as_deref(),
+        setting(
+            args.auth_password,
+            "ROCKLAKE_AUTH_PASSWORD",
+            file_config.auth_password.clone(),
+            None,
+            "auth password",
+        )?,
+        setting(
+            args.auth_password_file,
+            "ROCKLAKE_AUTH_PASSWORD_FILE",
+            file_config.auth_password_file.clone(),
+            None,
+            "auth password file",
+        )?
+        .as_deref(),
         "ROCKLAKE_AUTH_PASSWORD_FILE",
     )?;
     let encryption_key = read_secret(
-        args.encryption_key,
-        args.encryption_key_file.as_deref(),
+        setting(
+            args.encryption_key,
+            "ROCKLAKE_ENCRYPTION_KEY",
+            file_config.encryption_key.clone(),
+            None,
+            "encryption key",
+        )?,
+        setting(
+            args.encryption_key_file,
+            "ROCKLAKE_ENCRYPTION_KEY_FILE",
+            file_config.encryption_key_file.clone(),
+            None,
+            "encryption key file",
+        )?
+        .as_deref(),
         "ROCKLAKE_ENCRYPTION_KEY_FILE",
     )?;
+    let bind: SocketAddr = setting(
+        args.bind,
+        "ROCKLAKE_BIND",
+        file_config.bind.clone(),
+        Some("127.0.0.1:5432".to_string()),
+        "bind address",
+    )?
+    .expect("bind default")
+    .parse()
+    .map_err(|e| format!("invalid bind address: {e}"))?;
+    let max_sessions = setting(
+        args.max_sessions,
+        "ROCKLAKE_MAX_SESSIONS",
+        file_config.max_sessions,
+        Some(50),
+        "max sessions",
+    )?
+    .expect("max sessions default");
+    let metrics_path = setting(
+        args.metrics_path,
+        "ROCKLAKE_METRICS_PATH",
+        file_config.metrics_path,
+        Some("/metrics".to_string()),
+        "metrics path",
+    )?
+    .expect("metrics path default");
+    let tls_required = setting(
+        args.tls_required,
+        "ROCKLAKE_TLS_REQUIRED",
+        file_config.tls_required,
+        Some(false),
+        "tls required",
+    )?
+    .expect("tls default");
+    let cost_mode = setting(
+        args.cost_mode,
+        "ROCKLAKE_COST_MODE",
+        file_config.cost_mode,
+        Some("balanced".to_string()),
+        "cost mode",
+    )?
+    .expect("cost mode default");
+    let s3_path_style = setting(
+        args.s3_path_style,
+        "ROCKLAKE_S3_PATH_STYLE",
+        file_config.s3_path_style,
+        Some(false),
+        "s3 path style",
+    )?
+    .expect("s3 path style default");
+    let extension_schemas = args
+        .extension_schemas
+        .or_else(|| {
+            std::env::var("ROCKLAKE_EXTENSION_SCHEMAS")
+                .ok()
+                .map(|value| {
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .map(str::to_string)
+                        .collect()
+                })
+        })
+        .or(file_config.extension_schemas)
+        .filter(|schemas: &Vec<String>| !schemas.is_empty())
+        .unwrap_or_else(|| vec!["public".to_string(), "pgtrickle".to_string()]);
     let config = ServeConfig {
-        catalog_url: args.catalog,
-        bind_addr: args
-            .bind
-            .parse()
-            .map_err(|e| format!("invalid bind address: {e}"))?,
-        max_sessions: args.max_sessions,
-        metrics_port: args.metrics_port,
-        metrics_path: args.metrics_path,
-        tls_cert: args.tls_cert,
-        tls_key: args.tls_key,
-        tls_required: args.tls_required,
-        auth_username: args.auth_user,
+        catalog_url,
+        bind_addr: bind,
+        max_sessions,
+        metrics_port: setting(
+            args.metrics_port,
+            "ROCKLAKE_METRICS_PORT",
+            file_config.metrics_port,
+            None,
+            "metrics port",
+        )?,
+        metrics_path,
+        tls_cert: setting(
+            args.tls_cert,
+            "ROCKLAKE_TLS_CERT",
+            file_config.tls_cert,
+            None,
+            "tls certificate",
+        )?,
+        tls_key: setting(
+            args.tls_key,
+            "ROCKLAKE_TLS_KEY",
+            file_config.tls_key,
+            None,
+            "tls key",
+        )?,
+        tls_required,
+        auth_username: setting(
+            args.auth_user,
+            "ROCKLAKE_AUTH_USER",
+            file_config.auth_user,
+            None,
+            "auth user",
+        )?,
         auth_password,
         mode,
-        cost_mode: args
-            .cost_mode
+        cost_mode: cost_mode
             .parse()
             .map_err(|e| format!("invalid cost mode: {e}"))?,
-        s3_endpoint: args.s3_endpoint,
-        s3_path_style: args.s3_path_style,
+        s3_endpoint: setting(
+            args.s3_endpoint,
+            "ROCKLAKE_S3_ENDPOINT",
+            file_config.s3_endpoint,
+            None,
+            "s3 endpoint",
+        )?,
+        s3_path_style,
         encryption_key,
-        extension_schemas: if args.extension_schemas.is_empty() {
-            vec!["public".to_string(), "pgtrickle".to_string()]
-        } else {
-            args.extension_schemas
-        },
-        otlp_endpoint: args.otlp_endpoint,
-        idle_connection_timeout_secs: args.idle_connection_timeout,
-        drain_timeout_secs: args.drain_timeout,
-        datafusion_bridge_queue_depth: args.datafusion_bridge_queue_depth,
+        extension_schemas,
+        otlp_endpoint: setting(
+            args.otlp_endpoint,
+            "ROCKLAKE_OTLP_ENDPOINT",
+            file_config.otlp_endpoint,
+            None,
+            "otlp endpoint",
+        )?,
+        idle_connection_timeout_secs: setting(
+            args.idle_connection_timeout,
+            "ROCKLAKE_IDLE_CONNECTION_TIMEOUT",
+            file_config.idle_connection_timeout,
+            Some(60),
+            "idle connection timeout",
+        )?
+        .expect("idle timeout default"),
+        drain_timeout_secs: setting(
+            args.drain_timeout,
+            "ROCKLAKE_DRAIN_TIMEOUT",
+            file_config.drain_timeout,
+            Some(30),
+            "drain timeout",
+        )?
+        .expect("drain timeout default"),
+        datafusion_bridge_queue_depth: setting(
+            args.datafusion_bridge_queue_depth,
+            "ROCKLAKE_DATAFUSION_BRIDGE_QUEUE_DEPTH",
+            file_config.datafusion_bridge_queue_depth,
+            Some(256),
+            "datafusion bridge queue depth",
+        )?
+        .expect("queue depth default"),
     };
+    if config.max_sessions == 0 {
+        return Err("max sessions must be greater than zero".into());
+    }
+    if config.datafusion_bridge_queue_depth == 0 {
+        return Err("datafusion bridge queue depth must be greater than zero".into());
+    }
+    if config.tls_required && (config.tls_cert.is_none() || config.tls_key.is_none()) {
+        return Err("tls-required needs both --tls-cert and --tls-key".into());
+    }
+    let encryption = config
+        .encryption_key
+        .as_deref()
+        .map(rocklake_catalog::EncryptionConfig::from_hex)
+        .transpose()
+        .map_err(|e| format!("--encryption-key: {e}"))?;
 
     // v0.39.0: Initialise OTLP tracing if --otlp-endpoint is set.
     let _telemetry = rocklake_pgwire::telemetry::TelemetryConfig {
@@ -141,12 +325,7 @@ async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error
     let opts = OpenOptions {
         object_store: object_store.clone(),
         path: catalog_path,
-        encryption: config
-            .encryption_key
-            .as_deref()
-            .map(rocklake_catalog::EncryptionConfig::from_hex)
-            .transpose()
-            .map_err(|e| format!("--encryption-key: {e}"))?,
+        encryption,
     };
 
     let store = if config.mode == "reader" {
@@ -168,6 +347,7 @@ async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error
         rocklake_pgwire::executor::AccessMode::Writer
     };
 
+    print_startup_summary(&config, &store);
     tracing::info!("Catalog opened successfully");
     tracing::info!(
         "Serving mode: {}, cost mode: {:?}, datafusion bridge queue depth: {}",
@@ -229,6 +409,66 @@ async fn cmd_serve(args: cli::ServeArgs) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
+fn setting<T>(
+    cli: Option<T>,
+    env_name: &str,
+    file: Option<T>,
+    default: Option<T>,
+    label: &str,
+) -> Result<Option<T>, String>
+where
+    T: std::str::FromStr + Clone,
+    T::Err: std::fmt::Display,
+{
+    if cli.is_some() {
+        return Ok(cli);
+    }
+    if let Ok(value) = std::env::var(env_name) {
+        return value
+            .parse()
+            .map(Some)
+            .map_err(|e| format!("invalid {label} in {env_name}: {e}"));
+    }
+    Ok(file.or(default))
+}
+
+fn print_startup_summary(config: &ServeConfig, _store: &CatalogStore) {
+    let tls = config.tls_cert.is_some() && config.tls_key.is_some();
+    let auth = config.auth_username.is_some() && config.auth_password.is_some();
+    println!("RockLake {}", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("Catalog       {}", config.catalog_url);
+    println!("Mode          {}", config.mode);
+    println!("DuckLake      1.0");
+    println!("Listener      {}", config.bind_addr);
+    println!("TLS           {}", if tls { "enabled" } else { "disabled" });
+    println!(
+        "Authentication {}",
+        if auth { "SCRAM-SHA-256" } else { "disabled" }
+    );
+    println!(
+        "Metrics       {}",
+        config
+            .metrics_port
+            .map(|port| format!("enabled on {port}"))
+            .unwrap_or_else(|| "disabled".to_string())
+    );
+    println!("Status        ready");
+    println!();
+    println!("DuckDB:");
+    println!(
+        "ATTACH 'ducklake:postgres:host={} port={} dbname=rocklake' AS lake (DATA_PATH 'data');",
+        config.bind_addr.ip(),
+        config.bind_addr.port()
+    );
+    if !config.bind_addr.ip().is_loopback() && !tls {
+        eprintln!("WARNING: listener is not loopback and TLS is disabled");
+    }
+    if !config.bind_addr.ip().is_loopback() && !auth {
+        eprintln!("WARNING: listener is not loopback and authentication is disabled");
+    }
+}
+
 fn read_secret(
     value: Option<String>,
     file: Option<&str>,
@@ -247,7 +487,8 @@ fn read_secret(
 
 #[cfg(test)]
 mod tests {
-    use super::read_secret;
+    use super::{read_secret, redacted_config, setting, validate_config};
+    use crate::config::ConfigFile;
 
     #[test]
     fn read_secret_prefers_value_and_trims_file_newlines() {
@@ -267,6 +508,32 @@ mod tests {
             .expect("prefer value"),
             Some("from-value".to_string())
         );
+    }
+
+    #[test]
+    fn settings_prefer_cli_over_file() {
+        assert_eq!(
+            setting(
+                Some("cli".to_string()),
+                "ROCKLAKE_TEST_SETTING_UNSET",
+                Some("file".to_string()),
+                Some("default".to_string()),
+                "test setting",
+            )
+            .unwrap(),
+            Some("cli".to_string())
+        );
+    }
+
+    #[test]
+    fn config_validation_and_redaction_cover_secrets() {
+        let config = ConfigFile {
+            auth_password: Some("secret".to_string()),
+            encryption_key: Some("not-a-key".to_string()),
+            ..ConfigFile::default()
+        };
+        assert!(validate_config(&config).is_err());
+        assert!(!redacted_config(&config).to_string().contains("secret"));
     }
 }
 
@@ -308,32 +575,60 @@ struct ServeConfig {
 // ─── gc ────────────────────────────────────────────────────────────────────
 
 async fn cmd_gc(command: cli::GcSubcommand) -> Result<(), Box<dyn std::error::Error>> {
-    let (catalog_url, retention_days, apply) = match command {
-        cli::GcSubcommand::Plan(args) => (args.catalog, args.retention_days, false),
-        cli::GcSubcommand::Apply(args) => (args.catalog, args.retention_days, true),
+    let (catalog_url, retention_days, apply, output) = match command {
+        cli::GcSubcommand::Plan(args) => (args.catalog, args.retention_days, false, args.output),
+        cli::GcSubcommand::Apply(args) => (args.catalog, args.retention_days, true, args.output),
     };
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
     if !apply {
         let plan = rocklake_catalog::gc::gc_plan(&db, retention_days).await?;
-        println!("GC Plan:");
-        println!("  Current retain-from: {}", plan.current_retain_from);
-        println!("  Proposed retain-from: {}", plan.proposed_retain_from);
-        println!("  Snapshots affected: {}", plan.snapshots_affected);
-        if !plan.pinned_snapshots.is_empty() {
-            println!("  Pinned snapshots: {:?}", plan.pinned_snapshots);
-        }
-        if !plan.leased_snapshots.is_empty() {
-            println!("  Leased snapshots: {:?}", plan.leased_snapshots);
+        match output {
+            cli::OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "current_retain_from": plan.current_retain_from,
+                    "proposed_retain_from": plan.proposed_retain_from,
+                    "snapshots_affected": plan.snapshots_affected,
+                    "pinned_snapshots": plan.pinned_snapshots,
+                    "leased_snapshots": plan.leased_snapshots
+                })
+            ),
+            cli::OutputFormat::Human => {
+                println!("GC Plan:");
+                println!("  Current retain-from: {}", plan.current_retain_from);
+                println!("  Proposed retain-from: {}", plan.proposed_retain_from);
+                println!("  Snapshots affected: {}", plan.snapshots_affected);
+                if !plan.pinned_snapshots.is_empty() {
+                    println!("  Pinned snapshots: {:?}", plan.pinned_snapshots);
+                }
+                if !plan.leased_snapshots.is_empty() {
+                    println!("  Leased snapshots: {:?}", plan.leased_snapshots);
+                }
+            }
         }
     } else {
         let plan = rocklake_catalog::gc::gc_plan(&db, retention_days).await?;
         let result = rocklake_catalog::gc::gc_apply(&db, plan.proposed_retain_from).await?;
-        println!("GC Applied:");
-        println!("  Previous retain-from: {}", result.previous_retain_from);
-        println!("  New retain-from: {}", result.new_retain_from);
-        println!("  Snapshots hidden: {}", result.snapshots_hidden);
+        match output {
+            cli::OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "previous_retain_from": result.previous_retain_from,
+                    "new_retain_from": result.new_retain_from,
+                    "snapshots_hidden": result.snapshots_hidden
+                })
+            ),
+            cli::OutputFormat::Human => {
+                println!("GC Applied:");
+                println!("  Previous retain-from: {}", result.previous_retain_from);
+                println!("  New retain-from: {}", result.new_retain_from);
+                println!("  Snapshots hidden: {}", result.snapshots_hidden);
+            }
+        }
     }
 
     db.close().await?;
@@ -343,34 +638,63 @@ async fn cmd_gc(command: cli::GcSubcommand) -> Result<(), Box<dyn std::error::Er
 // ─── excise ────────────────────────────────────────────────────────────────
 
 async fn cmd_excise(command: cli::ExciseSubcommand) -> Result<(), Box<dyn std::error::Error>> {
-    let (catalog_url, before, apply) = match command {
-        cli::ExciseSubcommand::Plan(args) => (args.catalog, args.before, false),
-        cli::ExciseSubcommand::Apply(args) => (args.catalog, args.before, true),
+    let (catalog_url, before, apply, output) = match command {
+        cli::ExciseSubcommand::Plan(args) => (args.catalog, args.before, false, args.output),
+        cli::ExciseSubcommand::Apply(args) => (args.catalog, args.before, true, args.output),
     };
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
     if !apply {
         let plan = rocklake_catalog::excise::excise_plan(&db, before).await?;
-        println!("Excise Plan:");
-        println!("  Before snapshot: {}", plan.before_snapshot);
-        println!("  Version rows eligible: {}", plan.version_rows_eligible);
-        println!(
-            "  Inlined inserts eligible: {}",
-            plan.inlined_inserts_eligible
-        );
-        println!(
-            "  Inlined deletes eligible: {}",
-            plan.inlined_deletes_eligible
-        );
-        println!("  Data files eligible: {}", plan.data_files_eligible.len());
-        println!("  Safe: {}", if plan.is_safe { "yes" } else { "NO" });
+        match output {
+            cli::OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "before_snapshot": plan.before_snapshot,
+                    "version_rows_eligible": plan.version_rows_eligible,
+                    "inlined_inserts_eligible": plan.inlined_inserts_eligible,
+                    "inlined_deletes_eligible": plan.inlined_deletes_eligible,
+                    "data_files_eligible": plan.data_files_eligible.len(),
+                    "safe": plan.is_safe
+                })
+            ),
+            cli::OutputFormat::Human => {
+                println!("Excise Plan:");
+                println!("  Before snapshot: {}", plan.before_snapshot);
+                println!("  Version rows eligible: {}", plan.version_rows_eligible);
+                println!(
+                    "  Inlined inserts eligible: {}",
+                    plan.inlined_inserts_eligible
+                );
+                println!(
+                    "  Inlined deletes eligible: {}",
+                    plan.inlined_deletes_eligible
+                );
+                println!("  Data files eligible: {}", plan.data_files_eligible.len());
+                println!("  Safe: {}", if plan.is_safe { "yes" } else { "NO" });
+            }
+        }
     } else {
         let result = rocklake_catalog::excise::excise_apply(&db, before, "operator").await?;
-        println!("Excise Applied:");
-        println!("  Keys deleted: {}", result.keys_deleted);
-        println!("  Keys failed: {}", result.keys_failed);
-        println!("  Audit entry ID: {}", result.audit_entry_id);
+        match output {
+            cli::OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "keys_deleted": result.keys_deleted,
+                    "keys_failed": result.keys_failed,
+                    "audit_entry_id": result.audit_entry_id
+                })
+            ),
+            cli::OutputFormat::Human => {
+                println!("Excise Applied:");
+                println!("  Keys deleted: {}", result.keys_deleted);
+                println!("  Keys failed: {}", result.keys_failed);
+                println!("  Audit entry ID: {}", result.audit_entry_id);
+            }
+        }
         if result.keys_failed > 0 {
             return Err(format!(
                 "excision incomplete: {} catalog deletions failed",
@@ -561,29 +885,55 @@ async fn cmd_rebuild(args: cli::RebuildArgs) -> Result<(), Box<dyn std::error::E
 async fn cmd_inspect(command: cli::InspectSubcommand) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         cli::InspectSubcommand::Snapshot(args) => {
+            let output = args.output;
             let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
             let db = slatedb::Db::open(catalog_path, object_store).await?;
 
             let result = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
-            println!("Catalog State:");
-            println!("  Latest snapshot ID: {}", result.latest_snapshot_id);
-            println!("  Schema version: {}", result.schema_version);
-            println!("  Snapshot time: {}", result.snapshot_time);
-            println!("  Next snapshot ID: {}", result.next_snapshot_id);
-            println!("  Next catalog ID: {}", result.next_catalog_id);
-            println!("  Next file ID: {}", result.next_file_id);
-            println!("  Schemas: {}", result.schema_count);
-            println!("  Tables: {}", result.table_count);
-            println!("  Columns: {}", result.column_count);
-            println!("  Data files: {}", result.data_file_count);
-            println!("  Delete files: {}", result.delete_file_count);
-            println!("  Retain-from: {}", result.retain_from);
-            println!("  Writer epoch: {}", result.writer_epoch);
-            println!("  Format version: {}", result.format_version);
+            match output {
+                cli::OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "latest_snapshot_id": result.latest_snapshot_id,
+                        "schema_version_id": result.schema_version,
+                        "snapshot_time": result.snapshot_time,
+                        "next_snapshot_id": result.next_snapshot_id,
+                        "next_catalog_id": result.next_catalog_id,
+                        "next_file_id": result.next_file_id,
+                        "schema_count": result.schema_count,
+                        "table_count": result.table_count,
+                        "column_count": result.column_count,
+                        "data_file_count": result.data_file_count,
+                        "delete_file_count": result.delete_file_count,
+                        "retain_from": result.retain_from,
+                        "writer_epoch": result.writer_epoch,
+                        "format_version": result.format_version
+                    })
+                ),
+                cli::OutputFormat::Human => {
+                    println!("Catalog State:");
+                    println!("  Latest snapshot ID: {}", result.latest_snapshot_id);
+                    println!("  Schema version: {}", result.schema_version);
+                    println!("  Snapshot time: {}", result.snapshot_time);
+                    println!("  Next snapshot ID: {}", result.next_snapshot_id);
+                    println!("  Next catalog ID: {}", result.next_catalog_id);
+                    println!("  Next file ID: {}", result.next_file_id);
+                    println!("  Schemas: {}", result.schema_count);
+                    println!("  Tables: {}", result.table_count);
+                    println!("  Columns: {}", result.column_count);
+                    println!("  Data files: {}", result.data_file_count);
+                    println!("  Delete files: {}", result.delete_file_count);
+                    println!("  Retain-from: {}", result.retain_from);
+                    println!("  Writer epoch: {}", result.writer_epoch);
+                    println!("  Format version: {}", result.format_version);
+                }
+            }
 
             db.close().await?;
         }
         cli::InspectSubcommand::ApiCosts(args) => {
+            let output = args.output;
             let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
             let db = slatedb::Db::open(catalog_path, object_store).await?;
             let state = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
@@ -599,9 +949,29 @@ async fn cmd_inspect(command: cli::InspectSubcommand) -> Result<(), Box<dyn std:
             };
             let report = rocklake_catalog::cost::ApiCostReport::from_snapshot(&snap);
 
-            report.print();
+            match output {
+                cli::OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "put_count": report.put_count,
+                        "get_count": report.get_count,
+                        "list_count": report.list_count,
+                        "delete_count": report.delete_count,
+                        "elapsed_secs": report.elapsed_secs,
+                        "estimated_monthly_usd": report.estimated_monthly_usd,
+                        "rds_monthly_usd": report.rds_monthly_usd,
+                        "put_per_minute": report.put_per_minute,
+                        "get_per_minute": report.get_per_minute,
+                        "list_per_minute": report.list_per_minute,
+                        "recommendations": report.recommendations
+                    })
+                ),
+                cli::OutputFormat::Human => report.print(),
+            }
         }
         cli::InspectSubcommand::CacheUtilization(args) => {
+            let output = args.output;
             let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
             let db = slatedb::Db::open(catalog_path, object_store).await?;
             let state = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
@@ -610,7 +980,22 @@ async fn cmd_inspect(command: cli::InspectSubcommand) -> Result<(), Box<dyn std:
             let stats =
                 rocklake_catalog::cache_utilization(256, state.data_file_count, state.column_count)
                     .await;
-            stats.print();
+            match output {
+                cli::OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "hits": stats.hits,
+                        "misses": stats.misses,
+                        "hit_ratio": stats.hit_ratio,
+                        "evictions": stats.evictions,
+                        "bytes_used": stats.bytes_used,
+                        "capacity_bytes": stats.capacity_bytes,
+                        "recommended_cache_size_mb": stats.recommended_cache_size_mb
+                    })
+                ),
+                cli::OutputFormat::Human => stats.print(),
+            }
         }
     }
 
@@ -624,41 +1009,74 @@ async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::e
         cli::VerifySubcommand::Catalog(args) => &args.catalog,
         cli::VerifySubcommand::DataFiles(args) => &args.catalog,
     };
+    let output = match &command {
+        cli::VerifySubcommand::Catalog(args) => args.output,
+        cli::VerifySubcommand::DataFiles(args) => args.output,
+    };
     let (catalog_path, object_store) = resolve_catalog(catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store.clone()).await?;
 
     match command {
         cli::VerifySubcommand::Catalog(_) => {
             let result = rocklake_catalog::verify::verify_catalog(&db).await?;
-            println!("Catalog Verification:");
-            println!("  Tables checked: {}", result.tables_checked);
-            println!("  Rows checked: {}", result.rows_checked);
-            if result.errors.is_empty() {
-                println!("  Status: OK");
-            } else {
-                println!("  Errors:");
-                for err in &result.errors {
-                    println!("    - {err}");
-                }
-            }
-            if !result.warnings.is_empty() {
-                println!("  Warnings:");
-                for warn in &result.warnings {
-                    println!("    - {warn}");
+            match output {
+                cli::OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "tables_checked": result.tables_checked,
+                        "rows_checked": result.rows_checked,
+                        "errors": result.errors,
+                        "warnings": result.warnings,
+                        "ok": result.is_ok()
+                    })
+                ),
+                cli::OutputFormat::Human => {
+                    println!("Catalog Verification:");
+                    println!("  Tables checked: {}", result.tables_checked);
+                    println!("  Rows checked: {}", result.rows_checked);
+                    if result.errors.is_empty() {
+                        println!("  Status: OK");
+                    } else {
+                        println!("  Errors:");
+                        for err in &result.errors {
+                            println!("    - {err}");
+                        }
+                    }
+                    if !result.warnings.is_empty() {
+                        println!("  Warnings:");
+                        for warn in &result.warnings {
+                            println!("    - {warn}");
+                        }
+                    }
                 }
             }
         }
         cli::VerifySubcommand::DataFiles(_) => {
             let result = rocklake_catalog::cleanup::verify_data_files(&db, &object_store).await?;
-            println!("Data File Verification:");
-            println!("  Files OK: {}", result.files_ok);
-            println!("  Files missing: {}", result.files_missing.len());
-            println!("  Files error: {}", result.files_error.len());
-            println!("  Total checked: {}", result.total_checked);
-            if !result.files_missing.is_empty() {
-                println!("  Missing files:");
-                for path in &result.files_missing {
-                    println!("    - {path}");
+            match output {
+                cli::OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "files_ok": result.files_ok,
+                        "files_missing": result.files_missing,
+                        "files_error": result.files_error,
+                        "total_checked": result.total_checked
+                    })
+                ),
+                cli::OutputFormat::Human => {
+                    println!("Data File Verification:");
+                    println!("  Files OK: {}", result.files_ok);
+                    println!("  Files missing: {}", result.files_missing.len());
+                    println!("  Files error: {}", result.files_error.len());
+                    println!("  Total checked: {}", result.total_checked);
+                    if !result.files_missing.is_empty() {
+                        println!("  Missing files:");
+                        for path in &result.files_missing {
+                            println!("    - {path}");
+                        }
+                    }
                 }
             }
         }
@@ -671,31 +1089,65 @@ async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::e
 // ─── repair ────────────────────────────────────────────────────────────────
 
 async fn cmd_repair(args: cli::RepairArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let output = args.output;
     let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
     let plan = rocklake_catalog::repair::repair_plan(&db).await?;
 
     if plan.is_empty() {
-        println!("No repairs needed. Catalog is healthy.");
-    } else {
-        println!("Repair Plan:");
-        for action in &plan.actions {
-            println!("  - {action:?}");
+        match output {
+            cli::OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({"schema_version": 1, "actions": [], "unrecoverable_errors": [], "applied": false})
+            ),
+            cli::OutputFormat::Human => println!("No repairs needed. Catalog is healthy."),
         }
-        if plan.has_unrecoverable() {
-            println!("  UNRECOVERABLE ERRORS (restore from backup):");
-            for err in &plan.unrecoverable_errors {
-                println!("    - {err}");
+    } else {
+        if matches!(output, cli::OutputFormat::Json) && !args.apply {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "actions": plan.actions.iter().map(|action| format!("{action:?}")).collect::<Vec<_>>(),
+                    "unrecoverable_errors": &plan.unrecoverable_errors,
+                    "applied": args.apply
+                })
+            );
+        } else if matches!(output, cli::OutputFormat::Human) {
+            println!("Repair Plan:");
+            for action in &plan.actions {
+                println!("  - {action:?}");
+            }
+            if plan.has_unrecoverable() {
+                println!("  UNRECOVERABLE ERRORS (restore from backup):");
+                for err in &plan.unrecoverable_errors {
+                    println!("    - {err}");
+                }
             }
         }
 
         if args.apply && !plan.has_unrecoverable() {
             let result = rocklake_catalog::repair::repair_apply(&db, &plan).await?;
-            println!("Repair Applied:");
-            println!("  Actions applied: {}", result.actions_applied);
-            println!("  Actions failed: {}", result.actions_failed);
-        } else if !args.apply {
+            match output {
+                cli::OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "actions": plan.actions.iter().map(|action| format!("{action:?}")).collect::<Vec<_>>(),
+                        "unrecoverable_errors": plan.unrecoverable_errors,
+                        "applied": true,
+                        "actions_applied": result.actions_applied,
+                        "actions_failed": result.actions_failed
+                    })
+                ),
+                cli::OutputFormat::Human => {
+                    println!("Repair Applied:");
+                    println!("  Actions applied: {}", result.actions_applied);
+                    println!("  Actions failed: {}", result.actions_failed);
+                }
+            }
+        } else if !args.apply && matches!(output, cli::OutputFormat::Human) {
             println!("\nDry run. Use --apply to execute repairs.");
         }
     }
@@ -955,6 +1407,9 @@ fn resolve_catalog_with_opts_mode(
         let obj_path = ObjectPath::from(prefix);
         Ok((obj_path, Arc::new(store)))
     } else {
+        if url.contains("://") {
+            return Err(format!("unsupported catalog URI scheme in '{url}'"));
+        }
         let path = std::path::Path::new(url);
         let canonical = if path.exists() {
             path.canonicalize()
@@ -1128,7 +1583,7 @@ async fn cmd_export_catalog(
 ///   rocklake diagnose --catalog ./my-catalog --data-root ./data/
 async fn cmd_diagnose(args: cli::DiagnoseArgs) -> Result<(), Box<dyn std::error::Error>> {
     let catalog_url = args.catalog;
-    let json_output = args.json;
+    let json_output = args.json || matches!(args.output, cli::OutputFormat::Json);
     let data_root = args.data_root;
 
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
@@ -1153,6 +1608,728 @@ async fn cmd_diagnose(args: cli::DiagnoseArgs) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize)]
+struct DoctorCheck {
+    name: String,
+    status: String,
+    message: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DoctorReport {
+    schema_version: u32,
+    rocklake_version: &'static str,
+    catalog: String,
+    mode: String,
+    ready: bool,
+    checks: Vec<DoctorCheck>,
+    warnings: Vec<String>,
+}
+
+fn doctor_check(
+    checks: &mut Vec<DoctorCheck>,
+    name: &str,
+    status: &str,
+    message: impl Into<String>,
+) {
+    checks.push(DoctorCheck {
+        name: name.to_string(),
+        status: status.to_string(),
+        message: message.into(),
+    });
+}
+
+async fn cmd_doctor(
+    args: cli::DoctorArgs,
+    config_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures::TryStreamExt;
+    use object_store::ObjectStore;
+
+    let (_, file_config) = config::load(config_path)?;
+    let mode = setting(
+        args.mode,
+        "ROCKLAKE_MODE",
+        file_config.mode.clone(),
+        Some("writer".to_string()),
+        "mode",
+    )?
+    .expect("doctor mode default");
+    let bind = setting(
+        args.bind,
+        "ROCKLAKE_BIND",
+        file_config.bind.clone(),
+        Some("127.0.0.1:5432".to_string()),
+        "bind address",
+    )?
+    .expect("doctor bind default")
+    .parse::<SocketAddr>()
+    .map_err(|e| format!("invalid bind address: {e}"))?;
+    let mut checks = Vec::new();
+    let mut warnings = Vec::new();
+
+    let encryption_key = setting(
+        args.encryption_key,
+        "ROCKLAKE_ENCRYPTION_KEY",
+        file_config.encryption_key.clone(),
+        None,
+        "encryption key",
+    )?;
+    let encryption_key_file = setting(
+        args.encryption_key_file,
+        "ROCKLAKE_ENCRYPTION_KEY_FILE",
+        file_config.encryption_key_file.clone(),
+        None,
+        "encryption key file",
+    )?;
+    let encryption = read_secret(
+        encryption_key,
+        encryption_key_file.as_deref(),
+        "ROCKLAKE_ENCRYPTION_KEY_FILE",
+    )?;
+    match encryption.as_deref() {
+        Some(key) => match rocklake_catalog::EncryptionConfig::from_hex(key) {
+            Ok(_) => doctor_check(&mut checks, "encryption", "pass", "encryption key is valid"),
+            Err(error) => doctor_check(&mut checks, "encryption", "fail", error.to_string()),
+        },
+        None => doctor_check(
+            &mut checks,
+            "encryption",
+            "pass",
+            "encryption not configured",
+        ),
+    }
+
+    let local_path = args
+        .catalog
+        .strip_prefix("file://")
+        .or_else(|| (!args.catalog.contains("://")).then_some(args.catalog.as_str()));
+    let mut location = None;
+    if let Some(path_text) = local_path {
+        doctor_check(&mut checks, "uri", "pass", "valid local catalog path");
+        doctor_check(
+            &mut checks,
+            "credentials",
+            "pass",
+            "local filesystem needs no credentials",
+        );
+        doctor_check(
+            &mut checks,
+            "connectivity",
+            "pass",
+            "local filesystem is reachable",
+        );
+        let path = std::path::Path::new(path_text);
+        if path.exists() {
+            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let writable = !std::fs::metadata(parent)?.permissions().readonly();
+            doctor_check(
+                &mut checks,
+                "catalog prefix",
+                "pass",
+                "local catalog directory exists",
+            );
+            doctor_check(
+                &mut checks,
+                "read permission",
+                "pass",
+                "local catalog can be read",
+            );
+            doctor_check(
+                &mut checks,
+                "write permission",
+                if writable { "pass" } else { "fail" },
+                if writable {
+                    "parent directory is writable"
+                } else {
+                    "parent directory is read-only"
+                },
+            );
+            location = Some(resolve_catalog_with_opts_mode(
+                &args.catalog,
+                &S3Options::default(),
+                false,
+            ));
+        } else {
+            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let parent_ok = parent.is_dir();
+            doctor_check(
+                &mut checks,
+                "catalog prefix",
+                "pass",
+                "fresh local catalog will be created by serve",
+            );
+            doctor_check(
+                &mut checks,
+                "read permission",
+                if parent_ok { "pass" } else { "fail" },
+                if parent_ok {
+                    "parent directory is available"
+                } else {
+                    "parent directory does not exist"
+                },
+            );
+            let writable = parent_ok
+                && std::fs::metadata(parent)
+                    .map(|metadata| !metadata.permissions().readonly())
+                    .unwrap_or(false);
+            doctor_check(
+                &mut checks,
+                "write permission",
+                if writable { "pass" } else { "fail" },
+                if writable {
+                    "parent directory is writable"
+                } else {
+                    "parent directory is not writable"
+                },
+            );
+            doctor_check(
+                &mut checks,
+                "format",
+                "skip",
+                "new catalog will use the supported format",
+            );
+            doctor_check(
+                &mut checks,
+                "migration",
+                "skip",
+                "new catalog needs no migration",
+            );
+            doctor_check(
+                &mut checks,
+                "snapshot",
+                "pass",
+                "empty catalog is ready to initialize",
+            );
+            doctor_check(
+                &mut checks,
+                "storage latency",
+                "skip",
+                "no storage read was needed",
+            );
+        }
+    } else {
+        let started = std::time::Instant::now();
+        match resolve_catalog_with_opts_mode(&args.catalog, &S3Options::default(), false) {
+            Ok((catalog_path, store)) => {
+                doctor_check(&mut checks, "uri", "pass", "valid object-store URI");
+                let mut objects = store.list(Some(&catalog_path));
+                match objects.try_next().await {
+                    Ok(Some(meta)) => {
+                        doctor_check(
+                            &mut checks,
+                            "credentials",
+                            "pass",
+                            "object-store credentials accepted",
+                        );
+                        doctor_check(
+                            &mut checks,
+                            "connectivity",
+                            "pass",
+                            "object store is reachable",
+                        );
+                        doctor_check(
+                            &mut checks,
+                            "catalog prefix",
+                            "pass",
+                            "catalog objects exist",
+                        );
+                        match store.get(&meta.location).await {
+                            Ok(_) => doctor_check(
+                                &mut checks,
+                                "read permission",
+                                "pass",
+                                "catalog object is readable",
+                            ),
+                            Err(error) => doctor_check(
+                                &mut checks,
+                                "read permission",
+                                "fail",
+                                error.to_string(),
+                            ),
+                        }
+                        doctor_check(
+                            &mut checks,
+                            "write permission",
+                            "skip",
+                            "not probed because doctor never mutates a catalog",
+                        );
+                        location = Some(Ok((catalog_path, store)));
+                    }
+                    Ok(None) => {
+                        doctor_check(
+                            &mut checks,
+                            "credentials",
+                            "pass",
+                            "object-store credentials accepted",
+                        );
+                        doctor_check(
+                            &mut checks,
+                            "connectivity",
+                            "pass",
+                            "object store is reachable",
+                        );
+                        doctor_check(
+                            &mut checks,
+                            "catalog prefix",
+                            "fail",
+                            "catalog prefix is empty or missing",
+                        );
+                        doctor_check(
+                            &mut checks,
+                            "read permission",
+                            "skip",
+                            "no catalog object exists to read",
+                        );
+                        doctor_check(
+                            &mut checks,
+                            "write permission",
+                            "skip",
+                            "not probed because doctor never mutates a catalog",
+                        );
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        doctor_check(&mut checks, "credentials", "fail", &message);
+                        doctor_check(&mut checks, "connectivity", "fail", message);
+                        doctor_check(
+                            &mut checks,
+                            "catalog prefix",
+                            "skip",
+                            "object-store listing failed",
+                        );
+                        doctor_check(
+                            &mut checks,
+                            "read permission",
+                            "skip",
+                            "object-store listing failed",
+                        );
+                        doctor_check(
+                            &mut checks,
+                            "write permission",
+                            "skip",
+                            "not probed because doctor never mutates a catalog",
+                        );
+                    }
+                }
+                doctor_check(
+                    &mut checks,
+                    "storage latency",
+                    "pass",
+                    format!(
+                        "catalog listing completed in {} ms",
+                        started.elapsed().as_millis()
+                    ),
+                );
+            }
+            Err(error) => {
+                doctor_check(&mut checks, "uri", "fail", error);
+                doctor_check(&mut checks, "credentials", "skip", "URI validation failed");
+                doctor_check(&mut checks, "connectivity", "skip", "URI validation failed");
+                doctor_check(
+                    &mut checks,
+                    "catalog prefix",
+                    "skip",
+                    "URI validation failed",
+                );
+            }
+        }
+    }
+
+    let tls_cert = setting(
+        args.tls_cert,
+        "ROCKLAKE_TLS_CERT",
+        file_config.tls_cert,
+        None,
+        "TLS certificate",
+    )?;
+    let tls_key = setting(
+        args.tls_key,
+        "ROCKLAKE_TLS_KEY",
+        file_config.tls_key,
+        None,
+        "TLS key",
+    )?;
+    let auth_user = setting(
+        args.auth_user,
+        "ROCKLAKE_AUTH_USER",
+        file_config.auth_user,
+        None,
+        "auth user",
+    )?;
+    let tls = tls_cert.is_some() && tls_key.is_some();
+    if !bind.ip().is_loopback() && !tls && auth_user.is_none() {
+        let warning = "listener is non-loopback without TLS or authentication".to_string();
+        warnings.push(warning.clone());
+        doctor_check(&mut checks, "runtime safety", "fail", warning);
+    } else {
+        doctor_check(
+            &mut checks,
+            "runtime safety",
+            "pass",
+            "listener configuration is acceptable",
+        );
+    }
+    doctor_check(
+        &mut checks,
+        "reader/writer eligibility",
+        "pass",
+        if mode == "reader" {
+            "reader mode uses no writer epoch"
+        } else {
+            "writer mode can acquire the epoch during serve"
+        },
+    );
+    if !checks
+        .iter()
+        .any(|check| check.name == "DuckLake compatibility")
+    {
+        doctor_check(
+            &mut checks,
+            "DuckLake compatibility",
+            "pass",
+            "DuckLake 1.0 catalog layout is supported",
+        );
+    }
+    if !checks.iter().any(|check| check.name == "storage latency") {
+        doctor_check(
+            &mut checks,
+            "storage latency",
+            "skip",
+            "local filesystem latency was not measured",
+        );
+    }
+
+    if let Some(Ok((catalog_path, store))) = location {
+        match slatedb::Db::open(catalog_path, store).await {
+            Ok(db) => match rocklake_catalog::inspect::inspect_snapshot(&db).await {
+                Ok(info) => {
+                    doctor_check(
+                        &mut checks,
+                        "format",
+                        if info.format_version == rocklake_core::tags::CATALOG_FORMAT_VERSION {
+                            "pass"
+                        } else {
+                            "fail"
+                        },
+                        format!(
+                            "catalog format {} (expected {})",
+                            info.format_version,
+                            rocklake_core::tags::CATALOG_FORMAT_VERSION
+                        ),
+                    );
+                    match rocklake_catalog::init::verify_migrations_complete(&db).await {
+                        Ok(()) => doctor_check(
+                            &mut checks,
+                            "migration",
+                            "pass",
+                            "key migrations complete",
+                        ),
+                        Err(error) => {
+                            doctor_check(&mut checks, "migration", "fail", error.to_string())
+                        }
+                    }
+                    doctor_check(
+                        &mut checks,
+                        "snapshot",
+                        "pass",
+                        format!("latest committed snapshot {}", info.latest_snapshot_id),
+                    );
+                }
+                Err(error) => doctor_check(&mut checks, "catalog state", "fail", error.to_string()),
+            },
+            Err(error) => doctor_check(&mut checks, "catalog open", "fail", error.to_string()),
+        }
+    }
+
+    let ready = checks.iter().all(|check| check.status != "fail");
+    let report = DoctorReport {
+        schema_version: 1,
+        rocklake_version: env!("CARGO_PKG_VERSION"),
+        catalog: args.catalog,
+        mode,
+        ready,
+        checks,
+        warnings,
+    };
+    match args.output {
+        cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        cli::OutputFormat::Human => {
+            println!("RockLake Doctor {}", report.rocklake_version);
+            println!("Catalog: {}", report.catalog);
+            println!("Mode: {}", report.mode);
+            for check in &report.checks {
+                println!(
+                    "[{:<4}] {:<24} {}",
+                    check.status.to_uppercase(),
+                    check.name,
+                    check.message
+                );
+            }
+            println!(
+                "Status: {}",
+                if report.ready { "READY" } else { "NOT READY" }
+            );
+        }
+    }
+    if !report.ready {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn cmd_config(
+    command: cli::ConfigSubcommand,
+    config_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        cli::ConfigSubcommand::Example => print!("{}", config::example()),
+        cli::ConfigSubcommand::Check(args) => {
+            let path = args
+                .file
+                .as_deref()
+                .or(config_path)
+                .ok_or("no config file selected; use --file or --config")?;
+            let (path, file_config) = config::load(Some(path))?;
+            validate_config(&file_config)?;
+            let path = path.expect("explicit config path");
+            match args.output {
+                cli::OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "valid": true,
+                        "path": path,
+                        "effective": redacted_config(&file_config)
+                    })
+                ),
+                cli::OutputFormat::Human => {
+                    println!("Valid configuration: {}", path.display())
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
+    if config.auth_password.is_some() && config.auth_password_file.is_some() {
+        return Err("auth_password and auth_password_file are mutually exclusive".to_string());
+    }
+    if config.encryption_key.is_some() && config.encryption_key_file.is_some() {
+        return Err("encryption_key and encryption_key_file are mutually exclusive".to_string());
+    }
+    if let Some(mode) = &config.mode {
+        if mode != "writer" && mode != "reader" {
+            return Err("mode must be writer or reader".to_string());
+        }
+    }
+    if let Some(cost_mode) = &config.cost_mode {
+        if !["conservative", "balanced", "latency"].contains(&cost_mode.as_str()) {
+            return Err("cost_mode must be conservative, balanced, or latency".to_string());
+        }
+    }
+    if let Some(bind) = &config.bind {
+        bind.parse::<SocketAddr>()
+            .map_err(|e| format!("invalid bind: {e}"))?;
+    }
+    if config.max_sessions == Some(0) || config.datafusion_bridge_queue_depth == Some(0) {
+        return Err("numeric limits must be greater than zero".to_string());
+    }
+    if config.tls_required == Some(true) && (config.tls_cert.is_none() || config.tls_key.is_none())
+    {
+        return Err("tls_required needs tls_cert and tls_key".to_string());
+    }
+    if let Some(key) = config.encryption_key.as_deref() {
+        rocklake_catalog::EncryptionConfig::from_hex(key).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
+    serde_json::json!({
+        "catalog": config.catalog,
+        "bind": config.bind,
+        "max_sessions": config.max_sessions,
+        "metrics_port": config.metrics_port,
+        "metrics_path": config.metrics_path,
+        "tls_cert": config.tls_cert,
+        "tls_key": config.tls_key,
+        "tls_required": config.tls_required,
+        "auth_user": config.auth_user,
+        "auth_password": config.auth_password.as_ref().map(|_| "[redacted]"),
+        "auth_password_file": config.auth_password_file,
+        "mode": config.mode,
+        "cost_mode": config.cost_mode,
+        "s3_endpoint": config.s3_endpoint,
+        "s3_path_style": config.s3_path_style,
+        "encryption_key": config.encryption_key.as_ref().map(|_| "[redacted]"),
+        "encryption_key_file": config.encryption_key_file,
+        "extension_schemas": config.extension_schemas,
+        "otlp_endpoint": config.otlp_endpoint,
+        "idle_connection_timeout": config.idle_connection_timeout,
+        "drain_timeout": config.drain_timeout,
+        "datafusion_bridge_queue_depth": config.datafusion_bridge_queue_depth,
+    })
+}
+
+async fn cmd_backup(command: cli::BackupSubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        cli::BackupSubcommand::Create(args) => {
+            let (catalog_path, object_store) =
+                resolve_catalog_with_opts_mode(&args.catalog, &S3Options::default(), false)?;
+            let db = slatedb::Db::open(catalog_path, object_store).await?;
+            let info =
+                rocklake_catalog::create_backup(&db, &args.out, &args.catalog, args.snapshot_id)
+                    .await?;
+            db.close().await?;
+            println!("Backup created: {}", info.path.display());
+            println!("  Snapshot: {}", info.manifest.snapshot_id);
+            println!("  Rows: {}", info.manifest.row_count);
+            println!("  SHA-256: {}", info.manifest.sha256);
+        }
+        cli::BackupSubcommand::Inspect(args) => {
+            let info = rocklake_catalog::inspect_backup(&args.backup).await?;
+            match args.output {
+                cli::OutputFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&info.manifest)?)
+                }
+                cli::OutputFormat::Human => {
+                    println!("Backup: {}", info.path.display());
+                    println!("  Version: {}", info.manifest.version);
+                    println!("  Source: {}", info.manifest.source_identity);
+                    println!("  Snapshot: {}", info.manifest.snapshot_id);
+                    println!("  Rows: {}", info.manifest.row_count);
+                    println!("  Bytes: {}", info.manifest.byte_count);
+                    println!("  SHA-256: {}", info.manifest.sha256);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    let (args, apply) = match command {
+        cli::RestoreSubcommand::Plan(args) => (args, false),
+        cli::RestoreSubcommand::Apply(args) => (args, true),
+    };
+    let backup = rocklake_catalog::inspect_backup(&args.backup).await?;
+    let local_target_missing = !apply
+        && args
+            .catalog
+            .strip_prefix("file://")
+            .or_else(|| (!args.catalog.contains("://")).then_some(args.catalog.as_str()))
+            .is_some_and(|path| !std::path::Path::new(path).exists());
+    if local_target_missing {
+        let plan = serde_json::json!({
+            "schema_version": 1,
+            "backup": args.backup,
+            "catalog": args.catalog,
+            "snapshot_id": backup.manifest.snapshot_id,
+            "rows": backup.manifest.row_count,
+            "target_empty": true,
+            "action": "import",
+        });
+        match args.output {
+            cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&plan)?),
+            cli::OutputFormat::Human => {
+                println!("Restore plan:\n{}", serde_json::to_string_pretty(&plan)?)
+            }
+        }
+        return Ok(());
+    }
+    let (catalog_path, object_store) =
+        resolve_catalog_with_opts_mode(&args.catalog, &S3Options::default(), apply)?;
+    let db = slatedb::Db::open(catalog_path, object_store).await?;
+    let mut existing = db.scan::<&[u8], _>(std::ops::RangeFull).await?;
+    let target_empty = existing
+        .next()
+        .await
+        .map_err(|e| format!("scan restore target: {e}"))?
+        .is_none();
+    if !target_empty && apply && !args.overwrite {
+        db.close().await?;
+        return Err(
+            "restore target is not empty; pass --overwrite explicitly or use a new catalog path"
+                .into(),
+        );
+    }
+    let plan = serde_json::json!({
+        "schema_version": 1,
+        "backup": args.backup,
+        "catalog": args.catalog,
+        "snapshot_id": backup.manifest.snapshot_id,
+        "rows": backup.manifest.row_count,
+        "target_empty": target_empty,
+        "action": if apply && !target_empty && args.overwrite {
+            "overwrite and import"
+        } else if apply {
+            "import"
+        } else if target_empty {
+            "no mutation"
+        } else {
+            "refused: target is not empty"
+        },
+    });
+    if !apply {
+        db.close().await?;
+        match args.output {
+            cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&plan)?),
+            cli::OutputFormat::Human => {
+                println!("Restore plan:\n{}", serde_json::to_string_pretty(&plan)?)
+            }
+        }
+        return Ok(());
+    }
+    let data_path = args.backup.join("catalog.ndjson");
+    let file = std::fs::File::open(&data_path)?;
+    if !target_empty {
+        let mut delete_batch = slatedb::WriteBatch::new();
+        let mut keys_deleted = 0usize;
+        let mut keys = db.scan::<&[u8], _>(std::ops::RangeFull).await?;
+        while let Some(kv) = keys
+            .next()
+            .await
+            .map_err(|e| format!("scan restore target for overwrite: {e}"))?
+        {
+            delete_batch.delete(&kv.key);
+            keys_deleted += 1;
+        }
+        if keys_deleted > 0 {
+            db.write(delete_batch).await?;
+        }
+    }
+    let result =
+        rocklake_catalog::export::import_catalog(&db, std::io::BufReader::new(file)).await?;
+    let restored = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
+    db.close().await?;
+    if restored.latest_snapshot_id != backup.manifest.snapshot_id {
+        return Err(format!(
+            "restore verification failed: restored snapshot {} differs from backup snapshot {}",
+            restored.latest_snapshot_id, backup.manifest.snapshot_id
+        )
+        .into());
+    }
+    match args.output {
+        cli::OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "schema_version": 1,
+                "restored": true,
+                "rows_imported": result.rows_imported,
+                "tables_imported": result.tables_imported,
+                "verified": true
+            })
+        ),
+        cli::OutputFormat::Human => println!(
+            "Restore applied: {} rows imported and verified",
+            result.rows_imported
+        ),
+    }
+    Ok(())
+}
+
 // ─── sweep-orphans (v0.39.0) ───────────────────────────────────────────────
 
 /// Identify (and optionally delete) orphan Parquet files in object storage.
@@ -1166,6 +2343,7 @@ async fn cmd_sweep_orphans(args: cli::SweepOrphansArgs) -> Result<(), Box<dyn st
     let data_root = args.data_root;
     let grace_period_hours = args.grace_period_hours;
     let apply = args.apply;
+    let output = args.output;
 
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store.clone()).await?;
@@ -1179,22 +2357,38 @@ async fn cmd_sweep_orphans(args: cli::SweepOrphansArgs) -> Result<(), Box<dyn st
     let result = rocklake_catalog::sweep_orphans(&db, object_store, &config).await?;
     db.close().await?;
 
-    if apply {
-        println!("Sweep complete (--apply mode):");
-    } else {
-        println!("Sweep complete (dry-run — use --apply to delete):");
-    }
-    println!("  Data root:          {data_root}");
-    println!("  Files scanned:      {}", result.total_scanned);
-    println!("  Orphan files found: {}", result.orphan_files.len());
-    println!("  Files deleted:      {}", result.deleted);
-    println!("  Deletion failures:  {}", result.deletion_failures.len());
-    println!("  Grace period:       {grace_period_hours}h");
-
-    if !result.orphan_files.is_empty() {
-        println!("\nOrphan files:");
-        for f in &result.orphan_files {
-            println!("  {f}");
+    match output {
+        cli::OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "schema_version": 1,
+                "data_root": data_root,
+                "files_scanned": result.total_scanned,
+                "orphan_files": &result.orphan_files,
+                "files_deleted": result.deleted,
+                "deletion_failures": &result.deletion_failures,
+                "grace_period_hours": grace_period_hours,
+                "applied": apply
+            })
+        ),
+        cli::OutputFormat::Human => {
+            if apply {
+                println!("Sweep complete (--apply mode):");
+            } else {
+                println!("Sweep complete (dry-run — use --apply to delete):");
+            }
+            println!("  Data root:          {data_root}");
+            println!("  Files scanned:      {}", result.total_scanned);
+            println!("  Orphan files found: {}", result.orphan_files.len());
+            println!("  Files deleted:      {}", result.deleted);
+            println!("  Deletion failures:  {}", result.deletion_failures.len());
+            println!("  Grace period:       {grace_period_hours}h");
+            if !result.orphan_files.is_empty() {
+                println!("\nOrphan files:");
+                for f in &result.orphan_files {
+                    println!("  {f}");
+                }
+            }
         }
     }
 

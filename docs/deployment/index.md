@@ -1,6 +1,6 @@
 # Deployment
 
-RockLake v0.49.0 is supported as a single `rocklake` binary backed by a local
+RockLake v0.50.0 is supported as a single `rocklake` binary backed by a local
 filesystem or cloud object storage. Keep the listener on `127.0.0.1` for local
 use and configure a network boundary before exposing it elsewhere.
 
