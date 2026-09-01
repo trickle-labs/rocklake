@@ -50,7 +50,7 @@ jobs:
         run: cargo test --package rocklake-pgwire -- --include-ignored corpus
 
       - name: Run all integration tests
-        run: cargo test --package rocklake-pgwire
+        run: cargo test --package rocklake-pgwire -- --test-threads=1
 
   postgres-client-compatibility:
     name: PostgreSQL Client Compatibility (${{ matrix.postgres-version }})
