@@ -1,11 +1,15 @@
 //! CatalogReader: read catalog state at a specific DuckLake snapshot.
 
+use base64::Engine as _;
+use futures::stream::{self, BoxStream};
+use futures::StreamExt;
 use rocklake_core::keys;
 use rocklake_core::mvcc::{self, SnapshotId};
 use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::types::DuckLakeType;
 use rocklake_core::values;
+use serde::{Deserialize, Serialize};
 use slatedb::Db;
 
 use crate::error::{CatalogError, CatalogResult};
@@ -69,9 +73,61 @@ impl SnapshotDiff {
 }
 
 /// Reads catalog state at a specific DuckLake snapshot ID.
+#[derive(Clone)]
 pub struct CatalogReader {
     db: Db,
     dl_snapshot_id: SnapshotId,
+}
+
+/// Maximum number of rows returned by one paginated data-file read.
+pub const MAX_DATA_FILE_PAGE_SIZE: usize = 1_024;
+
+/// A bounded page of data files and the cursor for the next page.
+#[derive(Debug, Clone)]
+pub struct DataFilePage {
+    /// Rows visible at the reader's snapshot.
+    pub files: Vec<DataFileRow>,
+    /// Opaque cursor, or `None` when this is the last page.
+    pub continuation_token: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DataFileCursor {
+    version: u8,
+    table_id: u64,
+    snapshot_id: u64,
+    page_size: usize,
+    begin_snapshot: u64,
+    data_file_id: u64,
+}
+
+fn decode_data_file_cursor(
+    token: &str,
+    table_id: u64,
+    snapshot_id: u64,
+    page_size: usize,
+) -> CatalogResult<(u64, u64)> {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|e| CatalogError::InvalidInput(format!("invalid continuation token: {e}")))?;
+    let cursor: DataFileCursor = serde_json::from_slice(&bytes)
+        .map_err(|e| CatalogError::InvalidInput(format!("invalid continuation token: {e}")))?;
+    if cursor.version != 1
+        || cursor.table_id != table_id
+        || cursor.snapshot_id != snapshot_id
+        || cursor.page_size != page_size
+    {
+        return Err(CatalogError::InvalidInput(
+            "continuation token does not match this request".to_string(),
+        ));
+    }
+    Ok((cursor.begin_snapshot, cursor.data_file_id))
+}
+
+fn encode_data_file_cursor(cursor: DataFileCursor) -> CatalogResult<String> {
+    let bytes = serde_json::to_vec(&cursor)
+        .map_err(|e| CatalogError::Internal(format!("encode continuation token: {e}")))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
 impl CatalogReader {
@@ -316,6 +372,164 @@ impl CatalogReader {
         // v0.24: order results by file_order (spec requirement).
         files.sort_by_key(|f| f.file_order.unwrap_or(f.data_file_id));
         Ok(files)
+    }
+
+    /// Return one bounded page of data files visible at this snapshot.
+    ///
+    /// The continuation token is valid only for the same table, snapshot, and
+    /// page size. Results are ordered by the data-file snapshot index.
+    pub async fn list_data_files_paged(
+        &self,
+        table_id: u64,
+        page_size: usize,
+        continuation_token: Option<&str>,
+    ) -> CatalogResult<DataFilePage> {
+        if page_size == 0 || page_size > MAX_DATA_FILE_PAGE_SIZE {
+            return Err(CatalogError::InvalidInput(format!(
+                "page size must be between 1 and {MAX_DATA_FILE_PAGE_SIZE}"
+            )));
+        }
+        let cursor = continuation_token
+            .map(|token| {
+                decode_data_file_cursor(token, table_id, self.dl_snapshot_id.as_u64(), page_size)
+            })
+            .transpose()?;
+        let upper =
+            keys::prefix_data_files_by_snapshot_upper(table_id, self.dl_snapshot_id.as_u64());
+        let start = cursor.map(|(begin_snapshot, data_file_id)| {
+            keys::key_data_file_by_snapshot(table_id, begin_snapshot, data_file_id)
+        });
+        let mut iter = match (start, upper.clone()) {
+            (Some(start), Some(upper)) => {
+                self.db
+                    .scan::<Vec<u8>, _>((
+                        std::ops::Bound::Excluded(start),
+                        std::ops::Bound::Excluded(upper),
+                    ))
+                    .await?
+            }
+            (Some(start), None) => {
+                self.db
+                    .scan::<Vec<u8>, _>((
+                        std::ops::Bound::Excluded(start),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .await?
+            }
+            (None, Some(upper)) => {
+                self.db
+                    .scan::<Vec<u8>, _>((
+                        std::ops::Bound::Included(keys::prefix_data_files_by_snapshot_for_table(
+                            table_id,
+                        )),
+                        std::ops::Bound::Excluded(upper),
+                    ))
+                    .await?
+            }
+            (None, None) => {
+                self.db
+                    .scan::<Vec<u8>, _>((
+                        std::ops::Bound::Included(keys::prefix_data_files_by_snapshot_for_table(
+                            table_id,
+                        )),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .await?
+            }
+        };
+        let mut files = Vec::with_capacity(page_size);
+        let mut last = None;
+        let mut page_full = false;
+        let mut has_more = false;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let key = kv.key.as_ref();
+            if key.len() < 25 {
+                return Err(CatalogError::Corruption(
+                    "data-file snapshot index key is shorter than 25 bytes".to_string(),
+                ));
+            }
+            let begin_snapshot = keys::decode_u64(&key[9..17])?;
+            let data_file_id = keys::decode_u64(&key[17..25])?;
+            let row: DataFileRow = values::decode_value(&kv.value)?;
+            if row
+                .end_snapshot
+                .is_some_and(|end| end <= self.dl_snapshot_id.as_u64())
+            {
+                continue;
+            }
+            if page_full {
+                has_more = true;
+                break;
+            }
+            last = Some((begin_snapshot, data_file_id));
+            files.push(row);
+            if files.len() == page_size {
+                page_full = true;
+            }
+        }
+        let continuation_token = if let Some((begin_snapshot, data_file_id)) = last {
+            if has_more {
+                Some(encode_data_file_cursor(DataFileCursor {
+                    version: 1,
+                    table_id,
+                    snapshot_id: self.dl_snapshot_id.as_u64(),
+                    page_size,
+                    begin_snapshot,
+                    data_file_id,
+                })?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(DataFilePage {
+            files,
+            continuation_token,
+        })
+    }
+
+    /// Stream data files with at most one decoded row buffered.
+    // ponytail: pull-based iteration provides backpressure and cancellation;
+    // a producer channel would add memory without a measured throughput need.
+    pub async fn stream_data_files(
+        &self,
+        table_id: u64,
+    ) -> CatalogResult<BoxStream<'static, CatalogResult<DataFileRow>>> {
+        let prefix = keys::prefix_data_files_by_snapshot_for_table(table_id);
+        let upper =
+            keys::prefix_data_files_by_snapshot_upper(table_id, self.dl_snapshot_id.as_u64());
+        let snapshot_id = self.dl_snapshot_id.as_u64();
+        let iter = self.db.scan_prefix(&prefix).await?;
+        Ok(
+            stream::try_unfold((iter, upper), move |(mut iter, upper)| async move {
+                loop {
+                    let Some(kv) = iter
+                        .next()
+                        .await
+                        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+                    else {
+                        return Ok(None);
+                    };
+                    if upper
+                        .as_ref()
+                        .is_some_and(|key| kv.key.as_ref() >= key.as_slice())
+                    {
+                        return Ok(None);
+                    }
+                    let row: DataFileRow = values::decode_value(&kv.value)?;
+                    if row.end_snapshot.is_some_and(|end| end <= snapshot_id) {
+                        continue;
+                    }
+                    return Ok(Some((row, (iter, upper))));
+                }
+            })
+            .boxed(),
+        )
     }
 
     /// List delete files visible at the current snapshot.

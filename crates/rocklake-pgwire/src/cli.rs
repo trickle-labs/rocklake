@@ -230,6 +230,22 @@ pub struct ServeArgs {
     /// Capacity of the DataFusion AsyncBridge channel (default: 256).
     #[arg(long)]
     pub datafusion_bridge_queue_depth: Option<usize>,
+
+    /// Maximum concurrent catalog scans (default: 25).
+    #[arg(long)]
+    pub max_active_scans: Option<usize>,
+    /// Maximum queued stream items (default: 64).
+    #[arg(long)]
+    pub stream_queue_depth: Option<usize>,
+    /// Maximum rows buffered for a response (default: 1024).
+    #[arg(long)]
+    pub max_buffered_rows: Option<usize>,
+    /// Maximum response bytes buffered per request (default: 16 MiB).
+    #[arg(long)]
+    pub max_response_bytes: Option<usize>,
+    /// Log operations slower than this threshold in milliseconds (default: 1000).
+    #[arg(long)]
+    pub slow_operation_threshold_ms: Option<u64>,
 }
 
 #[derive(Debug, Parser)]

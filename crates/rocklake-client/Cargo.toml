@@ -16,6 +16,7 @@ object_store = { workspace = true, features = ["aws", "gcp", "azure"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

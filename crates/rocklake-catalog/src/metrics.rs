@@ -11,6 +11,17 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+const QUERY_BUCKETS_US: [u64; 8] = [
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    60_000_000,
+    300_000_000,
+    u64::MAX,
+];
+
 /// Catalog-level metrics.
 #[derive(Debug)]
 pub struct CatalogMetrics {
@@ -93,6 +104,25 @@ pub struct CatalogMetrics {
     pub idle_sessions: AtomicU64,
     /// Configured DataFusion AsyncBridge channel queue depth.
     pub datafusion_bridge_queue_depth: AtomicU64,
+    pub pgwire_query_duration_buckets: [AtomicU64; 8],
+    pub pgwire_response_rows: AtomicU64,
+    pub pgwire_response_bytes: AtomicU64,
+    pub pgwire_response_rows_per_second: AtomicU64,
+    pub pgwire_response_bytes_per_second: AtomicU64,
+    pub pgwire_ttfr_us_total: AtomicU64,
+    pub pgwire_ttfr_count: AtomicU64,
+    pub pgwire_sql_classification_us_total: AtomicU64,
+    pub pgwire_sql_classification_count: AtomicU64,
+    pub pgwire_peak_buffered_rows: AtomicU64,
+    pub active_scans: AtomicU64,
+    pub max_active_scans: AtomicU64,
+    pub stream_queue_depth: AtomicU64,
+    pub max_buffered_rows: AtomicU64,
+    pub max_response_bytes: AtomicU64,
+    pub process_rss_bytes: AtomicU64,
+    pub process_peak_rss_bytes: AtomicU64,
+    pub resource_limit_exhaustions: AtomicU64,
+    pub stream_backpressure_total: AtomicU64,
 }
 
 impl CatalogMetrics {
@@ -137,6 +167,25 @@ impl CatalogMetrics {
             // v0.47.0 connection management & DataFusion bridge
             idle_sessions: AtomicU64::new(0),
             datafusion_bridge_queue_depth: AtomicU64::new(256),
+            pgwire_query_duration_buckets: std::array::from_fn(|_| AtomicU64::new(0)),
+            pgwire_response_rows: AtomicU64::new(0),
+            pgwire_response_bytes: AtomicU64::new(0),
+            pgwire_response_rows_per_second: AtomicU64::new(0),
+            pgwire_response_bytes_per_second: AtomicU64::new(0),
+            pgwire_ttfr_us_total: AtomicU64::new(0),
+            pgwire_ttfr_count: AtomicU64::new(0),
+            pgwire_sql_classification_us_total: AtomicU64::new(0),
+            pgwire_sql_classification_count: AtomicU64::new(0),
+            pgwire_peak_buffered_rows: AtomicU64::new(0),
+            active_scans: AtomicU64::new(0),
+            max_active_scans: AtomicU64::new(25),
+            stream_queue_depth: AtomicU64::new(64),
+            max_buffered_rows: AtomicU64::new(1024),
+            max_response_bytes: AtomicU64::new(16 * 1024 * 1024),
+            process_rss_bytes: AtomicU64::new(0),
+            process_peak_rss_bytes: AtomicU64::new(0),
+            resource_limit_exhaustions: AtomicU64::new(0),
+            stream_backpressure_total: AtomicU64::new(0),
         }
     }
 
@@ -181,6 +230,48 @@ impl CatalogMetrics {
     pub fn set_datafusion_bridge_queue_depth(&self, depth: u64) {
         self.datafusion_bridge_queue_depth
             .store(depth, Ordering::Relaxed);
+    }
+
+    pub fn set_resource_limits(&self, max_scans: u64, queue: u64, rows: u64, bytes: u64) {
+        self.max_active_scans.store(max_scans, Ordering::Relaxed);
+        self.stream_queue_depth.store(queue, Ordering::Relaxed);
+        self.max_buffered_rows.store(rows, Ordering::Relaxed);
+        self.max_response_bytes.store(bytes, Ordering::Relaxed);
+    }
+
+    pub fn set_active_scans(&self, count: u64) {
+        self.active_scans.store(count, Ordering::Relaxed);
+    }
+
+    pub fn increment_resource_limit_exhaustions(&self) {
+        self.resource_limit_exhaustions
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn increment_stream_backpressure(&self) {
+        self.stream_backpressure_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Refresh process memory metrics when the host exposes RSS through `ps`.
+    pub fn refresh_process_memory(&self) {
+        let pid = std::process::id().to_string();
+        let Ok(output) = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &pid])
+            .output()
+        else {
+            return;
+        };
+        let Ok(kib) = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<u64>()
+        else {
+            return;
+        };
+        let bytes = kib.saturating_mul(1024);
+        self.process_rss_bytes.store(bytes, Ordering::Relaxed);
+        self.process_peak_rss_bytes
+            .fetch_max(bytes, Ordering::Relaxed);
     }
 
     pub fn set_writer_epoch_age_ms(&self, age: u64) {
@@ -237,6 +328,55 @@ impl CatalogMetrics {
         self.pgwire_queries_total.fetch_add(1, Ordering::Relaxed);
         self.pgwire_query_duration_us_total
             .fetch_add(duration_us, Ordering::Relaxed);
+        for (bucket, limit) in self
+            .pgwire_query_duration_buckets
+            .iter()
+            .zip(QUERY_BUCKETS_US)
+        {
+            if duration_us <= limit {
+                bucket.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn record_pgwire_response(&self, rows: u64, ttfr_us: u64) {
+        self.record_pgwire_response_with_timing(rows, 0, ttfr_us, 0);
+    }
+
+    pub fn record_pgwire_response_with_bytes(&self, rows: u64, bytes: u64, ttfr_us: u64) {
+        self.record_pgwire_response_with_timing(rows, bytes, ttfr_us, 0);
+    }
+
+    pub fn record_pgwire_response_with_timing(
+        &self,
+        rows: u64,
+        bytes: u64,
+        ttfr_us: u64,
+        duration_us: u64,
+    ) {
+        self.pgwire_response_rows.fetch_add(rows, Ordering::Relaxed);
+        self.pgwire_response_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
+        self.pgwire_ttfr_us_total
+            .fetch_add(ttfr_us, Ordering::Relaxed);
+        self.pgwire_ttfr_count.fetch_add(1, Ordering::Relaxed);
+        self.pgwire_peak_buffered_rows
+            .fetch_max(u64::from(rows > 0), Ordering::Relaxed);
+        if let Some(rows_per_second) = rows.saturating_mul(1_000_000).checked_div(duration_us) {
+            self.pgwire_response_rows_per_second
+                .store(rows_per_second, Ordering::Relaxed);
+        }
+        if let Some(bytes_per_second) = bytes.saturating_mul(1_000_000).checked_div(duration_us) {
+            self.pgwire_response_bytes_per_second
+                .store(bytes_per_second, Ordering::Relaxed);
+        }
+    }
+
+    pub fn observe_sql_classification_us(&self, us: u64) {
+        self.pgwire_sql_classification_us_total
+            .fetch_add(us, Ordering::Relaxed);
+        self.pgwire_sql_classification_count
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a PG-wire error with SQLSTATE code.
@@ -294,6 +434,7 @@ impl CatalogMetrics {
 
     /// Render Prometheus-compatible metrics output.
     pub fn render_prometheus(&self) -> String {
+        self.refresh_process_memory();
         let mut out = String::new();
 
         out.push_str("# HELP rocklake_snapshots_created_total Total snapshots created.\n");
@@ -443,12 +584,85 @@ impl CatalogMetrics {
         ));
         let pgwire_sum_secs =
             self.pgwire_query_duration_us_total.load(Ordering::Relaxed) as f64 / 1_000_000.0;
-        out.push_str(
-            "# HELP rocklake_pgwire_query_duration_seconds_sum Accumulated query latency.\n",
-        );
-        out.push_str("# TYPE rocklake_pgwire_query_duration_seconds_sum counter\n");
+        out.push_str("# HELP rocklake_pgwire_query_duration_seconds Query duration histogram.\n");
+        out.push_str("# TYPE rocklake_pgwire_query_duration_seconds histogram\n");
         out.push_str(&format!(
             "rocklake_pgwire_query_duration_seconds_sum {pgwire_sum_secs:.6}\n"
+        ));
+        let mut cumulative = 0;
+        for (bucket, limit) in self
+            .pgwire_query_duration_buckets
+            .iter()
+            .zip(QUERY_BUCKETS_US)
+        {
+            cumulative += bucket.load(Ordering::Relaxed);
+            let le = if limit == u64::MAX {
+                "+Inf".to_string()
+            } else {
+                format!("{:.3}", limit as f64 / 1_000_000.0)
+            };
+            out.push_str(&format!(
+                "rocklake_pgwire_query_duration_seconds_bucket{{le=\"{le}\"}} {cumulative}\n"
+            ));
+        }
+        out.push_str(&format!(
+            "rocklake_pgwire_query_duration_seconds_count {}\n",
+            self.pgwire_queries_total.load(Ordering::Relaxed)
+        ));
+        out.push_str(
+            "# HELP rocklake_pgwire_response_rows_total Rows returned by PG-wire queries.\n",
+        );
+        out.push_str("# TYPE rocklake_pgwire_response_rows_total counter\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_response_rows_total {}\n",
+            self.pgwire_response_rows.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_pgwire_response_bytes_total Response bytes returned by PG-wire queries.\n");
+        out.push_str("# TYPE rocklake_pgwire_response_bytes_total counter\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_response_bytes_total {}\n",
+            self.pgwire_response_bytes.load(Ordering::Relaxed)
+        ));
+        out.push_str(
+            "# HELP rocklake_pgwire_response_rows_per_second Rows per second in the last PG-wire response.\n",
+        );
+        out.push_str("# TYPE rocklake_pgwire_response_rows_per_second gauge\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_response_rows_per_second {}\n",
+            self.pgwire_response_rows_per_second.load(Ordering::Relaxed)
+        ));
+        out.push_str(
+            "# HELP rocklake_pgwire_response_bytes_per_second Bytes per second in the last PG-wire response.\n",
+        );
+        out.push_str("# TYPE rocklake_pgwire_response_bytes_per_second gauge\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_response_bytes_per_second {}\n",
+            self.pgwire_response_bytes_per_second
+                .load(Ordering::Relaxed)
+        ));
+        out.push_str(
+            "# HELP rocklake_pgwire_time_to_first_row_seconds Time to first response row.\n",
+        );
+        out.push_str("# TYPE rocklake_pgwire_time_to_first_row_seconds summary\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_time_to_first_row_seconds_sum {:.6}\n",
+            self.pgwire_ttfr_us_total.load(Ordering::Relaxed) as f64 / 1_000_000.0
+        ));
+        out.push_str(&format!(
+            "rocklake_pgwire_time_to_first_row_seconds_count {}\n",
+            self.pgwire_ttfr_count.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_pgwire_sql_classification_seconds Accumulated SQL classification latency.\n");
+        out.push_str("# TYPE rocklake_pgwire_sql_classification_seconds summary\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_sql_classification_seconds_sum {:.6}\n",
+            self.pgwire_sql_classification_us_total
+                .load(Ordering::Relaxed) as f64
+                / 1_000_000.0
+        ));
+        out.push_str(&format!(
+            "rocklake_pgwire_sql_classification_seconds_count {}\n",
+            self.pgwire_sql_classification_count.load(Ordering::Relaxed)
         ));
         out.push_str("# HELP rocklake_pgwire_errors_total Total PG-wire errors.\n");
         out.push_str("# TYPE rocklake_pgwire_errors_total counter\n");
@@ -508,6 +722,56 @@ impl CatalogMetrics {
         out.push_str(&format!(
             "rocklake_datafusion_bridge_queue_depth {}\n",
             self.datafusion_bridge_queue_depth.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_active_scans Current active catalog scans.\n# TYPE rocklake_active_scans gauge\n");
+        out.push_str(&format!(
+            "rocklake_active_scans {}\n",
+            self.active_scans.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_max_active_scans Maximum concurrent catalog scans.\n# TYPE rocklake_max_active_scans gauge\n");
+        out.push_str(&format!(
+            "rocklake_max_active_scans {}\n",
+            self.max_active_scans.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_stream_queue_depth Configured stream queue depth.\n# TYPE rocklake_stream_queue_depth gauge\n");
+        out.push_str(&format!(
+            "rocklake_stream_queue_depth {}\n",
+            self.stream_queue_depth.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_max_buffered_rows Maximum buffered response rows.\n# TYPE rocklake_max_buffered_rows gauge\n");
+        out.push_str(&format!(
+            "rocklake_max_buffered_rows {}\n",
+            self.max_buffered_rows.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_pgwire_peak_buffered_rows Observed peak buffered response rows.\n# TYPE rocklake_pgwire_peak_buffered_rows gauge\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_peak_buffered_rows {}\n",
+            self.pgwire_peak_buffered_rows.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_max_response_bytes Maximum response bytes per request.\n# TYPE rocklake_max_response_bytes gauge\n");
+        out.push_str(&format!(
+            "rocklake_max_response_bytes {}\n",
+            self.max_response_bytes.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_process_rss_bytes Current process resident set size.\n# TYPE rocklake_process_rss_bytes gauge\n");
+        out.push_str(&format!(
+            "rocklake_process_rss_bytes {}\n",
+            self.process_rss_bytes.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_process_peak_rss_bytes Peak observed process resident set size.\n# TYPE rocklake_process_peak_rss_bytes gauge\n");
+        out.push_str(&format!(
+            "rocklake_process_peak_rss_bytes {}\n",
+            self.process_peak_rss_bytes.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_resource_limit_exhaustions_total Resource limit exhaustion events.\n# TYPE rocklake_resource_limit_exhaustions_total counter\n");
+        out.push_str(&format!(
+            "rocklake_resource_limit_exhaustions_total {}\n",
+            self.resource_limit_exhaustions.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_stream_backpressure_total Stream backpressure events.\n# TYPE rocklake_stream_backpressure_total counter\n");
+        out.push_str(&format!(
+            "rocklake_stream_backpressure_total {}\n",
+            self.stream_backpressure_total.load(Ordering::Relaxed)
         ));
 
         out

@@ -12,9 +12,10 @@
 //! - Concurrent reader throughput at 1, 4, 16 concurrent reader tasks
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use futures::StreamExt;
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::writer::stats::FileColumnStatsInput;
-use rocklake_catalog::{CatalogStore, CommitResult, OpenOptions};
+use rocklake_catalog::{CatalogMetrics, CatalogStore, CommitResult, OpenOptions};
 use rocklake_core::mvcc::SnapshotId;
 use rocklake_core::types::DuckLakeType;
 use std::sync::Arc;
@@ -444,6 +445,115 @@ fn bench_list_data_files_100k(c: &mut Criterion) {
     rt.block_on(catalog.close()).unwrap();
 }
 
+fn bench_list_data_files_paged(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("list_data_files_paged");
+
+    for &n in &[10_000usize, 100_000] {
+        let (catalog, _dir, _, table_id, snap) = setup_catalog_n_cols_n_files(&rt, 1, n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let reader = catalog.read_at(snap).unwrap();
+                    let mut token = None;
+                    let mut count = 0usize;
+                    loop {
+                        let page = reader
+                            .list_data_files_paged(table_id, 1_024, token.as_deref())
+                            .await
+                            .unwrap();
+                        count += page.files.len();
+                        token = page.continuation_token;
+                        if token.is_none() {
+                            break;
+                        }
+                    }
+                    std::hint::black_box(count);
+                });
+            });
+        });
+        rt.block_on(catalog.close()).unwrap();
+    }
+    group.finish();
+}
+
+fn bench_stream_data_files(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("stream_data_files");
+
+    for &n in &[10_000usize, 100_000] {
+        let (catalog, _dir, _, table_id, snap) = setup_catalog_n_cols_n_files(&rt, 1, n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let reader = catalog.read_at(snap).unwrap();
+                    let mut stream = reader.stream_data_files(table_id).await.unwrap();
+                    let mut count = 0usize;
+                    while stream.next().await.transpose().unwrap().is_some() {
+                        count += 1;
+                    }
+                    std::hint::black_box(count);
+                });
+            });
+        });
+        rt.block_on(catalog.close()).unwrap();
+    }
+    group.finish();
+}
+
+fn bench_stream_data_files_first_row(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("stream_data_files_first_row");
+
+    for &n in &[10_000usize, 100_000] {
+        let (catalog, _dir, _, table_id, snap) = setup_catalog_n_cols_n_files(&rt, 1, n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let reader = catalog.read_at(snap).unwrap();
+                    let mut stream = reader.stream_data_files(table_id).await.unwrap();
+                    std::hint::black_box(stream.next().await.transpose().unwrap());
+                });
+            });
+        });
+        rt.block_on(catalog.close()).unwrap();
+    }
+    group.finish();
+}
+
+fn bench_stream_data_files_memory(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("stream_data_files_memory");
+    let metrics = CatalogMetrics::new(0);
+
+    for &n in &[10_000usize, 100_000] {
+        let (catalog, _dir, _, table_id, snap) = setup_catalog_n_cols_n_files(&rt, 1, n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter_custom(|iterations| {
+                metrics.refresh_process_memory();
+                let started = std::time::Instant::now();
+                for _ in 0..iterations {
+                    rt.block_on(async {
+                        let reader = catalog.read_at(snap).unwrap();
+                        let mut stream = reader.stream_data_files(table_id).await.unwrap();
+                        while stream.next().await.transpose().unwrap().is_some() {}
+                    });
+                }
+                metrics.refresh_process_memory();
+                started.elapsed()
+            });
+        });
+        eprintln!(
+            "stream_data_files_memory files={n} peak_rss_bytes={}",
+            metrics
+                .process_peak_rss_bytes
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
+        rt.block_on(catalog.close()).unwrap();
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_get_current_snapshot_warm,
@@ -458,5 +568,9 @@ criterion_group!(
     bench_prune_files_legacy,
     bench_list_data_files_10k,
     bench_list_data_files_100k,
+    bench_list_data_files_paged,
+    bench_stream_data_files,
+    bench_stream_data_files_first_row,
+    bench_stream_data_files_memory,
 );
 criterion_main!(benches);

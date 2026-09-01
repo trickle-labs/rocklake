@@ -25,5 +25,5 @@ journalctl -u rocklake -f
 journalctl -u rocklake -p err
 ```
 
-The v0.50.0 binary emits text logs only. JSON output and a `--log-format` flag
+The v0.51.0 binary emits text logs only. JSON output and a `--log-format` flag
 are not part of the supported release surface.

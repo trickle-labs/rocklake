@@ -6,7 +6,7 @@ Google Cloud Storage (GCS) is a natural choice for RockLake deployments running 
 
 - A Google Cloud project with billing enabled
 - The `gcloud` CLI installed and authenticated (`gcloud auth login`)
-- RockLake v0.50.0 binary
+- RockLake v0.51.0 binary
 - IAM permissions to create GCS buckets and service accounts (typically `roles/storage.admin` and `roles/iam.admin`)
 
 ## Creating the Bucket

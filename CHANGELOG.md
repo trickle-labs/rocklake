@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.51.0] — 2026-09-01
+
+### Added
+
+- Added snapshot-aware paginated and bounded streaming data-file reads.
+- Added bounded PG-wire result delivery and explicit scan/response limits.
+- Added request, scan, queue, backpressure, and true histogram metrics with
+  low-cardinality labels.
+- Added request correlation IDs, configurable slow-operation reporting, and
+  large-catalog benchmark coverage.
+
 ## [0.50.0] — 2026-08-31
 
 ### Changed

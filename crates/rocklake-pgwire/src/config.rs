@@ -29,6 +29,11 @@ pub struct ConfigFile {
     pub idle_connection_timeout: Option<u64>,
     pub drain_timeout: Option<u64>,
     pub datafusion_bridge_queue_depth: Option<usize>,
+    pub max_active_scans: Option<usize>,
+    pub stream_queue_depth: Option<usize>,
+    pub max_buffered_rows: Option<usize>,
+    pub max_response_bytes: Option<usize>,
+    pub slow_operation_threshold_ms: Option<u64>,
 }
 
 pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), String> {
@@ -47,7 +52,7 @@ pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), St
 }
 
 pub fn example() -> &'static str {
-    r#"# RockLake v0.50.0 configuration
+    r#"# RockLake v0.51.0 configuration
 catalog = "./lake"
 bind = "127.0.0.1:5432"
 mode = "writer"
@@ -57,6 +62,11 @@ cost_mode = "balanced"
 idle_connection_timeout = 60
 drain_timeout = 30
 datafusion_bridge_queue_depth = 256
+max_active_scans = 25
+stream_queue_depth = 64
+max_buffered_rows = 1024
+max_response_bytes = 16777216
+slow_operation_threshold_ms = 1000
 
 # For cloud catalogs, use environment/provider credentials. Secrets may use files:
 # auth_user = "ducklake"

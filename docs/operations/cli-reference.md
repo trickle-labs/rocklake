@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.50.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.51.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -87,6 +87,9 @@ rocklake serve \
   [--bind <host:port>] \
   [--mode writer|reader] [--read-only] \
   [--max-sessions <n>] \
+  [--max-active-scans <n>] [--stream-queue-depth <n>] \
+  [--max-buffered-rows <n>] [--max-response-bytes <n>] \
+  [--slow-operation-threshold-ms <n>] \
   [--metrics-port <port>] [--metrics-path <path>] \
   [--tls-cert <path>] [--tls-key <path>] [--tls-required] \
   [--auth-user <name>] [--auth-password <secret> | --auth-password-file <path>] \
@@ -116,7 +119,7 @@ The supported RockLake variables are documented in
 [Environment Variables](../reference/environment-vars.md). Provider SDK
 variables such as `AWS_REGION` remain supported for object-store credentials.
 
-## v0.50 operator flow
+## v0.51 operator flow
 
 The supported release flow is deliberately small:
 

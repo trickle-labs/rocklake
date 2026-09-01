@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
+use futures::stream::BoxStream;
+use futures::StreamExt;
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response};
 use pgwire::api::Type;
 use sqlparser::ast::{Expr, SelectItem, SetExpr, Statement};
@@ -1203,99 +1205,115 @@ pub(super) fn make_columns_response(
     Response::Query(resp)
 }
 
-pub(super) fn make_data_files_response(
-    files: Vec<rocklake_core::rows::DataFileRow>,
+fn encode_data_file_row(
+    schema: Arc<Vec<FieldInfo>>,
+    f: &rocklake_core::rows::DataFileRow,
+) -> pgwire::error::PgWireResult<pgwire::messages::data::DataRow> {
+    let mut encoder = DataRowEncoder::new(schema);
+    encoder.encode_field_with_type_and_format(
+        &Some(f.data_file_id.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &Some(f.table_id.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &f.begin_snapshot.map(|s| s.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &f.end_snapshot.map(|e| e.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &f.file_order.map(|o| o.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &Some(f.path.clone()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &f.path_is_relative.map(|b| b.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &Some(f.file_format.clone()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &Some(f.record_count.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &Some(f.file_size_bytes.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &f.footer_size.map(|s| s.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &f.row_id_start.map(|r| r.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(
+        &f.partition_id.map(|p| p.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(&f.encryption_key, &Type::TEXT, FieldFormat::Text)?;
+    encoder.encode_field_with_type_and_format(
+        &f.mapping_id.map(|m| m.to_string()),
+        &Type::TEXT,
+        FieldFormat::Text,
+    )?;
+    encoder.encode_field_with_type_and_format(&f.partial_max, &Type::TEXT, FieldFormat::Text)?;
+    encoder.finish()
+}
+
+pub(super) async fn make_data_files_stream_response(
+    reader: rocklake_catalog::CatalogReader,
+    table_id: u64,
+    limit: Option<usize>,
+) -> Result<Response<'static>, RockLakeError> {
+    let files = reader
+        .stream_data_files(table_id)
+        .await
+        .map_err(RockLakeError::from)?;
+    Ok(make_data_files_stream_response_from_rows(files, limit))
+}
+
+pub(super) fn make_data_files_stream_response_from_rows(
+    files: BoxStream<
+        'static,
+        rocklake_catalog::error::CatalogResult<rocklake_core::rows::DataFileRow>,
+    >,
+    limit: Option<usize>,
 ) -> Response<'static> {
     let schema = crate::schema_registry::data_file_schema();
-    let mut data_rows = Vec::new();
-    for f in &files {
-        let mut encoder = DataRowEncoder::new(schema.clone());
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.data_file_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.table_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        let begin = f.begin_snapshot.map(|s| s.to_string());
-        encoder
-            .encode_field_with_type_and_format(&begin, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        let end = f.end_snapshot.map(|e| e.to_string());
-        encoder
-            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        let file_order = f.file_order.map(|o| o.to_string());
-        encoder
-            .encode_field_with_type_and_format(&file_order, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.path.clone()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        let path_is_relative = f.path_is_relative.map(|b| b.to_string());
-        encoder
-            .encode_field_with_type_and_format(&path_is_relative, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.file_format.clone()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.record_count.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.file_size_bytes.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        let footer_size = f.footer_size.map(|s| s.to_string());
-        encoder
-            .encode_field_with_type_and_format(&footer_size, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        let row_id_start = f.row_id_start.map(|r| r.to_string());
-        encoder
-            .encode_field_with_type_and_format(&row_id_start, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        let partition_id = f.partition_id.map(|p| p.to_string());
-        encoder
-            .encode_field_with_type_and_format(&partition_id, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&f.encryption_key, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        let mapping_id = f.mapping_id.map(|m| m.to_string());
-        encoder
-            .encode_field_with_type_and_format(&mapping_id, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&f.partial_max, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        data_rows.push(encoder.finish());
-    }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    let max_rows = limit.unwrap_or(usize::MAX);
+    let schema_for_rows = schema.clone();
+    let rows = files.take(max_rows).map(move |file| match file {
+        Ok(file) => encode_data_file_row(schema_for_rows.clone(), &file),
+        Err(error) => Err(RockLakeError::from(error).into()),
+    });
+    let mut response = QueryResponse::new(schema, rows);
+    response.set_command_tag("SELECT");
+    Response::Query(response)
 }
 
 pub(super) fn make_file_ids_response(file_ids: Vec<u64>) -> Response<'static> {

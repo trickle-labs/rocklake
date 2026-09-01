@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{error, info, info_span, warn, Instrument};
 
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
@@ -85,6 +85,10 @@ pub struct ServerConfig {
     pub max_sessions: usize,
     /// Maximum active scans (default: 25).
     pub max_active_scans: usize,
+    pub stream_queue_depth: usize,
+    pub max_buffered_rows: usize,
+    pub max_response_bytes: usize,
+    pub slow_operation_threshold: std::time::Duration,
     /// TLS configuration.
     pub tls: TlsConfig,
     /// Authentication configuration.
@@ -106,6 +110,10 @@ impl Default for ServerConfig {
             bind_addr: SocketAddr::from(([127, 0, 0, 1], 5432)),
             max_sessions: 50,
             max_active_scans: 25,
+            stream_queue_depth: 64,
+            max_buffered_rows: 1024,
+            max_response_bytes: 16 * 1024 * 1024,
+            slow_operation_threshold: std::time::Duration::from_secs(1),
             tls: TlsConfig::default(),
             auth: AuthConfig::default(),
             extension_schemas: vec!["public".to_string(), "pgtrickle".to_string()],
@@ -269,6 +277,7 @@ pub async fn run_server_with_shutdown_mode(
     }
 
     let session_semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_sessions));
+    let scan_semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_active_scans));
     let auth_config = Arc::new(config.auth);
     let tls_required = config.tls.required;
     let notify_manager = Arc::new(NotifyManager::new());
@@ -280,6 +289,16 @@ pub async fn run_server_with_shutdown_mode(
     // Active-session tracking for graceful drain.
     let active_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let metrics_ref = config.metrics.clone();
+    let slow_operation_threshold = config.slow_operation_threshold;
+    let max_active_scans = config.max_active_scans;
+    if let Some(ref metrics) = metrics_ref {
+        metrics.set_resource_limits(
+            config.max_active_scans as u64,
+            config.stream_queue_depth as u64,
+            config.max_buffered_rows as u64,
+            config.max_response_bytes as u64,
+        );
+    }
 
     tokio::select! {
         result = async {
@@ -287,6 +306,7 @@ pub async fn run_server_with_shutdown_mode(
                 let (socket, addr) = listener.accept().await?;
                 let catalog = catalog.clone();
                 let semaphore = session_semaphore.clone();
+                let scans = scan_semaphore.clone();
                 let tls = tls_acceptor.clone();
                 let auth = auth_config.clone();
                 let nm = notify_manager.clone();
@@ -311,18 +331,34 @@ pub async fn run_server_with_shutdown_mode(
                         m.set_active_sessions(active_ref.load(Ordering::Relaxed) as u64);
                     }
 
-                    info!("New connection from {addr}");
-                    let handlers = RockLakeServerHandlers::new_with_config_mode(
+                    let request_id = crate::telemetry::request_id();
+                    let span = info_span!("pgwire_connection", request_id = %request_id);
+                    info!(request_id = %request_id, peer = %addr, "New connection");
+                    let started = std::time::Instant::now();
+                    let handlers = RockLakeServerHandlers::new_with_config_mode_and_limits(
                         catalog,
                         auth,
                         tls_required,
                         nm,
                         es,
                         access_mode,
+                        scans,
+                        max_active_scans,
+                        config.max_buffered_rows,
+                        config.max_response_bytes,
+                        config.slow_operation_threshold,
+                        metrics_task.clone(),
                     );
 
-                    if let Err(e) = pgwire::tokio::process_socket(socket, tls, handlers).await {
-                        error!("Connection error from {addr}: {e}");
+                    if let Err(e) = pgwire::tokio::process_socket(socket, tls, handlers)
+                        .instrument(span)
+                        .await
+                    {
+                        error!(request_id = %request_id, peer = %addr, "Connection error: {e}");
+                    }
+                    let elapsed = started.elapsed();
+                    if elapsed >= slow_operation_threshold {
+                        warn!(request_id = %request_id, operation = "pgwire_connection", elapsed_ms = elapsed.as_millis() as u64, "slow operation");
                     }
 
                     counters_ref.idle_sessions.fetch_sub(1, Ordering::Relaxed);

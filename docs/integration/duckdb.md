@@ -237,7 +237,7 @@ For analytical queries scanning gigabytes of Parquet data (seconds to minutes of
 |----------|--------|-----------|
 | Co-locate in same AZ | Reduces round-trip to <1ms | Must deploy together |
 | S3 Express One Zone | Reduces SlateDB reads to <5ms | Higher storage cost |
-| Native extension | Not supported in v0.50.0 | Use the PG-wire sidecar |
+| Native extension | Not supported in v0.51.0 | Use the PG-wire sidecar |
 | Fewer data files per table | Fewer entries to list | Larger individual files |
 
 ### Data Path Performance

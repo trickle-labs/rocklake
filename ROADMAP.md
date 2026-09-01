@@ -1,6 +1,6 @@
 # RockLake roadmap
 
-**Current release:** v0.50.0
+**Current release:** v0.51.0
 
 RockLake is a DuckLake 1.0 catalog sidecar backed by SlateDB and exposed over
 the PostgreSQL wire protocol. The supported product path is the `rocklake`
@@ -19,23 +19,21 @@ Detailed plans for the release sequence are in
 
 ## Now
 
-- Use `rocklake doctor`, `rocklake serve ./lake`, and the copyable DuckDB
-  connection output for first-run setup.
-- Use typed `rocklake.toml` configuration and explicit backup/restore
-  plan/apply commands for repeatable operations.
+- Use snapshot-aware pagination and bounded streaming for large data-file
+  listings.
+- Use explicit scan, response, queue, and session limits with observable
+  backpressure.
 - Keep the complete release-certification workflow required for tagged builds
   and preserve the v0.47.17 production-failure certification gate.
 
 ## Next
 
-- Add only measured improvements to startup/readiness diagnostics without
-  changing the catalog model.
-- Measure large-catalog latency and memory before adding caching or streaming.
+- Measure large-catalog latency, first-row time, memory, and object-store
+  pressure with the release benchmark suite.
+- Keep the catalog model stable while tuning limits from production evidence.
 
 ## Later
 
-- Snapshot-aware pagination and bounded result streaming, if measurements
-  justify them.
 - Additional deployment integrations only with a maintained build and test
   path.
 
