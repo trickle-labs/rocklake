@@ -77,7 +77,7 @@ The optimal cache size depends on your catalog's total size and access patterns:
 ### Configuration
 
 ```bash
-# Start the server; cache sizing is managed by SlateDB in v0.50.0.
+# Start the server; cache sizing is managed by SlateDB in v0.51.0.
 rocklake serve --catalog s3://bucket/catalog/
 
 # Verify cache effectiveness via metrics
@@ -211,7 +211,7 @@ When RockLake accesses S3, the traffic can go through the public internet or thr
 
 ### Native DuckDB extension
 
-The native DuckDB extension is not supported in v0.50.0. Use the PostgreSQL
+The native DuckDB extension is not supported in v0.51.0. Use the PostgreSQL
 wire sidecar and co-locate DuckDB and RockLake when network latency matters.
 
 ## Compaction Tuning

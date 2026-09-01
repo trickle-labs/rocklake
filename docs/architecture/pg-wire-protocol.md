@@ -249,7 +249,7 @@ RockLake intentionally does not implement several PostgreSQL protocol features:
 - **Notifications (LISTEN/NOTIFY)** — Async event channels
 - **Cancellation** — CancelRequest messages are accepted but ignored
 - **Streaming replication** — WAL-based replication protocol
-- **SASL authentication** — SCRAM-SHA-256 is supported in v0.50.0
+- **SASL authentication** — SCRAM-SHA-256 is supported in v0.51.0
 - **SSL session resumption** — Each connection performs a full TLS handshake
 
 These omissions are intentional: DuckDB's `ducklake` extension does not use any of these features. If a client sends an unexpected message type, RockLake responds with an `ErrorResponse` (SQLSTATE `0A000`, "feature not supported") rather than silently ignoring it.

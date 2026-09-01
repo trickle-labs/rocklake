@@ -84,7 +84,30 @@ These track interactions with the underlying object store (S3/GCS/Azure/local):
 | Metric | Type | Description |
 |--------|------|-------------|
 | `rocklake_active_sessions` | Gauge | Currently connected PG-wire clients |
+| `rocklake_idle_sessions` | Gauge | Connected clients not currently querying |
 | `rocklake_max_sessions` | Gauge | Maximum sessions configured via `--max-sessions` |
+
+### Query and Resource Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `rocklake_pgwire_query_duration_seconds` | Histogram | PG-wire query duration with bounded latency buckets |
+| `rocklake_pgwire_response_rows_total` | Counter | Rows delivered to clients |
+| `rocklake_pgwire_response_bytes_total` | Counter | Response bytes delivered to clients |
+| `rocklake_pgwire_response_rows_per_second` | Gauge | Rows/sec for the last response |
+| `rocklake_pgwire_response_bytes_per_second` | Gauge | Bytes/sec for the last response |
+| `rocklake_pgwire_time_to_first_row_seconds` | Summary | Time from response start to first row |
+| `rocklake_pgwire_sql_classification_seconds` | Summary | SQL classifier latency |
+| `rocklake_active_scans` | Gauge | Catalog scans currently holding a permit |
+| `rocklake_max_active_scans` | Gauge | Maximum concurrent catalog scans |
+| `rocklake_stream_queue_depth` | Gauge | Configured stream queue bound; pull streams hold at most one row |
+| `rocklake_max_buffered_rows` | Gauge | Maximum response rows allowed in memory |
+| `rocklake_pgwire_peak_buffered_rows` | Gauge | Observed peak response rows buffered |
+| `rocklake_max_response_bytes` | Gauge | Maximum response bytes allowed per request |
+| `rocklake_process_rss_bytes` | Gauge | Current process resident set size |
+| `rocklake_process_peak_rss_bytes` | Gauge | Peak observed process resident set size |
+| `rocklake_resource_limit_exhaustions_total` | Counter | Requests rejected or stopped by a resource limit |
+| `rocklake_stream_backpressure_total` | Counter | Stream backpressure observations |
 
 ### Writer Metrics
 

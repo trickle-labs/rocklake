@@ -1,7 +1,7 @@
 # Lambda and serverless readers
 
 Running RockLake inside AWS Lambda or another serverless function is not a
-supported v0.50.0 integration. The supported runtime is the long-running
+supported v0.51.0 integration. The supported runtime is the long-running
 `rocklake` binary, with optional read-only reader processes sharing the same
 object-store catalog.
 

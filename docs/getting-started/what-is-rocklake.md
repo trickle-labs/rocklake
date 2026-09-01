@@ -55,13 +55,13 @@ RockLake offers three integration paths, each optimized for different deployment
 **Strategy B — PG-Wire Sidecar.** A standalone process that listens for PostgreSQL wire connections. DuckDB connects to it like any PostgreSQL server using the standard `ducklake` extension ATTACH syntax. This is the simplest, most flexible, and most production-ready deployment model. It supports any DuckDB client (local CLI, application-embedded, serverless function) and any object-store backend (S3, GCS, Azure, MinIO, local filesystem). It is the recommended deployment for all production use cases.
 
 **Embedded Client Library.** A universal C ABI (`rocklake.h`) and language
-bindings for Rust, Python, Go, and Node.js. The v0.50.0 bindings are built from
+bindings for Rust, Python, Go, and Node.js. The v0.51.0 bindings are built from
 the repository; package publication is not claimed. Any language with C FFI
 support can call the catalog directly — no PG-wire sidecar required. See
 [Client Library](../integration/client-library.md).
 
 The C ABI and language bindings are supported for embedded catalog clients.
-The experimental native DuckDB extension wrapper is not a v0.50.0 deployment
+The experimental native DuckDB extension wrapper is not a v0.51.0 deployment
 path; DuckDB clients should use the PG-wire sidecar.
 
 **DataFusion Integration.** For Rust applications built on Apache DataFusion, RockLake provides a `CatalogProvider` implementation that exposes DuckLake tables as DataFusion table sources. This enables the same catalog to be accessed from both DuckDB (via the PG-wire sidecar) and DataFusion (via the Rust API) without any translation layer.

@@ -291,12 +291,58 @@ async fn cmd_serve(
             "datafusion bridge queue depth",
         )?
         .expect("queue depth default"),
+        max_active_scans: setting(
+            args.max_active_scans,
+            "ROCKLAKE_MAX_ACTIVE_SCANS",
+            file_config.max_active_scans,
+            Some(25),
+            "max active scans",
+        )?
+        .expect("active scans default"),
+        stream_queue_depth: setting(
+            args.stream_queue_depth,
+            "ROCKLAKE_STREAM_QUEUE_DEPTH",
+            file_config.stream_queue_depth,
+            Some(64),
+            "stream queue depth",
+        )?
+        .expect("stream queue default"),
+        max_buffered_rows: setting(
+            args.max_buffered_rows,
+            "ROCKLAKE_MAX_BUFFERED_ROWS",
+            file_config.max_buffered_rows,
+            Some(1024),
+            "max buffered rows",
+        )?
+        .expect("buffered rows default"),
+        max_response_bytes: setting(
+            args.max_response_bytes,
+            "ROCKLAKE_MAX_RESPONSE_BYTES",
+            file_config.max_response_bytes,
+            Some(16 * 1024 * 1024),
+            "max response bytes",
+        )?
+        .expect("response bytes default"),
+        slow_operation_threshold_ms: setting(
+            args.slow_operation_threshold_ms,
+            "ROCKLAKE_SLOW_OPERATION_THRESHOLD_MS",
+            file_config.slow_operation_threshold_ms,
+            Some(1000),
+            "slow operation threshold",
+        )?
+        .expect("slow operation threshold default"),
     };
     if config.max_sessions == 0 {
         return Err("max sessions must be greater than zero".into());
     }
-    if config.datafusion_bridge_queue_depth == 0 {
-        return Err("datafusion bridge queue depth must be greater than zero".into());
+    if config.datafusion_bridge_queue_depth == 0
+        || config.max_active_scans == 0
+        || config.stream_queue_depth == 0
+        || config.max_buffered_rows == 0
+        || config.max_response_bytes == 0
+        || config.slow_operation_threshold_ms == 0
+    {
+        return Err("resource limits must be greater than zero".into());
     }
     if config.tls_required && (config.tls_cert.is_none() || config.tls_key.is_none()) {
         return Err("tls-required needs both --tls-cert and --tls-key".into());
@@ -386,7 +432,13 @@ async fn cmd_serve(
     let server_config = ServerConfig {
         bind_addr: config.bind_addr,
         max_sessions: config.max_sessions,
-        max_active_scans: 25,
+        max_active_scans: config.max_active_scans,
+        stream_queue_depth: config.stream_queue_depth,
+        max_buffered_rows: config.max_buffered_rows,
+        max_response_bytes: config.max_response_bytes,
+        slow_operation_threshold: std::time::Duration::from_millis(
+            config.slow_operation_threshold_ms,
+        ),
         metrics: Some(metrics.clone()),
         tls: rocklake_pgwire::server::TlsConfig {
             cert_path: config.tls_cert,
@@ -570,6 +622,11 @@ struct ServeConfig {
     drain_timeout_secs: u64,
     /// Capacity of the DataFusion AsyncBridge channel (default: 256).
     datafusion_bridge_queue_depth: usize,
+    max_active_scans: usize,
+    stream_queue_depth: usize,
+    max_buffered_rows: usize,
+    max_response_bytes: usize,
+    slow_operation_threshold_ms: u64,
 }
 
 // ─── gc ────────────────────────────────────────────────────────────────────
@@ -2133,7 +2190,14 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
         bind.parse::<SocketAddr>()
             .map_err(|e| format!("invalid bind: {e}"))?;
     }
-    if config.max_sessions == Some(0) || config.datafusion_bridge_queue_depth == Some(0) {
+    if config.max_sessions == Some(0)
+        || config.datafusion_bridge_queue_depth == Some(0)
+        || config.max_active_scans == Some(0)
+        || config.stream_queue_depth == Some(0)
+        || config.max_buffered_rows == Some(0)
+        || config.max_response_bytes == Some(0)
+        || config.slow_operation_threshold_ms == Some(0)
+    {
         return Err("numeric limits must be greater than zero".to_string());
     }
     if config.tls_required == Some(true) && (config.tls_cert.is_none() || config.tls_key.is_none())
@@ -2170,6 +2234,11 @@ fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
         "idle_connection_timeout": config.idle_connection_timeout,
         "drain_timeout": config.drain_timeout,
         "datafusion_bridge_queue_depth": config.datafusion_bridge_queue_depth,
+        "max_active_scans": config.max_active_scans,
+        "stream_queue_depth": config.stream_queue_depth,
+        "max_buffered_rows": config.max_buffered_rows,
+        "max_response_bytes": config.max_response_bytes,
+        "slow_operation_threshold_ms": config.slow_operation_threshold_ms,
     })
 }
 

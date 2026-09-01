@@ -4365,7 +4365,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-catalog"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -4399,9 +4399,10 @@ dependencies = [
 
 [[package]]
 name = "rocklake-client"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "async-trait",
+ "futures",
  "object_store 0.12.5",
  "rocklake-catalog",
  "rocklake-core",
@@ -4412,7 +4413,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-core"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -4433,7 +4434,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-datafusion"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4454,7 +4455,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-ffi"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "object_store 0.12.5",
  "rocklake-catalog",
@@ -4465,7 +4466,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-pgwire"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4504,7 +4505,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-sql"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "arrow",
  "bytes",
@@ -4521,7 +4522,7 @@ dependencies = [
 
 [[package]]
 name = "rocklake-testkit"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "base64",
  "chrono",

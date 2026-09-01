@@ -5,6 +5,7 @@
 
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -17,7 +18,9 @@ use pgwire::api::copy::CopyHandler;
 use pgwire::api::portal::Portal;
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::FieldInfo;
-use pgwire::api::results::{DescribePortalResponse, DescribeStatementResponse, Response};
+use pgwire::api::results::{
+    DescribePortalResponse, DescribeStatementResponse, QueryResponse, Response,
+};
 use pgwire::api::stmt::{QueryParser, StoredStatement};
 use pgwire::api::store::PortalStore;
 use pgwire::api::{
@@ -31,8 +34,10 @@ use pgwire::messages::{copy::CopyOutResponse, PgWireBackendMessage, PgWireFronte
 use sqlparser::ast::{Expr, SelectItem, SetExpr, Statement};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tracing::warn;
 
+use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
 use rocklake_core::rows::ColumnRow;
 use rocklake_sql::{classify_statement, ParamValues, StatementKind};
@@ -201,6 +206,149 @@ pub struct RockLakeHandler {
     /// Allowed extension schema names (configurable via --extension-schemas).
     pub extension_schemas: Arc<Vec<String>>,
     pub access_mode: executor::AccessMode,
+    scan_semaphore: Arc<Semaphore>,
+    max_active_scans: usize,
+    max_buffered_rows: usize,
+    max_response_bytes: usize,
+    slow_operation_threshold: Duration,
+    metrics: Option<Arc<CatalogMetrics>>,
+}
+
+struct ScanPermit {
+    _permit: OwnedSemaphorePermit,
+    semaphore: Arc<Semaphore>,
+    max: usize,
+    metrics: Option<Arc<CatalogMetrics>>,
+}
+
+struct ResponseObservation {
+    started: Instant,
+    first_row: Option<Instant>,
+    rows: u64,
+    bytes: u64,
+    slow_operation_threshold: Duration,
+    metrics: Option<Arc<CatalogMetrics>>,
+}
+
+impl ResponseObservation {
+    fn observe(&mut self) {
+        self.rows += 1;
+        self.first_row.get_or_insert_with(Instant::now);
+    }
+}
+
+impl Drop for ResponseObservation {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        if let Some(metrics) = &self.metrics {
+            metrics.record_pgwire_query(elapsed.as_micros() as u64);
+            let ttfr = self
+                .first_row
+                .map(|started| started.duration_since(self.started).as_micros() as u64)
+                .unwrap_or(0);
+            metrics.record_pgwire_response_with_timing(
+                self.rows,
+                self.bytes,
+                ttfr,
+                elapsed.as_micros() as u64,
+            );
+        }
+        if elapsed >= self.slow_operation_threshold {
+            warn!(
+                operation = "pgwire_query",
+                elapsed_ms = elapsed.as_millis() as u64,
+                rows = self.rows,
+                "slow operation"
+            );
+        }
+    }
+}
+
+fn wrap_query_response<'a>(
+    response: Response<'a>,
+    permit: Option<ScanPermit>,
+    max_buffered_rows: usize,
+    max_response_bytes: usize,
+    slow_operation_threshold: Duration,
+    metrics: Option<Arc<CatalogMetrics>>,
+) -> Response<'a> {
+    let Response::Query(query) = response else {
+        return response;
+    };
+
+    let schema = query.row_schema();
+    let command_tag = query.command_tag().to_string();
+    let rows = query.data_rows();
+    let state = (
+        rows,
+        permit,
+        0usize,
+        ResponseObservation {
+            started: Instant::now(),
+            first_row: None,
+            rows: 0,
+            bytes: 0,
+            slow_operation_threshold,
+            metrics,
+        },
+    );
+    let rows = futures::stream::unfold(
+        state,
+        move |(mut rows, permit, bytes, mut observation)| async move {
+            let item = rows.next().await?;
+            let mut next_bytes = bytes;
+            let item = match item {
+                Ok(row) => {
+                    if max_buffered_rows < 1 {
+                        if let Some(metrics) = &observation.metrics {
+                            metrics.increment_resource_limit_exhaustions();
+                        }
+                        return Some((
+                            Err(resource_limit_error("buffered row limit exhausted")),
+                            (rows, permit, bytes, observation),
+                        ));
+                    }
+                    next_bytes = bytes.saturating_add(row.data.len());
+                    if next_bytes > max_response_bytes {
+                        if let Some(metrics) = &observation.metrics {
+                            metrics.increment_resource_limit_exhaustions();
+                        }
+                        Err(resource_limit_error("response byte limit exhausted"))
+                    } else {
+                        observation.observe();
+                        observation.bytes = next_bytes as u64;
+                        Ok(row)
+                    }
+                }
+                Err(error) => Err(error),
+            };
+            Some((item, (rows, permit, next_bytes, observation)))
+        },
+    )
+    .boxed();
+    let mut wrapped = QueryResponse::new(schema, rows);
+    wrapped.set_command_tag(&command_tag);
+    Response::Query(wrapped)
+}
+
+impl Drop for ScanPermit {
+    fn drop(&mut self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.set_active_scans(
+                self.max
+                    .saturating_sub(self.semaphore.available_permits().saturating_add(1))
+                    as u64,
+            );
+        }
+    }
+}
+
+fn resource_limit_error(message: &str) -> PgWireError {
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        "ERROR".to_string(),
+        "54001".to_string(),
+        message.to_string(),
+    )))
 }
 
 impl RockLakeHandler {
@@ -220,6 +368,12 @@ impl RockLakeHandler {
             notify_manager: Arc::new(NotifyManager::new()),
             extension_schemas: Arc::new(vec!["pgtrickle".to_string()]),
             access_mode,
+            scan_semaphore: Arc::new(Semaphore::new(25)),
+            max_active_scans: 25,
+            max_buffered_rows: 1024,
+            max_response_bytes: 16 * 1024 * 1024,
+            slow_operation_threshold: Duration::from_secs(1),
+            metrics: None,
         }
     }
 
@@ -240,6 +394,12 @@ impl RockLakeHandler {
             notify_manager: Arc::new(NotifyManager::new()),
             extension_schemas: Arc::new(vec!["pgtrickle".to_string()]),
             access_mode,
+            scan_semaphore: Arc::new(Semaphore::new(25)),
+            max_active_scans: 25,
+            max_buffered_rows: 1024,
+            max_response_bytes: 16 * 1024 * 1024,
+            slow_operation_threshold: Duration::from_secs(1),
+            metrics: None,
         }
     }
 
@@ -265,6 +425,35 @@ impl RockLakeHandler {
         extension_schemas: Arc<Vec<String>>,
         access_mode: executor::AccessMode,
     ) -> Self {
+        Self::new_with_config_mode_and_limits(
+            catalog,
+            auth,
+            notify_manager,
+            extension_schemas,
+            access_mode,
+            Arc::new(Semaphore::new(25)),
+            25,
+            1024,
+            16 * 1024 * 1024,
+            Duration::from_secs(1),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_config_mode_and_limits(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+        scan_semaphore: Arc<Semaphore>,
+        max_active_scans: usize,
+        max_buffered_rows: usize,
+        max_response_bytes: usize,
+        slow_operation_threshold: Duration,
+        metrics: Option<Arc<CatalogMetrics>>,
+    ) -> Self {
         Self {
             catalog,
             session: Arc::new(Mutex::new(SessionState::new())),
@@ -273,7 +462,49 @@ impl RockLakeHandler {
             notify_manager,
             extension_schemas,
             access_mode,
+            scan_semaphore,
+            max_active_scans,
+            max_buffered_rows,
+            max_response_bytes,
+            slow_operation_threshold,
+            metrics,
         }
+    }
+
+    async fn acquire_scan(&self, sql: &str) -> PgWireResult<Option<ScanPermit>> {
+        let classification_started = Instant::now();
+        let kind = classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
+        if let Some(metrics) = &self.metrics {
+            metrics
+                .observe_sql_classification_us(classification_started.elapsed().as_micros() as u64);
+        }
+        if !matches!(
+            kind,
+            StatementKind::SelectDataFiles | StatementKind::SelectDataFilesWithLimit
+        ) {
+            return Ok(None);
+        }
+        let permit = match self.scan_semaphore.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                if let Some(metrics) = &self.metrics {
+                    metrics.increment_resource_limit_exhaustions();
+                }
+                return Err(resource_limit_error("active catalog scan limit exhausted"));
+            }
+        };
+        if let Some(metrics) = &self.metrics {
+            metrics.set_active_scans(
+                self.max_active_scans
+                    .saturating_sub(self.scan_semaphore.available_permits()) as u64,
+            );
+        }
+        Ok(Some(ScanPermit {
+            _permit: permit,
+            semaphore: self.scan_semaphore.clone(),
+            max: self.max_active_scans,
+            metrics: self.metrics.clone(),
+        }))
     }
 
     /// If `sql` is a `COPY (SELECT ...) TO STDOUT`, execute the inner SELECT
@@ -293,6 +524,8 @@ impl RockLakeHandler {
         else {
             return Ok(None);
         };
+
+        let _scan_permit = self.acquire_scan(&query).await?;
 
         let params = ParamValues::default();
         let mut session = self.session.lock().await;
@@ -335,12 +568,9 @@ impl RockLakeHandler {
             )))
             .await?;
 
-        // Build one contiguous binary COPY payload (header + rows + trailer).
-        // Some clients are strict about frame boundaries during binary COPY reads.
-        let mut payload = BytesMut::new();
-        payload.extend_from_slice(binary_copy_header().as_ref());
-
         let mut row_count = 0usize;
+        let mut response_bytes = 0usize;
+        let mut payload = BytesMut::from(binary_copy_header().as_ref());
         let mut rows = query_response.data_rows();
         while let Some(row_result) = rows.next().await {
             let row = row_result?;
@@ -350,19 +580,35 @@ impl RockLakeHandler {
                 &projected_indices,
                 row_schema.as_ref(),
             )?;
+            let row_bytes = 2usize
+                .saturating_add(projected_row.len())
+                .saturating_add(columns.saturating_mul(4));
+            response_bytes = response_bytes.saturating_add(row_bytes);
+            if response_bytes > self.max_response_bytes {
+                return Err(resource_limit_error("response byte limit exhausted"));
+            }
             payload.put_i16(columns as i16);
             payload.put_slice(&projected_row);
             row_count += 1;
+            if payload.len() >= self.max_response_bytes.min(64 * 1024) {
+                client
+                    .send(PgWireBackendMessage::CopyData(
+                        pgwire::messages::copy::CopyData::new(payload.split().freeze()),
+                    ))
+                    .await?;
+            }
         }
 
         // End-of-copy marker: int16 -1.
         payload.put_i16(-1);
 
-        client
-            .send(PgWireBackendMessage::CopyData(
-                pgwire::messages::copy::CopyData::new(payload.freeze()),
-            ))
-            .await?;
+        if !payload.is_empty() {
+            client
+                .send(PgWireBackendMessage::CopyData(
+                    pgwire::messages::copy::CopyData::new(payload.freeze()),
+                ))
+                .await?;
+        }
 
         client
             .send(PgWireBackendMessage::CopyDone(
@@ -854,6 +1100,7 @@ impl SimpleQueryHandler for RockLakeHandler {
             )]);
         }
 
+        let mut scan_permit = self.acquire_scan(query).await?;
         let params = ParamValues::default();
         let mut session = self.session.lock().await;
         match executor::execute_sql_with_mode(
@@ -867,7 +1114,19 @@ impl SimpleQueryHandler for RockLakeHandler {
         )
         .await
         {
-            Ok(responses) => Ok(responses),
+            Ok(responses) => Ok(responses
+                .into_iter()
+                .map(|response| {
+                    wrap_query_response(
+                        response,
+                        scan_permit.take(),
+                        self.max_buffered_rows,
+                        self.max_response_bytes,
+                        self.slow_operation_threshold,
+                        self.metrics.clone(),
+                    )
+                })
+                .collect()),
             Err(e) => Err(e.into()),
         }
     }
@@ -914,6 +1173,8 @@ impl ExtendedQueryHandler for RockLakeHandler {
                 pgwire::api::results::Tag::new("COPY").with_rows(rows),
             ));
         }
+
+        let mut scan_permit = self.acquire_scan(sql).await?;
 
         // Extract parameters from portal, handling binary-encoded integers.
         // tokio-postgres (and DuckDB) always send parameters in binary format;
@@ -977,7 +1238,14 @@ impl ExtendedQueryHandler for RockLakeHandler {
         {
             Ok(mut responses) => {
                 if let Some(resp) = responses.pop() {
-                    Ok(resp)
+                    Ok(wrap_query_response(
+                        resp,
+                        scan_permit.take(),
+                        self.max_buffered_rows,
+                        self.max_response_bytes,
+                        self.slow_operation_threshold,
+                        self.metrics.clone(),
+                    ))
                 } else {
                     Ok(Response::EmptyQuery)
                 }
@@ -1101,6 +1369,49 @@ impl RockLakeServerHandlers {
             notify_manager,
             extension_schemas,
             access_mode,
+        ));
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
+            handler.session.clone(),
+            access_mode,
+        ));
+        Self {
+            handler,
+            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required(
+                auth,
+                tls_required,
+            )),
+            copy_handler,
+            error_handler: Arc::new(NoopErrorHandler),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_config_mode_and_limits(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        tls_required: bool,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+        scan_semaphore: Arc<Semaphore>,
+        max_active_scans: usize,
+        max_buffered_rows: usize,
+        max_response_bytes: usize,
+        slow_operation_threshold: Duration,
+        metrics: Option<Arc<CatalogMetrics>>,
+    ) -> Self {
+        let handler = Arc::new(RockLakeHandler::new_with_config_mode_and_limits(
+            catalog,
+            auth.clone(),
+            notify_manager,
+            extension_schemas,
+            access_mode,
+            scan_semaphore,
+            max_active_scans,
+            max_buffered_rows,
+            max_response_bytes,
+            slow_operation_threshold,
+            metrics,
         ));
         let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
             handler.session.clone(),

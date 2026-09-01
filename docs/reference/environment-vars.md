@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-RockLake v0.50.0 reads the variables below through its typed CLI. Command-line
+RockLake v0.51.0 reads the variables below through its typed CLI. Command-line
 flags take precedence over environment variables, which take precedence over
 `rocklake.toml`. Run `rocklake serve --help` for the authoritative option list.
 
@@ -16,6 +16,11 @@ flags take precedence over environment variables, which take precedence over
 | `ROCKLAKE_ENCRYPTION_KEY_FILE` | `--encryption-key-file` | Read the encryption key from a file |
 | `ROCKLAKE_EXTENSION_SCHEMAS` | `--extension-schemas` | Comma-separated extension schemas |
 | `ROCKLAKE_OTLP_ENDPOINT` | `--otlp-endpoint` | OpenTelemetry HTTP endpoint |
+| `ROCKLAKE_MAX_ACTIVE_SCANS` | `--max-active-scans` | Maximum concurrent catalog scans |
+| `ROCKLAKE_STREAM_QUEUE_DEPTH` | `--stream-queue-depth` | Maximum stream queue depth |
+| `ROCKLAKE_MAX_BUFFERED_ROWS` | `--max-buffered-rows` | Maximum buffered response rows |
+| `ROCKLAKE_MAX_RESPONSE_BYTES` | `--max-response-bytes` | Maximum response bytes per request |
+| `ROCKLAKE_SLOW_OPERATION_THRESHOLD_MS` | `--slow-operation-threshold-ms` | Slow-operation log threshold |
 
 The catalog path and server options can also be supplied directly:
 

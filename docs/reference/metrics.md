@@ -16,7 +16,7 @@ the configured path; other paths return 404.
 
 ## Exported metrics
 
-The v0.50.0 binary exports these counters and gauges:
+The v0.51.0 binary exports these Prometheus metrics:
 
 - Catalog: `rocklake_snapshots_created_total`, `rocklake_files_per_snapshot`.
 - Object store: `rocklake_object_store_requests_total`,
@@ -28,7 +28,13 @@ The v0.50.0 binary exports these counters and gauges:
   `rocklake_max_sessions`.
 - Queries: `rocklake_last_query_keys_scanned`,
   `rocklake_pgwire_queries_total`,
-  `rocklake_pgwire_query_duration_seconds_sum`,
+  `rocklake_pgwire_query_duration_seconds` (histogram),
+  `rocklake_pgwire_response_rows_total`,
+  `rocklake_pgwire_response_bytes_total`,
+  `rocklake_pgwire_response_rows_per_second`,
+  `rocklake_pgwire_response_bytes_per_second`,
+  `rocklake_pgwire_time_to_first_row_seconds`,
+  `rocklake_pgwire_sql_classification_seconds`,
   `rocklake_pgwire_errors_total`.
 - Lifecycle: `rocklake_gc_retain_from_snapshot`,
   `rocklake_excision_bytes_deleted_total`,
@@ -36,6 +42,12 @@ The v0.50.0 binary exports these counters and gauges:
 - SlateDB estimates: `rocklake_slatedb_sst_count`,
   `rocklake_slatedb_compaction_lag_ms`, `rocklake_slatedb_memtable_bytes`.
 - DataFusion: `rocklake_datafusion_bridge_queue_depth`.
+- Resource limits: `rocklake_active_scans`, `rocklake_max_active_scans`,
+  `rocklake_stream_queue_depth`, `rocklake_max_buffered_rows`,
+  `rocklake_pgwire_peak_buffered_rows`, `rocklake_max_response_bytes`,
+  `rocklake_process_rss_bytes`, `rocklake_process_peak_rss_bytes`,
+  `rocklake_resource_limit_exhaustions_total`,
+  `rocklake_stream_backpressure_total`.
 
 Operation latency is exported as `_sum` and `_count` series under
 `rocklake_catalog_op_duration_seconds` with an `op` label.

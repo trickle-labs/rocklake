@@ -1,6 +1,6 @@
 # Backup and Restore
 
-The v0.50.0 supported backup boundary is a versioned, snapshot-consistent
+The v0.51.0 supported backup boundary is a versioned, snapshot-consistent
 catalog artifact. `backup create` writes the artifact; `backup inspect`
 validates its checksum and row count; `restore plan` previews the target; and
 `restore apply` imports it into an empty catalog.

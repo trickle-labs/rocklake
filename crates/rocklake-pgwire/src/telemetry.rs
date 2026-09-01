@@ -41,6 +41,11 @@ pub struct TelemetryHandle {
     otlp_active: bool,
 }
 
+/// Generate a correlation ID for a connection or request span.
+pub fn request_id() -> uuid::Uuid {
+    uuid::Uuid::new_v4()
+}
+
 impl TelemetryHandle {
     /// Flush and shut down the OpenTelemetry tracer provider if OTLP was active.
     pub fn shutdown(self) {

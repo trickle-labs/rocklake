@@ -31,6 +31,7 @@
 
 use std::sync::Arc;
 
+use futures::stream::BoxStream;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 use thiserror::Error;
@@ -118,6 +119,13 @@ pub struct DataFile {
     pub file_size_bytes: u64,
     /// Snapshot at which this file was first visible.
     pub snapshot_id: u64,
+}
+
+/// A bounded page of data files and an opaque continuation token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataFilePage {
+    pub files: Vec<DataFile>,
+    pub continuation_token: Option<String>,
 }
 
 /// A column descriptor returned by [`CatalogClient::get_table`].
@@ -510,18 +518,42 @@ impl CatalogClient {
         let store = guard.as_ref().expect("checked by read()");
         let reader = Self::reader(store, snapshot.into())?;
         let rows = reader.list_data_files(table_id).await?;
-        Ok(rows
-            .into_iter()
-            .map(|f| DataFile {
-                data_file_id: f.data_file_id,
-                table_id: f.table_id,
-                path: f.path,
-                file_format: f.file_format,
-                row_count: f.record_count,
-                file_size_bytes: f.file_size_bytes,
-                snapshot_id: f.begin_snapshot.unwrap_or(0),
-            })
-            .collect())
+        Ok(rows.into_iter().map(DataFile::from_row).collect())
+    }
+
+    /// List one bounded page of data files at the selected snapshot.
+    pub async fn list_data_files_paged(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+        page_size: usize,
+        continuation_token: Option<&str>,
+    ) -> ClientResult<DataFilePage> {
+        let guard = self.read().await?;
+        let store = guard.as_ref().expect("checked by read()");
+        let reader = Self::reader(store, snapshot.into())?;
+        let page = reader
+            .list_data_files_paged(table_id, page_size, continuation_token)
+            .await?;
+        Ok(DataFilePage {
+            files: page.files.into_iter().map(DataFile::from_row).collect(),
+            continuation_token: page.continuation_token,
+        })
+    }
+
+    /// Stream data files incrementally at the selected snapshot.
+    pub async fn stream_data_files(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<BoxStream<'static, ClientResult<DataFile>>> {
+        let guard = self.read().await?;
+        let store = guard.as_ref().expect("checked by read()");
+        let reader = Self::reader(store, snapshot.into())?;
+        let stream = reader.stream_data_files(table_id).await?;
+        Ok(Box::pin(futures::StreamExt::map(stream, |row| {
+            row.map(DataFile::from_row).map_err(ClientError::from)
+        })))
     }
 
     /// Close the catalog and release all resources.
@@ -534,6 +566,20 @@ impl CatalogClient {
             store.close().await?;
         }
         Ok(())
+    }
+}
+
+impl DataFile {
+    fn from_row(f: rocklake_core::rows::DataFileRow) -> Self {
+        Self {
+            data_file_id: f.data_file_id,
+            table_id: f.table_id,
+            path: f.path,
+            file_format: f.file_format,
+            row_count: f.record_count,
+            file_size_bytes: f.file_size_bytes,
+            snapshot_id: f.begin_snapshot.unwrap_or(0),
+        }
     }
 }
 
@@ -721,6 +767,22 @@ impl CatalogClientSync {
     ) -> ClientResult<Vec<DataFile>> {
         self.runtime
             .block_on(self.inner.list_data_files(table_id, snapshot))
+    }
+
+    /// List one bounded page of data files at the selected snapshot.
+    pub fn list_data_files_paged(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+        page_size: usize,
+        continuation_token: Option<&str>,
+    ) -> ClientResult<DataFilePage> {
+        self.runtime.block_on(self.inner.list_data_files_paged(
+            table_id,
+            snapshot,
+            page_size,
+            continuation_token,
+        ))
     }
 
     /// Close the catalog.
