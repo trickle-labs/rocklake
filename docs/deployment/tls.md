@@ -1,6 +1,6 @@
 # TLS and authentication
 
-RockLake v0.51.1 server supports server-side TLS, cleartext password
+RockLake v0.51.2 server supports server-side TLS, cleartext password
 authentication, and SCRAM-SHA-256 authentication on the
 PostgreSQL wire listener. It does not support mutual TLS or certificate
 hot-reload.
@@ -22,7 +22,7 @@ the wire in plaintext.
 
 Set `ROCKLAKE_AUTH_PASSWORD` from a secret manager or a
 permission-restricted file. Do not put passwords in command-line arguments.
-The v0.51.1 release binary selects SCRAM-SHA-256 for authenticated
+The v0.51.2 release binary selects SCRAM-SHA-256 for authenticated
 connections, so clients must support SCRAM-SHA-256. The cleartext password
 path remains available to library users that configure it directly and must
 use TLS outside trusted local use.

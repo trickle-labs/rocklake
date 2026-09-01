@@ -25,7 +25,7 @@ backend versions that CI covers.
 
 | Catalog format | Current read support | Current write support |
 |---|---|---|
-| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.51.1 | v0.51.1 |
+| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.51.2 | v0.51.2 |
 
 ## Metrics
 
@@ -34,6 +34,10 @@ bucket equals `rocklake_pgwire_queries_total`. Query timing starts before SQL
 classification and ends after response completion. Query logs and child
 catalog spans carry a unique `query_id` and the connection's stable
 `connection_id`.
+
+The session metrics `rocklake_active_sessions` and `rocklake_idle_sessions`
+remain deprecated aliases for `rocklake_connections_open` and
+`rocklake_connections_idle` through v0.53.x. Do not remove them before v0.54.0.
 
 ## Upgrade and restore contract
 

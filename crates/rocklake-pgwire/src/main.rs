@@ -86,6 +86,14 @@ async fn cmd_serve(
     config_path: Option<&std::path::Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (_, file_config) = config::load(config_path)?;
+    warn_deprecated_limits(
+        file_config.stream_queue_depth.is_some()
+            || file_config.max_buffered_rows.is_some()
+            || args.stream_queue_depth.is_some()
+            || args.max_buffered_rows.is_some()
+            || std::env::var_os("ROCKLAKE_STREAM_QUEUE_DEPTH").is_some()
+            || std::env::var_os("ROCKLAKE_MAX_BUFFERED_ROWS").is_some(),
+    );
     let catalog_url = setting(
         args.catalog.or(args.path),
         "ROCKLAKE_CATALOG",
@@ -484,6 +492,14 @@ where
     Ok(file.or(default))
 }
 
+fn warn_deprecated_limits(configured: bool) {
+    if configured {
+        eprintln!(
+            "WARNING: stream_queue_depth and max_buffered_rows are accepted for compatibility but have no independent runtime effect"
+        );
+    }
+}
+
 fn print_startup_summary(config: &ServeConfig, _store: &CatalogStore) {
     let tls = config.tls_cert.is_some() && config.tls_key.is_some();
     let auth = config.auth_username.is_some() && config.auth_password.is_some();
@@ -586,6 +602,13 @@ mod tests {
         };
         assert!(validate_config(&config).is_err());
         assert!(!redacted_config(&config).to_string().contains("secret"));
+    }
+
+    #[test]
+    fn config_example_omits_inert_limits() {
+        let example = crate::config::example();
+        assert!(!example.contains("stream_queue_depth"));
+        assert!(!example.contains("max_buffered_rows"));
     }
 }
 
@@ -2148,6 +2171,9 @@ async fn cmd_config(
                 .or(config_path)
                 .ok_or("no config file selected; use --file or --config")?;
             let (path, file_config) = config::load(Some(path))?;
+            warn_deprecated_limits(
+                file_config.stream_queue_depth.is_some() || file_config.max_buffered_rows.is_some(),
+            );
             validate_config(&file_config)?;
             let path = path.expect("explicit config path");
             match args.output {

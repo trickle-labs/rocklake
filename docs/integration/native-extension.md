@@ -1,6 +1,6 @@
 # Native DuckDB Extension
 
-The native DuckDB extension is not a supported v0.51.1 deployment path.
+The native DuckDB extension is not a supported v0.51.2 deployment path.
 
 The repository contains an experimental C++ ABI wrapper and the
 `rocklake-ffi` library, but it is not a complete DuckDB catalog extension and

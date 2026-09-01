@@ -79,7 +79,7 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.51.1 is distributed and tested as a binary. There is no published
+RockLake v0.51.2 is distributed and tested as a binary. There is no published
 Docker image; use the binary deployment path below.
 
 ### Prerequisites (build from source)
@@ -177,7 +177,7 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | v0.27.x | DuckLake v1.0 conformance, SQL facade, stats, external compatibility | Done |
 | v0.28–v0.35 | Writer fencing, recovery, protocol hardening, DataFusion, security, embedded client library | Done |
 | **v0.50.0** | Operational UX, typed configuration, and deployment simplicity | Done |
-| **v0.51.1** | Telemetry correctness | **Current** |
+| **v0.51.2** | Connection lifecycle | **Current** |
 | Next | See [ROADMAP.md](ROADMAP.md) for the live Now/Next/Later plan | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.

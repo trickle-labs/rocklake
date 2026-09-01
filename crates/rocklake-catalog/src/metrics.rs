@@ -41,7 +41,7 @@ pub struct CatalogMetrics {
     pub object_store_throttles: AtomicU64,
     /// Object-store retry count.
     pub object_store_retries: AtomicU64,
-    /// Active session count.
+    /// Deprecated alias for [`Self::connections_open`].
     pub active_sessions: AtomicU64,
     /// Max sessions configured.
     pub max_sessions: AtomicU64,
@@ -100,8 +100,14 @@ pub struct CatalogMetrics {
     pub slatedb_memtable_bytes: AtomicU64,
 
     // ── v0.47.0: Connection management & DataFusion bridge ───────────────────
-    /// Idle (connected but not querying) session count.
+    /// Deprecated alias for [`Self::connections_idle`].
     pub idle_sessions: AtomicU64,
+    /// Number of open PG-wire connections.
+    pub connections_open: AtomicU64,
+    /// Number of open connections waiting for a query.
+    pub connections_idle: AtomicU64,
+    /// Number of queries currently in flight.
+    pub queries_in_flight: AtomicU64,
     /// Configured DataFusion AsyncBridge channel queue depth.
     pub datafusion_bridge_queue_depth: AtomicU64,
     pub pgwire_query_duration_buckets: [AtomicU64; 8],
@@ -178,6 +184,9 @@ impl CatalogMetrics {
             slatedb_memtable_bytes: AtomicU64::new(0),
             // v0.47.0 connection management & DataFusion bridge
             idle_sessions: AtomicU64::new(0),
+            connections_open: AtomicU64::new(0),
+            connections_idle: AtomicU64::new(0),
+            queries_in_flight: AtomicU64::new(0),
             datafusion_bridge_queue_depth: AtomicU64::new(256),
             pgwire_query_duration_buckets: std::array::from_fn(|_| AtomicU64::new(0)),
             pgwire_response_rows: AtomicU64::new(0),
@@ -238,11 +247,25 @@ impl CatalogMetrics {
     }
 
     pub fn set_active_sessions(&self, count: u64) {
-        self.active_sessions.store(count, Ordering::Relaxed);
+        self.set_connections_open(count);
     }
 
     pub fn set_idle_sessions(&self, count: u64) {
+        self.set_connections_idle(count);
+    }
+
+    pub fn set_connections_open(&self, count: u64) {
+        self.connections_open.store(count, Ordering::Relaxed);
+        self.active_sessions.store(count, Ordering::Relaxed);
+    }
+
+    pub fn set_connections_idle(&self, count: u64) {
+        self.connections_idle.store(count, Ordering::Relaxed);
         self.idle_sessions.store(count, Ordering::Relaxed);
+    }
+
+    pub fn set_queries_in_flight(&self, count: u64) {
+        self.queries_in_flight.store(count, Ordering::Relaxed);
     }
 
     pub fn set_datafusion_bridge_queue_depth(&self, depth: u64) {
@@ -529,20 +552,43 @@ impl CatalogMetrics {
             self.object_store_retries.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP rocklake_active_sessions Current active PG sessions.\n");
-        out.push_str("# TYPE rocklake_active_sessions gauge\n");
+        out.push_str("# HELP rocklake_connections_open Current open PG-wire connections.\n");
+        out.push_str("# TYPE rocklake_connections_open gauge\n");
         out.push_str(&format!(
-            "rocklake_active_sessions {}\n",
-            self.active_sessions.load(Ordering::Relaxed)
+            "rocklake_connections_open {}\n",
+            self.connections_open.load(Ordering::Relaxed)
+        ));
+
+        out.push_str("# HELP rocklake_connections_idle Current idle PG-wire connections.\n");
+        out.push_str("# TYPE rocklake_connections_idle gauge\n");
+        out.push_str(&format!(
+            "rocklake_connections_idle {}\n",
+            self.connections_idle.load(Ordering::Relaxed)
+        ));
+
+        out.push_str("# HELP rocklake_queries_in_flight Current PG-wire queries in flight.\n");
+        out.push_str("# TYPE rocklake_queries_in_flight gauge\n");
+        out.push_str(&format!(
+            "rocklake_queries_in_flight {}\n",
+            self.queries_in_flight.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP rocklake_idle_sessions Current idle (connected, not querying) PG sessions.\n",
+            "# HELP rocklake_active_sessions Deprecated alias for rocklake_connections_open.\n",
+        );
+        out.push_str("# TYPE rocklake_active_sessions gauge\n");
+        out.push_str(&format!(
+            "rocklake_active_sessions {}\n",
+            self.connections_open.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP rocklake_idle_sessions Deprecated alias for rocklake_connections_idle.\n",
         );
         out.push_str("# TYPE rocklake_idle_sessions gauge\n");
         out.push_str(&format!(
             "rocklake_idle_sessions {}\n",
-            self.idle_sessions.load(Ordering::Relaxed)
+            self.connections_idle.load(Ordering::Relaxed)
         ));
 
         out.push_str("# HELP rocklake_max_sessions Maximum allowed sessions.\n");

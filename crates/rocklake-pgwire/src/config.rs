@@ -52,7 +52,7 @@ pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), St
 }
 
 pub fn example() -> &'static str {
-    r#"# RockLake v0.51.1 configuration
+    r#"# RockLake v0.51.2 configuration
 catalog = "./lake"
 bind = "127.0.0.1:5432"
 mode = "writer"
@@ -63,8 +63,6 @@ idle_connection_timeout = 60
 drain_timeout = 30
 datafusion_bridge_queue_depth = 256
 max_active_scans = 25
-stream_queue_depth = 64
-max_buffered_rows = 1024
 max_response_bytes = 16777216
 slow_operation_threshold_ms = 1000
 

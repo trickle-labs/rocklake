@@ -83,9 +83,15 @@ These track interactions with the underlying object store (S3/GCS/Azure/local):
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `rocklake_active_sessions` | Gauge | Currently connected PG-wire clients |
-| `rocklake_idle_sessions` | Gauge | Connected clients not currently querying |
+| `rocklake_connections_open` | Gauge | Currently connected PG-wire clients |
+| `rocklake_connections_idle` | Gauge | Connected clients not currently querying |
+| `rocklake_queries_in_flight` | Gauge | Queries currently executing |
 | `rocklake_max_sessions` | Gauge | Maximum sessions configured via `--max-sessions` |
+
+The v0.51.2 lifecycle names replace the deprecated aliases
+`rocklake_active_sessions` (`rocklake_connections_open`) and
+`rocklake_idle_sessions` (`rocklake_connections_idle`). The aliases remain
+available through v0.53.x. Do not remove them before v0.54.0.
 
 ### Query and Resource Metrics
 
@@ -103,14 +109,19 @@ These track interactions with the underlying object store (S3/GCS/Azure/local):
 | `rocklake_pgwire_sql_classification_seconds` | Summary | SQL classifier latency |
 | `rocklake_active_scans` | Gauge | Catalog scans currently holding a permit |
 | `rocklake_max_active_scans` | Gauge | Maximum concurrent catalog scans |
-| `rocklake_stream_queue_depth` | Gauge | Configured stream queue bound; pull streams hold at most one row |
-| `rocklake_max_buffered_rows` | Gauge | Maximum response rows allowed in memory |
+| `rocklake_stream_queue_depth` | Gauge | Legacy configured value; no independent runtime effect |
+| `rocklake_max_buffered_rows` | Gauge | Legacy configured value; no independent runtime effect |
 | `rocklake_pgwire_peak_buffered_rows` | Gauge | Observed peak response rows buffered |
 | `rocklake_max_response_bytes` | Gauge | Maximum response bytes allowed per request |
 | `rocklake_process_rss_bytes` | Gauge | Current process resident set size |
 | `rocklake_process_peak_rss_bytes` | Gauge | Peak observed process resident set size |
 | `rocklake_resource_limit_exhaustions_total` | Counter | Requests rejected or stopped by a resource limit |
 | `rocklake_stream_backpressure_total` | Counter | Stream backpressure observations |
+
+`stream_queue_depth` and `max_buffered_rows` remain accepted configuration
+keys for compatibility. They have no independent runtime effect, and RockLake
+emits one warning when either key is configured. Do not add them to new
+configuration files.
 
 ### Writer Metrics
 
@@ -142,7 +153,7 @@ groups:
           description: "No metrics received from RockLake for 30 seconds"
 
       - alert: RockLakeSessionsExhausted
-        expr: rocklake_active_sessions / rocklake_max_sessions > 0.95
+        expr: rocklake_connections_open / rocklake_max_sessions > 0.95
         for: 5m
         labels:
           severity: critical
@@ -193,8 +204,8 @@ A comprehensive RockLake dashboard includes these panels:
 
 **Row 1: Overview**
 
-- Current sessions (gauge) — `rocklake_active_sessions`
-- Session capacity (gauge) — `rocklake_active_sessions / rocklake_max_sessions`
+- Current connections (gauge) — `rocklake_connections_open`
+- Session capacity (gauge) — `rocklake_connections_open / rocklake_max_sessions`
 - Snapshots/min (graph) — `rate(rocklake_snapshots_created_total[1m])`
 
 **Row 2: Object Storage**
@@ -230,7 +241,7 @@ Use the CloudWatch Agent's Prometheus scraping to forward metrics:
           "metric_namespace": "RockLake",
           "metric_unit": {
             "rocklake_writer_epoch_age_ms": "Milliseconds",
-            "rocklake_active_sessions": "Count"
+            "rocklake_connections_open": "Count"
           }
         }
       }
@@ -264,7 +275,7 @@ Understanding baseline behavior helps identify anomalies:
 |--------|--------------|------------|
 | `rocklake_object_store_throttles_total` rate | 0 | Any sustained rate |
 | `rocklake_object_store_retries_total` rate | < 1/min | > 5/min |
-| `rocklake_active_sessions` / `rocklake_max_sessions` | < 80% | > 95% |
+| `rocklake_connections_open` / `rocklake_max_sessions` | < 80% | > 95% |
 | `rocklake_writer_epoch_age_ms` | < 60 000 ms | > 300 000 ms |
 | `rocklake_cdc_record_count_mismatch_total` | 0 | Any increase |
 | `rocklake_catalog_op_duration_seconds_sum / count` (per op) | < 0.5 s avg | > 2 s avg |

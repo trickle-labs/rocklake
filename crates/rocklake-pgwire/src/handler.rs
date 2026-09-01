@@ -49,7 +49,7 @@ use rocklake_sql::{classify_statement, ParamValues, StatementKind};
 use crate::copy_parser;
 use crate::executor;
 use crate::notify::NotifyManager;
-use crate::server::AuthConfig;
+use crate::server::{server_shutting_down_error, AuthConfig, ConnectionActivity};
 use crate::session::{BootstrapSchemaRow, SessionState};
 
 /// RockLake COPY handler: parses binary COPY FROM STDIN data for ducklake_*
@@ -217,6 +217,7 @@ pub struct RockLakeHandler {
     slow_operation_threshold: Duration,
     metrics: Option<Arc<CatalogMetrics>>,
     connection_id: uuid::Uuid,
+    lifecycle: Arc<ConnectionActivity>,
 }
 
 struct ScanPermit {
@@ -440,6 +441,7 @@ impl RockLakeHandler {
             slow_operation_threshold: Duration::from_secs(1),
             metrics: None,
             connection_id: crate::telemetry::request_id(),
+            lifecycle: ConnectionActivity::standalone(),
         }
     }
 
@@ -467,6 +469,7 @@ impl RockLakeHandler {
             slow_operation_threshold: Duration::from_secs(1),
             metrics: None,
             connection_id: crate::telemetry::request_id(),
+            lifecycle: ConnectionActivity::standalone(),
         }
     }
 
@@ -521,6 +524,37 @@ impl RockLakeHandler {
         slow_operation_threshold: Duration,
         metrics: Option<Arc<CatalogMetrics>>,
     ) -> Self {
+        Self::new_with_config_mode_and_limits_and_lifecycle(
+            catalog,
+            auth,
+            notify_manager,
+            extension_schemas,
+            access_mode,
+            scan_semaphore,
+            max_active_scans,
+            max_buffered_rows,
+            max_response_bytes,
+            slow_operation_threshold,
+            metrics,
+            ConnectionActivity::standalone(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_config_mode_and_limits_and_lifecycle(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+        scan_semaphore: Arc<Semaphore>,
+        max_active_scans: usize,
+        max_buffered_rows: usize,
+        max_response_bytes: usize,
+        slow_operation_threshold: Duration,
+        metrics: Option<Arc<CatalogMetrics>>,
+        lifecycle: Arc<ConnectionActivity>,
+    ) -> Self {
         Self {
             catalog,
             session: Arc::new(Mutex::new(SessionState::new())),
@@ -536,6 +570,7 @@ impl RockLakeHandler {
             slow_operation_threshold,
             metrics,
             connection_id: crate::telemetry::request_id(),
+            lifecycle,
         }
     }
 
@@ -1487,6 +1522,10 @@ impl SimpleQueryHandler for RockLakeHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        if self.lifecycle.is_draining() {
+            return Err(server_shutting_down_error());
+        }
+        let _query_guard = self.lifecycle.begin_query();
         let query = self.query_telemetry();
         let result = async {
             if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
@@ -1610,6 +1649,10 @@ impl ExtendedQueryHandler for RockLakeHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        if self.lifecycle.is_draining() {
+            return Err(server_shutting_down_error());
+        }
+        let _query_guard = self.lifecycle.begin_query();
         let query = self.query_telemetry();
         let result = async {
             if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
@@ -1839,9 +1882,10 @@ impl RockLakeServerHandlers {
         slow_operation_threshold: Duration,
         metrics: Option<Arc<CatalogMetrics>>,
     ) -> Self {
-        let handler = Arc::new(RockLakeHandler::new_with_config_mode_and_limits(
+        Self::new_with_config_mode_and_limits_and_lifecycle(
             catalog,
             auth.clone(),
+            tls_required,
             notify_manager,
             extension_schemas,
             access_mode,
@@ -1851,7 +1895,42 @@ impl RockLakeServerHandlers {
             max_response_bytes,
             slow_operation_threshold,
             metrics,
-        ));
+            ConnectionActivity::standalone(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_config_mode_and_limits_and_lifecycle(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        tls_required: bool,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+        scan_semaphore: Arc<Semaphore>,
+        max_active_scans: usize,
+        max_buffered_rows: usize,
+        max_response_bytes: usize,
+        slow_operation_threshold: Duration,
+        metrics: Option<Arc<CatalogMetrics>>,
+        lifecycle: Arc<ConnectionActivity>,
+    ) -> Self {
+        let handler = Arc::new(
+            RockLakeHandler::new_with_config_mode_and_limits_and_lifecycle(
+                catalog,
+                auth.clone(),
+                notify_manager,
+                extension_schemas,
+                access_mode,
+                scan_semaphore,
+                max_active_scans,
+                max_buffered_rows,
+                max_response_bytes,
+                slow_operation_threshold,
+                metrics,
+                lifecycle,
+            ),
+        );
         let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
             handler.session.clone(),
             access_mode,

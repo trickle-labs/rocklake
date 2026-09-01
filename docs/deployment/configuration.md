@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.51.1 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.51.2 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 
@@ -43,6 +43,11 @@ rocklake serve --catalog <file://...,s3://...,gs://...,az://...>
 | `--max-buffered-rows <n>` | `1024` |
 | `--max-response-bytes <n>` | `16777216` |
 | `--slow-operation-threshold-ms <n>` | `1000` |
+
+`--stream-queue-depth` and `--max-buffered-rows` remain accepted for
+compatibility. RockLake warns when either option is configured, but neither
+option has an independent runtime effect. Leave both options out of new
+configuration files.
 
 Run `rocklake serve --help` for the authoritative list and validation rules.
 The server uses the standard AWS, GCS, and Azure credential environment

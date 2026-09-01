@@ -53,7 +53,7 @@ Verify the installation:
 
 ```bash
 rocklake --version
-# RockLake v0.51.1
+# RockLake v0.51.2
 ```
 
 ### Building from Source
@@ -417,6 +417,6 @@ Do not grant `s3:*` or full bucket access. RockLake does not need access to data
 ## Further Reading
 
 - **[Configuration](configuration.md)** — Full reference for all configuration options
-- Docker images are not published or supported in v0.51.1.
+- Docker images are not published or supported in v0.51.2.
 - **[High Availability](high-availability.md)** — Running with failover for uptime SLAs
 - **[Operations: Health Checks](../operations/health-checks.md)** — Detailed monitoring integration
