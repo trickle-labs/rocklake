@@ -182,13 +182,13 @@ The `auth_timing_constant_time_comparison_no_early_exit` and
 
 ### SCRAM-SHA-256
 
-For v0.51.2, RockLake selects SCRAM-SHA-256 for authenticated connections.
+For v0.51.3, RockLake selects SCRAM-SHA-256 for authenticated connections.
 SCRAM-SHA-256 provides:
 - Mutual authentication (server also proves identity to client)
 - Salted, iterated hashing (prevents offline dictionary attacks)
 - Channel binding when combined with TLS
 
-The v0.51.2 release binary selects SCRAM-SHA-256, so clients must support
+The v0.51.3 release binary selects SCRAM-SHA-256, so clients must support
 SCRAM-SHA-256. The cleartext password path remains available to library users
 that configure it directly. Use TLS with that path outside trusted local use.
 Set `ROCKLAKE_AUTH_PASSWORD` from a secret manager or a permission-restricted

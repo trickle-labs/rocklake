@@ -3,7 +3,7 @@
 This section provides lookup-oriented reference material for RockLake. Unlike
 the conceptual documentation (which explains why things work the way they do)
 or the architecture documentation (which explains how components fit
-together), reference pages answer questions about the supported v0.51.2
+together), reference pages answer questions about the supported v0.51.3
 surface: error codes, catalog fields, environment variables, metrics, and SQL
 patterns.
 
@@ -22,6 +22,12 @@ Each page covers a single reference domain:
     ---
 
     Complete list of all 28 catalog table types stored in the RockLake catalog. For each table: the tag byte, protobuf message fields, key encoding format, sort behavior, and relationship to other tables. This is the authoritative specification of the catalog schema.
+
+-   **[Bounded Metadata](bounded-metadata.md)**
+
+    ---
+
+    Ordering, pagination, streaming, admission, cancellation, and response-limit contracts for high-cardinality catalog operations.
 
 -   **[Supported SQL](sql-supported.md)**
 

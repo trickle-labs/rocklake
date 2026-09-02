@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.51.3] — 2026-09-02
+
+### Added
+
+- Added snapshot-aware streaming and pagination for delete-file, file-column
+  statistics, and snapshot-change metadata.
+- Added a file-order index so data-file page, stream, legacy, SQL, and `COPY`
+  paths share one `file_order ASC, data_file_id ASC` ordering contract.
+
+### Changed
+
+- Made active-scan admission wait cancellable and removed the default total
+  response-byte ceiling; an optional ceiling remains available for operators.
+- Documented boundedness, memory, ordering, failure, and cancellation behavior.
+
 ## [0.51.2] — 2026-09-01
 
 ### Fixed

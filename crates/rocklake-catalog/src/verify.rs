@@ -255,7 +255,15 @@ pub async fn verify_catalog(db: &Db) -> CatalogResult<VerifyResult> {
     }
     verify_paths(&mut result, &schemas, &tables, &data_files, &delete_files);
     verify_extensions(&mut result, &extensions);
-    verify_indexes(db, &mut result, &tables, &data_files).await?;
+    verify_indexes(
+        db,
+        &mut result,
+        &tables,
+        &data_files,
+        &delete_files,
+        &file_column_stats,
+    )
+    .await?;
     verify_counters(
         db,
         &mut result,
@@ -355,6 +363,8 @@ async fn verify_keys(db: &Db, result: &mut VerifyResult) -> CatalogResult<()> {
             | TAG_SORT_EXPRESSION
             | TAG_SCHEMA_VERSIONS => 17,
             TAG_NAME_MAPPING | TAG_FILE_COLUMN_STATS | TAG_FILE_PARTITION_VALUE => 25,
+            TAG_FILE_COLUMN_STATS_BY_SNAPSHOT => 33,
+            TAG_DELETE_FILE_BY_TABLE | TAG_DATA_FILE_BY_ORDER => 25,
             TAG_FILE_VARIANT_STATS | TAG_COLUMN_TAG => 33,
             TAG_TAG => 25,
             TAG_DATA_FILE_BY_SNAPSHOT => 25,
@@ -916,6 +926,8 @@ async fn verify_indexes(
     result: &mut VerifyResult,
     tables: &[(Vec<u8>, TableRow)],
     data_files: &[(Vec<u8>, DataFileRow)],
+    delete_files: &[(Vec<u8>, DeleteFileRow)],
+    file_column_stats: &[(Vec<u8>, FileColumnStatsRow)],
 ) -> CatalogResult<()> {
     let mut table_indexes = HashMap::new();
     let mut iter = db.scan_prefix(&[TAG_TABLE_BY_ID]).await?;
@@ -1038,6 +1050,189 @@ async fn verify_indexes(
             result.errors.push(format!(
                 "missing data-file index for {}/{}",
                 row.table_id, row.data_file_id
+            ));
+        }
+    }
+    verify_data_file_order_index(db, result, data_files).await?;
+    verify_delete_file_index(db, result, delete_files).await?;
+    verify_file_column_stats_index(db, result, data_files, file_column_stats).await?;
+    Ok(())
+}
+
+async fn verify_data_file_order_index(
+    db: &Db,
+    result: &mut VerifyResult,
+    data_files: &[(Vec<u8>, DataFileRow)],
+) -> CatalogResult<()> {
+    let mut keys_seen = HashSet::new();
+    let mut iter = db.scan_prefix(&[TAG_DATA_FILE_BY_ORDER]).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        if kv.key.len() != 25 {
+            result.errors.push(format!(
+                "invalid data-file order index key length {}",
+                kv.key.len()
+            ));
+            continue;
+        }
+        let table_id = keys::decode_u64(&kv.key[1..9])?;
+        let file_order = keys::decode_u64(&kv.key[9..17])?;
+        let file_id = keys::decode_u64(&kv.key[17..25])?;
+        let Some((primary_key, file)) = data_files
+            .iter()
+            .find(|(_, row)| row.table_id == table_id && row.data_file_id == file_id)
+        else {
+            result.errors.push(format!(
+                "data-file order index references missing data file {table_id}/{file_id}"
+            ));
+            continue;
+        };
+        if file.file_order.unwrap_or(file_id) != file_order {
+            result.errors.push(format!(
+                "data-file order index for {table_id}/{file_id} has wrong file_order"
+            ));
+        }
+        if values::decode_value::<DataFileRow>(&kv.value).ok().as_ref() != Some(file) {
+            result.errors.push(format!(
+                "data-file order index for {table_id}/{file_id} does not match primary value"
+            ));
+        }
+        keys_seen.insert(primary_key.clone());
+    }
+    if keys_seen.is_empty() {
+        return Ok(());
+    }
+    for (primary_key, row) in data_files {
+        if !keys_seen.contains(primary_key) {
+            result.errors.push(format!(
+                "missing data-file order index for {}/{}",
+                row.table_id, row.data_file_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn verify_delete_file_index(
+    db: &Db,
+    result: &mut VerifyResult,
+    delete_files: &[(Vec<u8>, DeleteFileRow)],
+) -> CatalogResult<()> {
+    let mut ids_seen = HashSet::new();
+    let mut iter = db.scan_prefix(&[TAG_DELETE_FILE_BY_TABLE]).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        if kv.key.len() != 25 {
+            result.errors.push(format!(
+                "invalid delete-file index key length {}",
+                kv.key.len()
+            ));
+            continue;
+        }
+        let table_id = keys::decode_u64(&kv.key[1..9])?;
+        let begin_snapshot = keys::decode_u64(&kv.key[9..17])?;
+        let delete_file_id = keys::decode_u64(&kv.key[17..25])?;
+        let Ok(index_row) = values::decode_value::<DeleteFileRow>(&kv.value) else {
+            result.errors.push(format!(
+                "invalid delete-file index value for {table_id}/{delete_file_id}"
+            ));
+            continue;
+        };
+        let Some((primary_key, row)) = delete_files
+            .iter()
+            .find(|(_, row)| row.delete_file_id == delete_file_id)
+        else {
+            result.errors.push(format!(
+                "delete-file index references missing delete file {table_id}/{delete_file_id}"
+            ));
+            continue;
+        };
+        if index_row != *row || begin_snapshot != row.begin_snapshot.unwrap_or(row.snapshot_id) {
+            result.errors.push(format!(
+                "delete-file index for {table_id}/{delete_file_id} does not match primary value"
+            ));
+        }
+        ids_seen.insert(primary_key.clone());
+    }
+    if ids_seen.is_empty() {
+        return Ok(());
+    }
+    for (primary_key, row) in delete_files {
+        if !ids_seen.contains(primary_key) && row.table_id.is_some() {
+            result.errors.push(format!(
+                "missing delete-file index for {}",
+                row.delete_file_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn verify_file_column_stats_index(
+    db: &Db,
+    result: &mut VerifyResult,
+    data_files: &[(Vec<u8>, DataFileRow)],
+    file_column_stats: &[(Vec<u8>, FileColumnStatsRow)],
+) -> CatalogResult<()> {
+    let mut stats_seen = HashSet::new();
+    let mut iter = db.scan_prefix(&[TAG_FILE_COLUMN_STATS_BY_SNAPSHOT]).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        if kv.key.len() != 33 {
+            result.errors.push(format!(
+                "invalid file-column-stats index key length {}",
+                kv.key.len()
+            ));
+            continue;
+        }
+        let table_id = keys::decode_u64(&kv.key[1..9])?;
+        let column_id = keys::decode_u64(&kv.key[9..17])?;
+        let begin_snapshot = keys::decode_u64(&kv.key[17..25])?;
+        let data_file_id = keys::decode_u64(&kv.key[25..33])?;
+        let Ok(index_row) = values::decode_value::<FileColumnStatsRow>(&kv.value) else {
+            result.errors.push(format!(
+                "invalid file-column-stats index value for {table_id}/{column_id}/{data_file_id}"
+            ));
+            continue;
+        };
+        let Some((primary_key, row)) = file_column_stats.iter().find(|(_, row)| {
+            row.table_id == table_id
+                && row.column_id == column_id
+                && row.data_file_id == data_file_id
+        }) else {
+            result.errors.push(format!(
+                "file-column-stats index references missing stats {table_id}/{column_id}/{data_file_id}"
+            ));
+            continue;
+        };
+        let expected_begin = data_files
+            .iter()
+            .find(|(_, file)| file.table_id == table_id && file.data_file_id == data_file_id)
+            .map(|(_, file)| file.begin_snapshot.unwrap_or(0));
+        if index_row != *row || expected_begin != Some(begin_snapshot) {
+            result.errors.push(format!(
+                "file-column-stats index for {table_id}/{column_id}/{data_file_id} does not match primary value"
+            ));
+        }
+        stats_seen.insert(primary_key.clone());
+    }
+    if stats_seen.is_empty() {
+        return Ok(());
+    }
+    for (primary_key, row) in file_column_stats {
+        if !stats_seen.contains(primary_key) {
+            result.errors.push(format!(
+                "missing file-column-stats index for {}/{}/{}",
+                row.table_id, row.column_id, row.data_file_id
             ));
         }
     }

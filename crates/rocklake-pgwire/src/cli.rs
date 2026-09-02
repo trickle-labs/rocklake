@@ -240,7 +240,7 @@ pub struct ServeArgs {
     /// Maximum rows buffered for a response (default: 1024).
     #[arg(long)]
     pub max_buffered_rows: Option<usize>,
-    /// Maximum response bytes buffered per request (default: 16 MiB).
+    /// Optional total response-byte policy; omitted means unlimited.
     #[arg(long)]
     pub max_response_bytes: Option<usize>,
     /// Log operations slower than this threshold in milliseconds (default: 1000).

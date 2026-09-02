@@ -437,7 +437,7 @@ impl RockLakeHandler {
             scan_semaphore: Arc::new(Semaphore::new(25)),
             max_active_scans: 25,
             max_buffered_rows: 1024,
-            max_response_bytes: 16 * 1024 * 1024,
+            max_response_bytes: usize::MAX,
             slow_operation_threshold: Duration::from_secs(1),
             metrics: None,
             connection_id: crate::telemetry::request_id(),
@@ -465,7 +465,7 @@ impl RockLakeHandler {
             scan_semaphore: Arc::new(Semaphore::new(25)),
             max_active_scans: 25,
             max_buffered_rows: 1024,
-            max_response_bytes: 16 * 1024 * 1024,
+            max_response_bytes: usize::MAX,
             slow_operation_threshold: Duration::from_secs(1),
             metrics: None,
             connection_id: crate::telemetry::request_id(),
@@ -504,7 +504,7 @@ impl RockLakeHandler {
             Arc::new(Semaphore::new(25)),
             25,
             1024,
-            16 * 1024 * 1024,
+            usize::MAX,
             Duration::from_secs(1),
             None,
         )
@@ -610,21 +610,28 @@ impl RockLakeHandler {
         let admission_started = Instant::now();
         if !matches!(
             kind,
-            StatementKind::SelectDataFiles | StatementKind::SelectDataFilesWithLimit
+            StatementKind::SelectDataFiles
+                | StatementKind::SelectDataFilesWithLimit
+                | StatementKind::SelectFileColumnStats
+                | StatementKind::SelectDeleteFiles
         ) {
             query.record_admission(admission_started);
             return Ok(None);
         }
-        let permit = match self.scan_semaphore.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
+        // Waiting is cancellation-safe: dropping the acquire future releases
+        // the queue slot without consuming a permit.
+        let permit = self
+            .scan_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| {
                 query.record_admission(admission_started);
                 if let Some(metrics) = &self.metrics {
                     metrics.increment_resource_limit_exhaustions();
                 }
-                return Err(resource_limit_error("active catalog scan limit exhausted"));
-            }
-        };
+                resource_limit_error("active catalog scan limit unavailable")
+            })?;
         if let Some(metrics) = &self.metrics {
             metrics.set_active_scans(
                 self.max_active_scans

@@ -444,7 +444,30 @@ impl CatalogWriter {
             extra_stats: input.extra_stats.map(|s| s.to_string()),
         };
         let key = keys::key_file_column_stats(input.table_id, input.column_id, input.data_file_id);
-        self.stage(key, values::encode_value(&row));
+        let encoded = values::encode_value(&row);
+        self.stage(key, encoded.clone());
+        let data_file_key = keys::key_data_file(input.table_id, input.data_file_id);
+        let data_file = match self.staged_value(&data_file_key) {
+            Some(data) => Some(values::decode_value::<rocklake_core::rows::DataFileRow>(
+                data,
+            )?),
+            None => self
+                .db
+                .get(&data_file_key)
+                .await?
+                .map(|data| values::decode_value::<rocklake_core::rows::DataFileRow>(&data))
+                .transpose()?,
+        };
+        let begin_snapshot = data_file.and_then(|file| file.begin_snapshot).unwrap_or(0);
+        self.stage(
+            keys::key_file_column_stats_by_snapshot(
+                input.table_id,
+                input.column_id,
+                begin_snapshot,
+                input.data_file_id,
+            ),
+            encoded,
+        );
         Ok(())
     }
 

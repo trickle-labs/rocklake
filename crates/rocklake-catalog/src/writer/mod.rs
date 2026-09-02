@@ -326,6 +326,33 @@ impl CatalogWriter {
         Err(CatalogError::NotFound(format!("data file {data_file_id}")))
     }
 
+    async fn find_data_file_table_id(&self, data_file_id: u64) -> CatalogResult<Option<u64>> {
+        let prefix = keys::prefix_for_tag(TAG_DATA_FILE);
+        if let Some(table_id) = self.staged.iter().find_map(|(key, value)| {
+            if !key.starts_with(&prefix) {
+                return None;
+            }
+            values::decode_value::<DataFileRow>(value)
+                .ok()
+                .filter(|row| row.data_file_id == data_file_id)
+                .map(|row| row.table_id)
+        }) {
+            return Ok(Some(table_id));
+        }
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: DataFileRow = values::decode_value(&kv.value)?;
+            if row.data_file_id == data_file_id {
+                return Ok(Some(row.table_id));
+            }
+        }
+        Ok(None)
+    }
+
     async fn ensure_partition_belongs(
         &self,
         partition_id: u64,
@@ -794,7 +821,15 @@ impl CatalogWriter {
                 // Also update the secondary index (TAG_DATA_FILE_BY_SNAPSHOT) so
                 // list_data_files() sees the retirement via its secondary-index scan.
                 let idx_key = keys::key_data_file_by_snapshot(table_id, file_begin_snap, file_id);
-                self.stage(idx_key, encoded);
+                self.stage(idx_key, encoded.clone());
+                self.stage(
+                    keys::key_data_file_by_order(
+                        table_id,
+                        df_row.file_order.unwrap_or(file_id),
+                        file_id,
+                    ),
+                    encoded,
+                );
             }
         }
 
@@ -928,7 +963,13 @@ impl CatalogWriter {
             }
             for (df_key, mut df_row) in to_retire {
                 df_row.end_snapshot = Some(snapshot_id);
-                self.stage(df_key, values::encode_value(&df_row));
+                let begin_snapshot = df_row.begin_snapshot.unwrap_or(df_row.snapshot_id);
+                let encoded = values::encode_value(&df_row);
+                self.stage(df_key, encoded.clone());
+                self.stage(
+                    keys::key_delete_file_by_table(table_id, begin_snapshot, df_row.delete_file_id),
+                    encoded,
+                );
             }
         }
 
@@ -1716,6 +1757,10 @@ impl CatalogWriter {
         )
         .await?;
         self.stage(idx_key, encoded);
+        self.stage(
+            keys::key_data_file_by_order(table_id, file_order, data_file_id),
+            values::encode_value(&row),
+        );
         Ok(data_file_id)
     }
 
@@ -1775,6 +1820,10 @@ impl CatalogWriter {
         )
         .await?;
         self.stage(idx_key, encoded);
+        self.stage(
+            keys::key_data_file_by_order(table_id, file_order, data_file_id),
+            values::encode_value(&row),
+        );
         Ok(data_file_id)
     }
 
@@ -1846,6 +1895,10 @@ impl CatalogWriter {
         )
         .await?;
         self.stage(idx_key, encoded);
+        self.stage(
+            keys::key_data_file_by_order(table_id, file_order, data_file_id),
+            values::encode_value(&row),
+        );
         Ok(data_file_id)
     }
 
@@ -1901,6 +1954,10 @@ impl CatalogWriter {
         } else {
             self.ensure_data_file_exists(data_file_id).await?;
         }
+        let indexed_table_id = match table_id {
+            Some(table_id) => Some(table_id),
+            None => self.find_data_file_table_id(data_file_id).await?,
+        };
         let delete_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
@@ -1927,7 +1984,14 @@ impl CatalogWriter {
         };
 
         let key = keys::key_delete_file(data_file_id, delete_file_id);
-        self.stage(key, values::encode_value(&row));
+        let encoded = values::encode_value(&row);
+        self.stage(key, encoded.clone());
+        if let Some(table_id) = indexed_table_id {
+            self.stage(
+                keys::key_delete_file_by_table(table_id, snapshot_id, delete_file_id),
+                encoded,
+            );
+        }
         Ok(delete_file_id)
     }
 
@@ -2186,7 +2250,15 @@ impl CatalogWriter {
                     updated_row.begin_snapshot.unwrap_or(0),
                     updated_row.data_file_id,
                 );
-                self.stage(idx_key, encoded);
+                self.stage(idx_key, encoded.clone());
+                self.stage(
+                    keys::key_data_file_by_order(
+                        updated_row.table_id,
+                        updated_row.file_order.unwrap_or(updated_row.data_file_id),
+                        updated_row.data_file_id,
+                    ),
+                    encoded,
+                );
                 break; // Only one data file per data_file_id
             }
         }
@@ -2211,9 +2283,21 @@ impl CatalogWriter {
         {
             let df_row: DeleteFileRow = values::decode_value(&kv.value)?;
             if df_row.delete_file_id == delete_file_id && df_row.end_snapshot.is_none() {
+                let indexed_table_id = match df_row.table_id {
+                    Some(table_id) => Some(table_id),
+                    None => self.find_data_file_table_id(df_row.data_file_id).await?,
+                };
+                let begin_snapshot = df_row.begin_snapshot.unwrap_or(df_row.snapshot_id);
                 let mut updated_row = df_row;
                 updated_row.end_snapshot = Some(snapshot_id);
-                self.stage(kv.key.to_vec(), values::encode_value(&updated_row));
+                let encoded = values::encode_value(&updated_row);
+                self.stage(kv.key.to_vec(), encoded.clone());
+                if let Some(table_id) = indexed_table_id {
+                    self.stage(
+                        keys::key_delete_file_by_table(table_id, begin_snapshot, delete_file_id),
+                        encoded,
+                    );
+                }
                 break; // Only one delete file per delete_file_id
             }
         }

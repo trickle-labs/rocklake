@@ -292,6 +292,25 @@ pub fn prefix_data_files_by_snapshot_upper(table_id: u64, snapshot_id: u64) -> O
     Some(buf)
 }
 
+/// Build the data-file order index key:
+/// `0x20 | table_id(u64) | file_order(u64) | data_file_id(u64)`.
+pub fn key_data_file_by_order(table_id: u64, file_order: u64, file_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(25);
+    buf.push(crate::tags::TAG_DATA_FILE_BY_ORDER);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf.extend_from_slice(&encode_u64(file_order));
+    buf.extend_from_slice(&encode_u64(file_id));
+    buf
+}
+
+/// Prefix for the data-file order index for one table.
+pub fn prefix_data_files_by_order_for_table(table_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(crate::tags::TAG_DATA_FILE_BY_ORDER);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf
+}
+
 /// Build a key for `ducklake_delete_file`: `0x0C | data_file_id(u64) | delete_file_id(u64)`.
 pub fn key_delete_file(data_file_id: u64, delete_file_id: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(17);
@@ -299,6 +318,75 @@ pub fn key_delete_file(data_file_id: u64, delete_file_id: u64) -> Vec<u8> {
     buf.extend_from_slice(&encode_u64(data_file_id));
     buf.extend_from_slice(&encode_u64(delete_file_id));
     buf
+}
+
+/// Build the delete-file table index key:
+/// `0x1E | table_id(u64) | begin_snapshot(u64) | delete_file_id(u64)`.
+pub fn key_delete_file_by_table(
+    table_id: u64,
+    begin_snapshot: u64,
+    delete_file_id: u64,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(25);
+    buf.push(crate::tags::TAG_DELETE_FILE_BY_TABLE);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf.extend_from_slice(&encode_u64(begin_snapshot));
+    buf.extend_from_slice(&encode_u64(delete_file_id));
+    buf
+}
+
+/// Prefix for delete files belonging to one table.
+pub fn prefix_delete_files_by_table(table_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(crate::tags::TAG_DELETE_FILE_BY_TABLE);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf
+}
+
+/// Build the file-column-stats snapshot index key:
+/// `0x1D | table_id | column_id | begin_snapshot | data_file_id`.
+pub fn key_file_column_stats_by_snapshot(
+    table_id: u64,
+    column_id: u64,
+    begin_snapshot: u64,
+    data_file_id: u64,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(33);
+    buf.push(crate::tags::TAG_FILE_COLUMN_STATS_BY_SNAPSHOT);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf.extend_from_slice(&encode_u64(column_id));
+    buf.extend_from_slice(&encode_u64(begin_snapshot));
+    buf.extend_from_slice(&encode_u64(data_file_id));
+    buf
+}
+
+/// Prefix for file-column stats for one table and column.
+pub fn prefix_file_column_stats_by_snapshot(table_id: u64, column_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(17);
+    buf.push(crate::tags::TAG_FILE_COLUMN_STATS_BY_SNAPSHOT);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf.extend_from_slice(&encode_u64(column_id));
+    buf
+}
+
+/// Upper-exclusive bound for file-column stats at a snapshot.
+pub fn prefix_file_column_stats_by_snapshot_upper(
+    table_id: u64,
+    column_id: u64,
+    snapshot_id: u64,
+) -> Option<Vec<u8>> {
+    let upper_snap = snapshot_id.checked_add(1)?;
+    Some(key_file_column_stats_by_snapshot(table_id, column_id, upper_snap, 0)[..25].to_vec())
+}
+
+/// Upper-exclusive bound for delete files at a snapshot.
+pub fn prefix_delete_files_by_table_upper(table_id: u64, snapshot_id: u64) -> Option<Vec<u8>> {
+    let upper_snap = snapshot_id.checked_add(1)?;
+    let mut buf = Vec::with_capacity(17);
+    buf.push(crate::tags::TAG_DELETE_FILE_BY_TABLE);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf.extend_from_slice(&encode_u64(upper_snap));
+    Some(buf)
 }
 
 /// Build a key for `ducklake_files_scheduled_for_deletion`: `0x0D | schedule_start(u64) | data_file_id(u64)`.

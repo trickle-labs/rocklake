@@ -6,7 +6,7 @@ Azure Blob Storage is an excellent backend for RockLake deployments on Microsoft
 
 - An Azure subscription
 - Azure CLI installed and authenticated (`az login`)
-- RockLake v0.51.2 binary
+- RockLake v0.51.3 binary
 - Permissions to create Storage Accounts, resource groups, and Managed Identities (typically `Owner` or `Contributor` plus `User Access Administrator` on the subscription or resource group)
 
 ## Creating the Storage Account
@@ -195,7 +195,7 @@ rocklake serve \
 Expected startup output:
 
 ```
-INFO  RockLake v0.51.2 starting
+INFO  RockLake v0.51.3 starting
 INFO  Storage backend: azure-blob
 INFO  Catalog path: az://mylakehouse/catalog/
 INFO  Opening SlateDB...

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rocklake"
-version = "0.51.2"
+version = "0.51.3"
 description = "Python bindings for the RockLake lakehouse catalog"
 authors = [{ name = "Trickle Labs" }]
 license = { text = "Apache-2.0" }

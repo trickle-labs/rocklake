@@ -16,7 +16,7 @@ the configured path; other paths return 404.
 
 ## Exported metrics
 
-The v0.51.2 binary exports these Prometheus metrics:
+The v0.51.3 binary exports these Prometheus metrics:
 
 - Catalog: `rocklake_snapshots_created_total`, `rocklake_files_per_snapshot`.
 - Object store: `rocklake_object_store_requests_total`,
@@ -69,7 +69,7 @@ request's final completion message. Its buckets are cumulative, and its
 
 ### Lifecycle metric aliases
 
-The v0.51.2 lifecycle names replace these older names. The old names remain
+The v0.51.3 lifecycle names replace these older names. The old names remain
 available as aliases through v0.53.x. Do not remove them before v0.54.0.
 
 | Current metric | Deprecated alias |

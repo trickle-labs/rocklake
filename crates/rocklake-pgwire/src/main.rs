@@ -327,7 +327,7 @@ async fn cmd_serve(
             args.max_response_bytes,
             "ROCKLAKE_MAX_RESPONSE_BYTES",
             file_config.max_response_bytes,
-            Some(16 * 1024 * 1024),
+            Some(usize::MAX),
             "max response bytes",
         )?
         .expect("response bytes default"),
