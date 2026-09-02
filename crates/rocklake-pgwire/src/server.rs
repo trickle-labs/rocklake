@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use bytes::BytesMut;
 use pgwire::error::{ErrorInfo, PgWireError};
 use pgwire::messages::PgWireBackendMessage;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Mutex, Notify};
 use tracing::{debug, error, info, info_span, warn, Instrument};
@@ -231,6 +231,7 @@ async fn reject_connection(
     code: &str,
     message: &str,
 ) -> std::io::Result<()> {
+    let _ = socket.set_nodelay(true);
     let response = PgWireBackendMessage::ErrorResponse(
         ErrorInfo::new("FATAL".to_string(), code.to_string(), message.to_string()).into(),
     );
@@ -239,7 +240,23 @@ async fn reject_connection(
         .encode(&mut encoded)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
     socket.write_all(&encoded).await?;
-    socket.shutdown().await
+    let _ = socket.shutdown().await;
+
+    // Drain incoming data until EOF or a short timeout.
+    // On Windows, dropping a socket with unread data in the receive buffer
+    // causes Winsock to send a TCP RST instead of a graceful FIN, which causes
+    // the client to discard the ErrorResponse with WSAECONNRESET before parsing it.
+    let mut buf = [0u8; 1024];
+    let drain = async {
+        loop {
+            match socket.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    };
+    let _ = tokio::time::timeout(Duration::from_millis(500), drain).await;
+    Ok(())
 }
 
 pub(crate) fn server_shutting_down_error() -> PgWireError {
@@ -522,17 +539,21 @@ pub async fn run_server_with_shutdown_mode(
                     Ok(permit) => permit,
                     Err(_) => {
                         warn!(peer = %addr, "connection rejected: session capacity exhausted");
-                        let _ = reject_connection(
-                            socket,
-                            "53300",
-                            "too many connections",
-                        )
-                        .await;
+                        tokio::spawn(async move {
+                            let _ = reject_connection(
+                                socket,
+                                "53300",
+                                "too many connections",
+                            )
+                            .await;
+                        });
                         continue;
                     }
                 };
                 if draining.load(Ordering::Acquire) {
-                    let _ = reject_connection(socket, "57P01", "server is shutting down").await;
+                    tokio::spawn(async move {
+                        let _ = reject_connection(socket, "57P01", "server is shutting down").await;
+                    });
                     drop(permit);
                     continue;
                 }
