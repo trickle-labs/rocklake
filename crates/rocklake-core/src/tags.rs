@@ -95,7 +95,17 @@ pub const TAG_ENCRYPTED_SECRET: u8 = 0x24;
 /// Key: `0x25 | catalog_id(u64 BE) | begin_snapshot(u64 BE)`
 pub const TAG_ENCRYPTION_KEY: u8 = 0x25;
 
-// 0x1D–0x20: removed (formerly IVM — v0.22)
+/// v0.51.3: secondary index for file-column statistics by snapshot.
+/// Key: `0x1D | table_id | column_id | begin_snapshot | data_file_id`.
+pub const TAG_FILE_COLUMN_STATS_BY_SNAPSHOT: u8 = 0x1D;
+
+/// v0.51.3: secondary index for delete files by table and snapshot.
+/// Key: `0x1E | table_id | begin_snapshot | delete_file_id`.
+pub const TAG_DELETE_FILE_BY_TABLE: u8 = 0x1E;
+
+/// v0.51.3: secondary index for data files in public `file_order` order.
+/// Key: `0x20 | table_id | file_order | data_file_id`.
+pub const TAG_DATA_FILE_BY_ORDER: u8 = 0x20;
 
 /// v0.18: Snapshot lease. MutableSingleton per consumer_id.
 /// Key: `0x22 | len(u16 BE) | consumer_id(utf-8 bytes)`
@@ -264,6 +274,22 @@ pub static ALL_TAGS: &[TagDescriptor] = &[
         status: TagStatus::Live,
     },
     TagDescriptor {
+        tag: TAG_FILE_COLUMN_STATS_BY_SNAPSHOT,
+        name: "rocklake_file_column_stats_by_snapshot",
+        key_shape: "table_id | column_id | begin_snapshot | data_file_id",
+        mvcc: MvccBehavior::AppendOnly,
+        unique_guard: UniqueGuard::NotNeeded,
+        status: TagStatus::Live,
+    },
+    TagDescriptor {
+        tag: TAG_DELETE_FILE_BY_TABLE,
+        name: "rocklake_delete_file_by_table",
+        key_shape: "table_id | begin_snapshot | delete_file_id",
+        mvcc: MvccBehavior::AppendOnly,
+        unique_guard: UniqueGuard::NotNeeded,
+        status: TagStatus::Live,
+    },
+    TagDescriptor {
         tag: TAG_DELETE_FILE,
         name: "ducklake_delete_file",
         key_shape: "data_file_id | delete_file_id",
@@ -399,6 +425,14 @@ pub static ALL_TAGS: &[TagDescriptor] = &[
         unique_guard: UniqueGuard::NotNeeded,
         status: TagStatus::Live,
     },
+    TagDescriptor {
+        tag: TAG_DATA_FILE_BY_ORDER,
+        name: "rocklake_data_file_by_order",
+        key_shape: "table_id | file_order | data_file_id",
+        mvcc: MvccBehavior::AppendOnly,
+        unique_guard: UniqueGuard::NotNeeded,
+        status: TagStatus::Live,
+    },
     // ─── RockLake Internal ───
     TagDescriptor {
         tag: TAG_INLINED_ROWS,
@@ -463,9 +497,8 @@ mod tests {
 
     #[test]
     fn all_ducklake_tags_allocated() {
-        // 28 DuckLake tables (0x01..=0x1C) + 4 RockLake internal tags (0xFC–0xFF)
-        // 0x1D–0x20 were removed in v0.22 (formerly IVM catalog tables)
-        assert_eq!(ALL_TAGS.len(), 32);
+        // 28 DuckLake tables plus RockLake secondary indexes and system tags.
+        assert_eq!(ALL_TAGS.len(), 35);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # MinIO
 
 MinIO-backed RockLake testing is covered by CI when the MinIO test feature is
-enabled. v0.51.2 does not publish a RockLake Docker image or a Docker Compose
+enabled. v0.51.3 does not publish a RockLake Docker image or a Docker Compose
 deployment. Run RockLake as a binary and point it at an S3-compatible MinIO
 endpoint:
 

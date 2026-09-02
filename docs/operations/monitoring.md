@@ -88,7 +88,7 @@ These track interactions with the underlying object store (S3/GCS/Azure/local):
 | `rocklake_queries_in_flight` | Gauge | Queries currently executing |
 | `rocklake_max_sessions` | Gauge | Maximum sessions configured via `--max-sessions` |
 
-The v0.51.2 lifecycle names replace the deprecated aliases
+The v0.51.3 lifecycle names replace the deprecated aliases
 `rocklake_active_sessions` (`rocklake_connections_open`) and
 `rocklake_idle_sessions` (`rocklake_connections_idle`). The aliases remain
 available through v0.53.x. Do not remove them before v0.54.0.

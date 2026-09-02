@@ -159,8 +159,8 @@ pub async fn excise_apply(
     keys_deleted += d;
     keys_failed += f;
 
-    // Delete retired data and delete-file catalog rows, including the data-file
-    // snapshot index. Object bytes are handled by scheduled cleanup.
+    // Delete retired data and delete-file catalog rows, including their
+    // secondary indexes. Object bytes are handled by scheduled cleanup.
     let (d, f) = delete_excisable_data_files(db, before_snapshot).await?;
     keys_deleted += d;
     keys_failed += f;
@@ -537,19 +537,54 @@ async fn delete_excisable_data_files(db: &Db, before_snapshot: u64) -> CatalogRe
             to_delete.push((
                 kv.key.to_vec(),
                 keys::key_data_file_by_snapshot(row.table_id, begin, row.data_file_id),
+                keys::key_data_file_by_order(
+                    row.table_id,
+                    row.file_order.unwrap_or(row.data_file_id),
+                    row.data_file_id,
+                ),
             ));
         }
     }
     let mut deleted = 0;
     let mut failed = 0;
-    for (key, index_key) in to_delete {
-        for key in [key, index_key] {
+    for (key, snapshot_index_key, order_index_key) in to_delete {
+        for key in [key, snapshot_index_key, order_index_key] {
             match db.delete(&key).await {
                 Ok(_) => deleted += 1,
                 Err(e) => {
                     tracing::warn!("Failed to delete data-file key: {e}");
                     failed += 1;
                 }
+            }
+        }
+    }
+    let mut stale_stats_indexes = Vec::new();
+    let mut iter = db
+        .scan_prefix(&keys::prefix_for_tag(TAG_FILE_COLUMN_STATS_BY_SNAPSHOT))
+        .await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        if kv.key.len() == 33 {
+            let table_id = keys::decode_u64(&kv.key[1..9])?;
+            let data_file_id = keys::decode_u64(&kv.key[25..33])?;
+            if db
+                .get(&keys::key_data_file(table_id, data_file_id))
+                .await?
+                .is_none()
+            {
+                stale_stats_indexes.push(kv.key.to_vec());
+            }
+        }
+    }
+    for key in stale_stats_indexes {
+        match db.delete(&key).await {
+            Ok(_) => deleted += 1,
+            Err(e) => {
+                tracing::warn!("Failed to delete file-column-stats index: {e}");
+                failed += 1;
             }
         }
     }
@@ -570,7 +605,23 @@ async fn delete_excisable_delete_files(db: &Db, before_snapshot: u64) -> Catalog
             to_delete.push(kv.key.to_vec());
         }
     }
-    delete_keys(db, to_delete, "delete-file").await
+    let mut index_keys = Vec::new();
+    let mut iter = db
+        .scan_prefix(&keys::prefix_for_tag(TAG_DELETE_FILE_BY_TABLE))
+        .await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: DeleteFileRow = values::decode_value(&kv.value)?;
+        if row.end_snapshot.is_some_and(|end| end <= before_snapshot) {
+            index_keys.push(kv.key.to_vec());
+        }
+    }
+    let (deleted, failed) = delete_keys(db, to_delete, "delete-file").await?;
+    let (index_deleted, index_failed) = delete_keys(db, index_keys, "delete-file-index").await?;
+    Ok((deleted + index_deleted, failed + index_failed))
 }
 
 async fn delete_excisable_schemas(db: &Db, before_snapshot: u64) -> CatalogResult<(u64, u64)> {

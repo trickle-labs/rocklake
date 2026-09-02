@@ -243,6 +243,7 @@ nav:
   - Reference:
     - reference/index.md
     - Catalog Tables: reference/catalog-tables.md
+    - Bounded Metadata: reference/bounded-metadata.md
     - Supported SQL: reference/sql-supported.md
     - Error Codes: reference/error-codes.md
     - Metrics: reference/metrics.md

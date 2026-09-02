@@ -1804,6 +1804,14 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                 let idx_begin = begin_snapshot.unwrap_or(0);
                 put!(
                     keys::key_data_file_by_snapshot(table_id, idx_begin, data_file_id),
+                    encoded.clone()
+                );
+                put!(
+                    keys::key_data_file_by_order(
+                        table_id,
+                        row.file_order.unwrap_or(data_file_id),
+                        data_file_id,
+                    ),
                     encoded
                 );
                 max_file_id = max_file_id.max(data_file_id);
@@ -1839,7 +1847,18 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     encryption_key: d["encryption_key"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_delete_file(data_file_id, delete_file_id);
-                put!(key, values::encode_value(&row));
+                let encoded = values::encode_value(&row);
+                put!(key, encoded.clone());
+                if let Some(table_id) = row.table_id {
+                    put!(
+                        keys::key_delete_file_by_table(
+                            table_id,
+                            row.begin_snapshot.unwrap_or(row.snapshot_id),
+                            delete_file_id,
+                        ),
+                        encoded
+                    );
+                }
                 rows_imported += 1;
             }
             "ducklake_inlined_insert" => {
@@ -2103,7 +2122,24 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     extra_stats: d["extra_stats"].as_str().map(|s| s.to_string()),
                 };
                 let key = keys::key_file_column_stats(table_id, column_id, data_file_id);
-                put!(key, values::encode_value(&row));
+                let encoded = values::encode_value(&row);
+                put!(key, encoded.clone());
+                let begin_snapshot = db
+                    .get(&keys::key_data_file(table_id, data_file_id))
+                    .await?
+                    .map(|data| values::decode_value::<DataFileRow>(&data))
+                    .transpose()?
+                    .and_then(|file| file.begin_snapshot)
+                    .unwrap_or(0);
+                put!(
+                    keys::key_file_column_stats_by_snapshot(
+                        table_id,
+                        column_id,
+                        begin_snapshot,
+                        data_file_id,
+                    ),
+                    encoded
+                );
                 rows_imported += 1;
             }
             "ducklake_column_mapping" => {
@@ -2955,6 +2991,10 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
         // Write secondary index for O(log N) snapshot-bounded scans.
         batch.put(
             keys::key_data_file_by_snapshot(table_id, 1, file_id),
+            &encoded,
+        );
+        batch.put(
+            keys::key_data_file_by_order(table_id, file_id, file_id),
             &encoded,
         );
         file_id += 1;

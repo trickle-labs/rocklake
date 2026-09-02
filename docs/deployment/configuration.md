@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.51.2 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.51.3 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 
@@ -41,7 +41,7 @@ rocklake serve --catalog <file://...,s3://...,gs://...,az://...>
 | `--max-active-scans <n>` | `25` |
 | `--stream-queue-depth <n>` | `64` |
 | `--max-buffered-rows <n>` | `1024` |
-| `--max-response-bytes <n>` | `16777216` |
+| `--max-response-bytes <n>` | Unlimited (optional) |
 | `--slow-operation-threshold-ms <n>` | `1000` |
 
 `--stream-queue-depth` and `--max-buffered-rows` remain accepted for

@@ -1363,9 +1363,12 @@ struct FileColumnStatsProjection {
     source: FileColumnStatsProjectionSource,
 }
 
-pub(super) fn make_file_column_stats_response(
+pub(super) fn make_file_column_stats_stream_response(
     sql: &str,
-    rows: Vec<rocklake_core::rows::FileColumnStatsRow>,
+    rows: BoxStream<
+        'static,
+        rocklake_catalog::error::CatalogResult<rocklake_core::rows::FileColumnStatsRow>,
+    >,
 ) -> Response<'static> {
     let projections = file_column_stats_projections(sql);
     let schema = Arc::new(
@@ -1382,11 +1385,15 @@ pub(super) fn make_file_column_stats_response(
             })
             .collect::<Vec<_>>(),
     );
-
-    let mut data_rows = Vec::new();
-    for row in &rows {
-        let mut encoder = DataRowEncoder::new(schema.clone());
-        for projection in &projections {
+    let schema_for_rows = schema.clone();
+    let projections = Arc::new(projections);
+    let rows = rows.map(move |row| {
+        let row = match row {
+            Ok(row) => row,
+            Err(error) => return Err(RockLakeError::from(error).into()),
+        };
+        let mut encoder = DataRowEncoder::new(schema_for_rows.clone());
+        for projection in projections.iter() {
             match projection.source {
                 FileColumnStatsProjectionSource::DataFileId => {
                     encode_text_i64(&mut encoder, row.data_file_id)
@@ -1413,19 +1420,17 @@ pub(super) fn make_file_column_stats_response(
                     encode_text_value(&mut encoder, &row.max_value)
                 }
                 FileColumnStatsProjectionSource::ContainsNan => {
-                    let value = Some(row.contains_nan.to_string());
-                    encode_text_value(&mut encoder, &value);
+                    encode_text_value(&mut encoder, &Some(row.contains_nan.to_string()))
                 }
                 FileColumnStatsProjectionSource::ExtraStats => {
                     encode_text_value(&mut encoder, &row.extra_stats)
                 }
             }
         }
-        data_rows.push(encoder.finish());
-    }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
+        encoder.finish()
+    });
+    let mut resp = QueryResponse::new(schema, rows);
+    resp.set_command_tag("SELECT");
     Response::Query(resp)
 }
 
@@ -2268,87 +2273,46 @@ pub(super) fn make_table_column_stats_response(
     Response::Query(resp)
 }
 
-/// Build a PgWire response for `SELECT * FROM ducklake_delete_file WHERE table_id = $1`.
-pub(super) fn make_delete_files_response(
-    files: Vec<rocklake_core::rows::DeleteFileRow>,
+pub(super) fn make_delete_files_stream_response(
+    files: BoxStream<
+        'static,
+        rocklake_catalog::error::CatalogResult<rocklake_core::rows::DeleteFileRow>,
+    >,
 ) -> Response<'static> {
     let schema = crate::schema_registry::delete_file_schema();
-    let mut data_rows = Vec::new();
-    for f in &files {
-        let mut encoder = DataRowEncoder::new(schema.clone());
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.delete_file_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        let tid = f.table_id.map(|t| t.to_string());
-        encoder
-            .encode_field_with_type_and_format(&tid, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &f.begin_snapshot.map(|value| value.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        let end = f.end_snapshot.map(|value| value.to_string());
-        encoder
-            .encode_field_with_type_and_format(&end, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.data_file_id.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.path.clone()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        let path_is_relative = f.path_is_relative.map(|value| value.to_string());
-        encoder
-            .encode_field_with_type_and_format(&path_is_relative, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&f.format, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.delete_count.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(f.file_size_bytes.to_string()),
-                &Type::TEXT,
-                FieldFormat::Text,
-            )
-            .expect("pgwire field encoding is infallible");
-        let footer_size = f.footer_size.map(|s| s.to_string());
-        encoder
-            .encode_field_with_type_and_format(&footer_size, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&f.encryption_key, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        encoder
-            .encode_field_with_type_and_format(&f.partial_max, &Type::TEXT, FieldFormat::Text)
-            .expect("pgwire field encoding is infallible");
-        data_rows.push(encoder.finish());
-    }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
+    let schema_for_rows = schema.clone();
+    let rows = files.map(move |file| match file {
+        Ok(file) => encode_delete_file_row(schema_for_rows.clone(), &file),
+        Err(error) => Err(RockLakeError::from(error).into()),
+    });
+    let mut resp = QueryResponse::new(schema, rows);
+    resp.set_command_tag("SELECT");
     Response::Query(resp)
+}
+
+fn encode_delete_file_row(
+    schema: Arc<Vec<FieldInfo>>,
+    file: &rocklake_core::rows::DeleteFileRow,
+) -> pgwire::error::PgWireResult<pgwire::messages::data::DataRow> {
+    let mut encoder = DataRowEncoder::new(schema);
+    for value in [
+        Some(file.delete_file_id.to_string()),
+        file.table_id.map(|value| value.to_string()),
+        file.begin_snapshot.map(|value| value.to_string()),
+        file.end_snapshot.map(|value| value.to_string()),
+        Some(file.data_file_id.to_string()),
+        Some(file.path.clone()),
+        file.path_is_relative.map(|value| value.to_string()),
+        file.format.clone(),
+        Some(file.delete_count.to_string()),
+        Some(file.file_size_bytes.to_string()),
+        file.footer_size.map(|value| value.to_string()),
+        file.encryption_key.clone(),
+        file.partial_max.clone(),
+    ] {
+        encoder.encode_field_with_type_and_format(&value, &Type::TEXT, FieldFormat::Text)?;
+    }
+    encoder.finish()
 }
 
 pub(super) fn make_files_scheduled_for_deletion_response(

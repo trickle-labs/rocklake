@@ -30,18 +30,19 @@ use crate::session::{BufferedOp, CopyAccumulator, SessionState};
 use catalog::{
     execute_commit, execute_next_rowid_range, execute_table_changes, make_column_mapping_response,
     make_column_tags_response, make_columns_response, make_data_files_stream_response,
-    make_data_files_stream_response_from_rows, make_delete_files_response,
-    make_file_column_stats_response, make_file_ids_response, make_file_variant_stats_response,
-    make_files_scheduled_for_deletion_response, make_global_table_stats_response,
-    make_inlined_data_tables_response, make_inlined_rows_response,
-    make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
-    make_macros_response, make_metadata_response, make_metadata_table_empty_response,
-    make_name_mapping_response, make_partition_columns_response, make_partition_info_response,
-    make_schema_version_response, make_schema_versions_response, make_schemas_response,
-    make_snapshot_changes_response, make_snapshot_row_response,
-    make_snapshot_stats_changes_response, make_sort_expressions_response, make_sort_info_response,
-    make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
-    make_tags_response, make_views_response, parse_inlined_table_ids,
+    make_data_files_stream_response_from_rows, make_delete_files_stream_response,
+    make_file_column_stats_stream_response, make_file_ids_response,
+    make_file_variant_stats_response, make_files_scheduled_for_deletion_response,
+    make_global_table_stats_response, make_inlined_data_tables_response,
+    make_inlined_rows_response, make_latest_snapshot_info_response, make_macro_impls_response,
+    make_macro_parameters_response, make_macros_response, make_metadata_response,
+    make_metadata_table_empty_response, make_name_mapping_response,
+    make_partition_columns_response, make_partition_info_response, make_schema_version_response,
+    make_schema_versions_response, make_schemas_response, make_snapshot_changes_response,
+    make_snapshot_row_response, make_snapshot_stats_changes_response,
+    make_sort_expressions_response, make_sort_info_response, make_table_column_stats_response,
+    make_table_stats_rows_response_for_sql, make_tables_response, make_tags_response,
+    make_views_response, parse_inlined_table_ids,
 };
 use extension::{
     execute_create_extension_table, execute_delete_extension_rows, execute_insert_extension_row,
@@ -1319,10 +1320,10 @@ async fn execute_classified<'a>(
             let predicate = params.get(3).unwrap_or("");
             if predicate.is_empty() {
                 let rows = reader
-                    .list_file_column_stats(table_id, column_id)
+                    .stream_file_column_stats(table_id, column_id)
                     .await
                     .map_err(RockLakeError::from)?;
-                return Ok(vec![make_file_column_stats_response(_sql, rows)]);
+                return Ok(vec![make_file_column_stats_stream_response(_sql, rows)]);
             }
             // v0.26: look up the actual column type for type-aware pruning.
             let col_type = reader
@@ -1401,31 +1402,30 @@ async fn execute_classified<'a>(
             let table_id = params.get_u64(0).ok();
             let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snap_id).await?;
-            let files = if let Some(table_id) = table_id {
-                reader
-                    .list_delete_files(table_id)
+            if let Some(table_id) = table_id {
+                let files = reader
+                    .stream_delete_files(table_id)
+                    .await
+                    .map_err(RockLakeError::from)?;
+                return Ok(vec![make_delete_files_stream_response(files)]);
+            }
+            let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
+            let mut table_ids = Vec::new();
+            for schema in schemas {
+                for table in reader
+                    .list_tables(schema.schema_id)
                     .await
                     .map_err(RockLakeError::from)?
-            } else {
-                let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
-                let mut files = Vec::new();
-                for schema in schemas {
-                    for table in reader
-                        .list_tables(schema.schema_id)
-                        .await
-                        .map_err(RockLakeError::from)?
-                    {
-                        files.extend(
-                            reader
-                                .list_delete_files(table.table_id)
-                                .await
-                                .map_err(RockLakeError::from)?,
-                        );
-                    }
+                {
+                    table_ids.push(table.table_id);
                 }
-                files
-            };
-            Ok(vec![make_delete_files_response(files)])
+            }
+            let streams = futures::stream::iter(table_ids).then(move |table_id| {
+                let reader = reader.clone();
+                async move { reader.stream_delete_files(table_id).await }
+            });
+            let files = streams.try_flatten().boxed();
+            Ok(vec![make_delete_files_stream_response(files)])
         }
         StatementKind::SelectSnapshot => {
             let snap_id = params.get_u64(0).ok();

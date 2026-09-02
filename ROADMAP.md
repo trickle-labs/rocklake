@@ -1,8 +1,8 @@
 # RockLake roadmap
 
 - **Status:** Active
-- **Current release:** v0.51.2
-- **Planning horizon:** v0.51.2 through v0.53.x
+- **Current release:** v0.51.3
+- **Planning horizon:** v0.51.3 through v0.53.x
 - **v1.0:** Deferred intentionally
 
 RockLake is an object-store-native DuckLake catalog. The supported product path
@@ -44,7 +44,7 @@ The v0.51.x releases are a patch train. Each patch changes one failure domain.
 | Release | Theme | Exit condition |
 |---|---|---|
 | v0.51.1 | Telemetry correctness | Metrics and request timing describe the work the server performed. |
-| **v0.51.2** | Connection lifecycle | Admission, session state, idle timeout, and shutdown have enforced contracts. |
+| v0.51.2 | Connection lifecycle | Admission, session state, idle timeout, and shutdown have enforced contracts. |
 | v0.51.3 | Bounded metadata | High-cardinality operations stream or page results within documented limits. |
 | v0.51.4 | Client and operator ergonomics | The binary, client APIs, installation path, and operator tasks have one clear path. |
 | v0.52.0 | Local and MinIO evidence | Fresh-process results cover catalogs with up to one million files. |

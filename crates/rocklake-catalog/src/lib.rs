@@ -61,7 +61,10 @@ pub use metrics::CatalogMetrics;
 pub use migrate::{migrate_apply, migrate_dry_run, MigrateDryRunResult, MigrateResult};
 pub use partition::{CatalogRegistry, DatasetEntry, PartitionedWriter};
 pub use performance::{BenchmarkReport, HotKeyState, SlateDbTuning};
-pub use reader::{CatalogReader, DataFilePage, SnapshotDiff, MAX_DATA_FILE_PAGE_SIZE};
+pub use reader::{
+    CatalogReader, DataFilePage, MetadataPage, SnapshotDiff, MAX_DATA_FILE_PAGE_SIZE,
+    MAX_METADATA_PAGE_SIZE,
+};
 pub use readonly::ReadOnlyCatalog;
 pub use store::{CatalogStore, OpenOptions};
 pub use streaming::{measure_ingest_throughput, IngestRecord, IngestResult, RockLakeSink};

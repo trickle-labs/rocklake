@@ -208,7 +208,7 @@ impl CatalogMetrics {
             max_active_scans: AtomicU64::new(25),
             stream_queue_depth: AtomicU64::new(64),
             max_buffered_rows: AtomicU64::new(1024),
-            max_response_bytes: AtomicU64::new(16 * 1024 * 1024),
+            max_response_bytes: AtomicU64::new(u64::MAX),
             process_rss_bytes: AtomicU64::new(0),
             process_peak_rss_bytes: AtomicU64::new(0),
             resource_limit_exhaustions: AtomicU64::new(0),

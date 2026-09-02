@@ -300,6 +300,7 @@ pub struct ServerConfig {
     pub max_active_scans: usize,
     pub stream_queue_depth: usize,
     pub max_buffered_rows: usize,
+    /// Optional total response-byte policy; `usize::MAX` means unlimited.
     pub max_response_bytes: usize,
     pub slow_operation_threshold: std::time::Duration,
     /// TLS configuration.
@@ -325,7 +326,7 @@ impl Default for ServerConfig {
             max_active_scans: 25,
             stream_queue_depth: 64,
             max_buffered_rows: 1024,
-            max_response_bytes: 16 * 1024 * 1024,
+            max_response_bytes: usize::MAX,
             slow_operation_threshold: std::time::Duration::from_secs(1),
             tls: TlsConfig::default(),
             auth: AuthConfig::default(),

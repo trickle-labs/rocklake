@@ -956,6 +956,14 @@ fn write_row_to_batch(
             let idx_begin = begin_snapshot.unwrap_or(0);
             batch.put(
                 keys::key_data_file_by_snapshot(table_id, idx_begin, data_file_id),
+                encoded.clone(),
+            );
+            batch.put(
+                keys::key_data_file_by_order(
+                    table_id,
+                    row.file_order.unwrap_or(data_file_id),
+                    data_file_id,
+                ),
                 encoded,
             );
             report.data_file_count += 1;
@@ -982,10 +990,21 @@ fn write_row_to_batch(
                 partial_max: d["partial_max"].as_str().map(|s| s.to_string()),
                 encryption_key: d["encryption_key"].as_str().map(|s| s.to_string()),
             };
+            let encoded = values::encode_value(&row);
             batch.put(
                 keys::key_delete_file(data_file_id, delete_file_id),
-                values::encode_value(&row),
+                encoded.clone(),
             );
+            if let Some(table_id) = row.table_id {
+                batch.put(
+                    keys::key_delete_file_by_table(
+                        table_id,
+                        row.begin_snapshot.unwrap_or(row.snapshot_id),
+                        delete_file_id,
+                    ),
+                    encoded,
+                );
+            }
         }
         "ducklake_view" => {
             let view_id = req_u64(d, "view_id", table)?;
