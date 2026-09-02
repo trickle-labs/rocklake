@@ -27,8 +27,30 @@ use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_pgwire::server::{run_server_with_mode, ServerConfig};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+const MAIN_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let builder = std::thread::Builder::new()
+        .name("rocklake-main".into())
+        .stack_size(MAIN_THREAD_STACK_SIZE);
+
+    let handle = builder.spawn(|| {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(MAIN_THREAD_STACK_SIZE)
+            .build()
+            .map_err(|e| e.to_string())?;
+        rt.block_on(async_main()).map_err(|e| e.to_string())
+    })?;
+
+    match handle.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => Err(err.into()),
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
