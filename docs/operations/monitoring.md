@@ -135,6 +135,19 @@ configuration files.
 |--------|------|-------------|
 | `rocklake_cdc_record_count_mismatch_total` | Counter | Times a Parquet file's scanned row count differed from catalog metadata (N-04 data-quality guard) |
 
+## Capacity Rejection (SQLSTATE 53300)
+
+When incoming load reaches or exceeds configured server thresholds, RockLake immediately rejects excess operations with SQLSTATE `53300` (`too_many_connections` or `configuration_limit_exceeded`) rather than degrading latency or causing unbounded memory growth:
+
+- **Connection capacity (`--max-sessions`)**: When total open PG-wire client connections reach `--max-sessions`, new incoming connections are rejected with `53300`.
+- **Concurrent scan capacity (`--max-active-scans`)**: When concurrent active scans reach `--max-active-scans`, admission control rejects new scans with `53300`.
+- **Response byte limit (`--max-response-bytes`)**: If a single query generates a response exceeding `--max-response-bytes`, the query is terminated with `53300`.
+
+Every capacity rejection increments the counter `rocklake_resource_limit_exhaustions_total`. Operators can observe headroom and set alerts on:
+- Connection saturation ratio: `rocklake_connections_open / rocklake_max_sessions`
+- Scan saturation ratio: `rocklake_active_scans / rocklake_max_active_scans`
+- Rejection rate: `rate(rocklake_resource_limit_exhaustions_total[5m])`
+
 ## Alerting Rules
 
 ### Critical Alerts (Page Immediately)

@@ -29,6 +29,7 @@
 //! # });
 //! ```
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
@@ -228,8 +229,10 @@ impl CatalogClientBuilder {
         };
 
         let cat = rocklake_catalog::ReadOnlyCatalog::open(opts).await?;
+        let current_snapshot_id = cat.current_snapshot_id_atomic();
         Ok(ReadOnlyClient {
             inner: tokio::sync::Mutex::new(cat),
+            current_snapshot_id,
         })
     }
 }
@@ -386,9 +389,11 @@ impl CatalogClient {
     /// # });
     /// ```
     pub async fn snapshot_id(&self) -> ClientResult<u64> {
-        let guard = self.read().await?;
-        let store = guard.as_ref().expect("checked by read()");
-        let reader = store.read_latest();
+        let reader = {
+            let guard = self.read().await?;
+            let store = guard.as_ref().expect("checked by read()");
+            store.read_latest()
+        };
         let snap = reader.get_snapshot().await?;
         Ok(snap.map(|s| s.snapshot_id).unwrap_or(0))
     }
@@ -410,9 +415,11 @@ impl CatalogClient {
         &self,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<Schema>> {
-        let guard = self.read().await?;
-        let store = guard.as_ref().expect("checked by read()");
-        let reader = Self::reader(store, snapshot.into())?;
+        let reader = {
+            let guard = self.read().await?;
+            let store = guard.as_ref().expect("checked by read()");
+            Self::reader(store, snapshot.into())?
+        };
         let rows = reader.list_schemas().await?;
         Ok(rows
             .into_iter()
@@ -441,9 +448,11 @@ impl CatalogClient {
         schema_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<Table>> {
-        let guard = self.read().await?;
-        let store = guard.as_ref().expect("checked by read()");
-        let reader = Self::reader(store, snapshot.into())?;
+        let reader = {
+            let guard = self.read().await?;
+            let store = guard.as_ref().expect("checked by read()");
+            Self::reader(store, snapshot.into())?
+        };
         let rows = reader.list_tables(schema_id).await?;
         Ok(rows
             .into_iter()
@@ -475,9 +484,11 @@ impl CatalogClient {
         table_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Option<Vec<Column>>> {
-        let guard = self.read().await?;
-        let store = guard.as_ref().expect("checked by read()");
-        let reader = Self::reader(store, snapshot.into())?;
+        let reader = {
+            let guard = self.read().await?;
+            let store = guard.as_ref().expect("checked by read()");
+            Self::reader(store, snapshot.into())?
+        };
         let result = reader.describe_table(table_id).await?;
         Ok(result.map(|(_table, cols)| {
             cols.into_iter()
@@ -514,9 +525,11 @@ impl CatalogClient {
         table_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<DataFile>> {
-        let guard = self.read().await?;
-        let store = guard.as_ref().expect("checked by read()");
-        let reader = Self::reader(store, snapshot.into())?;
+        let reader = {
+            let guard = self.read().await?;
+            let store = guard.as_ref().expect("checked by read()");
+            Self::reader(store, snapshot.into())?
+        };
         let rows = reader.list_data_files(table_id).await?;
         Ok(rows.into_iter().map(DataFile::from_row).collect())
     }
@@ -529,9 +542,11 @@ impl CatalogClient {
         page_size: usize,
         continuation_token: Option<&str>,
     ) -> ClientResult<DataFilePage> {
-        let guard = self.read().await?;
-        let store = guard.as_ref().expect("checked by read()");
-        let reader = Self::reader(store, snapshot.into())?;
+        let reader = {
+            let guard = self.read().await?;
+            let store = guard.as_ref().expect("checked by read()");
+            Self::reader(store, snapshot.into())?
+        };
         let page = reader
             .list_data_files_paged(table_id, page_size, continuation_token)
             .await?;
@@ -547,9 +562,11 @@ impl CatalogClient {
         table_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<BoxStream<'static, ClientResult<DataFile>>> {
-        let guard = self.read().await?;
-        let store = guard.as_ref().expect("checked by read()");
-        let reader = Self::reader(store, snapshot.into())?;
+        let reader = {
+            let guard = self.read().await?;
+            let store = guard.as_ref().expect("checked by read()");
+            Self::reader(store, snapshot.into())?
+        };
         let stream = reader.stream_data_files(table_id).await?;
         Ok(Box::pin(futures::StreamExt::map(stream, |row| {
             row.map(DataFile::from_row).map_err(ClientError::from)
@@ -608,6 +625,7 @@ impl DataFile {
 /// ```
 pub struct ReadOnlyClient {
     inner: tokio::sync::Mutex<rocklake_catalog::ReadOnlyCatalog>,
+    current_snapshot_id: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for ReadOnlyClient {
@@ -617,11 +635,26 @@ impl std::fmt::Debug for ReadOnlyClient {
 }
 
 impl ReadOnlyClient {
+    fn resolve_reader(
+        cat: &rocklake_catalog::ReadOnlyCatalog,
+        snapshot: SnapshotRef,
+    ) -> rocklake_catalog::CatalogResult<rocklake_catalog::CatalogReader> {
+        match snapshot {
+            SnapshotRef::Latest => cat.reader(),
+            SnapshotRef::At(snapshot_id) => cat.read_at(snapshot_id),
+        }
+    }
+
     /// Return the snapshot ID observed at the last `refresh()` (or `open()`).
     pub fn current_snapshot_id(&self) -> Option<SnapshotId> {
-        // Try to acquire the mutex without blocking; if locked we return None.
-        // In practise callers hold no concurrent mutable reference.
-        self.inner.try_lock().ok().map(|g| g.current_snapshot_id())
+        Some(SnapshotId::new(
+            self.current_snapshot_id.load(Ordering::Acquire),
+        ))
+    }
+
+    /// Return the latest committed snapshot ID.
+    pub async fn snapshot_id(&self) -> ClientResult<u64> {
+        Ok(self.current_snapshot_id.load(Ordering::Acquire))
     }
 
     /// Advance to the latest committed snapshot without writer coordination.
@@ -630,16 +663,23 @@ impl ReadOnlyClient {
     /// Returns the newly observed snapshot ID.
     pub async fn refresh(&self) -> ClientResult<SnapshotId> {
         let mut guard = self.inner.lock().await;
-        Ok(guard.refresh().await?)
+        let snap = guard.refresh().await?;
+        self.current_snapshot_id
+            .store(snap.as_u64(), Ordering::Release);
+        Ok(snap)
     }
 
-    /// List schemas visible at the current snapshot.
-    pub async fn list_schemas(&self) -> ClientResult<Vec<Schema>> {
-        let guard = self.inner.lock().await;
-        let reader = guard.reader()?;
-        Ok(reader
-            .list_schemas()
-            .await?
+    /// List schemas visible at the selected snapshot.
+    pub async fn list_schemas(
+        &self,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Vec<Schema>> {
+        let reader = {
+            let guard = self.inner.lock().await;
+            Self::resolve_reader(&guard, snapshot.into())?
+        };
+        let rows = reader.list_schemas().await?;
+        Ok(rows
             .into_iter()
             .map(|r| Schema {
                 schema_id: r.schema_id,
@@ -648,13 +688,18 @@ impl ReadOnlyClient {
             .collect())
     }
 
-    /// List tables in a schema, visible at the current snapshot.
-    pub async fn list_tables(&self, schema_id: u64) -> ClientResult<Vec<Table>> {
-        let guard = self.inner.lock().await;
-        let reader = guard.reader()?;
-        Ok(reader
-            .list_tables(schema_id)
-            .await?
+    /// List tables in a schema, visible at the selected snapshot.
+    pub async fn list_tables(
+        &self,
+        schema_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Vec<Table>> {
+        let reader = {
+            let guard = self.inner.lock().await;
+            Self::resolve_reader(&guard, snapshot.into())?
+        };
+        let rows = reader.list_tables(schema_id).await?;
+        Ok(rows
             .into_iter()
             .map(|r| Table {
                 table_id: r.table_id,
@@ -664,10 +709,231 @@ impl ReadOnlyClient {
             .collect())
     }
 
+    /// Describe the columns of `table_id` at the selected snapshot.
+    ///
+    /// Returns `None` when no table with that ID exists at the given snapshot.
+    pub async fn get_table(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Option<Vec<Column>>> {
+        let reader = {
+            let guard = self.inner.lock().await;
+            Self::resolve_reader(&guard, snapshot.into())?
+        };
+        let result = reader.describe_table(table_id).await?;
+        Ok(result.map(|(_table, cols)| {
+            cols.into_iter()
+                .map(|c| Column {
+                    column_id: c.column_id,
+                    table_id: c.table_id,
+                    column_name: c.column_name,
+                    data_type: c.data_type,
+                    column_index: c.column_index,
+                    is_nullable: c.is_nullable,
+                })
+                .collect()
+        }))
+    }
+
+    /// List data files for `table_id` visible at the selected snapshot.
+    pub async fn list_data_files(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<Vec<DataFile>> {
+        let reader = {
+            let guard = self.inner.lock().await;
+            Self::resolve_reader(&guard, snapshot.into())?
+        };
+        let rows = reader.list_data_files(table_id).await?;
+        Ok(rows.into_iter().map(DataFile::from_row).collect())
+    }
+
+    /// List one bounded page of data files at the selected snapshot.
+    pub async fn list_data_files_paged(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+        page_size: usize,
+        continuation_token: Option<&str>,
+    ) -> ClientResult<DataFilePage> {
+        let reader = {
+            let guard = self.inner.lock().await;
+            Self::resolve_reader(&guard, snapshot.into())?
+        };
+        let page = reader
+            .list_data_files_paged(table_id, page_size, continuation_token)
+            .await?;
+        Ok(DataFilePage {
+            files: page.files.into_iter().map(DataFile::from_row).collect(),
+            continuation_token: page.continuation_token,
+        })
+    }
+
+    /// Stream data files incrementally at the selected snapshot.
+    pub async fn stream_data_files(
+        &self,
+        table_id: u64,
+        snapshot: impl Into<SnapshotRef>,
+    ) -> ClientResult<BoxStream<'static, ClientResult<DataFile>>> {
+        let reader = {
+            let guard = self.inner.lock().await;
+            Self::resolve_reader(&guard, snapshot.into())?
+        };
+        let stream = reader.stream_data_files(table_id).await?;
+        Ok(Box::pin(futures::StreamExt::map(stream, |row| {
+            row.map(DataFile::from_row).map_err(ClientError::from)
+        })))
+    }
+
     /// Close the catalog and release all resources.
     pub async fn close(self) -> ClientResult<()> {
         let guard = self.inner.into_inner();
         guard.close().await.map_err(ClientError::from)
+    }
+}
+
+/// Unified asynchronous read model implemented by writer-backed and read-only clients.
+#[async_trait::async_trait]
+pub trait CatalogReaderOps {
+    /// Return the latest committed snapshot ID.
+    async fn snapshot_id(&self) -> ClientResult<u64>;
+
+    /// List schemas visible at the selected snapshot.
+    async fn list_schemas(&self, snapshot: SnapshotRef) -> ClientResult<Vec<Schema>>;
+
+    /// List tables in `schema_id` visible at the selected snapshot.
+    async fn list_tables(&self, schema_id: u64, snapshot: SnapshotRef) -> ClientResult<Vec<Table>>;
+
+    /// Describe the columns of `table_id` at the selected snapshot.
+    async fn get_table(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<Option<Vec<Column>>>;
+
+    /// List data files for `table_id` visible at the selected snapshot.
+    async fn list_data_files(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<Vec<DataFile>>;
+
+    /// List one bounded page of data files at the selected snapshot.
+    async fn list_data_files_paged(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+        page_size: usize,
+        continuation_token: Option<&str>,
+    ) -> ClientResult<DataFilePage>;
+
+    /// Stream data files incrementally at the selected snapshot.
+    async fn stream_data_files(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<BoxStream<'static, ClientResult<DataFile>>>;
+}
+
+#[async_trait::async_trait]
+impl CatalogReaderOps for CatalogClient {
+    async fn snapshot_id(&self) -> ClientResult<u64> {
+        self.snapshot_id().await
+    }
+
+    async fn list_schemas(&self, snapshot: SnapshotRef) -> ClientResult<Vec<Schema>> {
+        self.list_schemas(snapshot).await
+    }
+
+    async fn list_tables(&self, schema_id: u64, snapshot: SnapshotRef) -> ClientResult<Vec<Table>> {
+        self.list_tables(schema_id, snapshot).await
+    }
+
+    async fn get_table(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<Option<Vec<Column>>> {
+        self.get_table(table_id, snapshot).await
+    }
+
+    async fn list_data_files(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<Vec<DataFile>> {
+        self.list_data_files(table_id, snapshot).await
+    }
+
+    async fn list_data_files_paged(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+        page_size: usize,
+        continuation_token: Option<&str>,
+    ) -> ClientResult<DataFilePage> {
+        self.list_data_files_paged(table_id, snapshot, page_size, continuation_token)
+            .await
+    }
+
+    async fn stream_data_files(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<BoxStream<'static, ClientResult<DataFile>>> {
+        self.stream_data_files(table_id, snapshot).await
+    }
+}
+
+#[async_trait::async_trait]
+impl CatalogReaderOps for ReadOnlyClient {
+    async fn snapshot_id(&self) -> ClientResult<u64> {
+        self.snapshot_id().await
+    }
+
+    async fn list_schemas(&self, snapshot: SnapshotRef) -> ClientResult<Vec<Schema>> {
+        self.list_schemas(snapshot).await
+    }
+
+    async fn list_tables(&self, schema_id: u64, snapshot: SnapshotRef) -> ClientResult<Vec<Table>> {
+        self.list_tables(schema_id, snapshot).await
+    }
+
+    async fn get_table(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<Option<Vec<Column>>> {
+        self.get_table(table_id, snapshot).await
+    }
+
+    async fn list_data_files(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<Vec<DataFile>> {
+        self.list_data_files(table_id, snapshot).await
+    }
+
+    async fn list_data_files_paged(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+        page_size: usize,
+        continuation_token: Option<&str>,
+    ) -> ClientResult<DataFilePage> {
+        self.list_data_files_paged(table_id, snapshot, page_size, continuation_token)
+            .await
+    }
+
+    async fn stream_data_files(
+        &self,
+        table_id: u64,
+        snapshot: SnapshotRef,
+    ) -> ClientResult<BoxStream<'static, ClientResult<DataFile>>> {
+        self.stream_data_files(table_id, snapshot).await
     }
 }
 
@@ -942,5 +1208,52 @@ mod tests {
             .close()
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn readonly_client_shares_read_model() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let uri = format!("file://{}", dir.path().to_str().unwrap());
+
+        // First initialize with writer client
+        let writer = CatalogClientBuilder::new(&uri).build().await.unwrap();
+        writer.close().await.unwrap();
+
+        // Open with readonly client
+        let reader = CatalogClientBuilder::new(&uri)
+            .build_readonly()
+            .await
+            .unwrap();
+        assert_eq!(reader.snapshot_id().await.unwrap(), 0);
+        assert_eq!(reader.current_snapshot_id().unwrap().as_u64(), 0);
+
+        let schemas = reader.list_schemas(SnapshotRef::Latest).await.unwrap();
+        assert!(schemas.is_empty());
+
+        let tables = reader.list_tables(1, SnapshotRef::Latest).await.unwrap();
+        assert!(tables.is_empty());
+
+        let table = reader.get_table(1, SnapshotRef::Latest).await.unwrap();
+        assert!(table.is_none());
+
+        let files = reader
+            .list_data_files(1, SnapshotRef::Latest)
+            .await
+            .unwrap();
+        assert!(files.is_empty());
+
+        let paged = reader
+            .list_data_files_paged(1, SnapshotRef::Latest, 10, None)
+            .await
+            .unwrap();
+        assert!(paged.files.is_empty());
+
+        // Trait usage
+        async fn read_via_trait<T: CatalogReaderOps>(client: &T) {
+            let _ = client.list_schemas(SnapshotRef::Latest).await.unwrap();
+        }
+        read_via_trait(&reader).await;
+
+        reader.close().await.unwrap();
     }
 }

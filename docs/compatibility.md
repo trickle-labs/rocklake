@@ -4,9 +4,18 @@ This page lists the component and backend versions covered by CI. The public
 policy for format, upgrade, deprecation, support, and scale claims is in the
 root [`COMPATIBILITY.md`](https://github.com/trickle-labs/rocklake/blob/main/COMPATIBILITY.md).
 
+## Support Matrix
+
+| Level | Interfaces | Details |
+|---|---|---|
+| **Supported** | `rocklake` binary, PostgreSQL wire protocol, DuckDB DuckLake | Primary supported path with full CI test certification. |
+| **Preview** | Rust client (`rocklake-client`), read-only API, Apache DataFusion | Preview read APIs; maintained with documented migrations. |
+| **Experimental** | Language bindings (Python, Node.js, Java) and unmaintained engine integrations (Spark, Trino) | Experimental bindings without maintained certification paths. |
+| **Internal** | Wire corpus, repair internals, low-level catalog key manipulations | Implementation details; no public stability guarantees. |
+
 ## DuckLake v1.0 Compatibility Claim
 
-**RockLake v0.27.10 is compatible with DuckLake 1.0 (Catalog Version 7 / `V1_0`) under DuckDB v1.5.3.**
+**RockLake is compatible with DuckLake 1.0 (Catalog Version 7 / `V1_0`) under DuckDB v1.5.3.**
 
 This claim is backed by the durable compatibility corpus and automated CI evidence:
 
@@ -70,7 +79,7 @@ and not applied.
 
 | Spark Version | Status | Protocol | Notes |
 |--------------|--------|----------|-------|
-| 3.5.x | ✅ Supported | pg-wire | Full wire-corpus validated in CI |
+| 3.5.x | ⚠️ Experimental | pg-wire | Wire-corpus validated in CI; community maintained |
 | 3.4.x | ⚠️ Untested | pg-wire | Expected to work; not tested |
 | 3.3.x | ❌ Not supported | Not applicable | Extended query protocol required |
 
@@ -78,7 +87,7 @@ and not applied.
 
 | Version | Status | Protocol | Notes |
 |---------|--------|----------|-------|
-| Trino 432+ | ✅ Supported | pg-wire | Full wire-corpus validated in CI |
+| Trino 432+ | ⚠️ Experimental | pg-wire | Wire-corpus validated in CI; community maintained |
 | Trino 400-431 | ⚠️ Untested | pg-wire | Expected to work |
 | Presto | ❌ Not tested | Not applicable | May work; contributions welcome |
 
@@ -86,7 +95,7 @@ and not applied.
 
 | DataFusion Version | Status | Notes |
 |-------------------|--------|-------|
-| 45.0.0 | ✅ Supported | Default version; Parquet scan validated |
+| 45.0.0 | ⚠️ Preview | Preview integration; Parquet scan validated |
 | < 45 | ❌ Not supported | API breaking changes in v45 |
 
 ## Object Storage Backends

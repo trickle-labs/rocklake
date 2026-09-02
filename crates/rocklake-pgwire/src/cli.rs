@@ -46,10 +46,125 @@ pub enum Commands {
     /// Run a read-only startup preflight.
     Doctor(DoctorArgs),
 
+    /// Check catalog and server readiness.
+    Status(StatusArgs),
+
+    /// Catalog lifecycle and maintenance operations.
+    #[command(subcommand)]
+    Catalog(CatalogSubcommand),
+
+    /// Diagnostic and debugging operations.
+    #[command(subcommand)]
+    Debug(DebugSubcommand),
+
     /// Validate or print configuration.
     #[command(subcommand)]
     Config(ConfigSubcommand),
 
+    /// Generate shell completion scripts.
+    Completions(CompletionsArgs),
+
+    // ─── Legacy top-level command aliases (hidden) ───────────────────────────
+    /// Create and inspect portable catalog backups.
+    #[command(subcommand, hide = true)]
+    Backup(BackupSubcommand),
+
+    /// Plan or apply a backup restore.
+    #[command(subcommand, hide = true)]
+    Restore(RestoreSubcommand),
+
+    /// Visibility GC — advance the retain-from watermark.
+    #[command(subcommand, hide = true)]
+    Gc(GcSubcommand),
+
+    /// Physical excision of catalog facts before a snapshot.
+    #[command(subcommand, hide = true)]
+    Excise(ExciseSubcommand),
+
+    /// Manage catalog checkpoints.
+    #[command(subcommand, hide = true)]
+    Checkpoint(CheckpointSubcommand),
+
+    /// Export catalog to NDJSON.
+    #[command(hide = true)]
+    Export(ExportArgs),
+
+    /// Import catalog from NDJSON.
+    #[command(hide = true)]
+    Import(ImportArgs),
+
+    /// Convert NDJSON export to PostgreSQL INSERT statements.
+    #[command(name = "pg-migrate", hide = true)]
+    PgMigrate(PgMigrateArgs),
+
+    /// Rebuild catalog by scanning Parquet files in object storage.
+    #[command(hide = true)]
+    Rebuild(RebuildArgs),
+
+    /// Inspect catalog state (snapshot, API costs, cache utilisation).
+    #[command(subcommand, hide = true)]
+    Inspect(InspectSubcommand),
+
+    /// Verify catalog integrity.
+    #[command(subcommand, hide = true)]
+    Verify(VerifySubcommand),
+
+    /// Repair catalog issues.
+    #[command(hide = true)]
+    Repair(RepairArgs),
+
+    /// Warm up the block cache before serving.
+    #[command(hide = true)]
+    Warmup(WarmupArgs),
+
+    /// Migrate catalog to the current format version.
+    #[command(hide = true)]
+    Migrate(MigrateArgs),
+
+    /// Wire-corpus operations (diff and validate).
+    #[command(subcommand, hide = true)]
+    Corpus(CorpusSubcommand),
+
+    /// Output recommended settings for a target cost.
+    #[command(hide = true)]
+    Tune(TuneArgs),
+
+    /// Migrate from an existing DuckLake catalog into RockLake.
+    #[command(name = "migrate-from-ducklake", hide = true)]
+    MigrateFromDucklake(MigrateFromDucklakeArgs),
+
+    /// Export all 28+ DuckLake catalog tables to NDJSON.
+    #[command(name = "export-catalog", hide = true)]
+    ExportCatalog(ExportCatalogArgs),
+
+    /// Structured catalog health diagnostic report.
+    #[command(hide = true)]
+    Diagnose(DiagnoseArgs),
+
+    /// Identify (and optionally delete) orphan Parquet files.
+    #[command(name = "sweep-orphans", hide = true)]
+    SweepOrphans(SweepOrphansArgs),
+}
+
+/// Options for `rocklake status`.
+#[derive(Debug, Parser)]
+pub struct StatusArgs {
+    /// Catalog URL (`file:///…`, `s3://…`, `gs://…`, `az://…`).
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG", conflicts_with = "path")]
+    pub catalog: Option<String>,
+
+    /// Local catalog directory (equivalent to `--catalog ./lake`).
+    #[arg(value_name = "PATH", conflicts_with = "catalog")]
+    pub path: Option<String>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    pub output: OutputFormat,
+}
+
+/// Catalog lifecycle and maintenance operations.
+#[derive(Debug, Subcommand)]
+pub enum CatalogSubcommand {
     /// Create and inspect portable catalog backups.
     #[command(subcommand)]
     Backup(BackupSubcommand),
@@ -76,16 +191,12 @@ pub enum Commands {
     /// Import catalog from NDJSON.
     Import(ImportArgs),
 
-    /// Convert NDJSON export to PostgreSQL INSERT statements.
-    #[command(name = "pg-migrate")]
-    PgMigrate(PgMigrateArgs),
+    /// Export all 28+ DuckLake catalog tables to NDJSON.
+    #[command(name = "export-catalog")]
+    ExportCatalog(ExportCatalogArgs),
 
-    /// Rebuild catalog by scanning Parquet files in object storage.
-    Rebuild(RebuildArgs),
-
-    /// Inspect catalog state (snapshot, API costs, cache utilisation).
-    #[command(subcommand)]
-    Inspect(InspectSubcommand),
+    /// Migrate catalog to the current format version.
+    Migrate(MigrateArgs),
 
     /// Verify catalog integrity.
     #[command(subcommand)]
@@ -93,37 +204,42 @@ pub enum Commands {
 
     /// Repair catalog issues.
     Repair(RepairArgs),
+}
 
-    /// Warm up the block cache before serving.
-    Warmup(WarmupArgs),
+/// Diagnostic and debugging operations.
+#[derive(Debug, Subcommand)]
+pub enum DebugSubcommand {
+    /// Structured catalog health diagnostic report.
+    Diagnose(DiagnoseArgs),
 
-    /// Migrate catalog to the current format version.
-    Migrate(MigrateArgs),
+    /// Inspect catalog state (snapshot, API costs, cache utilisation).
+    #[command(subcommand)]
+    Inspect(InspectSubcommand),
 
     /// Wire-corpus operations (diff and validate).
     #[command(subcommand)]
     Corpus(CorpusSubcommand),
 
-    /// Output recommended settings for a target cost.
-    Tune(TuneArgs),
-
-    /// Migrate from an existing DuckLake catalog into RockLake.
-    #[command(name = "migrate-from-ducklake")]
-    MigrateFromDucklake(MigrateFromDucklakeArgs),
-
-    /// Export all 28+ DuckLake catalog tables to NDJSON.
-    #[command(name = "export-catalog")]
-    ExportCatalog(ExportCatalogArgs),
-
-    /// Structured catalog health diagnostic report.
-    Diagnose(DiagnoseArgs),
+    /// Rebuild catalog by scanning Parquet files in object storage.
+    Rebuild(RebuildArgs),
 
     /// Identify (and optionally delete) orphan Parquet files.
     #[command(name = "sweep-orphans")]
     SweepOrphans(SweepOrphansArgs),
 
-    /// Generate shell completion scripts.
-    Completions(CompletionsArgs),
+    /// Convert NDJSON export to PostgreSQL INSERT statements.
+    #[command(name = "pg-migrate")]
+    PgMigrate(PgMigrateArgs),
+
+    /// Output recommended settings for a target cost.
+    Tune(TuneArgs),
+
+    /// Warm up the block cache before serving.
+    Warmup(WarmupArgs),
+
+    /// Migrate from an existing DuckLake catalog into RockLake.
+    #[command(name = "migrate-from-ducklake")]
+    MigrateFromDucklake(MigrateFromDucklakeArgs),
 }
 
 // ─── serve ─────────────────────────────────────────────────────────────────

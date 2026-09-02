@@ -56,6 +56,7 @@ wait "$server_pid" || true
 grep -q '"snapshot_id":'"$snapshot" "$catalog_dir/historical.ndjson"
 grep -q '"table":"ducklake_data_file".*"record_count":2' "$catalog_dir/historical.ndjson"
 "$binary" doctor --catalog "$catalog_dir/catalog" --output json | grep '"ready": true' >/dev/null
+"$binary" status --catalog "$catalog_dir/catalog" --output json | grep '"status": "ready"' >/dev/null
 "$binary" backup create --catalog "$catalog_dir/catalog" --out "$catalog_dir/backup" >/dev/null
 "$binary" backup inspect "$catalog_dir/backup" --output json | grep '"version": 1' >/dev/null
 "$binary" restore plan --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --output json | grep '"target_empty": true' >/dev/null
@@ -63,4 +64,4 @@ grep -q '"table":"ducklake_data_file".*"record_count":2' "$catalog_dir/historica
 "$binary" restore apply --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --overwrite --output json | grep '"verified":true\|"verified": true' >/dev/null
 "$binary" inspect snapshot --catalog "$catalog_dir/restored" --output json | grep '"latest_snapshot_id"' >/dev/null
 "$binary" diagnose --catalog "$catalog_dir/catalog" --json | grep -q 'overall_status.*ok'
-echo "v0.51.3 quickstart passed (latest snapshot: $snapshot)"
+echo "v0.51.4 quickstart passed (latest snapshot: $snapshot)"

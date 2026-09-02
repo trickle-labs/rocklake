@@ -1,8 +1,8 @@
 # RockLake roadmap
 
 - **Status:** Active
-- **Current release:** v0.51.3
-- **Planning horizon:** v0.51.3 through v0.53.x
+- **Current release:** v0.51.4
+- **Planning horizon:** v0.51.4 through v0.53.x
 - **v1.0:** Deferred intentionally
 
 RockLake is an object-store-native DuckLake catalog. The supported product path

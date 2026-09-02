@@ -53,6 +53,9 @@ The v0.51.3 binary exports these Prometheus metrics:
   `rocklake_resource_limit_exhaustions_total`,
   `rocklake_stream_backpressure_total`.
 
+Capacity rejections (`SQLSTATE 53300`) increment `rocklake_resource_limit_exhaustions_total`
+when `--max-sessions`, `--max-active-scans`, or `--max-response-bytes` thresholds are reached.
+
 The configuration keys `stream_queue_depth` and `max_buffered_rows` remain
 accepted for compatibility. They have no independent runtime effect, and
 RockLake emits one warning when either key is configured.
