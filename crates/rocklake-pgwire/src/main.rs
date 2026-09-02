@@ -30,6 +30,7 @@ use rocklake_pgwire::server::{run_server_with_mode, ServerConfig};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::from_default_env().add_directive(
                 "info"
@@ -54,6 +55,33 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
         }
         Commands::Serve(args) => cmd_serve(*args, config_path.as_deref()).await?,
         Commands::Doctor(args) => cmd_doctor(args, config_path.as_deref()).await?,
+        Commands::Status(args) => cmd_status(args, config_path.as_deref()).await?,
+        Commands::Catalog(command) => match command {
+            cli::CatalogSubcommand::Backup(sub) => cmd_backup(sub).await?,
+            cli::CatalogSubcommand::Restore(sub) => cmd_restore(sub).await?,
+            cli::CatalogSubcommand::Gc(sub) => cmd_gc(sub).await?,
+            cli::CatalogSubcommand::Excise(sub) => cmd_excise(sub).await?,
+            cli::CatalogSubcommand::Checkpoint(sub) => cmd_checkpoint(sub).await?,
+            cli::CatalogSubcommand::Export(args) => cmd_export(args).await?,
+            cli::CatalogSubcommand::Import(args) => cmd_import(args).await?,
+            cli::CatalogSubcommand::ExportCatalog(args) => cmd_export_catalog(args).await?,
+            cli::CatalogSubcommand::Migrate(args) => cmd_migrate(args).await?,
+            cli::CatalogSubcommand::Verify(sub) => cmd_verify(sub).await?,
+            cli::CatalogSubcommand::Repair(args) => cmd_repair(args).await?,
+        },
+        Commands::Debug(command) => match command {
+            cli::DebugSubcommand::Diagnose(args) => cmd_diagnose(args).await?,
+            cli::DebugSubcommand::Inspect(sub) => cmd_inspect(sub).await?,
+            cli::DebugSubcommand::Corpus(sub) => cmd_corpus(sub).await?,
+            cli::DebugSubcommand::Rebuild(args) => cmd_rebuild(args).await?,
+            cli::DebugSubcommand::SweepOrphans(args) => cmd_sweep_orphans(args).await?,
+            cli::DebugSubcommand::PgMigrate(args) => cmd_pg_migrate(args).await?,
+            cli::DebugSubcommand::Tune(args) => cmd_tune(args).await?,
+            cli::DebugSubcommand::Warmup(args) => cmd_warmup(args).await?,
+            cli::DebugSubcommand::MigrateFromDucklake(args) => {
+                cmd_migrate_from_ducklake(args).await?
+            }
+        },
         Commands::Config(command) => cmd_config(command, config_path.as_deref()).await?,
         Commands::Backup(command) => cmd_backup(command).await?,
         Commands::Restore(command) => cmd_restore(command).await?,
@@ -500,12 +528,39 @@ fn warn_deprecated_limits(configured: bool) {
     }
 }
 
+fn redact_catalog_url(url: &str) -> String {
+    if let Some(scheme_end) = url.find("://") {
+        let scheme = &url[..scheme_end + 3];
+        let rest = &url[scheme_end + 3..];
+        if let Some(at_idx) = rest.find('@') {
+            let after_at = &rest[at_idx..];
+            return format!("{scheme}[redacted]{after_at}");
+        }
+    }
+    url.to_string()
+}
+
+fn generate_duckdb_attach(config: &ServeConfig) -> String {
+    let mut params = format!(
+        "host={} port={} dbname=rocklake",
+        config.bind_addr.ip(),
+        config.bind_addr.port()
+    );
+    if let Some(user) = &config.auth_username {
+        params.push_str(&format!(" user={user}"));
+    }
+    if config.tls_required {
+        params.push_str(" sslmode=require");
+    }
+    format!("ATTACH 'ducklake:postgres:{params}' AS lake (DATA_PATH 'data');")
+}
+
 fn print_startup_summary(config: &ServeConfig, _store: &CatalogStore) {
     let tls = config.tls_cert.is_some() && config.tls_key.is_some();
     let auth = config.auth_username.is_some() && config.auth_password.is_some();
     println!("RockLake {}", env!("CARGO_PKG_VERSION"));
     println!();
-    println!("Catalog       {}", config.catalog_url);
+    println!("Catalog       {}", redact_catalog_url(&config.catalog_url));
     println!("Mode          {}", config.mode);
     println!("DuckLake      1.0");
     println!("Listener      {}", config.bind_addr);
@@ -524,11 +579,7 @@ fn print_startup_summary(config: &ServeConfig, _store: &CatalogStore) {
     println!("Status        ready");
     println!();
     println!("DuckDB:");
-    println!(
-        "ATTACH 'ducklake:postgres:host={} port={} dbname=rocklake' AS lake (DATA_PATH 'data');",
-        config.bind_addr.ip(),
-        config.bind_addr.port()
-    );
+    println!("{}", generate_duckdb_attach(config));
     if !config.bind_addr.ip().is_loopback() && !tls {
         eprintln!("WARNING: listener is not loopback and TLS is disabled");
     }
@@ -610,8 +661,68 @@ mod tests {
         assert!(!example.contains("stream_queue_depth"));
         assert!(!example.contains("max_buffered_rows"));
     }
+
+    #[test]
+    fn test_redact_catalog_url() {
+        assert_eq!(
+            super::redact_catalog_url("s3://AKIA:SECRET@my-bucket/lake"),
+            "s3://[redacted]@my-bucket/lake"
+        );
+        assert_eq!(
+            super::redact_catalog_url("postgres://user:pass@localhost:5432/lake"),
+            "postgres://[redacted]@localhost:5432/lake"
+        );
+        assert_eq!(
+            super::redact_catalog_url("file:///tmp/catalog"),
+            "file:///tmp/catalog"
+        );
+    }
+
+    #[test]
+    fn test_generate_duckdb_attach() {
+        let config_plain = super::ServeConfig {
+            catalog_url: "file:///tmp/lake".to_string(),
+            bind_addr: "127.0.0.1:5432".parse().unwrap(),
+            max_sessions: 64,
+            metrics_port: None,
+            metrics_path: "/metrics".to_string(),
+            tls_cert: None,
+            tls_key: None,
+            tls_required: false,
+            auth_username: None,
+            auth_password: None,
+            mode: "writer".to_string(),
+            cost_mode: rocklake_catalog::CostMode::default(),
+            s3_endpoint: None,
+            s3_path_style: false,
+            encryption_key: None,
+            extension_schemas: vec![],
+            otlp_endpoint: None,
+            idle_connection_timeout_secs: 60,
+            drain_timeout_secs: 30,
+            datafusion_bridge_queue_depth: 256,
+            max_active_scans: 16,
+            stream_queue_depth: 0,
+            max_buffered_rows: 0,
+            max_response_bytes: 67108864,
+            slow_operation_threshold_ms: 1000,
+        };
+        assert_eq!(
+            super::generate_duckdb_attach(&config_plain),
+            "ATTACH 'ducklake:postgres:host=127.0.0.1 port=5432 dbname=rocklake' AS lake (DATA_PATH 'data');"
+        );
+
+        let mut config_auth_tls = config_plain.clone();
+        config_auth_tls.auth_username = Some("ducklake_user".to_string());
+        config_auth_tls.tls_required = true;
+        assert_eq!(
+            super::generate_duckdb_attach(&config_auth_tls),
+            "ATTACH 'ducklake:postgres:host=127.0.0.1 port=5432 dbname=rocklake user=ducklake_user sslmode=require' AS lake (DATA_PATH 'data');"
+        );
+    }
 }
 
+#[derive(Clone)]
 struct ServeConfig {
     catalog_url: String,
     bind_addr: SocketAddr,
@@ -2154,6 +2265,62 @@ async fn cmd_doctor(
     }
     if !report.ready {
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn cmd_status(
+    args: cli::StatusArgs,
+    config_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, file_config) = config::load(config_path)?;
+    let catalog_url = setting(
+        args.catalog.or(args.path),
+        "ROCKLAKE_CATALOG",
+        file_config.catalog.clone(),
+        None,
+        "catalog",
+    )?
+    .ok_or("a catalog path is required (use `status ./lake` or --catalog)")?;
+
+    let s3_opts = S3Options {
+        endpoint: file_config.s3_endpoint.clone(),
+        path_style: file_config.s3_path_style.unwrap_or(false),
+    };
+    let (catalog_path, object_store) =
+        resolve_catalog_with_opts_mode(&catalog_url, &s3_opts, false)?;
+
+    let opts = OpenOptions {
+        object_store,
+        path: catalog_path,
+        encryption: None,
+    };
+
+    let store = CatalogStore::open_without_epoch(opts).await?;
+    let latest_snapshot_id = store.latest_committed_snapshot_id();
+    let retain_from = rocklake_catalog::gc::read_retain_from(store.db()).await?;
+    let schema_version = store.schema_version();
+
+    match args.output {
+        cli::OutputFormat::Human => {
+            println!("Catalog:       {}", redact_catalog_url(&catalog_url));
+            println!("Status:        ready");
+            println!("Snapshot:      {}", latest_snapshot_id);
+            println!("Retain from:   {}", retain_from);
+            println!("Format:        DuckLake 1.0 (V1_0)");
+            println!("Schema ver:    {}", schema_version);
+        }
+        cli::OutputFormat::Json => {
+            let json = serde_json::json!({
+                "catalog": redact_catalog_url(&catalog_url),
+                "status": "ready",
+                "snapshot_id": latest_snapshot_id,
+                "retain_from": retain_from,
+                "format_version": "DuckLake 1.0 (V1_0)",
+                "schema_version": schema_version,
+            });
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
     }
     Ok(())
 }

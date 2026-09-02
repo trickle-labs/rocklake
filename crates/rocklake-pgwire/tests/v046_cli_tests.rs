@@ -197,3 +197,77 @@ fn datafusion_pg_wire_flag_is_removed() {
         "5433",
     ]);
 }
+
+#[test]
+fn help_v0514_primary_commands() {
+    for args in [
+        ["status", "--help"].as_slice(),
+        ["catalog", "--help"].as_slice(),
+        ["catalog", "backup", "--help"].as_slice(),
+        ["catalog", "restore", "--help"].as_slice(),
+        ["catalog", "export", "--help"].as_slice(),
+        ["catalog", "import", "--help"].as_slice(),
+        ["catalog", "export-catalog", "--help"].as_slice(),
+        ["catalog", "gc", "--help"].as_slice(),
+        ["catalog", "excise", "--help"].as_slice(),
+        ["catalog", "checkpoint", "--help"].as_slice(),
+        ["catalog", "migrate", "--help"].as_slice(),
+        ["catalog", "verify", "--help"].as_slice(),
+        ["catalog", "repair", "--help"].as_slice(),
+        ["debug", "--help"].as_slice(),
+        ["debug", "diagnose", "--help"].as_slice(),
+        ["debug", "inspect", "--help"].as_slice(),
+        ["debug", "corpus", "--help"].as_slice(),
+        ["debug", "rebuild", "--help"].as_slice(),
+        ["debug", "sweep-orphans", "--help"].as_slice(),
+        ["debug", "pg-migrate", "--help"].as_slice(),
+        ["debug", "tune", "--help"].as_slice(),
+        ["debug", "warmup", "--help"].as_slice(),
+        ["debug", "migrate-from-ducklake", "--help"].as_slice(),
+    ] {
+        help_exits_zero(args);
+    }
+}
+
+#[test]
+fn v0514_status_command_reports_ready() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let bin = rocklake_bin();
+    if !bin.exists() {
+        return;
+    }
+    // Initialize catalog
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let dir_path = dir.path().to_str().unwrap().to_string();
+    rt.block_on(async move {
+        let store = object_store::local::LocalFileSystem::new_with_prefix(&dir_path).unwrap();
+        let cat = rocklake_catalog::CatalogStore::open(rocklake_catalog::OpenOptions {
+            object_store: std::sync::Arc::new(store),
+            path: object_store::path::Path::from(""),
+            encryption: None,
+        })
+        .await
+        .unwrap();
+        cat.close().await.unwrap();
+    });
+
+    // Check status
+    let output = std::process::Command::new(&bin)
+        .args([
+            "status",
+            "--catalog",
+            dir.path().to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("run status");
+    assert!(
+        output.status.success(),
+        "status failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"status\": \"ready\""));
+    assert!(stdout.contains("\"format_version\": \"DuckLake 1.0 (V1_0)\""));
+}

@@ -79,15 +79,30 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.51.3 is distributed and tested as a binary. There is no published
-Docker image; use the binary deployment path below.
+RockLake v0.51.4 is distributed and tested as a standalone binary. There is no published
+Docker image; release binaries are the primary supported installation path.
 
-### Prerequisites (build from source)
+### Install Release Binary
+
+Download the release binary and SHA-256 checksum for your platform from GitHub releases:
+
+```bash
+# Download binary archive and checksum
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.51.4/rocklake-v0.51.4-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.51.4/rocklake-v0.51.4-x86_64-unknown-linux-gnu.tar.gz.sha256
+
+# Verify checksum
+sha256sum -c rocklake-v0.51.4-x86_64-unknown-linux-gnu.tar.gz.sha256
+
+# Extract and install
+tar -xzf rocklake-v0.51.4-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 755 rocklake /usr/local/bin/rocklake
+```
+
+### Build from Source (Alternative)
 
 - Rust stable toolchain ([rustup.rs](https://rustup.rs))
 - An S3-compatible object store (or just a local directory to start)
-
-### Build
 
 ```bash
 git clone https://github.com/trickle-labs/rocklake
@@ -102,17 +117,20 @@ when a network boundary, TLS, and authentication are configured.
 
 ```bash
 # Preflight and start a local catalog directory
-./target/release/rocklake doctor --catalog ./lake
-./target/release/rocklake serve ./lake
+rocklake doctor --catalog ./lake
+rocklake serve ./lake
+
+# Check status
+rocklake status --catalog ./lake
 
 # Expose a public listener only with TLS and authentication
-./target/release/rocklake serve --catalog /path/to/catalog \
+rocklake serve --catalog /path/to/catalog \
   --bind 0.0.0.0:5432 --tls-cert /etc/rocklake/server.crt \
   --tls-key /etc/rocklake/server.key --tls-required \
   --auth-user ducklake --auth-password-file /run/secrets/rocklake-auth-password
 
 # Limit concurrent sessions
-./target/release/rocklake serve --catalog /path/to/catalog --max-sessions 16
+rocklake serve --catalog /path/to/catalog --max-sessions 16
 ```
 
 ### Connect with DuckDB
@@ -177,7 +195,8 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | v0.27.x | DuckLake v1.0 conformance, SQL facade, stats, external compatibility | Done |
 | v0.28–v0.35 | Writer fencing, recovery, protocol hardening, DataFusion, security, embedded client library | Done |
 | **v0.50.0** | Operational UX, typed configuration, and deployment simplicity | Done |
-| **v0.51.3** | Bounded metadata | **Current** |
+| **v0.51.3** | Bounded metadata | Done |
+| **v0.51.4** | Client and operator ergonomics | **Current** |
 | Next | See [ROADMAP.md](ROADMAP.md) for the live Now/Next/Later plan | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.

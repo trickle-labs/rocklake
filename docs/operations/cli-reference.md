@@ -1,37 +1,22 @@
 # CLI Reference
 
-RockLake v0.51.3 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.51.4 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
-## Commands
+## Primary Commands
 
 ```text
 serve
 doctor
+status
+catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair
+debug diagnose|inspect|corpus|rebuild|sweep-orphans|pg-migrate|tune|warmup
 config check|example
-backup create|inspect
-restore plan|apply
-gc plan|apply
-excise plan|apply
-checkpoint create|list|restore|pin|unpin|pins
-export
-import
-pg-migrate
-rebuild
-inspect snapshot|api-costs|cache-utilization
-verify catalog|data-files
-repair
-warmup
-migrate
-corpus diff|validate
-tune
-migrate-from-ducklake
-export-catalog
-diagnose
-sweep-orphans
 completions
 ```
+
+Legacy flat commands (e.g. `rocklake backup`, `rocklake export-catalog`, `rocklake diagnose`) remain supported as hidden aliases for backward compatibility.
 
 ### `export`
 

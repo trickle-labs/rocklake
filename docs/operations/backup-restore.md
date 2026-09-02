@@ -1,9 +1,10 @@
 # Backup and Restore
 
-The v0.51.3 supported backup boundary is a versioned, snapshot-consistent
-catalog artifact. `backup create` writes the artifact; `backup inspect`
-validates its checksum and row count; `restore plan` previews the target; and
-`restore apply` imports it into an empty catalog.
+The v0.51.4 supported backup boundary is a versioned, snapshot-consistent
+catalog artifact. `catalog backup create` writes the artifact; `catalog backup inspect`
+validates its checksum and row count; `catalog restore plan` previews the target; and
+`catalog restore apply` imports it into an empty catalog. Legacy flat invocations
+(`rocklake backup` and `rocklake restore`) remain supported as backward-compatible aliases.
 
 RockLake keeps catalog history in object storage. A logical backup is a
 complete NDJSON export at an explicit snapshot; object-store versioning or a
@@ -12,26 +13,26 @@ separate bucket can provide an additional recovery boundary.
 ## Create and inspect a backup
 
 ```bash
-rocklake backup create \
+rocklake catalog backup create \
   --catalog s3://prod/catalog/ \
   --out catalog-backup/
-rocklake backup inspect catalog-backup/ --output json
+rocklake catalog backup inspect catalog-backup/ --output json
 ```
 
 To preserve a historical state, pass `--snapshot-id` with the exact snapshot
-ID reported by `inspect snapshot`.
+ID reported by `rocklake status` or `rocklake debug inspect snapshot`.
 
 ## Restore
 
 ```bash
-rocklake restore plan \
+rocklake catalog restore plan \
   --backup catalog-backup/ \
   --catalog s3://restored/catalog/ \
   --output json
-rocklake restore apply \
+rocklake catalog restore apply \
   --backup catalog-backup/ \
   --catalog s3://restored/catalog/
-rocklake inspect snapshot --catalog s3://restored/catalog/
+rocklake status --catalog s3://restored/catalog/
 ```
 
 Restore into a separate catalog prefix first. For an existing target, pass

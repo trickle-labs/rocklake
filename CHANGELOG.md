@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.51.4] — 2026-09-02
+
+### Added
+
+- Added unified `CatalogReaderOps` read model implemented by `CatalogClient` and `ReadOnlyClient` across schemas, tables, snapshots, and data-file traversal.
+- Added `rocklake status` command to inspect current catalog format version, snapshot ID, retention floor, and readiness without acquiring a writer epoch.
+- Organized primary CLI commands into distinct jobs: `doctor`, `serve`, `status`, `catalog`, and `debug`, preserving legacy flat command spellings as hidden aliases.
+
+### Changed
+
+- Release binaries with SHA-256 checksum verification are now the primary documented installation path in `README.md` and operations guides.
+- Read-only scans no longer hold a mutable catalog lock after creating a snapshot-bound reader.
+- `ReadOnlyClient` snapshot access uses atomic state to prevent lock contention from being reported as missing snapshots.
+- Redacted credentials in catalog URL startup summaries and generated dynamic DuckDB `ATTACH` syntax with user and SSL configuration.
+- Aligned support matrix in `docs/compatibility.md`: binary, PG-wire, DuckDB DuckLake = Supported; Rust client, DataFusion = Preview; language bindings, Spark, Trino = Experimental.
+
 ## [0.51.3] — 2026-09-02
 
 ### Added

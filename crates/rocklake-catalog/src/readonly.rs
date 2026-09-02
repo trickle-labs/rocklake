@@ -58,7 +58,7 @@ pub struct ReadOnlyCatalog {
     db: Db,
     /// Snapshot ID of the latest committed snapshot at the time of the last
     /// `refresh()` call (or `open()`).
-    current_snapshot_id: SnapshotId,
+    current_snapshot_id: Arc<AtomicU64>,
     /// Cached retain-from floor (read from SlateDB on open / refresh).
     retain_from: Arc<AtomicU64>,
     /// Object store held for callers (e.g. data-file reads).
@@ -93,7 +93,7 @@ impl ReadOnlyCatalog {
 
         Ok(Self {
             db,
-            current_snapshot_id,
+            current_snapshot_id: Arc::new(AtomicU64::new(current_snapshot_id.as_u64())),
             retain_from: Arc::new(AtomicU64::new(retain_from_initial)),
             object_store: object_store_ref,
         })
@@ -104,7 +104,7 @@ impl ReadOnlyCatalog {
     /// Returns `CatalogError::SnapshotOutOfRetention` if the current snapshot
     /// has been GC-retired.
     pub fn reader(&self) -> CatalogResult<CatalogReader> {
-        self.read_at(self.current_snapshot_id)
+        self.read_at(self.current_snapshot_id())
     }
 
     /// Return a reader bound to a specific snapshot ID.
@@ -121,7 +121,7 @@ impl ReadOnlyCatalog {
                 retain_from,
             });
         }
-        let latest = self.current_snapshot_id.as_u64();
+        let latest = self.current_snapshot_id().as_u64();
         if dl_snapshot_id.as_u64() > latest {
             return Err(CatalogError::SnapshotNotFound {
                 requested: dl_snapshot_id.as_u64(),
@@ -145,15 +145,21 @@ impl ReadOnlyCatalog {
 
         // Refresh retain-from floor.
         let retain_from = Self::read_retain_from(&self.db).await?;
-        self.current_snapshot_id = current_snapshot_id;
+        self.current_snapshot_id
+            .store(current_snapshot_id.as_u64(), Ordering::Release);
         self.retain_from.store(retain_from, Ordering::Release);
 
-        Ok(self.current_snapshot_id)
+        Ok(current_snapshot_id)
     }
 
     /// Return the snapshot ID observed at the last `refresh()` (or `open()`).
     pub fn current_snapshot_id(&self) -> SnapshotId {
-        self.current_snapshot_id
+        SnapshotId::new(self.current_snapshot_id.load(Ordering::Acquire))
+    }
+
+    /// Return an atomic handle to the current snapshot ID.
+    pub fn current_snapshot_id_atomic(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.current_snapshot_id)
     }
 
     /// Return the object store backing this catalog.
@@ -188,7 +194,7 @@ impl ReadOnlyCatalog {
     pub fn from_db_for_test(db: Db, object_store: Arc<dyn object_store::ObjectStore>) -> Self {
         Self {
             db,
-            current_snapshot_id: SnapshotId::new(0),
+            current_snapshot_id: Arc::new(AtomicU64::new(0)),
             retain_from: Arc::new(AtomicU64::new(0)),
             object_store,
         }

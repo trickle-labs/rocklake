@@ -2404,6 +2404,11 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
         keys::key_system(SYSTEM_CATALOG_FORMAT_VERSION),
         values::encode_format_version(CATALOG_FORMAT_VERSION),
     );
+    batch.put(keys::key_system(SYSTEM_KEY_ENCODING_V020_MIGRATED), [1]);
+    batch.put(
+        keys::key_system(SYSTEM_RETAIN_FROM),
+        values::encode_counter(0),
+    );
     for (table_id, schema_id) in table_schema_ids {
         batch.put(
             keys::key_table_by_id(table_id),

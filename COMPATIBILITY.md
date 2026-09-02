@@ -25,7 +25,7 @@ backend versions that CI covers.
 
 | Catalog format | Current read support | Current write support |
 |---|---|---|
-| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.51.3 | v0.51.3 |
+| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.51.4 | v0.51.4 |
 
 ## Metrics
 
