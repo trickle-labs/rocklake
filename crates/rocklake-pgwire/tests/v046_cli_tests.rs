@@ -150,6 +150,23 @@ fn version_flag() {
 }
 
 #[test]
+fn version_json_reports_release_contract() {
+    let output = Command::new(rocklake_bin())
+        .args(["--version", "--output", "json"])
+        .output()
+        .expect("run rocklake --version --output json");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("version json");
+    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    assert!(json["certified_sha"].is_string());
+    assert!(json["target_triple"].is_string());
+    assert!(json["rust_version"].is_string());
+    assert_eq!(json["catalog_read_format"], 1);
+    assert_eq!(json["catalog_write_format"], 1);
+    assert!(json["build_provenance_available"].is_boolean());
+}
+
+#[test]
 fn completions_bash() {
     let bin = rocklake_bin();
     if !bin.exists() {

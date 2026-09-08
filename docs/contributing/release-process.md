@@ -1,10 +1,11 @@
 # Release process
 
-Releases are prepared from the tagged source commit. For v0.51.3, the
+Releases are prepared from the tagged source commit. For v0.51.5, the
 release-blocking `Release Certification` workflow runs the complete matrix:
 formatting, clippy, workspace tests, DuckLake conformance, public-surface and
 backend execution, Windows, security, docs, quickstart, compatibility, Miri,
-sanitizers, and the preserved v0.47.17 production-failure certification.
+sanitizers, and the preserved v0.47.17 production-failure certification. The
+publication stage also tests the built artifacts without rebuilding from source.
 
 ## Before the release PR
 
@@ -19,7 +20,7 @@ bash scripts/quickstart.sh
 ```
 
 Update `CHANGELOG.md` and current version references. Keep claims tied to
-tests: v0.51.3 supports the binary, DuckLake 1.0 targets covered by CI, local
+tests: v0.51.5 supports the binary, DuckLake 1.0 targets covered by CI, local
 and cloud object storage, server-side TLS, password authentication,
 SCRAM-SHA-256 authentication, and typed TOML configuration. It does not
 publish Docker images or support mTLS or certificate hot-reload.
@@ -33,9 +34,11 @@ SHA; it does not push a version bump after tagging.
 After review and green CI, merge the release PR and tag the merge commit:
 
 ```bash
-git tag v0.51.3
-git push origin v0.51.3
+git tag v0.51.5
+git push origin v0.51.5
 ```
 
-Release artifacts must be built from that tag. The v0.47.17 certification
-remains a required regression gate for later releases.
+Release artifacts must be built from that tag. The release contains raw
+target-named binaries, per-binary checksums and build metadata, `SHA256SUMS`,
+`release-manifest.json`, one SPDX SBOM, and provenance attestations. The
+v0.47.17 certification remains a required regression gate for later releases.

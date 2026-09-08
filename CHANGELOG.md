@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.51.5] — 2026-09-08
+
+### Added
+
+- Added JSON release metadata to `rocklake --version --output json`.
+- Added `SHA256SUMS` and `release-manifest.json` to certified releases.
+- Added artifact-only installation checks for the supported release targets.
+
+### Changed
+
+- Standardized release assets on raw target-named binaries with per-binary
+  checksums and build metadata.
+- Updated installation documentation and quickstart checks to consume the
+  published asset names and avoid source builds.
+
 ## [0.51.4] — 2026-09-02
 
 ### Added

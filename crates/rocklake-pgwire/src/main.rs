@@ -30,6 +30,15 @@ use rocklake_pgwire::server::{run_server_with_mode, ServerConfig};
 const MAIN_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+        let json = args.iter().enumerate().any(|(index, arg)| {
+            arg == "--output=json"
+                || (arg == "--output" && args.get(index + 1).is_some_and(|value| value == "json"))
+        });
+        return print_version(json);
+    }
+
     let builder = std::thread::Builder::new()
         .name("rocklake-main".into())
         .stack_size(MAIN_THREAD_STACK_SIZE);
@@ -48,6 +57,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(Err(err)) => Err(err.into()),
         Err(panic) => std::panic::resume_unwind(panic),
     }
+}
+
+fn print_version(json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "certified_sha": option_env!("ROCKLAKE_RELEASE_SHA").unwrap_or("unknown"),
+                "target_triple": option_env!("ROCKLAKE_RELEASE_TARGET").unwrap_or("unknown"),
+                "rust_version": option_env!("ROCKLAKE_RUST_VERSION").unwrap_or("unknown"),
+                "catalog_read_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
+                "catalog_write_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
+                "build_provenance_available": option_env!("ROCKLAKE_PROVENANCE_AVAILABLE") == Some("true"),
+            })
+        );
+    } else {
+        println!("RockLake {}", env!("CARGO_PKG_VERSION"));
+    }
+    Ok(())
 }
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {

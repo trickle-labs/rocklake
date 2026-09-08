@@ -80,6 +80,14 @@ jobs:
       - name: Verify certified tagged SHA
         run: test "$(git rev-parse HEAD)" = "${{ needs.certification.outputs.certified-sha }}"
 
+      - name: Set embedded release metadata
+        shell: bash
+        run: |
+          echo "ROCKLAKE_RELEASE_SHA=${{ needs.certification.outputs.certified-sha }}" >> "$GITHUB_ENV"
+          echo "ROCKLAKE_RELEASE_TARGET=${{ matrix.target }}" >> "$GITHUB_ENV"
+          echo "ROCKLAKE_RUST_VERSION=$(rustc -V)" >> "$GITHUB_ENV"
+          echo "ROCKLAKE_PROVENANCE_AVAILABLE=true" >> "$GITHUB_ENV"
+
       - name: Install cross (for aarch64 Linux)
         if: matrix.cross == true
         run: cargo install cross --locked
@@ -131,6 +139,73 @@ jobs:
             ${{ matrix.artifact }}.sha256
             ${{ matrix.artifact }}.build-metadata.json
 
+  artifact-install:
+    name: Install artifact (${{ matrix.target }})
+    needs: [build, prepare]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: rocklake-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: rocklake-linux-aarch64
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            artifact: rocklake-macos-arm64
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            artifact: rocklake-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifact
+      - name: Verify artifact checksum (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd artifact
+          if command -v sha256sum >/dev/null; then sha256sum -c "${{ matrix.artifact }}.sha256"; else shasum -a 256 -c "${{ matrix.artifact }}.sha256"; fi
+      - name: Verify artifact checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $expected = (Get-Content "artifact/${{ matrix.artifact }}.sha256").Split()[0]
+          $actual = (Get-FileHash "artifact/${{ matrix.artifact }}" -Algorithm SHA256).Hash.ToLower()
+          if ($expected -ne $actual) { throw "Checksum mismatch" }
+      - name: Run installed artifact (Unix)
+        if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-gnu'
+        run: bash scripts/test_release_artifact.sh "$PWD/artifact/${{ matrix.artifact }}"
+      - name: Validate cross-built artifact (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          file "artifact/${{ matrix.artifact }}"
+          echo "Execution skipped: ubuntu-latest is x86-64; checksum and ELF validation cover the cross-built artifact."
+      - name: Run installed artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test_release_artifact.ps1 "${{ github.workspace }}/artifact/${{ matrix.artifact }}"
+
+      - name: Install DuckDB CLI
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          DUCKDB_VERSION: "1.5.5"
+        run: |
+          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o "$RUNNER_TEMP/duckdb.zip"
+          unzip -q "$RUNNER_TEMP/duckdb.zip" -d "$RUNNER_TEMP/duckdb"
+          echo "$RUNNER_TEMP/duckdb" >> "$GITHUB_PATH"
+      - name: Run artifact quickstart
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          ROCKLAKE_BINARY: ${{ github.workspace }}/artifact/rocklake-linux-x86_64
+        run: bash scripts/quickstart.sh
+
   sbom:
     name: SBOM
     needs: [certification, prepare]
@@ -175,8 +250,13 @@ jobs:
         run: |
           test "${GITHUB_SHA}" = "${{ needs.certification.outputs.certified-sha }}"
           test -f artifacts/rocklake-v${{ needs.prepare.outputs.version }}.sbom.spdx.json
+          python3 scripts/create_release_manifest.py \
+            --artifacts artifacts \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --certified-sha "${{ needs.certification.outputs.certified-sha }}"
           cd artifacts
           for checksum in *.sha256; do sha256sum -c "$checksum" --status; done
+          sha256sum -c SHA256SUMS --status
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@v2
@@ -190,7 +270,7 @@ jobs:
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
           files: |
-            artifacts/rocklake-*
+            artifacts/*
           generate_release_notes: true
           body: |
             ## RockLake v${{ needs.prepare.outputs.version }}
@@ -202,6 +282,7 @@ jobs:
             **Linux x86-64**
             ```bash
             curl -LO https://github.com/trickle-labs/rocklake/releases/download/v${{ needs.prepare.outputs.version }}/rocklake-linux-x86_64
+            curl -LO https://github.com/trickle-labs/rocklake/releases/download/v${{ needs.prepare.outputs.version }}/rocklake-linux-x86_64.sha256
             sha256sum -c rocklake-linux-x86_64.sha256
             chmod +x rocklake-linux-x86_64
             mv rocklake-linux-x86_64 /usr/local/bin/rocklake
@@ -210,6 +291,7 @@ jobs:
             **macOS arm64 (Apple Silicon)**
             ```bash
             curl -LO https://github.com/trickle-labs/rocklake/releases/download/v${{ needs.prepare.outputs.version }}/rocklake-macos-arm64
+            curl -LO https://github.com/trickle-labs/rocklake/releases/download/v${{ needs.prepare.outputs.version }}/rocklake-macos-arm64.sha256
             shasum -a 256 -c rocklake-macos-arm64.sha256
             chmod +x rocklake-macos-arm64
             mv rocklake-macos-arm64 /usr/local/bin/rocklake
@@ -218,12 +300,14 @@ jobs:
             **Windows x86-64** (PowerShell)
             ```powershell
             Invoke-WebRequest -Uri "https://github.com/trickle-labs/rocklake/releases/download/v${{ needs.prepare.outputs.version }}/rocklake-windows-x86_64.exe" -OutFile rocklake.exe
-            # Verify checksum
+            Invoke-WebRequest -Uri "https://github.com/trickle-labs/rocklake/releases/download/v${{ needs.prepare.outputs.version }}/rocklake-windows-x86_64.exe.sha256" -OutFile rocklake-windows-x86_64.exe.sha256
             $expected = (Get-Content rocklake-windows-x86_64.exe.sha256).Split()[0]
             $actual   = (Get-FileHash rocklake.exe -Algorithm SHA256).Hash.ToLower()
             if ($expected -ne $actual) { Write-Error "Checksum mismatch" } else { Write-Output "Checksum OK" }
             # Move to a directory on your PATH
             Move-Item rocklake.exe "$env:USERPROFILE\.local\bin\rocklake.exe"
             ```
+
+            `SHA256SUMS`, `release-manifest.json`, build metadata, the SPDX SBOM, and provenance are published with the binaries.
 
             See [CHANGELOG.md](https://github.com/trickle-labs/rocklake/blob/main/CHANGELOG.md) for full release notes.

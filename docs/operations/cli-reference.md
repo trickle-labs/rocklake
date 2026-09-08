@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.51.4 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.51.5 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -17,6 +17,10 @@ completions
 ```
 
 Legacy flat commands (e.g. `rocklake backup`, `rocklake export-catalog`, `rocklake diagnose`) remain supported as hidden aliases for backward compatibility.
+
+`rocklake --version --output json` reports the semantic version, certified Git
+SHA, target triple, Rust version, catalog read/write formats, and provenance
+availability. Source builds report unavailable release metadata as `unknown`.
 
 ### `export`
 

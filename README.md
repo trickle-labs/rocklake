@@ -79,25 +79,28 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.51.4 is distributed and tested as a standalone binary. There is no published
+RockLake v0.51.5 is distributed and tested as a standalone binary. There is no published
 Docker image; release binaries are the primary supported installation path.
 
 ### Install Release Binary
 
-Download the release binary and SHA-256 checksum for your platform from GitHub releases:
+Download the release binary and SHA-256 checksum for your platform from GitHub releases.
+The release uses raw, target-named binaries plus `.sha256`, build metadata, a
+single `SHA256SUMS`, and `release-manifest.json`.
 
 ```bash
-# Download binary archive and checksum
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.51.4/rocklake-v0.51.4-x86_64-unknown-linux-gnu.tar.gz
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.51.4/rocklake-v0.51.4-x86_64-unknown-linux-gnu.tar.gz.sha256
+# Download binary and checksum
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.51.5/rocklake-linux-x86_64
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.51.5/rocklake-linux-x86_64.sha256
 
 # Verify checksum
-sha256sum -c rocklake-v0.51.4-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c rocklake-linux-x86_64.sha256
 
-# Extract and install
-tar -xzf rocklake-v0.51.4-x86_64-unknown-linux-gnu.tar.gz
-sudo install -m 755 rocklake /usr/local/bin/rocklake
+# Install
+sudo install -m 755 rocklake-linux-x86_64 /usr/local/bin/rocklake
 ```
+
+Check the machine-readable build contract with `rocklake --version --output json`.
 
 ### Build from Source (Alternative)
 
@@ -196,7 +199,8 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | v0.28–v0.35 | Writer fencing, recovery, protocol hardening, DataFusion, security, embedded client library | Done |
 | **v0.50.0** | Operational UX, typed configuration, and deployment simplicity | Done |
 | **v0.51.3** | Bounded metadata | Done |
-| **v0.51.4** | Client and operator ergonomics | **Current** |
+| **v0.51.4** | Client and operator ergonomics | Done |
+| **v0.51.5** | Distribution correctness and release repair | **Current** |
 | Next | See [ROADMAP.md](ROADMAP.md) for the live Now/Next/Later plan | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.
