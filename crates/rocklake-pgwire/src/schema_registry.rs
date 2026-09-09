@@ -619,6 +619,47 @@ pub fn name_mapping_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── Registry lookup by table name ────────────────────────────────────────────
 
+/// Every metadata relation supported by the executor and the generic row
+/// encoder. Keep this list next to `fields_for_table` so adding a relation
+/// requires a schema and an encoder check together.
+pub fn supported_tables() -> &'static [&'static str] {
+    &[
+        "ducklake_snapshot",
+        "ducklake_snapshot_changes",
+        "ducklake_schema",
+        "ducklake_table",
+        "ducklake_column",
+        "ducklake_data_file",
+        "ducklake_delete_file",
+        "ducklake_table_stats",
+        "ducklake_table_column_stats",
+        "ducklake_file_column_stats",
+        "ducklake_metadata",
+        "ducklake_view",
+        "ducklake_macro",
+        "ducklake_macro_impl",
+        "ducklake_macro_parameters",
+        "ducklake_tag",
+        "ducklake_column_tag",
+        "ducklake_partition_info",
+        "ducklake_partition_column",
+        "ducklake_partition_value",
+        "ducklake_sort_info",
+        "ducklake_sort_expression",
+        "ducklake_files_scheduled_for_deletion",
+        "ducklake_inlined_data_tables",
+        "ducklake_schema_version",
+        "ducklake_schema_versions",
+        "ducklake_schema_changes",
+        "ducklake_encrypted_secret",
+        "ducklake_encryption_key",
+        "ducklake_file_partition_value",
+        "ducklake_file_variant_stats",
+        "ducklake_column_mapping",
+        "ducklake_name_mapping",
+    ]
+}
+
 /// Look up the canonical `FieldInfo` list for a named DuckLake metadata table.
 ///
 /// Returns `Some(schema)` for the 28 DuckLake v1.0 tables and RockLake's
@@ -660,5 +701,21 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
         "ducklake_column_mapping" => Some(column_mapping_schema()),
         "ducklake_name_mapping" => Some(name_mapping_schema()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata_stream::{encode_metadata_row, MetadataValue};
+
+    #[test]
+    fn every_supported_table_has_a_schema_driven_encoder() {
+        for table in supported_tables() {
+            let schema = fields_for_table(table).expect("supported table must be registered");
+            let values = schema.iter().map(|_| MetadataValue::Null).collect();
+            encode_metadata_row(schema, values)
+                .unwrap_or_else(|error| panic!("{table} cannot be encoded: {error}"));
+        }
     }
 }

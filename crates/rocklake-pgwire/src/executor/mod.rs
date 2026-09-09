@@ -1293,12 +1293,17 @@ async fn execute_classified<'a>(
                         table_ids.push(table.table_id);
                     }
                 }
+                let snapshot_id = reader.snapshot_id().as_u64();
                 let streams = futures::stream::iter(table_ids).then(move |table_id| {
                     let reader = reader.clone();
                     async move { reader.stream_data_files(table_id).await }
                 });
                 let files = streams.try_flatten().boxed();
-                Ok(vec![make_data_files_stream_response_from_rows(files, None)])
+                Ok(vec![make_data_files_stream_response_from_rows(
+                    snapshot_id,
+                    files,
+                    None,
+                )])
             }
         }
         StatementKind::SelectFileColumnStats => {
@@ -1323,7 +1328,11 @@ async fn execute_classified<'a>(
                     .stream_file_column_stats(table_id, column_id)
                     .await
                     .map_err(RockLakeError::from)?;
-                return Ok(vec![make_file_column_stats_stream_response(_sql, rows)]);
+                return Ok(vec![make_file_column_stats_stream_response(
+                    reader.snapshot_id().as_u64(),
+                    _sql,
+                    rows,
+                )]);
             }
             // v0.26: look up the actual column type for type-aware pruning.
             let col_type = reader
@@ -1407,7 +1416,10 @@ async fn execute_classified<'a>(
                     .stream_delete_files(table_id)
                     .await
                     .map_err(RockLakeError::from)?;
-                return Ok(vec![make_delete_files_stream_response(files)]);
+                return Ok(vec![make_delete_files_stream_response(
+                    reader.snapshot_id().as_u64(),
+                    files,
+                )]);
             }
             let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
             let mut table_ids = Vec::new();
@@ -1420,12 +1432,13 @@ async fn execute_classified<'a>(
                     table_ids.push(table.table_id);
                 }
             }
+            let snapshot_id = reader.snapshot_id().as_u64();
             let streams = futures::stream::iter(table_ids).then(move |table_id| {
                 let reader = reader.clone();
                 async move { reader.stream_delete_files(table_id).await }
             });
             let files = streams.try_flatten().boxed();
-            Ok(vec![make_delete_files_stream_response(files)])
+            Ok(vec![make_delete_files_stream_response(snapshot_id, files)])
         }
         StatementKind::SelectSnapshot => {
             let snap_id = params.get_u64(0).ok();

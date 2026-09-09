@@ -8,6 +8,7 @@ pub mod error;
 pub mod executor;
 pub mod handler;
 pub mod lifecycle;
+pub mod metadata_stream;
 pub mod notify;
 pub mod schema_registry;
 pub mod scram;

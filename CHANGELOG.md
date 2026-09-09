@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.53.1] — 2026-09-09
+
+### Added
+
+- Added a shared schema-driven metadata row encoder and bounded catalog-row
+  stream for data files, delete files, and file-column statistics.
+- Added cancellation checks while waiting for storage rows and applied the
+  tighter stream-queue and response-row limit at the wire boundary.
+
+### Changed
+
+- Updated workspace, binding, binary, and release documentation metadata to
+  v0.53.1.
+
 ## [0.53.0] — 2026-09-09
 
 ### Added

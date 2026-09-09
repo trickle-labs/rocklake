@@ -358,7 +358,17 @@ fn wrap_query_response<'a>(
                     (rows, permit, bytes, observation),
                 ));
             }
-            let Some(item) = rows.next().await else {
+            let item = tokio::select! {
+                item = rows.next() => item,
+                _ = observation.request.cancelled() => {
+                    observation.set_terminal(RequestTerminalState::Cancelled);
+                    return Some((
+                        Err(observation.request.cancellation_error()),
+                        (rows, permit, bytes, observation),
+                    ));
+                }
+            };
+            let Some(item) = item else {
                 observation.set_terminal(RequestTerminalState::Completed);
                 let request = observation.request.clone();
                 observation.finish();
@@ -725,11 +735,16 @@ impl RockLakeHandler {
         let mut response_bytes = 0usize;
         let mut payload = BytesMut::from(binary_copy_header().as_ref());
         let mut rows = query_response.data_rows();
-        while let Some(row_result) = rows.next().await {
-            if query.is_cancelled() {
-                observation.set_terminal(RequestTerminalState::Cancelled);
-                return Err(query.cancellation_error());
-            }
+        loop {
+            let Some(row_result) = (tokio::select! {
+                row = rows.next() => row,
+                _ = query.cancelled() => {
+                    observation.set_terminal(RequestTerminalState::Cancelled);
+                    return Err(query.cancellation_error());
+                }
+            }) else {
+                break;
+            };
             let row = match row_result {
                 Ok(row) => row,
                 Err(error) => {

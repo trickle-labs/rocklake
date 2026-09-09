@@ -319,6 +319,10 @@ pub async fn run_server_with_shutdown_mode(
     let counters = SessionCounters::new();
     let metrics_ref = config.metrics.clone();
     let max_active_scans = config.max_active_scans;
+    // The effective row window is the tighter of the compatibility row limit
+    // and the stream queue limit. The response path is lazy, so this bounds
+    // rows held between storage decoding and wire delivery.
+    let response_row_limit = config.max_buffered_rows.min(config.stream_queue_depth);
     if let Some(ref metrics) = metrics_ref {
         metrics.set_resource_limits(
             config.max_active_scans as u64,
@@ -388,7 +392,7 @@ pub async fn run_server_with_shutdown_mode(
                         access_mode,
                         scans,
                         max_active_scans,
-                        config.max_buffered_rows,
+                        response_row_limit,
                         config.max_response_bytes,
                         config.slow_operation_threshold,
                         connection_context.clone(),

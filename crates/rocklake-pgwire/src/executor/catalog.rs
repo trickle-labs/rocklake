@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
-use futures::StreamExt;
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response};
 use pgwire::api::Type;
 use sqlparser::ast::{Expr, SelectItem, SetExpr, Statement};
@@ -16,6 +15,8 @@ use rocklake_catalog::{CatalogStore, CommitResult};
 use rocklake_core::rows::{ColumnRow, InlinedDataTablesRow, InlinedInsertRow};
 
 use crate::error::RockLakeError;
+use crate::lifecycle::OperationClass;
+use crate::metadata_stream::{encode_metadata_row, CatalogRowStream, MetadataValue};
 use crate::notify::NotifyManager;
 use crate::session::BufferedOp;
 
@@ -958,10 +959,7 @@ pub(super) fn make_snapshot_changes_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "snapshot_id ASC")
 }
 
 pub(super) fn make_latest_snapshot_info_response(
@@ -1050,10 +1048,7 @@ pub(super) fn make_schemas_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "schema_id ASC")
 }
 
 pub(super) fn make_tables_response(
@@ -1107,10 +1102,7 @@ pub(super) fn make_tables_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "schema_id ASC, table_id ASC")
 }
 
 pub(super) fn make_columns_response(
@@ -1199,90 +1191,38 @@ pub(super) fn make_columns_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(
+        schema,
+        data_rows,
+        "table_id ASC, column_index ASC, column_id ASC",
+    )
 }
 
 fn encode_data_file_row(
     schema: Arc<Vec<FieldInfo>>,
     f: &rocklake_core::rows::DataFileRow,
 ) -> pgwire::error::PgWireResult<pgwire::messages::data::DataRow> {
-    let mut encoder = DataRowEncoder::new(schema);
-    encoder.encode_field_with_type_and_format(
-        &Some(f.data_file_id.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &Some(f.table_id.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &f.begin_snapshot.map(|s| s.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &f.end_snapshot.map(|e| e.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &f.file_order.map(|o| o.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &Some(f.path.clone()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &f.path_is_relative.map(|b| b.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &Some(f.file_format.clone()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &Some(f.record_count.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &Some(f.file_size_bytes.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &f.footer_size.map(|s| s.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &f.row_id_start.map(|r| r.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(
-        &f.partition_id.map(|p| p.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(&f.encryption_key, &Type::TEXT, FieldFormat::Text)?;
-    encoder.encode_field_with_type_and_format(
-        &f.mapping_id.map(|m| m.to_string()),
-        &Type::TEXT,
-        FieldFormat::Text,
-    )?;
-    encoder.encode_field_with_type_and_format(&f.partial_max, &Type::TEXT, FieldFormat::Text)?;
-    encoder.finish()
+    encode_metadata_row(
+        schema,
+        vec![
+            MetadataValue::text(f.data_file_id.to_string()),
+            MetadataValue::text(f.table_id.to_string()),
+            MetadataValue::optional_text(f.begin_snapshot.map(|value| value.to_string())),
+            MetadataValue::optional_text(f.end_snapshot.map(|value| value.to_string())),
+            MetadataValue::optional_text(f.file_order.map(|value| value.to_string())),
+            MetadataValue::text(f.path.clone()),
+            MetadataValue::optional_text(f.path_is_relative.map(|value| value.to_string())),
+            MetadataValue::text(f.file_format.clone()),
+            MetadataValue::text(f.record_count.to_string()),
+            MetadataValue::text(f.file_size_bytes.to_string()),
+            MetadataValue::optional_text(f.footer_size.map(|value| value.to_string())),
+            MetadataValue::optional_text(f.row_id_start.map(|value| value.to_string())),
+            MetadataValue::optional_text(f.partition_id.map(|value| value.to_string())),
+            MetadataValue::optional_text(f.encryption_key.clone()),
+            MetadataValue::optional_text(f.mapping_id.map(|value| value.to_string())),
+            MetadataValue::optional_text(f.partial_max.clone()),
+        ],
+    )
 }
 
 pub(super) async fn make_data_files_stream_response(
@@ -1294,10 +1234,15 @@ pub(super) async fn make_data_files_stream_response(
         .stream_data_files(table_id)
         .await
         .map_err(RockLakeError::from)?;
-    Ok(make_data_files_stream_response_from_rows(files, limit))
+    Ok(make_data_files_stream_response_from_rows(
+        reader.snapshot_id().as_u64(),
+        files,
+        limit,
+    ))
 }
 
 pub(super) fn make_data_files_stream_response_from_rows(
+    snapshot_id: u64,
     files: BoxStream<
         'static,
         rocklake_catalog::error::CatalogResult<rocklake_core::rows::DataFileRow>,
@@ -1305,15 +1250,21 @@ pub(super) fn make_data_files_stream_response_from_rows(
     limit: Option<usize>,
 ) -> Response<'static> {
     let schema = crate::schema_registry::data_file_schema();
-    let max_rows = limit.unwrap_or(usize::MAX);
-    let schema_for_rows = schema.clone();
-    let rows = files.take(max_rows).map(move |file| match file {
-        Ok(file) => encode_data_file_row(schema_for_rows.clone(), &file),
-        Err(error) => Err(RockLakeError::from(error).into()),
-    });
-    let mut response = QueryResponse::new(schema, rows);
-    response.set_command_tag("SELECT");
-    Response::Query(response)
+    let stream = CatalogRowStream::from_catalog_rows(
+        snapshot_id,
+        schema,
+        OperationClass::InteractiveScan,
+        "file_order ASC, data_file_id ASC",
+        None,
+        files,
+        |file, schema| encode_data_file_row(schema, &file),
+    );
+    let stream = if let Some(limit) = limit {
+        stream.take(limit)
+    } else {
+        stream
+    };
+    stream.into_response("SELECT")
 }
 
 pub(super) fn make_file_ids_response(file_ids: Vec<u64>) -> Response<'static> {
@@ -1336,10 +1287,7 @@ pub(super) fn make_file_ids_response(file_ids: Vec<u64>) -> Response<'static> {
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "data_file_id ASC")
 }
 
 #[derive(Clone)]
@@ -1364,6 +1312,7 @@ struct FileColumnStatsProjection {
 }
 
 pub(super) fn make_file_column_stats_stream_response(
+    snapshot_id: u64,
     sql: &str,
     rows: BoxStream<
         'static,
@@ -1385,53 +1334,54 @@ pub(super) fn make_file_column_stats_stream_response(
             })
             .collect::<Vec<_>>(),
     );
-    let schema_for_rows = schema.clone();
     let projections = Arc::new(projections);
-    let rows = rows.map(move |row| {
-        let row = match row {
-            Ok(row) => row,
-            Err(error) => return Err(RockLakeError::from(error).into()),
-        };
-        let mut encoder = DataRowEncoder::new(schema_for_rows.clone());
-        for projection in projections.iter() {
-            match projection.source {
-                FileColumnStatsProjectionSource::DataFileId => {
-                    encode_text_i64(&mut encoder, row.data_file_id)
-                }
-                FileColumnStatsProjectionSource::TableId => {
-                    encode_text_i64(&mut encoder, row.table_id)
-                }
-                FileColumnStatsProjectionSource::ColumnId => {
-                    encode_text_i64(&mut encoder, row.column_id)
-                }
-                FileColumnStatsProjectionSource::ColumnSizeBytes => {
-                    encode_text_optional_i64(&mut encoder, row.column_size_bytes)
-                }
-                FileColumnStatsProjectionSource::ValueCount => {
-                    encode_text_optional_i64(&mut encoder, row.value_count)
-                }
-                FileColumnStatsProjectionSource::NullCount => {
-                    encode_text_optional_i64(&mut encoder, row.null_count)
-                }
-                FileColumnStatsProjectionSource::MinValue => {
-                    encode_text_value(&mut encoder, &row.min_value)
-                }
-                FileColumnStatsProjectionSource::MaxValue => {
-                    encode_text_value(&mut encoder, &row.max_value)
-                }
-                FileColumnStatsProjectionSource::ContainsNan => {
-                    encode_text_value(&mut encoder, &Some(row.contains_nan.to_string()))
-                }
-                FileColumnStatsProjectionSource::ExtraStats => {
-                    encode_text_value(&mut encoder, &row.extra_stats)
-                }
-            }
-        }
-        encoder.finish()
-    });
-    let mut resp = QueryResponse::new(schema, rows);
-    resp.set_command_tag("SELECT");
-    Response::Query(resp)
+    CatalogRowStream::from_catalog_rows(
+        snapshot_id,
+        schema,
+        OperationClass::InteractiveScan,
+        "data_file_id ASC, column_id ASC",
+        None,
+        rows,
+        move |row, schema| {
+            let values = projections
+                .iter()
+                .map(|projection| match projection.source {
+                    FileColumnStatsProjectionSource::DataFileId => {
+                        MetadataValue::text(row.data_file_id.to_string())
+                    }
+                    FileColumnStatsProjectionSource::TableId => {
+                        MetadataValue::text(row.table_id.to_string())
+                    }
+                    FileColumnStatsProjectionSource::ColumnId => {
+                        MetadataValue::text(row.column_id.to_string())
+                    }
+                    FileColumnStatsProjectionSource::ColumnSizeBytes => {
+                        MetadataValue::optional_text(row.column_size_bytes.map(|v| v.to_string()))
+                    }
+                    FileColumnStatsProjectionSource::ValueCount => {
+                        MetadataValue::optional_text(row.value_count.map(|v| v.to_string()))
+                    }
+                    FileColumnStatsProjectionSource::NullCount => {
+                        MetadataValue::optional_text(row.null_count.map(|v| v.to_string()))
+                    }
+                    FileColumnStatsProjectionSource::MinValue => {
+                        MetadataValue::optional_text(row.min_value.clone())
+                    }
+                    FileColumnStatsProjectionSource::MaxValue => {
+                        MetadataValue::optional_text(row.max_value.clone())
+                    }
+                    FileColumnStatsProjectionSource::ContainsNan => {
+                        MetadataValue::text(row.contains_nan.to_string())
+                    }
+                    FileColumnStatsProjectionSource::ExtraStats => {
+                        MetadataValue::optional_text(row.extra_stats.clone())
+                    }
+                })
+                .collect();
+            encode_metadata_row(schema, values)
+        },
+    )
+    .into_response("SELECT")
 }
 
 fn encode_text_i64(encoder: &mut DataRowEncoder, value: u64) {
@@ -1446,6 +1396,23 @@ fn encode_text_value(encoder: &mut DataRowEncoder, value: &Option<String>) {
     encoder
         .encode_field_with_type_and_format(value, &Type::TEXT, FieldFormat::Text)
         .expect("pgwire field encoding is infallible");
+}
+
+fn make_encoded_metadata_response(
+    schema: Arc<Vec<FieldInfo>>,
+    data_rows: Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>>,
+    ordering: &'static str,
+) -> Response<'static> {
+    let count = data_rows.len();
+    CatalogRowStream::from_encoded_rows(
+        0,
+        schema,
+        OperationClass::Interactive,
+        ordering,
+        Some(count),
+        futures::stream::iter(data_rows),
+    )
+    .into_response(&format!("SELECT {count}"))
 }
 
 fn text_field(name: &str) -> FieldInfo {
@@ -2017,10 +1984,7 @@ pub(super) fn make_table_stats_rows_response_for_sql(
         }
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC")
 }
 
 pub(super) fn make_global_table_stats_response(
@@ -2046,10 +2010,7 @@ pub(super) fn make_global_table_stats_response(
             }
         }
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC, column_id ASC")
 }
 
 fn encode_global_table_stats_row(
@@ -2267,52 +2228,51 @@ pub(super) fn make_table_column_stats_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC, column_id ASC")
 }
 
 pub(super) fn make_delete_files_stream_response(
+    snapshot_id: u64,
     files: BoxStream<
         'static,
         rocklake_catalog::error::CatalogResult<rocklake_core::rows::DeleteFileRow>,
     >,
 ) -> Response<'static> {
     let schema = crate::schema_registry::delete_file_schema();
-    let schema_for_rows = schema.clone();
-    let rows = files.map(move |file| match file {
-        Ok(file) => encode_delete_file_row(schema_for_rows.clone(), &file),
-        Err(error) => Err(RockLakeError::from(error).into()),
-    });
-    let mut resp = QueryResponse::new(schema, rows);
-    resp.set_command_tag("SELECT");
-    Response::Query(resp)
+    CatalogRowStream::from_catalog_rows(
+        snapshot_id,
+        schema,
+        OperationClass::InteractiveScan,
+        "begin_snapshot ASC, delete_file_id ASC",
+        None,
+        files,
+        |file, schema| encode_delete_file_row(schema, &file),
+    )
+    .into_response("SELECT")
 }
 
 fn encode_delete_file_row(
     schema: Arc<Vec<FieldInfo>>,
     file: &rocklake_core::rows::DeleteFileRow,
 ) -> pgwire::error::PgWireResult<pgwire::messages::data::DataRow> {
-    let mut encoder = DataRowEncoder::new(schema);
-    for value in [
-        Some(file.delete_file_id.to_string()),
-        file.table_id.map(|value| value.to_string()),
-        file.begin_snapshot.map(|value| value.to_string()),
-        file.end_snapshot.map(|value| value.to_string()),
-        Some(file.data_file_id.to_string()),
-        Some(file.path.clone()),
-        file.path_is_relative.map(|value| value.to_string()),
-        file.format.clone(),
-        Some(file.delete_count.to_string()),
-        Some(file.file_size_bytes.to_string()),
-        file.footer_size.map(|value| value.to_string()),
-        file.encryption_key.clone(),
-        file.partial_max.clone(),
-    ] {
-        encoder.encode_field_with_type_and_format(&value, &Type::TEXT, FieldFormat::Text)?;
-    }
-    encoder.finish()
+    encode_metadata_row(
+        schema,
+        vec![
+            MetadataValue::text(file.delete_file_id.to_string()),
+            MetadataValue::optional_text(file.table_id.map(|value| value.to_string())),
+            MetadataValue::optional_text(file.begin_snapshot.map(|value| value.to_string())),
+            MetadataValue::optional_text(file.end_snapshot.map(|value| value.to_string())),
+            MetadataValue::text(file.data_file_id.to_string()),
+            MetadataValue::text(file.path.clone()),
+            MetadataValue::optional_text(file.path_is_relative.map(|value| value.to_string())),
+            MetadataValue::optional_text(file.format.clone()),
+            MetadataValue::text(file.delete_count.to_string()),
+            MetadataValue::text(file.file_size_bytes.to_string()),
+            MetadataValue::optional_text(file.footer_size.map(|value| value.to_string())),
+            MetadataValue::optional_text(file.encryption_key.clone()),
+            MetadataValue::optional_text(file.partial_max.clone()),
+        ],
+    )
 }
 
 pub(super) fn make_files_scheduled_for_deletion_response(
@@ -2349,10 +2309,7 @@ pub(super) fn make_files_scheduled_for_deletion_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "schedule_start ASC, data_file_id ASC")
 }
 
 /// v0.25: Build a PgWire response for `SELECT * FROM ducklake_metadata`.
@@ -2383,10 +2340,7 @@ pub(super) fn make_metadata_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "scope ASC, key ASC")
 }
 
 /// v0.25: Build a PgWire response for `SELECT * FROM ducklake_view`.
@@ -2441,10 +2395,7 @@ pub(super) fn make_views_response(views: Vec<rocklake_core::rows::ViewRow>) -> R
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "schema_id ASC, view_id ASC")
 }
 
 /// v0.25: Build a PgWire response for `SELECT * FROM ducklake_macro`.
@@ -2492,10 +2443,7 @@ pub(super) fn make_macros_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "schema_id ASC, macro_id ASC")
 }
 
 pub(super) fn make_macro_impls_response(
@@ -2534,10 +2482,7 @@ pub(super) fn make_macro_impls_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "macro_id ASC, impl_id ASC")
 }
 
 pub(super) fn make_macro_parameters_response(
@@ -2594,10 +2539,11 @@ pub(super) fn make_macro_parameters_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(
+        schema,
+        data_rows,
+        "macro_id ASC, impl_id ASC, column_id ASC",
+    )
 }
 
 #[derive(Clone)]
@@ -2684,10 +2630,7 @@ pub(super) fn make_inlined_data_tables_response(
         }
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC, schema_version ASC")
 }
 
 pub(super) fn make_schema_versions_response(
@@ -2720,10 +2663,7 @@ pub(super) fn make_schema_versions_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC, begin_snapshot ASC")
 }
 
 pub(super) fn make_inlined_rows_response(
@@ -2800,10 +2740,7 @@ pub(super) fn make_inlined_rows_response(
         data_rows.push(encoder.finish());
     }
 
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "row_id ASC")
 }
 
 fn inlined_projections(sql: &str, columns: &[ColumnRow]) -> Vec<InlinedProjection> {
@@ -3074,10 +3011,7 @@ pub(super) fn make_partition_info_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC, partition_id ASC")
 }
 
 /// v0.47.3: Build a PgWire response for `SELECT * FROM ducklake_partition_column`.
@@ -3118,10 +3052,11 @@ pub(super) fn make_partition_columns_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(
+        schema,
+        data_rows,
+        "partition_id ASC, partition_key_index ASC",
+    )
 }
 
 /// v0.47.3: Build a PgWire response for `SELECT * FROM ducklake_sort_expression`.
@@ -3174,10 +3109,11 @@ pub(super) fn make_sort_expressions_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(
+        schema,
+        data_rows,
+        "table_id ASC, sort_id ASC, sort_key_index ASC",
+    )
 }
 
 pub(super) fn make_metadata_table_empty_response(table_name: &str) -> Response<'static> {
@@ -3235,10 +3171,7 @@ pub(super) fn make_tags_response(rows: Vec<rocklake_core::rows::TagRow>) -> Resp
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "object_id ASC, key ASC")
 }
 
 /// v0.27: Build a PgWire response for `SELECT * FROM ducklake_column_tag`.
@@ -3295,10 +3228,7 @@ pub(super) fn make_column_tags_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC, column_id ASC, key ASC")
 }
 
 /// v0.27: Build a PgWire response for `SELECT * FROM ducklake_sort_info`.
@@ -3339,10 +3269,7 @@ pub(super) fn make_sort_info_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC, sort_id ASC")
 }
 
 /// v0.27: Build a PgWire response for `SELECT * FROM ducklake_schema_version`.
@@ -3436,10 +3363,11 @@ pub(super) fn make_file_variant_stats_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(
+        schema,
+        data_rows,
+        "table_id ASC, column_id ASC, data_file_id ASC",
+    )
 }
 
 /// v0.48: Build a PgWire response for `SELECT * FROM ducklake_column_mapping`.
@@ -3469,10 +3397,7 @@ pub(super) fn make_column_mapping_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "table_id ASC, mapping_id ASC")
 }
 
 /// v0.48: Build a PgWire response for `SELECT * FROM ducklake_name_mapping`.
@@ -3518,8 +3443,5 @@ pub(super) fn make_name_mapping_response(
             .expect("pgwire field encoding is infallible");
         data_rows.push(encoder.finish());
     }
-    let count = data_rows.len();
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag(&format!("SELECT {count}"));
-    Response::Query(resp)
+    make_encoded_metadata_response(schema, data_rows, "mapping_id ASC, column_id ASC")
 }
