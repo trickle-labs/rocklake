@@ -954,6 +954,8 @@ mod tests {
     async fn concurrent_first_open_is_single_flight() {
         let catalog_dir = tempfile::tempdir().unwrap();
         let data_dir = tempfile::tempdir().unwrap();
+        let catalog_path = catalog_dir.path().to_string_lossy().replace('\\', "/");
+        let data_path = data_dir.path().to_string_lossy().replace('\\', "/");
         let config = StaticConfig::new(
             RouterSettings {
                 max_open_catalogs: 1,
@@ -962,8 +964,8 @@ mod tests {
             vec![entry(
                 "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9",
                 "main",
-                &format!("file://{}", catalog_dir.path().display()),
-                &format!("file://{}", data_dir.path().display()),
+                &catalog_path,
+                &data_path,
             )],
         )
         .unwrap();
