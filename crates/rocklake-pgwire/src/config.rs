@@ -9,6 +9,7 @@ use serde::Deserialize;
 pub struct ConfigFile {
     pub catalog: Option<String>,
     pub router: Option<rocklake_router::RouterSettings>,
+    pub registry: Option<rocklake_router::RegistrySettings>,
     #[serde(default)]
     pub catalogs: Vec<rocklake_router::CatalogConfig>,
     pub bind: Option<String>,
@@ -55,7 +56,7 @@ pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), St
 }
 
 pub fn example() -> &'static str {
-    r#"# RockLake v0.54.0 configuration
+    r#"# RockLake v0.55.0 configuration
 catalog = "./lake"
 bind = "127.0.0.1:5432"
 mode = "writer"
@@ -87,6 +88,12 @@ slow_operation_threshold_ms = 1000
 # data = "s3://company-data/analytics"
 # mode = "read-write"
 # credential_provider = "aws-default"
+
+# Managed registry (takes precedence over static routing when configured):
+# [registry]
+# location = "file:///var/lib/rocklake/registry"
+# emergency_read_only = true
+# recovery_file = "/etc/rocklake/recovery.toml"
 "#
 }
 
@@ -124,5 +131,21 @@ mod tests {
         let router = static_router(&config).unwrap().unwrap();
         assert_eq!(router.settings.default_catalog.as_deref(), Some("main"));
         assert_eq!(router.catalogs.len(), 1);
+    }
+
+    #[test]
+    fn parses_managed_registry_config() {
+        let config: ConfigFile = toml::from_str(
+            r#"
+                [registry]
+                location = "file:///var/lib/rocklake/registry"
+                emergency_read_only = true
+                recovery_file = "/etc/rocklake/recovery.toml"
+            "#,
+        )
+        .unwrap();
+        let registry = config.registry.unwrap();
+        assert!(registry.emergency_read_only);
+        assert_eq!(registry.location, "file:///var/lib/rocklake/registry");
     }
 }

@@ -1,4 +1,8 @@
-//! Static routing for independent RockLake catalogs.
+//! Routing for independent RockLake catalogs.
+
+mod registry;
+
+pub use registry::*;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -14,7 +18,8 @@ use thiserror::Error;
 use tokio::sync::{Mutex, Notify};
 
 /// A stable opaque catalog identity. It is never derived from an alias or path.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct CatalogId(String);
 
 impl CatalogId {
@@ -47,7 +52,8 @@ impl FromStr for CatalogId {
 }
 
 /// A safe PostgreSQL database/catalog alias.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct CatalogAlias(String);
 
 impl CatalogAlias {
@@ -159,16 +165,7 @@ impl CatalogLocation {
         }
 
         if scheme == "file" && !input.contains("://") {
-            let path = std::fs::canonicalize(input).unwrap_or_else(|_| {
-                let path = PathBuf::from(input);
-                if path.is_absolute() {
-                    path
-                } else {
-                    std::env::current_dir()
-                        .map(|directory| directory.join(&path))
-                        .unwrap_or(path)
-                }
-            });
+            let path = canonicalize_local_path(input);
             let prefix = path.to_string_lossy().replace('\\', "/");
             return Self::from_parts(scheme, String::new(), &prefix, Some(path));
         }
@@ -189,7 +186,9 @@ impl CatalogLocation {
             )));
         }
         let prefix = if scheme == "file" {
-            format!("/{path}")
+            canonicalize_local_path(&format!("/{path}"))
+                .to_string_lossy()
+                .replace('\\', "/")
         } else {
             path.to_string()
         };
@@ -271,7 +270,7 @@ impl CatalogLocation {
         prefix_overlaps(&self.prefix, &other.prefix)
     }
 
-    fn object_store_path(
+    pub(crate) fn object_store_path(
         &self,
         options: &RouterOpenOptions,
     ) -> Result<(ObjectPath, Arc<dyn object_store::ObjectStore>), RouterError> {
@@ -318,6 +317,36 @@ impl CatalogLocation {
     }
 }
 
+fn canonicalize_local_path(input: &str) -> PathBuf {
+    let path = PathBuf::from(input);
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map(|directory| directory.join(path))
+            .unwrap_or_else(|_| PathBuf::from(input))
+    };
+    if let Ok(path) = std::fs::canonicalize(&absolute) {
+        return path;
+    }
+    let mut missing = Vec::new();
+    let mut existing = absolute.clone();
+    while !existing.exists() {
+        let Some(name) = existing.file_name().map(ToOwned::to_owned) else {
+            return absolute;
+        };
+        missing.push(name);
+        if !existing.pop() {
+            return absolute;
+        }
+    }
+    let mut canonical = std::fs::canonicalize(&existing).unwrap_or(existing);
+    for name in missing.into_iter().rev() {
+        canonical.push(name);
+    }
+    canonical
+}
+
 impl TryFrom<&str> for CatalogLocation {
     type Error = RouterError;
 
@@ -353,6 +382,9 @@ pub struct CatalogConfig {
     pub mode: CatalogMode,
     /// Named credential provider. Credentials in URLs are never accepted.
     pub credential_provider: String,
+    /// Optional policy identifier; the policy contents are stored elsewhere.
+    #[serde(default)]
+    pub policy_reference: Option<String>,
     /// Optional per-catalog limits.
     #[serde(default)]
     pub limits: CatalogLimits,
@@ -373,6 +405,8 @@ pub struct CatalogDescriptor {
     pub mode: CatalogMode,
     /// Credential provider name.
     pub credential_provider: String,
+    /// Optional policy identifier; raw policy material is never stored here.
+    pub policy_reference: Option<String>,
     /// Per-catalog limits.
     pub limits: CatalogLimits,
 }
@@ -411,6 +445,7 @@ impl TryFrom<CatalogConfig> for CatalogDescriptor {
             data,
             mode: config.mode,
             credential_provider: config.credential_provider,
+            policy_reference: config.policy_reference,
             limits: config.limits,
         })
     }
@@ -420,7 +455,7 @@ impl TryFrom<CatalogConfig> for CatalogDescriptor {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouterSettings {
-    /// Router mode; only `static` is supported in v0.54.
+    /// Router mode (`static` or the managed `registry`).
     #[serde(default = "default_router_mode")]
     pub mode: String,
     /// Alias used when a client omits the database parameter.
@@ -463,6 +498,8 @@ pub struct StaticConfig {
     pub settings: RouterSettings,
     /// Validated descriptors.
     pub catalogs: Vec<CatalogDescriptor>,
+    /// Registry generation represented by this immutable route snapshot.
+    pub generation: u64,
 }
 
 impl StaticConfig {
@@ -471,9 +508,9 @@ impl StaticConfig {
         settings: RouterSettings,
         catalogs: Vec<CatalogConfig>,
     ) -> Result<Self, RouterError> {
-        if settings.mode != "static" {
+        if settings.mode != "static" && settings.mode != "registry" {
             return Err(RouterError::InvalidConfig(
-                "router.mode must be 'static'".into(),
+                "router.mode must be 'static' or 'registry'".into(),
             ));
         }
         if settings.max_open_catalogs == 0 || settings.catalog_idle_timeout == 0 {
@@ -536,7 +573,40 @@ impl StaticConfig {
                 ..settings
             },
             catalogs,
+            generation: 0,
         })
+    }
+
+    /// Build a validated route configuration from already validated descriptors.
+    pub fn from_descriptors(
+        settings: RouterSettings,
+        descriptors: Vec<CatalogDescriptor>,
+    ) -> Result<Self, RouterError> {
+        Self::from_descriptors_at_generation(settings, descriptors, 0)
+    }
+
+    /// Build a validated route configuration at a specific registry generation.
+    pub fn from_descriptors_at_generation(
+        settings: RouterSettings,
+        descriptors: Vec<CatalogDescriptor>,
+        generation: u64,
+    ) -> Result<Self, RouterError> {
+        let catalogs = descriptors
+            .into_iter()
+            .map(|descriptor| CatalogConfig {
+                id: descriptor.id.to_string(),
+                aliases: descriptor.aliases.iter().map(ToString::to_string).collect(),
+                catalog: descriptor.catalog.display_uri(),
+                data: descriptor.data.display_uri(),
+                mode: descriptor.mode,
+                credential_provider: descriptor.credential_provider,
+                policy_reference: descriptor.policy_reference,
+                limits: descriptor.limits,
+            })
+            .collect();
+        let mut config = Self::new(settings, catalogs)?;
+        config.generation = generation;
+        Ok(config)
     }
 }
 
@@ -549,9 +619,12 @@ pub struct CatalogRoute {
     pub alias: CatalogAlias,
     /// Immutable descriptor snapshot.
     pub descriptor: CatalogDescriptor,
+    /// Registry or route-table generation selected for this connection.
+    pub generation: u64,
 }
 
 struct RouteTable {
+    generation: u64,
     settings: RouterSettings,
     by_alias: BTreeMap<CatalogAlias, CatalogId>,
     by_id: BTreeMap<CatalogId, CatalogDescriptor>,
@@ -559,6 +632,7 @@ struct RouteTable {
 
 impl RouteTable {
     fn from_config(config: StaticConfig) -> Self {
+        let generation = config.generation;
         let mut by_alias = BTreeMap::new();
         let mut by_id = BTreeMap::new();
         for catalog in config.catalogs {
@@ -568,6 +642,7 @@ impl RouteTable {
             by_id.insert(catalog.id.clone(), catalog);
         }
         Self {
+            generation,
             settings: config.settings,
             by_alias,
             by_id,
@@ -593,6 +668,7 @@ impl RouteTable {
             id: id.clone(),
             alias,
             descriptor,
+            generation: self.generation,
         })
     }
 
@@ -607,6 +683,7 @@ impl RouteTable {
             id: id.clone(),
             alias,
             descriptor,
+            generation: self.generation,
         })
     }
 }
@@ -715,7 +792,14 @@ impl CatalogRouter {
 
     /// Atomically replace the route table after validating a new configuration.
     pub fn reload(&self, config: StaticConfig) -> Result<(), RouterError> {
-        let table = Arc::new(RouteTable::from_config(config));
+        let mut table = RouteTable::from_config(config);
+        table.generation = self
+            .routes
+            .read()
+            .expect("router route lock poisoned")
+            .generation
+            .saturating_add(1);
+        let table = Arc::new(table);
         *self.routes.write().expect("router route lock poisoned") = table;
         Ok(())
     }
@@ -900,6 +984,7 @@ mod tests {
             data: data.into(),
             mode: CatalogMode::ReadWrite,
             credential_provider: "env".into(),
+            policy_reference: None,
             limits: CatalogLimits::default(),
         }
     }

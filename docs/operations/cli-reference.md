@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.54.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.55.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -10,7 +10,8 @@ binary or a command for the complete generated reference.
 serve
 doctor
 status
-catalogs validate|list|status
+catalogs validate|list|status|create|register|rename|set-mode|disable|enable|remove
+registry init|status|backup|restore|verify|migrate-static
 catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair|jobs
 debug diagnose|inspect|corpus|rebuild|sweep-orphans|pg-migrate|tune|warmup
 config check|example
@@ -76,6 +77,23 @@ rocklake catalog jobs resume --catalog ./lake --id <job-uuid>
 rocklake catalogs validate
 rocklake catalogs list --output json
 rocklake catalogs status
+rocklake registry init --registry <location>
+rocklake registry status --registry <location> --output json
+rocklake registry backup --registry <location> --output <directory>
+rocklake registry restore --registry <location> --input <directory>
+rocklake registry verify --registry <location>
+rocklake registry migrate-static --registry <location> --request-id <id>
+rocklake catalogs create --registry <location> --id <uuid> --alias <name> \
+  --catalog <location> --data <location> --credential-provider <name> \
+  --request-id <id>
+rocklake catalogs register --registry <location> --id <uuid> --alias <name> \
+  --catalog <location> --data <location> --credential-provider <name> \
+  --request-id <id>
+rocklake catalogs rename --registry <location> --id <uuid> --alias <name> --request-id <id>
+rocklake catalogs set-mode --registry <location> --id <uuid> --mode read-only --request-id <id>
+rocklake catalogs disable --registry <location> --id <uuid> --request-id <id>
+rocklake catalogs enable --registry <location> --id <uuid> --request-id <id>
+rocklake catalogs remove --registry <location> --id <uuid> --request-id <id>
 ~~~
 
 ```bash

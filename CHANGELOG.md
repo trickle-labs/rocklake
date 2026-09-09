@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.55.0] — 2026-09-09
+
+### Added
+
+- Added a versioned object-store-backed catalog registry with generation/CAS
+  updates, immutable management audit entries, lifecycle states, and tombstones.
+- Added idempotent `rocklake catalogs create|register|rename|set-mode|disable|enable|remove`
+  operations and `rocklake registry init|status|backup|restore|verify`.
+- Added static v0.54 configuration migration and emergency read-only startup
+  from a verified static recovery file.
+
+### Changed
+
+- Registry snapshots now feed the existing multi-catalog router while keeping
+  sessions bound to the selected catalog ID and registry generation.
+- Route removal only detaches routing; catalog and data bytes are never deleted.
+- Updated workspace, binding, binary, and release documentation metadata to
+  v0.55.0.
+
 ## [0.54.0] — 2026-09-09
 
 ### Added

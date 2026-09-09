@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.54.0 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.55.0 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 
@@ -18,6 +18,37 @@ with `rocklake config check --file rocklake.toml`.
 ```bash
 rocklake serve --catalog <file://...,s3://...,gs://...,az://...>
 ```
+
+## Managed catalog registry
+
+The v0.55.0 registry stores routing state separately from tenant catalogs. It
+keeps aliases, lifecycle state, policy references, and credential-provider
+names; it never stores raw credentials. `remove` detaches a route and retains a
+tombstone. It does not delete catalog or data bytes.
+
+```toml
+[registry]
+location = "file:///var/lib/rocklake/registry"
+emergency_read_only = true
+recovery_file = "/etc/rocklake/recovery.toml"
+```
+
+Initialize and manage routes locally:
+
+```bash
+rocklake registry init --registry file:///var/lib/rocklake/registry
+rocklake catalogs create --registry file:///var/lib/rocklake/registry \
+  --id 018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9 --alias analytics \
+  --catalog s3://company-rocklake/catalogs/analytics \
+  --data s3://company-data/analytics --credential-provider aws-default \
+  --request-id create-analytics
+rocklake registry backup --registry file:///var/lib/rocklake/registry --output ./registry-backup
+rocklake registry verify --registry file:///var/lib/rocklake/registry
+```
+
+Use `rocklake registry migrate-static` to import the v0.54 static route table.
+Registry and tenant prefixes must be disjoint. Registry management is local;
+there is no remote management API in this release.
 
 ## Static multi-catalog routing
 

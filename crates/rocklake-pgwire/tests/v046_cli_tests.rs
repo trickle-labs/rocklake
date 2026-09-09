@@ -219,6 +219,18 @@ fn datafusion_pg_wire_flag_is_removed() {
 fn help_v0514_primary_commands() {
     for args in [
         ["status", "--help"].as_slice(),
+        ["registry", "--help"].as_slice(),
+        ["registry", "init", "--help"].as_slice(),
+        ["registry", "backup", "--help"].as_slice(),
+        ["registry", "restore", "--help"].as_slice(),
+        ["registry", "verify", "--help"].as_slice(),
+        ["catalogs", "create", "--help"].as_slice(),
+        ["catalogs", "register", "--help"].as_slice(),
+        ["catalogs", "rename", "--help"].as_slice(),
+        ["catalogs", "set-mode", "--help"].as_slice(),
+        ["catalogs", "disable", "--help"].as_slice(),
+        ["catalogs", "enable", "--help"].as_slice(),
+        ["catalogs", "remove", "--help"].as_slice(),
         ["catalog", "--help"].as_slice(),
         ["catalog", "backup", "--help"].as_slice(),
         ["catalog", "restore", "--help"].as_slice(),

@@ -9,7 +9,7 @@
 //! The module is deliberately kept separate from the command implementations
 //! so that the structs can be unit-tested independently.
 
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum OutputFormat {
@@ -56,6 +56,10 @@ pub enum Commands {
     /// Inspect and validate static multi-catalog routes.
     #[command(subcommand)]
     Catalogs(CatalogsSubcommand),
+
+    /// Initialize and verify the managed catalog registry.
+    #[command(subcommand)]
+    Registry(RegistrySubcommand),
 
     /// Diagnostic and debugging operations.
     #[command(subcommand)]
@@ -218,19 +222,203 @@ pub enum CatalogSubcommand {
 #[derive(Debug, Subcommand)]
 pub enum CatalogsSubcommand {
     /// Validate the static route configuration.
-    Validate,
+    Validate {
+        /// Optional managed registry location.
+        #[arg(long, env = "ROCKLAKE_REGISTRY")]
+        registry: Option<String>,
+    },
     /// List configured catalogs without opening them.
     List {
+        /// Optional managed registry location.
+        #[arg(long, env = "ROCKLAKE_REGISTRY")]
+        registry: Option<String>,
         /// Output format.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         output: OutputFormat,
     },
     /// Show configured catalogs and current open-handle state.
     Status {
+        /// Optional managed registry location.
+        #[arg(long, env = "ROCKLAKE_REGISTRY")]
+        registry: Option<String>,
         /// Output format.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         output: OutputFormat,
     },
+    /// Create a new lazy catalog route.
+    Create(CatalogMutationArgs),
+    /// Register an existing catalog route.
+    Register(CatalogMutationArgs),
+    /// Rename a catalog route alias.
+    Rename(CatalogRenameArgs),
+    /// Change a catalog route mode.
+    SetMode(CatalogSetModeArgs),
+    /// Disable a catalog route without deleting bytes.
+    Disable(CatalogIdArgs),
+    /// Re-enable a disabled catalog route.
+    Enable(CatalogIdArgs),
+    /// Detach a route and retain a tombstone; never deletes bytes.
+    Remove(CatalogIdArgs),
+}
+
+/// Managed registry operations.
+#[derive(Debug, Subcommand)]
+pub enum RegistrySubcommand {
+    /// Initialize an empty registry.
+    Init(RegistryLocationArgs),
+    /// Show registry generation and lifecycle counts.
+    Status(RegistryOutputArgs),
+    /// Back up registry state and audit entries to a local directory.
+    Backup(RegistryBackupArgs),
+    /// Restore a backup into an uninitialized registry location.
+    Restore(RegistryRestoreArgs),
+    /// Verify registry state, indexes, prefixes, and audit sequence.
+    Verify(RegistryOutputArgs),
+    /// Import the v0.54 static route table from the selected config file.
+    #[command(name = "migrate-static")]
+    MigrateStatic(RegistryMigrateStaticArgs),
+}
+
+/// A registry location resolved from this flag, the environment, or config.
+#[derive(Debug, Args)]
+pub struct RegistryLocationArgs {
+    /// Registry location (`file:///…`, `s3://…`, `gs://…`, `az://…`).
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+}
+
+/// Registry output options.
+#[derive(Debug, Args)]
+pub struct RegistryOutputArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    pub output: OutputFormat,
+}
+
+/// Registry backup options.
+#[derive(Debug, Args)]
+pub struct RegistryBackupArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Local output directory.
+    #[arg(long)]
+    pub output: std::path::PathBuf,
+}
+
+/// Registry restore options.
+#[derive(Debug, Args)]
+pub struct RegistryRestoreArgs {
+    /// Target registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Local backup directory.
+    #[arg(long)]
+    pub input: std::path::PathBuf,
+}
+
+/// Static-to-registry migration options.
+#[derive(Debug, Args)]
+pub struct RegistryMigrateStaticArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Caller-supplied idempotency key.
+    #[arg(long, default_value = "migrate-static")]
+    pub request_id: String,
+}
+
+/// Catalog definition used by create and register.
+#[derive(Debug, Args)]
+pub struct CatalogMutationArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Stable UUID catalog identity.
+    #[arg(long)]
+    pub id: String,
+    /// One or more PostgreSQL aliases.
+    #[arg(long = "alias", required = true)]
+    pub aliases: Vec<String>,
+    /// SlateDB catalog location.
+    #[arg(long)]
+    pub catalog: String,
+    /// Referenced data location.
+    #[arg(long)]
+    pub data: String,
+    /// Access mode.
+    #[arg(long, value_enum, default_value_t = CatalogModeArg::ReadWrite)]
+    pub mode: CatalogModeArg,
+    /// Named credential provider.
+    #[arg(long)]
+    pub credential_provider: String,
+    /// Optional policy identifier.
+    #[arg(long)]
+    pub policy_reference: Option<String>,
+    /// Caller-supplied idempotency key.
+    #[arg(long)]
+    pub request_id: String,
+}
+
+/// CLI catalog mode.
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+pub enum CatalogModeArg {
+    /// Read and write.
+    #[default]
+    ReadWrite,
+    /// Read only.
+    ReadOnly,
+}
+
+/// Catalog alias rename options.
+#[derive(Debug, Args)]
+pub struct CatalogRenameArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Stable catalog UUID.
+    #[arg(long)]
+    pub id: String,
+    /// New PostgreSQL alias.
+    #[arg(long)]
+    pub alias: String,
+    /// Caller-supplied idempotency key.
+    #[arg(long)]
+    pub request_id: String,
+}
+
+/// Catalog mode options.
+#[derive(Debug, Args)]
+pub struct CatalogSetModeArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Stable catalog UUID.
+    #[arg(long)]
+    pub id: String,
+    /// New access mode.
+    #[arg(long, value_enum)]
+    pub mode: CatalogModeArg,
+    /// Caller-supplied idempotency key.
+    #[arg(long)]
+    pub request_id: String,
+}
+
+/// Catalog ID mutation options.
+#[derive(Debug, Args)]
+pub struct CatalogIdArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Stable catalog UUID.
+    #[arg(long)]
+    pub id: String,
+    /// Caller-supplied idempotency key.
+    #[arg(long)]
+    pub request_id: String,
 }
 
 /// Durable administrative job controls.

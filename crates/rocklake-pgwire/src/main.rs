@@ -27,6 +27,7 @@ use tracing_subscriber::EnvFilter;
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_pgwire::server::{run_server_with_mode, ServerConfig};
+use rocklake_router::CatalogLocation;
 
 const MAIN_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 
@@ -123,6 +124,7 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
             cli::CatalogSubcommand::Jobs(sub) => cmd_jobs(sub).await?,
         },
         Commands::Catalogs(command) => cmd_catalogs(command, config_path.as_deref()).await?,
+        Commands::Registry(command) => cmd_registry(command, config_path.as_deref()).await?,
         Commands::Debug(command) => match command {
             cli::DebugSubcommand::Diagnose(args) => cmd_diagnose(args).await?,
             cli::DebugSubcommand::Inspect(sub) => cmd_inspect(sub).await?,
@@ -306,10 +308,303 @@ async fn cmd_catalogs(
     command: cli::CatalogsSubcommand,
     config_path: Option<&std::path::Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let loaded_config = config::load(config_path)?.1;
+    match command {
+        cli::CatalogsSubcommand::Validate { registry } => {
+            let (_, file_config) = config::load(config_path)?;
+            if let Some(location) = registry.or_else(|| {
+                file_config
+                    .registry
+                    .as_ref()
+                    .map(|registry| registry.location.clone())
+            }) {
+                let registry = open_registry(&location, &file_config).await?;
+                registry.verify().await?;
+                println!("Managed registry is valid.");
+            } else {
+                config::static_router(&file_config)?
+                    .ok_or("no static router or managed registry configured")?;
+                println!("Static router configuration is valid.");
+            }
+        }
+        cli::CatalogsSubcommand::List { registry, output } => {
+            let (_, file_config) = config::load(config_path)?;
+            if let Some(location) = registry.or_else(|| {
+                file_config
+                    .registry
+                    .as_ref()
+                    .map(|registry| registry.location.clone())
+            }) {
+                let registry = open_registry(&location, &file_config).await?;
+                let snapshot = registry.snapshot().await?;
+                print_registry_rows(&snapshot, output);
+            } else {
+                let router = config::static_router(&file_config)?
+                    .ok_or("no static router or managed registry configured")?;
+                print_static_rows(&router, output);
+            }
+        }
+        cli::CatalogsSubcommand::Status { registry, output } => {
+            let (_, file_config) = config::load(config_path)?;
+            if let Some(location) = registry.or_else(|| {
+                file_config
+                    .registry
+                    .as_ref()
+                    .map(|registry| registry.location.clone())
+            }) {
+                let registry = open_registry(&location, &file_config).await?;
+                let status = registry.status().await?;
+                match output {
+                    cli::OutputFormat::Json => println!(
+                        "{}",
+                        serde_json::json!({
+                            "router_mode": "registry",
+                            "generation": status.generation,
+                            "registry_format_version": status.format_version,
+                            "catalogs": status.catalogs,
+                            "routed_catalogs": status.routed_catalogs,
+                            "next_audit_sequence": status.next_audit_sequence,
+                        })
+                    ),
+                    cli::OutputFormat::Human => {
+                        println!("Router mode       registry");
+                        println!("Generation        {}", status.generation);
+                        println!("Configured        {}", status.catalogs);
+                        println!("Routed            {}", status.routed_catalogs);
+                    }
+                }
+            } else {
+                let router = config::static_router(&file_config)?
+                    .ok_or("no static router or managed registry configured")?;
+                let rows = static_catalog_rows(&router);
+                match output {
+                    cli::OutputFormat::Json => println!(
+                        "{}",
+                        serde_json::json!({
+                            "router_mode": router.settings.mode,
+                            "default_catalog": router.settings.default_catalog,
+                            "max_open_catalogs": router.settings.max_open_catalogs,
+                            "catalog_idle_timeout": router.settings.catalog_idle_timeout,
+                            "open_handles": 0,
+                            "catalogs": rows,
+                        })
+                    ),
+                    cli::OutputFormat::Human => {
+                        println!("Router mode       {}", router.settings.mode);
+                        println!(
+                            "Default catalog   {}",
+                            router.settings.default_catalog.unwrap_or_default()
+                        );
+                        println!(
+                            "Open handles      0 / {}",
+                            router.settings.max_open_catalogs
+                        );
+                        println!("Configured        {}", router.catalogs.len());
+                    }
+                }
+            }
+        }
+        cli::CatalogsSubcommand::Create(args) => {
+            cmd_catalog_mutation(args, false, &loaded_config).await?
+        }
+        cli::CatalogsSubcommand::Register(args) => {
+            cmd_catalog_mutation(args, true, &loaded_config).await?
+        }
+        cli::CatalogsSubcommand::Rename(args) => {
+            let (_, file_config) = config::load(config_path)?;
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let id = args.id.parse()?;
+            print_mutation(registry.rename(&id, &args.alias, &args.request_id).await?);
+        }
+        cli::CatalogsSubcommand::SetMode(args) => {
+            let (_, file_config) = config::load(config_path)?;
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let id = args.id.parse()?;
+            print_mutation(
+                registry
+                    .set_mode(&id, catalog_mode(args.mode), &args.request_id)
+                    .await?,
+            );
+        }
+        cli::CatalogsSubcommand::Disable(args) => {
+            let (_, file_config) = config::load(config_path)?;
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let id = args.id.parse()?;
+            print_mutation(registry.disable(&id, &args.request_id).await?);
+        }
+        cli::CatalogsSubcommand::Enable(args) => {
+            let (_, file_config) = config::load(config_path)?;
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let id = args.id.parse()?;
+            print_mutation(registry.enable(&id, &args.request_id).await?);
+        }
+        cli::CatalogsSubcommand::Remove(args) => {
+            let (_, file_config) = config::load(config_path)?;
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let id = args.id.parse()?;
+            print_mutation(registry.remove(&id, &args.request_id).await?);
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_registry(
+    command: cli::RegistrySubcommand,
+    config_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let (_, file_config) = config::load(config_path)?;
-    let router = config::static_router(&file_config)?
-        .ok_or("no static router configured; add [router] and [[catalogs]] to rocklake.toml")?;
-    let rows: Vec<_> = router
+    match command {
+        cli::RegistrySubcommand::Init(args) => {
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let snapshot = registry.init().await?;
+            println!(
+                "Registry initialized at generation {}.",
+                snapshot.generation
+            );
+        }
+        cli::RegistrySubcommand::Status(args) => {
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let status = registry.status().await?;
+            print_registry_status(&status, args.output);
+        }
+        cli::RegistrySubcommand::Backup(args) => {
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let info = registry.backup(&args.output).await?;
+            println!("Registry backup created: {}", info.path.display());
+        }
+        cli::RegistrySubcommand::Restore(args) => {
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let snapshot = registry.restore(&args.input).await?;
+            println!("Registry restored at generation {}.", snapshot.generation);
+        }
+        cli::RegistrySubcommand::Verify(args) => {
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let status = registry.verify().await?;
+            print_registry_status(&status, args.output);
+        }
+        cli::RegistrySubcommand::MigrateStatic(args) => {
+            let location = configured_registry(args.registry, &file_config)?;
+            let router = config::static_router(&file_config)?
+                .ok_or("static router configuration is required for migration")?;
+            let registry = open_registry(&location, &file_config).await?;
+            registry.init().await?;
+            print_mutation(registry.migrate_static(router, &args.request_id).await?);
+        }
+    }
+    Ok(())
+}
+
+fn configured_registry(
+    explicit: Option<String>,
+    config: &config::ConfigFile,
+) -> Result<String, Box<dyn std::error::Error>> {
+    explicit
+        .or_else(|| {
+            config
+                .registry
+                .as_ref()
+                .map(|registry| registry.location.clone())
+        })
+        .ok_or_else(|| "a registry location is required (use --registry or [registry])".into())
+}
+
+fn router_open_options(config: &config::ConfigFile) -> rocklake_router::RouterOpenOptions {
+    rocklake_router::RouterOpenOptions {
+        s3_endpoint: config.s3_endpoint.clone(),
+        s3_path_style: config.s3_path_style.unwrap_or(false),
+        ..rocklake_router::RouterOpenOptions::default()
+    }
+}
+
+async fn open_registry(
+    location: &str,
+    config: &config::ConfigFile,
+) -> Result<rocklake_router::CatalogRegistry, Box<dyn std::error::Error>> {
+    Ok(
+        rocklake_router::CatalogRegistry::open_location(location, &router_open_options(config))
+            .await?,
+    )
+}
+
+fn catalog_mode(mode: cli::CatalogModeArg) -> rocklake_router::CatalogMode {
+    match mode {
+        cli::CatalogModeArg::ReadWrite => rocklake_router::CatalogMode::ReadWrite,
+        cli::CatalogModeArg::ReadOnly => rocklake_router::CatalogMode::ReadOnly,
+    }
+}
+
+async fn cmd_catalog_mutation(
+    args: cli::CatalogMutationArgs,
+    register: bool,
+    config: &config::ConfigFile,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let location = configured_registry(args.registry, config)?;
+    let registry = open_registry(&location, config).await?;
+    let catalog = rocklake_router::CatalogConfig {
+        id: args.id,
+        aliases: args.aliases,
+        catalog: args.catalog,
+        data: args.data,
+        mode: catalog_mode(args.mode),
+        credential_provider: args.credential_provider,
+        policy_reference: args.policy_reference,
+        limits: rocklake_router::CatalogLimits::default(),
+    };
+    let mutation = if register {
+        registry.register(catalog, &args.request_id).await?
+    } else {
+        registry.create(catalog, &args.request_id).await?
+    };
+    print_mutation(mutation);
+    Ok(())
+}
+
+fn print_mutation(mutation: rocklake_router::RegistryMutation) {
+    println!(
+        "Catalog mutation committed at generation {}{}.",
+        mutation.generation,
+        if mutation.replayed {
+            " (idempotent replay)"
+        } else {
+            ""
+        }
+    );
+}
+
+fn print_registry_status(status: &rocklake_router::RegistryStatus, output: cli::OutputFormat) {
+    match output {
+        cli::OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "registry_format_version": status.format_version,
+                "generation": status.generation,
+                "catalogs": status.catalogs,
+                "routed_catalogs": status.routed_catalogs,
+                "next_audit_sequence": status.next_audit_sequence,
+            })
+        ),
+        cli::OutputFormat::Human => {
+            println!("Registry format   {}", status.format_version);
+            println!("Generation        {}", status.generation);
+            println!("Catalogs           {}", status.catalogs);
+            println!("Routed            {}", status.routed_catalogs);
+            println!("Next audit        {}", status.next_audit_sequence);
+        }
+    }
+}
+
+fn static_catalog_rows(router: &rocklake_router::StaticConfig) -> Vec<serde_json::Value> {
+    router
         .catalogs
         .iter()
         .map(|catalog| {
@@ -318,51 +613,88 @@ async fn cmd_catalogs(
                 "aliases": catalog.aliases.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 "catalog": redact_router_location(&catalog.catalog),
                 "data": redact_router_location(&catalog.data),
-                "mode": match catalog.mode {
-                    rocklake_router::CatalogMode::ReadWrite => "read-write",
-                    rocklake_router::CatalogMode::ReadOnly => "read-only",
-                },
+                "mode": catalog_mode_name(catalog.mode),
                 "credential_provider": catalog.credential_provider.clone(),
+                "policy_reference": catalog.policy_reference.clone(),
+            })
+        })
+        .collect()
+}
+
+fn print_static_rows(router: &rocklake_router::StaticConfig, output: cli::OutputFormat) {
+    let rows = static_catalog_rows(router);
+    match output {
+        cli::OutputFormat::Json => println!("{}", serde_json::json!({"catalogs": rows})),
+        cli::OutputFormat::Human => {
+            for row in rows {
+                println!("{}  {}  {}", row["id"], row["aliases"], row["mode"]);
+            }
+        }
+    }
+}
+
+fn print_registry_rows(snapshot: &rocklake_router::RegistrySnapshot, output: cli::OutputFormat) {
+    let rows: Vec<_> = snapshot
+        .catalogs
+        .iter()
+        .map(|catalog| {
+            serde_json::json!({
+                "id": catalog.id.to_string(),
+                "aliases": catalog.aliases.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "catalog": redact_registry_location(&catalog.catalog),
+                "data": redact_registry_location(&catalog.data),
+                "mode": catalog_mode_name(catalog.mode),
+                "lifecycle": lifecycle_name(catalog.lifecycle),
+                "credential_provider": catalog.credential_provider.clone(),
+                "policy_reference": catalog.policy_reference.clone(),
+                "generation": catalog.updated_generation,
+                "tombstone": catalog.tombstone,
             })
         })
         .collect();
-    match command {
-        cli::CatalogsSubcommand::Validate => println!("Static router configuration is valid."),
-        cli::CatalogsSubcommand::List { output } => match output {
-            cli::OutputFormat::Json => println!("{}", serde_json::json!({"catalogs": rows})),
-            cli::OutputFormat::Human => {
-                for row in rows {
-                    println!("{}  {}  {:?}", row["id"], row["aliases"], row["mode"]);
-                }
-            }
-        },
-        cli::CatalogsSubcommand::Status { output } => match output {
-            cli::OutputFormat::Json => println!(
-                "{}",
-                serde_json::json!({
-                    "router_mode": router.settings.mode,
-                    "default_catalog": router.settings.default_catalog,
-                    "max_open_catalogs": router.settings.max_open_catalogs,
-                    "catalog_idle_timeout": router.settings.catalog_idle_timeout,
-                    "open_handles": 0,
-                    "catalogs": rows,
-                })
-            ),
-            cli::OutputFormat::Human => {
-                println!("Router mode       {}", router.settings.mode);
+    match output {
+        cli::OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "generation": snapshot.generation,
+                "default_catalog": snapshot.default_catalog,
+                "catalogs": rows,
+            })
+        ),
+        cli::OutputFormat::Human => {
+            for row in rows {
                 println!(
-                    "Default catalog   {}",
-                    router.settings.default_catalog.unwrap_or_default()
+                    "{}  {}  {}  {}",
+                    row["id"], row["aliases"], row["mode"], row["lifecycle"]
                 );
-                println!(
-                    "Open handles      0 / {}",
-                    router.settings.max_open_catalogs
-                );
-                println!("Configured        {}", router.catalogs.len());
             }
-        },
+        }
     }
-    Ok(())
+}
+
+fn redact_registry_location(value: &str) -> String {
+    CatalogLocation::parse(value)
+        .map(|location| redact_router_location(&location))
+        .unwrap_or_else(|_| "[invalid]".into())
+}
+
+fn catalog_mode_name(mode: rocklake_router::CatalogMode) -> &'static str {
+    match mode {
+        rocklake_router::CatalogMode::ReadWrite => "read-write",
+        rocklake_router::CatalogMode::ReadOnly => "read-only",
+    }
+}
+
+fn lifecycle_name(lifecycle: rocklake_router::CatalogLifecycle) -> &'static str {
+    match lifecycle {
+        rocklake_router::CatalogLifecycle::Creating => "creating",
+        rocklake_router::CatalogLifecycle::Active => "active",
+        rocklake_router::CatalogLifecycle::ReadOnly => "read-only",
+        rocklake_router::CatalogLifecycle::Disabled => "disabled",
+        rocklake_router::CatalogLifecycle::Deleting => "deleting",
+        rocklake_router::CatalogLifecycle::Deleted => "deleted",
+        rocklake_router::CatalogLifecycle::Error => "error",
+    }
 }
 
 fn redact_router_location(location: &rocklake_router::CatalogLocation) -> String {
@@ -389,7 +721,41 @@ async fn cmd_serve(
             || std::env::var_os("ROCKLAKE_STREAM_QUEUE_DEPTH").is_some()
             || std::env::var_os("ROCKLAKE_MAX_BUFFERED_ROWS").is_some(),
     );
-    let static_router = config::static_router(&file_config)?;
+    let registry_settings = file_config.registry.clone();
+    let mut emergency_read_only = false;
+    let managed_registry = if let Some(settings) = &registry_settings {
+        match open_registry(&settings.location, &file_config).await {
+            Ok(registry) => match registry.static_config().await {
+                Ok(_) => Some(registry),
+                Err(_error) if settings.emergency_read_only => {
+                    emergency_read_only = true;
+                    None
+                }
+                Err(error) => return Err(error.into()),
+            },
+            Err(_error) if settings.emergency_read_only => {
+                emergency_read_only = true;
+                None
+            }
+            Err(error) => return Err(error.into()),
+        }
+    } else {
+        None
+    };
+    let static_router = if let Some(registry) = &managed_registry {
+        Some(registry.static_config().await?)
+    } else if emergency_read_only {
+        let settings = registry_settings
+            .as_ref()
+            .expect("emergency registry settings");
+        let recovery_path = settings
+            .recovery_file
+            .as_deref()
+            .ok_or("emergency_read_only requires registry.recovery_file")?;
+        config::static_router(&config::load(Some(recovery_path))?.1)?
+    } else {
+        config::static_router(&file_config)?
+    };
     let catalog_url = setting(
         args.catalog.or(args.path),
         "ROCKLAKE_CATALOG",
@@ -410,7 +776,7 @@ async fn cmd_serve(
             .map(|catalog| catalog.catalog.display_uri())
     })
     .ok_or("a catalog path is required (use `serve ./lake` or --catalog)")?;
-    let mode = if args.read_only.unwrap_or(false) {
+    let mode = if emergency_read_only || args.read_only.unwrap_or(false) {
         "reader".to_string()
     } else {
         setting(
@@ -828,6 +1194,7 @@ async fn cmd_serve(
     } else {
         run_server_with_mode(server_config, catalog, access_mode).await?;
     }
+    drop(managed_registry);
     Ok(())
 }
 
@@ -2879,6 +3246,10 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
     if let Some(key) = config.encryption_key.as_deref() {
         rocklake_catalog::EncryptionConfig::from_hex(key).map_err(|e| e.to_string())?;
     }
+    if let Some(registry) = &config.registry {
+        CatalogLocation::parse(&registry.location)
+            .map_err(|error| format!("invalid registry location: {error}"))?;
+    }
     config::static_router(config)?;
     Ok(())
 }
@@ -2887,6 +3258,7 @@ fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
     serde_json::json!({
         "catalog": config.catalog,
         "router": config.router.as_ref().map(|_| "static"),
+        "registry": config.registry.as_ref().map(|_| "managed"),
         "catalogs": config.catalogs.len(),
         "bind": config.bind,
         "max_sessions": config.max_sessions,
