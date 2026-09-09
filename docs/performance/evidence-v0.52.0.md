@@ -39,4 +39,4 @@ contract for the report and JSONL event files.
 
 Do not convert a run into a compatibility claim until LocalFS and MinIO have
 completed the required recovery, cancellation, failure-injection, and bounded
-memory review described in the [v0.52.0 roadmap](../../ROADMAP.md#v0520--reproducible-localfs-and-minio-scale-evidence).
+memory review described in the [v0.52.0 roadmap](https://github.com/trickle-labs/rocklake/blob/main/ROADMAP.md#v0520--reproducible-localfs-and-minio-scale-evidence).
