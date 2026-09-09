@@ -1,14 +1,15 @@
 # Release process
 
-Releases are prepared from the tagged source commit. For v0.52.0, the
+Releases are prepared from the tagged source commit. For v0.53.0, the
 release-blocking `Release Certification` workflow retains the complete
 correctness matrix:
 formatting, clippy, workspace tests, DuckLake conformance, public-surface and
 backend execution, Windows, security, docs, quickstart, compatibility, Miri,
 sanitizers, and the preserved v0.47.17 production-failure certification. The
-v0.52.0 LocalFS and MinIO scale evidence is run with `rocklake-evidence` on
-dedicated hardware and reviewed before scale claims are published. The
-publication stage also tests the built artifacts without rebuilding from source.
+v0.53.0 lifecycle tests cover shared connection and request ownership,
+cancellation, typed admission permits, and exactly-once response observation.
+The publication stage also tests the built artifacts without rebuilding from
+source.
 
 ## Before the release PR
 
@@ -23,10 +24,9 @@ bash scripts/quickstart.sh
 ```
 
 Update `CHANGELOG.md` and current version references. Keep claims tied to
-tests: v0.52.0 supports the binary, DuckLake 1.0 targets covered by CI, local
+tests: v0.53.0 supports the binary, DuckLake 1.0 targets covered by CI, local
 and cloud object storage, server-side TLS, password authentication,
-SCRAM-SHA-256 authentication, and typed TOML configuration. LocalFS and MinIO
-scale claims require the v0.52.0 evidence report and review. It does not
+SCRAM-SHA-256 authentication, and typed TOML configuration. It does not
 publish Docker images or support mTLS or certificate hot-reload.
 
 The release workflow must certify the exact commit SHA before a version tag is
@@ -38,8 +38,8 @@ SHA; it does not push a version bump after tagging.
 After review and green CI, merge the release PR and tag the merge commit:
 
 ```bash
-git tag v0.52.0
-git push origin v0.52.0
+git tag v0.53.0
+git push origin v0.53.0
 ```
 
 Release artifacts must be built from that tag. The release contains raw

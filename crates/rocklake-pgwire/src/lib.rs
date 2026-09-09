@@ -7,6 +7,7 @@ pub mod copy_parser;
 pub mod error;
 pub mod executor;
 pub mod handler;
+pub mod lifecycle;
 pub mod notify;
 pub mod schema_registry;
 pub mod scram;

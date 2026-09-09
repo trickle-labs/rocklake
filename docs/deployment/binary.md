@@ -9,13 +9,13 @@ The RockLake binary is statically linked (on Linux) and has no runtime dependenc
 ### Pre-built Releases
 
 Download the pre-built binary and its checksum for your platform from the
-[v0.52.0 GitHub release](https://github.com/trickle-labs/rocklake/releases/tag/v0.52.0):
+[v0.53.0 GitHub release](https://github.com/trickle-labs/rocklake/releases/tag/v0.53.0):
 
 === "Linux (x86_64)"
 
     ```bash
-    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.52.0/rocklake-linux-x86_64
-    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.52.0/rocklake-linux-x86_64.sha256
+    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.53.0/rocklake-linux-x86_64
+    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.53.0/rocklake-linux-x86_64.sha256
     sha256sum -c rocklake-linux-x86_64.sha256
     chmod +x rocklake-linux-x86_64
     sudo install -m 755 rocklake-linux-x86_64 /usr/local/bin/rocklake
@@ -24,8 +24,8 @@ Download the pre-built binary and its checksum for your platform from the
 === "Linux (ARM64 / aarch64)"
 
     ```bash
-    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.52.0/rocklake-linux-aarch64
-    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.52.0/rocklake-linux-aarch64.sha256
+    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.53.0/rocklake-linux-aarch64
+    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.53.0/rocklake-linux-aarch64.sha256
     sha256sum -c rocklake-linux-aarch64.sha256
     chmod +x rocklake-linux-aarch64
     sudo install -m 755 rocklake-linux-aarch64 /usr/local/bin/rocklake
@@ -34,8 +34,8 @@ Download the pre-built binary and its checksum for your platform from the
 === "macOS (Apple Silicon)"
 
     ```bash
-    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.52.0/rocklake-macos-arm64
-    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.52.0/rocklake-macos-arm64.sha256
+    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.53.0/rocklake-macos-arm64
+    curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.53.0/rocklake-macos-arm64.sha256
     shasum -a 256 -c rocklake-macos-arm64.sha256
     chmod +x rocklake-macos-arm64
     sudo install -m 755 rocklake-macos-arm64 /usr/local/bin/rocklake
@@ -44,8 +44,8 @@ Download the pre-built binary and its checksum for your platform from the
 === "Windows (x86-64)"
 
     ```powershell
-    Invoke-WebRequest -Uri "https://github.com/trickle-labs/rocklake/releases/download/v0.52.0/rocklake-windows-x86_64.exe" -OutFile rocklake.exe
-    Invoke-WebRequest -Uri "https://github.com/trickle-labs/rocklake/releases/download/v0.52.0/rocklake-windows-x86_64.exe.sha256" -OutFile rocklake-windows-x86_64.exe.sha256
+    Invoke-WebRequest -Uri "https://github.com/trickle-labs/rocklake/releases/download/v0.53.0/rocklake-windows-x86_64.exe" -OutFile rocklake.exe
+    Invoke-WebRequest -Uri "https://github.com/trickle-labs/rocklake/releases/download/v0.53.0/rocklake-windows-x86_64.exe.sha256" -OutFile rocklake-windows-x86_64.exe.sha256
     $expected = (Get-Content rocklake-windows-x86_64.exe.sha256).Split()[0]
     $actual   = (Get-FileHash rocklake.exe -Algorithm SHA256).Hash.ToLower()
     if ($expected -ne $actual) { Write-Error "Checksum mismatch" }
@@ -60,7 +60,7 @@ Verify the installation:
 
 ```bash
 rocklake --version
-# RockLake 0.52.0
+# RockLake 0.53.0
 ```
 
 ### Building from Source
@@ -424,6 +424,6 @@ Do not grant `s3:*` or full bucket access. RockLake does not need access to data
 ## Further Reading
 
 - **[Configuration](configuration.md)** — Full reference for all configuration options
-- Docker images are not published or supported in v0.52.0.
+- Docker images are not published or supported in v0.53.0.
 - **[High Availability](high-availability.md)** — Running with failover for uptime SLAs
 - **[Operations: Health Checks](../operations/health-checks.md)** — Detailed monitoring integration

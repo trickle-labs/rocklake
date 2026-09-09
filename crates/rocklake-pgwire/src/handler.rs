@@ -4,8 +4,7 @@
 //! Supports optional password authentication (cleartext with constant-time comparison).
 
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -28,7 +27,7 @@ use pgwire::api::stmt::{QueryParser, StoredStatement};
 use pgwire::api::store::PortalStore;
 use pgwire::api::{
     ClientInfo, ClientPortalStore, NoopErrorHandler, PgWireConnectionState, PgWireServerHandlers,
-    Type, METADATA_USER,
+    Type, METADATA_DATABASE, METADATA_USER,
 };
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::data::RowDescription;
@@ -38,8 +37,8 @@ use pgwire::messages::{copy::CopyOutResponse, PgWireBackendMessage, PgWireFronte
 use sqlparser::ast::{Expr, SelectItem, SetExpr, Statement};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
-use tracing::{info_span, warn, Instrument, Span};
+use tokio::sync::{Mutex, Semaphore};
+use tracing::Instrument;
 
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
@@ -48,8 +47,11 @@ use rocklake_sql::{classify_statement, ParamValues, StatementKind};
 
 use crate::copy_parser;
 use crate::executor;
+use crate::lifecycle::{
+    AdmissionPermit, ConnectionContext, OperationClass, RequestContext, RequestTerminalState,
+};
 use crate::notify::NotifyManager;
-use crate::server::{server_shutting_down_error, AuthConfig, ConnectionActivity};
+use crate::server::{server_shutting_down_error, AuthConfig};
 use crate::session::{BootstrapSchemaRow, SessionState};
 
 /// RockLake COPY handler: parses binary COPY FROM STDIN data for ducklake_*
@@ -57,6 +59,8 @@ use crate::session::{BootstrapSchemaRow, SessionState};
 #[derive(Clone)]
 pub struct RockLakeCopyHandler {
     session: Arc<Mutex<SessionState>>,
+    connection: Arc<ConnectionContext>,
+    copy_request: Arc<StdMutex<Option<RequestContext>>>,
     mode: executor::AccessMode,
 }
 
@@ -66,7 +70,43 @@ impl RockLakeCopyHandler {
     }
 
     pub fn new_with_mode(session: Arc<Mutex<SessionState>>, mode: executor::AccessMode) -> Self {
-        Self { session, mode }
+        Self {
+            session,
+            connection: ConnectionContext::standalone(None),
+            copy_request: Arc::new(StdMutex::new(None)),
+            mode,
+        }
+    }
+
+    fn new_with_connection(connection: Arc<ConnectionContext>, mode: executor::AccessMode) -> Self {
+        Self {
+            session: connection.session(),
+            connection,
+            copy_request: Arc::new(StdMutex::new(None)),
+            mode,
+        }
+    }
+
+    fn begin_copy_request(&self) -> RequestContext {
+        let mut request = self
+            .copy_request
+            .lock()
+            .expect("copy request mutex poisoned");
+        request
+            .get_or_insert_with(|| {
+                self.connection
+                    .begin_request(OperationClass::Copy, Duration::from_secs(1))
+            })
+            .clone()
+    }
+
+    fn take_copy_request(&self) -> RequestContext {
+        let request = self
+            .copy_request
+            .lock()
+            .expect("copy request mutex poisoned")
+            .take();
+        request.unwrap_or_else(|| self.begin_copy_request())
     }
 }
 
@@ -82,11 +122,23 @@ impl CopyHandler for RockLakeCopyHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        let query = self.begin_copy_request();
+        self.connection.touch();
         if self.mode == executor::AccessMode::Reader {
-            return Err(read_only_error());
+            let error = read_only_error();
+            query.record_error(&error);
+            query.finish(RequestTerminalState::Error);
+            return Err(error);
         }
         // Append incoming bytes to the accumulator for the active COPY table.
-        let mut session = self.session.lock().await;
+        let mut session = tokio::select! {
+            session = self.session.lock() => session,
+            _ = query.cancelled() => {
+                let error = query.cancellation_error();
+                query.finish(RequestTerminalState::Cancelled);
+                return Err(error);
+            }
+        };
         if let Some(acc) = &mut session.pending_copy {
             acc.data.extend_from_slice(&copy_data.data);
         }
@@ -103,8 +155,15 @@ impl CopyHandler for RockLakeCopyHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        let query = self.take_copy_request();
+        let mut observation = query.response_observer();
+        self.connection.touch();
         if self.mode == executor::AccessMode::Reader {
-            return Err(read_only_error());
+            let error = read_only_error();
+            observation.set_terminal(RequestTerminalState::Error);
+            query.record_error(&error);
+            query.finish(RequestTerminalState::Error);
+            return Err(error);
         }
         // Drain the accumulator outside the lock to avoid holding it during parsing.
         let (table, data) = {
@@ -113,7 +172,19 @@ impl CopyHandler for RockLakeCopyHandler {
                 Some(acc) => (acc.table, acc.data),
                 None => {
                     // No active COPY — still send CommandComplete.
-                    return send_copy_done(client, 0).await;
+                    let result = send_copy_done(client, 0).await;
+                    match &result {
+                        Ok(()) => {
+                            observation.finish();
+                            query.finish(RequestTerminalState::Completed);
+                        }
+                        Err(error) => {
+                            observation.set_terminal(RequestTerminalState::ProtocolError);
+                            query.record_error(error);
+                            query.finish(RequestTerminalState::ProtocolError);
+                        }
+                    }
+                    return result;
                 }
             }
         };
@@ -131,11 +202,15 @@ impl CopyHandler for RockLakeCopyHandler {
                     )))
                     .await
                     .ok();
-                return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                observation.set_terminal(RequestTerminalState::ProtocolError);
+                let error = PgWireError::UserError(Box::new(ErrorInfo::new(
                     "ERROR".to_string(),
                     "08P01".to_string(),
                     msg,
-                ))));
+                )));
+                query.record_error(&error);
+                query.finish(RequestTerminalState::ProtocolError);
+                return Err(error);
             }
         };
         let row_count = rows.len();
@@ -171,7 +246,46 @@ impl CopyHandler for RockLakeCopyHandler {
             }
         }
 
-        send_copy_done(client, row_count).await
+        let result = send_copy_done(client, row_count).await;
+        match &result {
+            Ok(()) => {
+                observation.finish();
+                query.finish(RequestTerminalState::Completed);
+            }
+            Err(error) => {
+                observation.set_terminal(RequestTerminalState::ProtocolError);
+                query.record_error(error);
+                query.finish(RequestTerminalState::ProtocolError);
+            }
+        }
+        result
+    }
+
+    async fn on_copy_fail<C>(
+        &self,
+        _client: &mut C,
+        fail: pgwire::messages::copy::CopyFail,
+    ) -> PgWireError
+    where
+        C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let error = PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_owned(),
+            "57014".to_owned(),
+            format!("COPY IN mode terminated by the user: {}", fail.message),
+        )));
+        let query = self
+            .copy_request
+            .lock()
+            .expect("copy request mutex poisoned")
+            .take();
+        if let Some(query) = query {
+            query.record_error(&error);
+            query.finish(RequestTerminalState::Cancelled);
+        }
+        error
     }
 }
 
@@ -202,7 +316,7 @@ where
 /// The main RockLake query handler.
 pub struct RockLakeHandler {
     pub catalog: Arc<Mutex<CatalogStore>>,
-    pub session: Arc<Mutex<SessionState>>,
+    pub connection: Arc<ConnectionContext>,
     pub parser: Arc<RockLakeQueryParser>,
     pub auth: Arc<AuthConfig>,
     /// Shared LISTEN/NOTIFY manager for this server instance.
@@ -214,130 +328,17 @@ pub struct RockLakeHandler {
     max_active_scans: usize,
     max_buffered_rows: usize,
     max_response_bytes: usize,
+    response_buffer: Arc<Semaphore>,
     slow_operation_threshold: Duration,
-    metrics: Option<Arc<CatalogMetrics>>,
-    connection_id: uuid::Uuid,
-    lifecycle: Arc<ConnectionActivity>,
-}
-
-struct ScanPermit {
-    _permit: OwnedSemaphorePermit,
-    semaphore: Arc<Semaphore>,
-    max: usize,
-    metrics: Option<Arc<CatalogMetrics>>,
-}
-
-#[derive(Clone)]
-struct QueryTelemetry {
-    connection_id: uuid::Uuid,
-    query_id: uuid::Uuid,
-    started: Instant,
-    span: Span,
-    finished: Arc<AtomicBool>,
-    slow_operation_threshold: Duration,
-    metrics: Option<Arc<CatalogMetrics>>,
-}
-
-impl QueryTelemetry {
-    fn new(
-        connection_id: uuid::Uuid,
-        slow_operation_threshold: Duration,
-        metrics: Option<Arc<CatalogMetrics>>,
-    ) -> Self {
-        let query_id = crate::telemetry::request_id();
-        let span = info_span!(
-            "pgwire_query",
-            connection_id = %connection_id,
-            query_id = %query_id,
-        );
-        Self {
-            connection_id,
-            query_id,
-            started: Instant::now(),
-            span,
-            finished: Arc::new(AtomicBool::new(false)),
-            slow_operation_threshold,
-            metrics,
-        }
-    }
-
-    fn record_admission(&self, started: Instant) {
-        if let Some(metrics) = &self.metrics {
-            metrics.observe_pgwire_admission_us(started.elapsed().as_micros() as u64);
-        }
-    }
-
-    fn record_execution(&self, started: Instant) {
-        if let Some(metrics) = &self.metrics {
-            metrics.observe_pgwire_execution_us(started.elapsed().as_micros() as u64);
-        }
-    }
-
-    fn record_response(&self, rows: u64, bytes: u64, first_row: Option<Instant>, started: Instant) {
-        if let Some(metrics) = &self.metrics {
-            let elapsed = started.elapsed();
-            let ttfr = first_row
-                .map(|first| first.duration_since(self.started).as_micros() as u64)
-                .unwrap_or(0);
-            metrics.record_pgwire_response_with_timing(
-                rows,
-                bytes,
-                ttfr,
-                elapsed.as_micros() as u64,
-            );
-            metrics.observe_pgwire_response_delivery_us(elapsed.as_micros() as u64);
-        }
-    }
-
-    fn finish(&self) {
-        if self.finished.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let elapsed = self.started.elapsed();
-        if let Some(metrics) = &self.metrics {
-            metrics.record_pgwire_query(elapsed.as_micros() as u64);
-        }
-        if elapsed >= self.slow_operation_threshold {
-            warn!(
-                query_id = %self.query_id,
-                connection_id = %self.connection_id,
-                operation = "pgwire_query",
-                elapsed_ms = elapsed.as_millis() as u64,
-                "slow operation"
-            );
-        }
-    }
-}
-
-struct ResponseObservation {
-    query: QueryTelemetry,
-    started: Instant,
-    first_row: Option<Instant>,
-    rows: u64,
-    bytes: u64,
-}
-
-impl ResponseObservation {
-    fn observe(&mut self) {
-        self.rows += 1;
-        self.first_row.get_or_insert_with(Instant::now);
-    }
-}
-
-impl Drop for ResponseObservation {
-    fn drop(&mut self) {
-        self.query
-            .record_response(self.rows, self.bytes, self.first_row, self.started);
-        self.query.finish();
-    }
 }
 
 fn wrap_query_response<'a>(
     response: Response<'a>,
-    permit: Option<ScanPermit>,
+    permit: Option<AdmissionPermit>,
     max_buffered_rows: usize,
     max_response_bytes: usize,
-    query: QueryTelemetry,
+    response_buffer: Arc<Semaphore>,
+    query: RequestContext,
 ) -> Response<'a> {
     let Response::Query(query_response) = response else {
         return response;
@@ -346,67 +347,76 @@ fn wrap_query_response<'a>(
     let schema = query_response.row_schema();
     let command_tag = query_response.command_tag().to_string();
     let rows = query_response.data_rows();
-    let state = (
-        rows,
-        permit,
-        0usize,
-        ResponseObservation {
-            query,
-            started: Instant::now(),
-            first_row: None,
-            rows: 0,
-            bytes: 0,
-        },
-    );
-    let rows = futures::stream::unfold(
-        state,
-        move |(mut rows, permit, bytes, mut observation)| async move {
-            let item = rows.next().await?;
+    let state = (rows, permit, 0usize, query.response_observer());
+    let rows = futures::stream::unfold(state, move |(mut rows, permit, bytes, mut observation)| {
+        let response_buffer = response_buffer.clone();
+        async move {
+            if observation.request.is_cancelled() {
+                observation.set_terminal(RequestTerminalState::Cancelled);
+                return Some((
+                    Err(observation.request.cancellation_error()),
+                    (rows, permit, bytes, observation),
+                ));
+            }
+            let Some(item) = rows.next().await else {
+                observation.set_terminal(RequestTerminalState::Completed);
+                let request = observation.request.clone();
+                observation.finish();
+                request.finish(RequestTerminalState::Completed);
+                return None;
+            };
             let mut next_bytes = bytes;
             let item = match item {
                 Ok(row) => {
                     if max_buffered_rows < 1 {
-                        if let Some(metrics) = &observation.query.metrics {
+                        if let Some(metrics) = observation.request.metrics() {
                             metrics.increment_resource_limit_exhaustions();
                         }
+                        observation.set_terminal(RequestTerminalState::Error);
                         return Some((
                             Err(resource_limit_error("buffered row limit exhausted")),
                             (rows, permit, bytes, observation),
                         ));
                     }
+                    let buffer_permit = match response_buffer.clone().try_acquire_owned() {
+                        Ok(permit) => AdmissionPermit::response_buffer(permit),
+                        Err(_) => {
+                            if let Some(metrics) = observation.request.metrics() {
+                                metrics.increment_resource_limit_exhaustions();
+                            }
+                            observation.set_terminal(RequestTerminalState::Error);
+                            return Some((
+                                Err(resource_limit_error("response buffer capacity exhausted")),
+                                (rows, permit, bytes, observation),
+                            ));
+                        }
+                    };
                     next_bytes = bytes.saturating_add(row.data.len());
                     if next_bytes > max_response_bytes {
-                        if let Some(metrics) = &observation.query.metrics {
+                        if let Some(metrics) = observation.request.metrics() {
                             metrics.increment_resource_limit_exhaustions();
                         }
+                        observation.set_terminal(RequestTerminalState::Error);
                         Err(resource_limit_error("response byte limit exhausted"))
                     } else {
-                        observation.observe();
-                        observation.bytes = next_bytes as u64;
+                        observation.observe_row(row.data.len());
+                        observation.mark_first_row();
+                        drop(buffer_permit);
                         Ok(row)
                     }
                 }
-                Err(error) => Err(error),
+                Err(error) => {
+                    observation.set_terminal(RequestTerminalState::Error);
+                    Err(error)
+                }
             };
             Some((item, (rows, permit, next_bytes, observation)))
-        },
-    )
+        }
+    })
     .boxed();
     let mut wrapped = QueryResponse::new(schema, rows);
     wrapped.set_command_tag(&command_tag);
     Response::Query(wrapped)
-}
-
-impl Drop for ScanPermit {
-    fn drop(&mut self) {
-        if let Some(metrics) = &self.metrics {
-            metrics.set_active_scans(
-                self.max
-                    .saturating_sub(self.semaphore.available_permits().saturating_add(1))
-                    as u64,
-            );
-        }
-    }
 }
 
 fn resource_limit_error(message: &str) -> PgWireError {
@@ -426,9 +436,10 @@ impl RockLakeHandler {
         catalog: Arc<Mutex<CatalogStore>>,
         access_mode: executor::AccessMode,
     ) -> Self {
+        let connection = ConnectionContext::standalone(None);
         Self {
             catalog,
-            session: Arc::new(Mutex::new(SessionState::new())),
+            connection,
             parser: Arc::new(RockLakeQueryParser),
             auth: Arc::new(AuthConfig::default()),
             notify_manager: Arc::new(NotifyManager::new()),
@@ -438,10 +449,8 @@ impl RockLakeHandler {
             max_active_scans: 25,
             max_buffered_rows: 1024,
             max_response_bytes: usize::MAX,
+            response_buffer: Arc::new(Semaphore::new(1024)),
             slow_operation_threshold: Duration::from_secs(1),
-            metrics: None,
-            connection_id: crate::telemetry::request_id(),
-            lifecycle: ConnectionActivity::standalone(),
         }
     }
 
@@ -454,9 +463,10 @@ impl RockLakeHandler {
         auth: Arc<AuthConfig>,
         access_mode: executor::AccessMode,
     ) -> Self {
+        let connection = ConnectionContext::standalone(None);
         Self {
             catalog,
-            session: Arc::new(Mutex::new(SessionState::new())),
+            connection,
             parser: Arc::new(RockLakeQueryParser),
             auth,
             notify_manager: Arc::new(NotifyManager::new()),
@@ -466,10 +476,8 @@ impl RockLakeHandler {
             max_active_scans: 25,
             max_buffered_rows: 1024,
             max_response_bytes: usize::MAX,
+            response_buffer: Arc::new(Semaphore::new(1024)),
             slow_operation_threshold: Duration::from_secs(1),
-            metrics: None,
-            connection_id: crate::telemetry::request_id(),
-            lifecycle: ConnectionActivity::standalone(),
         }
     }
 
@@ -535,8 +543,7 @@ impl RockLakeHandler {
             max_buffered_rows,
             max_response_bytes,
             slow_operation_threshold,
-            metrics,
-            ConnectionActivity::standalone(),
+            ConnectionContext::standalone(metrics),
         )
     }
 
@@ -552,12 +559,11 @@ impl RockLakeHandler {
         max_buffered_rows: usize,
         max_response_bytes: usize,
         slow_operation_threshold: Duration,
-        metrics: Option<Arc<CatalogMetrics>>,
-        lifecycle: Arc<ConnectionActivity>,
+        connection: Arc<ConnectionContext>,
     ) -> Self {
         Self {
             catalog,
-            session: Arc::new(Mutex::new(SessionState::new())),
+            connection,
             parser: Arc::new(RockLakeQueryParser),
             auth,
             notify_manager,
@@ -567,35 +573,35 @@ impl RockLakeHandler {
             max_active_scans,
             max_buffered_rows,
             max_response_bytes,
+            response_buffer: Arc::new(Semaphore::new(max_buffered_rows.max(1))),
             slow_operation_threshold,
-            metrics,
-            connection_id: crate::telemetry::request_id(),
-            lifecycle,
         }
     }
 
-    fn query_telemetry(&self) -> QueryTelemetry {
-        QueryTelemetry::new(
-            self.connection_id,
-            self.slow_operation_threshold,
-            self.metrics.clone(),
-        )
+    fn request_context(&self, operation: OperationClass) -> RequestContext {
+        self.connection
+            .begin_request(operation, self.slow_operation_threshold)
     }
 
     pub(crate) fn connection_id(&self) -> uuid::Uuid {
-        self.connection_id
+        self.connection.connection_id()
     }
 
-    fn classify_sql(&self, sql: &str, query: &QueryTelemetry) -> StatementKind {
+    fn classify_sql(&self, sql: &str, query: &RequestContext) -> StatementKind {
         let classification_started = Instant::now();
         let kind = classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
-        if let Some(metrics) = &self.metrics {
-            metrics
-                .observe_sql_classification_us(classification_started.elapsed().as_micros() as u64);
-        }
+        query.record_classification(classification_started);
+        query.set_operation_class(match kind {
+            StatementKind::CopyToStdout { .. } => OperationClass::Copy,
+            StatementKind::SelectDataFiles
+            | StatementKind::SelectDataFilesWithLimit
+            | StatementKind::SelectFileColumnStats
+            | StatementKind::SelectDeleteFiles => OperationClass::InteractiveScan,
+            _ => OperationClass::Interactive,
+        });
         tracing::debug!(
-            query_id = %query.query_id,
-            connection_id = %query.connection_id,
+            query_id = %query.query_id(),
+            connection_id = %query.connection_id(),
             statement_kind = ?kind,
             "classified SQL statement"
         );
@@ -605,8 +611,8 @@ impl RockLakeHandler {
     async fn acquire_scan(
         &self,
         kind: &StatementKind,
-        query: &QueryTelemetry,
-    ) -> PgWireResult<Option<ScanPermit>> {
+        query: &RequestContext,
+    ) -> PgWireResult<Option<AdmissionPermit>> {
         let admission_started = Instant::now();
         if !matches!(
             kind,
@@ -620,31 +626,29 @@ impl RockLakeHandler {
         }
         // Waiting is cancellation-safe: dropping the acquire future releases
         // the queue slot without consuming a permit.
-        let permit = self
-            .scan_semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| {
-                query.record_admission(admission_started);
-                if let Some(metrics) = &self.metrics {
+        let permit = tokio::select! {
+            permit = self.scan_semaphore.clone().acquire_owned() => permit.map_err(|_| {
+                if let Some(metrics) = query.metrics() {
                     metrics.increment_resource_limit_exhaustions();
                 }
                 resource_limit_error("active catalog scan limit unavailable")
-            })?;
-        if let Some(metrics) = &self.metrics {
+            }),
+            _ = query.cancelled() => Err(query.cancellation_error()),
+        };
+        query.record_admission(admission_started);
+        let permit = permit?;
+        if let Some(metrics) = query.metrics() {
             metrics.set_active_scans(
                 self.max_active_scans
                     .saturating_sub(self.scan_semaphore.available_permits()) as u64,
             );
         }
-        query.record_admission(admission_started);
-        Ok(Some(ScanPermit {
-            _permit: permit,
-            semaphore: self.scan_semaphore.clone(),
-            max: self.max_active_scans,
-            metrics: self.metrics.clone(),
-        }))
+        Ok(Some(AdmissionPermit::scan(
+            permit,
+            self.scan_semaphore.clone(),
+            self.max_active_scans,
+            query.metrics(),
+        )))
     }
 
     /// If `sql` is a `COPY (SELECT ...) TO STDOUT`, execute the inner SELECT
@@ -653,7 +657,7 @@ impl RockLakeHandler {
         &self,
         client: &mut C,
         kind: &StatementKind,
-        query: &QueryTelemetry,
+        query: &RequestContext,
     ) -> PgWireResult<Option<usize>>
     where
         C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
@@ -669,17 +673,23 @@ impl RockLakeHandler {
 
         let params = ParamValues::default();
         let execution_started = Instant::now();
-        let mut session = self.session.lock().await;
-        let result = executor::execute_sql_with_mode(
-            inner_sql,
-            &params,
-            &self.catalog,
-            &mut session,
-            &self.notify_manager,
-            &self.extension_schemas,
-            self.access_mode,
-        )
-        .await;
+        let session_handle = self.connection.session();
+        let mut session = session_handle.lock().await;
+        let result = tokio::select! {
+            result = executor::execute_sql_with_mode(
+                inner_sql,
+                &params,
+                &self.catalog,
+                &mut session,
+                &self.notify_manager,
+                &self.extension_schemas,
+                self.access_mode,
+            ) => result,
+            _ = query.cancelled() => {
+                query.record_execution(execution_started);
+                return Err(query.cancellation_error());
+            }
+        };
         query.record_execution(execution_started);
         let mut responses = result.map_err(|e| -> PgWireError { e.into() })?;
 
@@ -702,8 +712,7 @@ impl RockLakeHandler {
         let row_schema = query_response.row_schema();
         let projected_indices = projected_copy_indices(inner_sql, row_schema.as_ref());
         let columns = projected_indices.len();
-        let response_started = Instant::now();
-        let mut first_row = None;
+        let mut observation = query.response_observer();
         client
             .send(PgWireBackendMessage::CopyOutResponse(CopyOutResponse::new(
                 1,
@@ -717,22 +726,40 @@ impl RockLakeHandler {
         let mut payload = BytesMut::from(binary_copy_header().as_ref());
         let mut rows = query_response.data_rows();
         while let Some(row_result) = rows.next().await {
-            let row = row_result?;
-            let projected_row = project_copy_row_data(
+            if query.is_cancelled() {
+                observation.set_terminal(RequestTerminalState::Cancelled);
+                return Err(query.cancellation_error());
+            }
+            let row = match row_result {
+                Ok(row) => row,
+                Err(error) => {
+                    observation.set_terminal(RequestTerminalState::Error);
+                    return Err(error);
+                }
+            };
+            let projected_row = match project_copy_row_data(
                 &row.data,
                 row.field_count as usize,
                 &projected_indices,
                 row_schema.as_ref(),
-            )?;
+            ) {
+                Ok(projected_row) => projected_row,
+                Err(error) => {
+                    observation.set_terminal(RequestTerminalState::Error);
+                    return Err(error);
+                }
+            };
             let row_bytes = 2usize
                 .saturating_add(projected_row.len())
                 .saturating_add(columns.saturating_mul(4));
             response_bytes = response_bytes.saturating_add(row_bytes);
             if response_bytes > self.max_response_bytes {
+                observation.set_terminal(RequestTerminalState::Error);
                 return Err(resource_limit_error("response byte limit exhausted"));
             }
             payload.put_i16(columns as i16);
             payload.put_slice(&projected_row);
+            observation.observe_row(row_bytes);
             row_count += 1;
             if payload.len() >= self.max_response_bytes.min(64 * 1024) {
                 client
@@ -740,7 +767,7 @@ impl RockLakeHandler {
                         pgwire::messages::copy::CopyData::new(payload.split().freeze()),
                     ))
                     .await?;
-                first_row.get_or_insert_with(Instant::now);
+                observation.mark_first_row();
             }
         }
 
@@ -754,7 +781,7 @@ impl RockLakeHandler {
                 ))
                 .await?;
             if row_count > 0 {
-                first_row.get_or_insert_with(Instant::now);
+                observation.mark_first_row();
             }
         }
 
@@ -764,12 +791,8 @@ impl RockLakeHandler {
             ))
             .await?;
 
-        query.record_response(
-            row_count as u64,
-            response_bytes as u64,
-            first_row,
-            response_started,
-        );
+        observation.finish();
+        query.skip_next_response_observation();
 
         Ok(Some(row_count))
     }
@@ -1041,7 +1064,7 @@ fn copy_out_error(message: &str) -> PgWireError {
 pub struct RockLakeStartupHandler {
     auth: Arc<AuthConfig>,
     tls_required: bool,
-    lifecycle: Arc<ConnectionActivity>,
+    connection: Arc<ConnectionContext>,
     /// Per-connection SCRAM state (None until the client-first-message
     /// is received; Some during the challenge-response phase).
     scram_state: Mutex<Option<crate::scram::ScramState>>,
@@ -1049,26 +1072,26 @@ pub struct RockLakeStartupHandler {
 
 impl RockLakeStartupHandler {
     pub fn new(auth: Arc<AuthConfig>) -> Self {
-        Self::new_with_tls_required_and_lifecycle(auth, false, ConnectionActivity::standalone())
+        Self::new_with_tls_required_and_lifecycle(auth, false, ConnectionContext::standalone(None))
     }
 
     pub fn new_with_tls_required(auth: Arc<AuthConfig>, tls_required: bool) -> Self {
         Self::new_with_tls_required_and_lifecycle(
             auth,
             tls_required,
-            ConnectionActivity::standalone(),
+            ConnectionContext::standalone(None),
         )
     }
 
     pub(crate) fn new_with_tls_required_and_lifecycle(
         auth: Arc<AuthConfig>,
         tls_required: bool,
-        lifecycle: Arc<ConnectionActivity>,
+        connection: Arc<ConnectionContext>,
     ) -> Self {
         Self {
             auth,
             tls_required,
-            lifecycle,
+            connection,
             scram_state: Mutex::new(None),
         }
     }
@@ -1086,7 +1109,7 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        self.lifecycle.touch();
+        self.connection.touch();
         match message {
             PgWireFrontendMessage::Startup(ref startup) => {
                 // Reject plaintext connections when TLS is required.
@@ -1106,12 +1129,22 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                 }
 
                 save_startup_parameters_to_metadata(client, startup);
+                if let Some(principal) = client.metadata().get(METADATA_USER) {
+                    self.connection.set_principal(principal.clone());
+                }
+                if let Some(route) = client.metadata().get(METADATA_DATABASE) {
+                    self.connection.select_catalog_route(route.clone());
+                }
                 if !self.auth.is_enabled() {
                     finish_authentication(client, &DefaultServerParameterProvider::default())
                         .await?;
+                    self.connection
+                        .set_protocol_state(PgWireConnectionState::ReadyForQuery);
                 } else if self.auth.scram_sha256 {
                     // Initiate SCRAM-SHA-256 SASL exchange.
                     client.set_state(PgWireConnectionState::AuthenticationInProgress);
+                    self.connection
+                        .set_protocol_state(PgWireConnectionState::AuthenticationInProgress);
                     client
                         .send(PgWireBackendMessage::Authentication(Authentication::SASL(
                             vec!["SCRAM-SHA-256".to_string()],
@@ -1140,6 +1173,8 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                         return Ok(());
                     }
                     client.set_state(PgWireConnectionState::AuthenticationInProgress);
+                    self.connection
+                        .set_protocol_state(PgWireConnectionState::AuthenticationInProgress);
                     client
                         .send(PgWireBackendMessage::Authentication(
                             Authentication::CleartextPassword,
@@ -1206,6 +1241,8 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                                     &DefaultServerParameterProvider::default(),
                                 )
                                 .await?;
+                                self.connection
+                                    .set_protocol_state(PgWireConnectionState::ReadyForQuery);
                             }
                             None => {
                                 return send_auth_error(client, "SCRAM authentication failed")
@@ -1220,6 +1257,8 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                     if crate::scram::ct_bytes_eq(pwd.password.as_bytes(), expected) {
                         finish_authentication(client, &DefaultServerParameterProvider::default())
                             .await?;
+                        self.connection
+                            .set_protocol_state(PgWireConnectionState::ReadyForQuery);
                     } else {
                         return send_auth_error(client, "Password authentication failed").await;
                     }
@@ -1249,42 +1288,12 @@ where
 }
 
 impl RockLakeHandler {
-    fn record_error_info(&self, query: &QueryTelemetry, info: &ErrorInfo) {
-        if let Some(metrics) = &self.metrics {
-            metrics.record_pgwire_error(&info.code);
-        }
-        tracing::error!(
-            query_id = %query.query_id,
-            connection_id = %query.connection_id,
-            sqlstate = %info.code,
-            error = %info.message,
-            "query failed"
-        );
-    }
-
-    fn record_query_error(&self, query: &QueryTelemetry, error: &PgWireError) {
-        let sqlstate = match error {
-            PgWireError::UserError(info) => Some(info.code.as_str()),
-            _ => None,
-        };
-        if let (Some(metrics), Some(sqlstate)) = (&self.metrics, sqlstate) {
-            metrics.record_pgwire_error(sqlstate);
-        }
-        tracing::error!(
-            query_id = %query.query_id,
-            connection_id = %query.connection_id,
-            sqlstate = sqlstate.unwrap_or("XX000"),
-            error = %error,
-            "query failed"
-        );
-    }
-
     async fn execute_simple_query<'a, C>(
         &self,
         client: &mut C,
         sql: &'a str,
-        query: &QueryTelemetry,
-    ) -> PgWireResult<(Vec<Response<'a>>, Option<ScanPermit>)>
+        query: &RequestContext,
+    ) -> PgWireResult<(Vec<Response<'a>>, Option<AdmissionPermit>)>
     where
         C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
         C::Error: Debug,
@@ -1303,17 +1312,23 @@ impl RockLakeHandler {
         let scan_permit = self.acquire_scan(&kind, query).await?;
         let params = ParamValues::default();
         let execution_started = Instant::now();
-        let mut session = self.session.lock().await;
-        let result = executor::execute_sql_with_mode(
-            sql,
-            &params,
-            &self.catalog,
-            &mut session,
-            &self.notify_manager,
-            &self.extension_schemas,
-            self.access_mode,
-        )
-        .await;
+        let session_handle = self.connection.session();
+        let mut session = session_handle.lock().await;
+        let result = tokio::select! {
+            result = executor::execute_sql_with_mode(
+                sql,
+                &params,
+                &self.catalog,
+                &mut session,
+                &self.notify_manager,
+                &self.extension_schemas,
+                self.access_mode,
+            ) => result,
+            _ = query.cancelled() => {
+                query.record_execution(execution_started);
+                return Err(query.cancellation_error());
+            }
+        };
         query.record_execution(execution_started);
         Ok((
             result.map_err(|error| -> PgWireError { error.into() })?,
@@ -1325,8 +1340,8 @@ impl RockLakeHandler {
         &self,
         client: &mut C,
         portal: &'a Portal<String>,
-        query: &QueryTelemetry,
-    ) -> PgWireResult<(Option<Response<'a>>, Option<ScanPermit>)>
+        query: &RequestContext,
+    ) -> PgWireResult<(Option<Response<'a>>, Option<AdmissionPermit>)>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
         C::PortalStore: PortalStore<Statement = String>,
@@ -1386,17 +1401,23 @@ impl RockLakeHandler {
         let params = ParamValues::new(param_values);
 
         let execution_started = Instant::now();
-        let mut session = self.session.lock().await;
-        let result = executor::execute_sql_with_mode(
-            sql,
-            &params,
-            &self.catalog,
-            &mut session,
-            &self.notify_manager,
-            &self.extension_schemas,
-            self.access_mode,
-        )
-        .await;
+        let session_handle = self.connection.session();
+        let mut session = session_handle.lock().await;
+        let result = tokio::select! {
+            result = executor::execute_sql_with_mode(
+                sql,
+                &params,
+                &self.catalog,
+                &mut session,
+                &self.notify_manager,
+                &self.extension_schemas,
+                self.access_mode,
+            ) => result,
+            _ = query.cancelled() => {
+                query.record_execution(execution_started);
+                return Err(query.cancellation_error());
+            }
+        };
         query.record_execution(execution_started);
         let mut responses = result.map_err(|error| -> PgWireError { error.into() })?;
         Ok((responses.pop(), scan_permit))
@@ -1407,14 +1428,14 @@ impl RockLakeHandler {
         client: &mut C,
         results: QueryResponse<'a>,
         send_describe: bool,
-        query: &QueryTelemetry,
+        query: &RequestContext,
     ) -> PgWireResult<()>
     where
         C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let response_started = Instant::now();
+        let mut observation = query.response_observer();
         let row_schema = results.row_schema();
         if send_describe {
             client
@@ -1428,28 +1449,50 @@ impl RockLakeHandler {
         let mut rows = results.data_rows();
         let mut row_count = 0u64;
         let mut response_bytes = 0u64;
-        let mut first_row = None;
         while let Some(row_result) = rows.next().await {
-            let row = row_result?;
+            if query.is_cancelled() {
+                observation.set_terminal(RequestTerminalState::Cancelled);
+                return Err(query.cancellation_error());
+            }
+            let row = match row_result {
+                Ok(row) => row,
+                Err(error) => {
+                    observation.set_terminal(RequestTerminalState::Error);
+                    return Err(error);
+                }
+            };
             if self.max_buffered_rows < 1 {
-                if let Some(metrics) = &self.metrics {
+                if let Some(metrics) = query.metrics() {
                     metrics.increment_resource_limit_exhaustions();
                 }
+                observation.set_terminal(RequestTerminalState::Error);
                 return Err(resource_limit_error("buffered row limit exhausted"));
             }
+            let _buffer_permit = match self.response_buffer.clone().try_acquire_owned() {
+                Ok(permit) => AdmissionPermit::response_buffer(permit),
+                Err(_) => {
+                    if let Some(metrics) = query.metrics() {
+                        metrics.increment_resource_limit_exhaustions();
+                    }
+                    observation.set_terminal(RequestTerminalState::Error);
+                    return Err(resource_limit_error("response buffer capacity exhausted"));
+                }
+            };
             let next_bytes = response_bytes.saturating_add(row.data.len() as u64);
             if next_bytes > self.max_response_bytes as u64 {
-                if let Some(metrics) = &self.metrics {
+                if let Some(metrics) = query.metrics() {
                     metrics.increment_resource_limit_exhaustions();
                 }
+                observation.set_terminal(RequestTerminalState::Error);
                 return Err(resource_limit_error("response byte limit exhausted"));
             }
             response_bytes = next_bytes;
             row_count += 1;
+            observation.observe_row(row.data.len());
             client.feed(PgWireBackendMessage::DataRow(row)).await?;
             if row_count == 1 {
                 client.flush().await?;
-                first_row = Some(Instant::now());
+                observation.mark_first_row();
             }
         }
 
@@ -1460,7 +1503,7 @@ impl RockLakeHandler {
                 ),
             ))
             .await?;
-        query.record_response(row_count, response_bytes, first_row, response_started);
+        observation.finish();
         Ok(())
     }
 
@@ -1471,15 +1514,26 @@ impl RockLakeHandler {
         send_describe: bool,
         extended: bool,
         transaction_status: &mut pgwire::messages::response::TransactionStatus,
-        query: &QueryTelemetry,
+        query: &RequestContext,
     ) -> PgWireResult<()>
     where
         C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let response_started = Instant::now();
+        if let Response::Query(results) = response {
+            return self
+                .send_query_response_with_telemetry(client, results, send_describe, query)
+                .await;
+        }
+        let response_is_error = matches!(response, Response::Error(_));
+        let mut observation = if query.take_skipped_response_observation() {
+            None
+        } else {
+            Some(query.response_observer())
+        };
         match response {
+            Response::Query(_) => unreachable!("query responses are handled above"),
             Response::EmptyQuery => {
                 client
                     .feed(PgWireBackendMessage::EmptyQueryResponse(
@@ -1487,43 +1541,55 @@ impl RockLakeHandler {
                     ))
                     .await?;
             }
-            Response::Query(results) => {
-                self.send_query_response_with_telemetry(client, results, send_describe, query)
-                    .await?;
-                return Ok(());
-            }
             Response::Execution(tag) => {
                 send_execution_response(client, tag).await?;
             }
             Response::TransactionStart(tag) => {
                 send_execution_response(client, tag).await?;
                 *transaction_status = transaction_status.to_in_transaction_state();
+                self.connection.set_transaction_status(*transaction_status);
             }
             Response::TransactionEnd(tag) => {
                 send_execution_response(client, tag).await?;
                 *transaction_status = transaction_status.to_idle_state();
+                self.connection.set_transaction_status(*transaction_status);
             }
             Response::Error(error) => {
-                self.record_error_info(query, &error);
+                query.record_error_info(&error);
                 client
                     .feed(PgWireBackendMessage::ErrorResponse((*error).into()))
                     .await?;
                 *transaction_status = transaction_status.to_error_state();
+                self.connection.set_transaction_status(*transaction_status);
+                if let Some(observation) = &mut observation {
+                    observation.set_terminal(RequestTerminalState::Error);
+                }
             }
             Response::CopyIn(result) => {
                 client.set_state(PgWireConnectionState::CopyInProgress(extended));
+                self.connection
+                    .set_protocol_state(PgWireConnectionState::CopyInProgress(extended));
                 pgwire::api::copy::send_copy_in_response(client, result).await?;
             }
             Response::CopyOut(result) => {
                 client.set_state(PgWireConnectionState::CopyInProgress(extended));
+                self.connection
+                    .set_protocol_state(PgWireConnectionState::CopyInProgress(extended));
                 pgwire::api::copy::send_copy_out_response(client, result).await?;
             }
             Response::CopyBoth(result) => {
                 client.set_state(PgWireConnectionState::CopyInProgress(extended));
+                self.connection
+                    .set_protocol_state(PgWireConnectionState::CopyInProgress(extended));
                 pgwire::api::copy::send_copy_both_response(client, result).await?;
             }
         }
-        query.record_response(0, 0, None, response_started);
+        if let Some(observation) = observation {
+            observation.finish();
+        }
+        if response_is_error {
+            query.finish(RequestTerminalState::Error);
+        }
         Ok(())
     }
 }
@@ -1540,24 +1606,27 @@ impl SimpleQueryHandler for RockLakeHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        if self.lifecycle.is_draining() {
+        if self.connection.is_draining() {
             return Err(server_shutting_down_error());
         }
-        let _query_guard = self.lifecycle.begin_query();
-        let query = self.query_telemetry();
+        let query = self.request_context(OperationClass::Interactive);
         let result = async {
             if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
                 return Err(PgWireError::NotReadyForQuery);
             }
             let mut transaction_status = client.transaction_status();
             client.set_state(PgWireConnectionState::QueryInProgress);
+            self.connection
+                .set_protocol_state(PgWireConnectionState::QueryInProgress);
             let sql = message.query;
             if sql.trim().is_empty() || sql.trim() == ";" {
+                let observation = query.response_observer();
                 client
                     .feed(PgWireBackendMessage::EmptyQueryResponse(
                         EmptyQueryResponse::new(),
                     ))
                     .await?;
+                observation.finish();
             } else {
                 let (responses, permit) = self.execute_simple_query(client, &sql, &query).await?;
                 for response in responses {
@@ -1576,16 +1645,19 @@ impl SimpleQueryHandler for RockLakeHandler {
             if !matches!(client.state(), PgWireConnectionState::CopyInProgress(_)) {
                 client.set_state(PgWireConnectionState::ReadyForQuery);
                 client.set_transaction_status(transaction_status);
+                self.connection
+                    .set_protocol_state(PgWireConnectionState::ReadyForQuery);
+                self.connection.set_transaction_status(transaction_status);
                 send_ready_for_query(client, transaction_status).await?;
             }
-            query.finish();
+            query.finish(RequestTerminalState::Completed);
             Ok(())
         }
-        .instrument(query.span.clone())
+        .instrument(query.span())
         .await;
         if let Err(error) = &result {
-            self.record_query_error(&query, error);
-            query.finish();
+            query.record_error(error);
+            query.finish(RequestTerminalState::Error);
         }
         result
     }
@@ -1600,13 +1672,16 @@ impl SimpleQueryHandler for RockLakeHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let telemetry = self.query_telemetry();
+        let telemetry = self.request_context(OperationClass::Interactive);
         let result = async {
             let (responses, mut permit) =
                 self.execute_simple_query(client, query, &telemetry).await?;
             let has_query = responses
                 .iter()
                 .any(|response| matches!(response, Response::Query(_)));
+            let has_error = responses
+                .iter()
+                .any(|response| matches!(response, Response::Error(_)));
             let responses = responses
                 .into_iter()
                 .map(|response| {
@@ -1615,20 +1690,25 @@ impl SimpleQueryHandler for RockLakeHandler {
                         permit.take(),
                         self.max_buffered_rows,
                         self.max_response_bytes,
+                        self.response_buffer.clone(),
                         telemetry.clone(),
                     )
                 })
                 .collect();
             if !has_query {
-                telemetry.finish();
+                telemetry.finish(if has_error {
+                    RequestTerminalState::Error
+                } else {
+                    RequestTerminalState::Completed
+                });
             }
             Ok(responses)
         }
-        .instrument(telemetry.span.clone())
+        .instrument(telemetry.span())
         .await;
         if let Err(error) = &result {
-            self.record_query_error(&telemetry, error);
-            telemetry.finish();
+            telemetry.record_error(error);
+            telemetry.finish(RequestTerminalState::Error);
         }
         result
     }
@@ -1667,17 +1747,18 @@ impl ExtendedQueryHandler for RockLakeHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        if self.lifecycle.is_draining() {
+        if self.connection.is_draining() {
             return Err(server_shutting_down_error());
         }
-        let _query_guard = self.lifecycle.begin_query();
-        let query = self.query_telemetry();
+        let query = self.request_context(OperationClass::Interactive);
         let result = async {
             if !matches!(client.state(), PgWireConnectionState::ReadyForQuery) {
                 return Err(PgWireError::NotReadyForQuery);
             }
             let mut transaction_status = client.transaction_status();
             client.set_state(PgWireConnectionState::QueryInProgress);
+            self.connection
+                .set_protocol_state(PgWireConnectionState::QueryInProgress);
             let portal_name = message.name.as_deref().unwrap_or(pgwire::api::DEFAULT_NAME);
             let portal = client
                 .portal_store()
@@ -1699,15 +1780,18 @@ impl ExtendedQueryHandler for RockLakeHandler {
             if !matches!(client.state(), PgWireConnectionState::CopyInProgress(_)) {
                 client.set_state(PgWireConnectionState::ReadyForQuery);
                 client.set_transaction_status(transaction_status);
+                self.connection
+                    .set_protocol_state(PgWireConnectionState::ReadyForQuery);
+                self.connection.set_transaction_status(transaction_status);
             }
-            query.finish();
+            query.finish(RequestTerminalState::Completed);
             Ok(())
         }
-        .instrument(query.span.clone())
+        .instrument(query.span())
         .await;
         if let Err(error) = &result {
-            self.record_query_error(&query, error);
-            query.finish();
+            query.record_error(error);
+            query.finish(RequestTerminalState::Error);
         }
         result
     }
@@ -1724,13 +1808,13 @@ impl ExtendedQueryHandler for RockLakeHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let telemetry = self.query_telemetry();
+        let telemetry = self.request_context(OperationClass::Interactive);
         let result = async {
             let (response, mut permit) = self
                 .execute_extended_query(client, portal, &telemetry)
                 .await?;
             let Some(response) = response else {
-                telemetry.finish();
+                telemetry.finish(RequestTerminalState::Completed);
                 return Ok(Response::EmptyQuery);
             };
             let response = wrap_query_response(
@@ -1738,18 +1822,19 @@ impl ExtendedQueryHandler for RockLakeHandler {
                 permit.take(),
                 self.max_buffered_rows,
                 self.max_response_bytes,
+                self.response_buffer.clone(),
                 telemetry.clone(),
             );
             if permit.is_none() && !matches!(response, Response::Query(_)) {
-                telemetry.finish();
+                telemetry.finish(RequestTerminalState::Completed);
             }
             Ok(response)
         }
-        .instrument(telemetry.span.clone())
+        .instrument(telemetry.span())
         .await;
         if let Err(error) = &result {
-            self.record_query_error(&telemetry, error);
-            telemetry.finish();
+            telemetry.record_error(error);
+            telemetry.finish(RequestTerminalState::Error);
         }
         result
     }
@@ -1812,13 +1897,16 @@ impl RockLakeServerHandlers {
     pub fn new(catalog: Arc<Mutex<CatalogStore>>) -> Self {
         let auth = Arc::new(AuthConfig::default());
         let handler = Arc::new(RockLakeHandler::new(catalog));
-        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
-            handler.session.clone(),
+        let connection = handler.connection.clone();
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_connection(
+            connection.clone(),
             handler.access_mode,
         ));
         Self {
             handler,
-            startup: Arc::new(RockLakeStartupHandler::new(auth)),
+            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required_and_lifecycle(
+                auth, false, connection,
+            )),
             copy_handler,
             error_handler: Arc::new(NoopErrorHandler),
         }
@@ -1826,13 +1914,16 @@ impl RockLakeServerHandlers {
 
     pub fn new_with_auth(catalog: Arc<Mutex<CatalogStore>>, auth: Arc<AuthConfig>) -> Self {
         let handler = Arc::new(RockLakeHandler::new_with_auth(catalog, auth.clone()));
-        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
-            handler.session.clone(),
+        let connection = handler.connection.clone();
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_connection(
+            connection.clone(),
             handler.access_mode,
         ));
         Self {
             handler,
-            startup: Arc::new(RockLakeStartupHandler::new(auth)),
+            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required_and_lifecycle(
+                auth, false, connection,
+            )),
             copy_handler,
             error_handler: Arc::new(NoopErrorHandler),
         }
@@ -1870,15 +1961,17 @@ impl RockLakeServerHandlers {
             extension_schemas,
             access_mode,
         ));
-        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
-            handler.session.clone(),
+        let connection = handler.connection.clone();
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_connection(
+            connection.clone(),
             access_mode,
         ));
         Self {
             handler,
-            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required(
+            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required_and_lifecycle(
                 auth,
                 tls_required,
+                connection,
             )),
             copy_handler,
             error_handler: Arc::new(NoopErrorHandler),
@@ -1912,8 +2005,7 @@ impl RockLakeServerHandlers {
             max_buffered_rows,
             max_response_bytes,
             slow_operation_threshold,
-            metrics,
-            ConnectionActivity::standalone(),
+            ConnectionContext::standalone(metrics),
         )
     }
 
@@ -1930,8 +2022,7 @@ impl RockLakeServerHandlers {
         max_buffered_rows: usize,
         max_response_bytes: usize,
         slow_operation_threshold: Duration,
-        metrics: Option<Arc<CatalogMetrics>>,
-        lifecycle: Arc<ConnectionActivity>,
+        connection: Arc<ConnectionContext>,
     ) -> Self {
         let handler = Arc::new(
             RockLakeHandler::new_with_config_mode_and_limits_and_lifecycle(
@@ -1945,12 +2036,11 @@ impl RockLakeServerHandlers {
                 max_buffered_rows,
                 max_response_bytes,
                 slow_operation_threshold,
-                metrics,
-                lifecycle.clone(),
+                connection.clone(),
             ),
         );
-        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_mode(
-            handler.session.clone(),
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_connection(
+            connection.clone(),
             access_mode,
         ));
         Self {
@@ -1958,7 +2048,7 @@ impl RockLakeServerHandlers {
             startup: Arc::new(RockLakeStartupHandler::new_with_tls_required_and_lifecycle(
                 auth,
                 tls_required,
-                lifecycle,
+                connection,
             )),
             copy_handler,
             error_handler: Arc::new(NoopErrorHandler),

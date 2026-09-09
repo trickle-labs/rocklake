@@ -3,228 +3,25 @@
 //! Supports optional TLS (--tls-cert, --tls-key) and password authentication.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::BytesMut;
 use pgwire::error::{ErrorInfo, PgWireError};
 use pgwire::messages::PgWireBackendMessage;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{watch, Mutex, Notify};
+use tokio::sync::{watch, Mutex};
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
 
 use crate::handler::RockLakeServerHandlers;
+pub use crate::lifecycle::SessionCounters;
+use crate::lifecycle::{decrement_if_positive, wait_for_connection_end, ConnectionContext};
 use crate::notify::NotifyManager;
-
-/// Monotonically-tracked session counters used to populate Prometheus gauges.
-#[derive(Default)]
-pub struct SessionCounters {
-    /// Current open connections.
-    pub connections_open: AtomicI64,
-    /// Open connections waiting for a query.
-    pub connections_idle: AtomicI64,
-    /// Queries currently executing.
-    pub queries_in_flight: AtomicI64,
-    /// Deprecated alias for `connections_open` kept for source compatibility.
-    pub active_sessions: AtomicI64,
-    /// Deprecated alias for `connections_idle` kept for source compatibility.
-    pub idle_sessions: AtomicI64,
-}
-
-impl SessionCounters {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-
-    fn publish(&self, metrics: Option<&Arc<CatalogMetrics>>) {
-        let open = self.connections_open.load(Ordering::Relaxed).max(0) as u64;
-        let idle = self.connections_idle.load(Ordering::Relaxed).max(0) as u64;
-        let queries = self.queries_in_flight.load(Ordering::Relaxed).max(0) as u64;
-        self.active_sessions.store(open as i64, Ordering::Relaxed);
-        self.idle_sessions.store(idle as i64, Ordering::Relaxed);
-        if let Some(metrics) = metrics {
-            metrics.set_connections_open(open);
-            metrics.set_connections_idle(idle);
-            metrics.set_queries_in_flight(queries);
-        }
-    }
-}
-
-/// Shared state for one connection's activity and the server's drain state.
-pub(crate) struct ConnectionActivity {
-    counters: Arc<SessionCounters>,
-    metrics: Option<Arc<CatalogMetrics>>,
-    draining: Arc<AtomicBool>,
-    query_in_flight: AtomicBool,
-    query_idle_counted: AtomicBool,
-    last_activity: StdMutex<Instant>,
-    activity: Notify,
-}
-
-impl ConnectionActivity {
-    pub(crate) fn new(
-        counters: Arc<SessionCounters>,
-        metrics: Option<Arc<CatalogMetrics>>,
-        draining: Arc<AtomicBool>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            counters,
-            metrics,
-            draining,
-            query_in_flight: AtomicBool::new(false),
-            query_idle_counted: AtomicBool::new(false),
-            last_activity: StdMutex::new(Instant::now()),
-            activity: Notify::new(),
-        })
-    }
-
-    pub(crate) fn standalone() -> Arc<Self> {
-        Self::new(
-            SessionCounters::new(),
-            None,
-            Arc::new(AtomicBool::new(false)),
-        )
-    }
-
-    pub(crate) fn is_draining(&self) -> bool {
-        self.draining.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn begin_query(self: &Arc<Self>) -> QueryGuard {
-        self.touch();
-        if !self.query_in_flight.swap(true, Ordering::AcqRel) {
-            let idle_counted = decrement_if_positive(&self.counters.connections_idle);
-            self.query_idle_counted
-                .store(idle_counted, Ordering::Release);
-            self.counters
-                .queries_in_flight
-                .fetch_add(1, Ordering::AcqRel);
-            self.counters.publish(self.metrics.as_ref());
-        }
-        QueryGuard {
-            activity: self.clone(),
-        }
-    }
-
-    fn finish_query(&self) {
-        if self.query_in_flight.swap(false, Ordering::AcqRel) {
-            if self.query_idle_counted.swap(false, Ordering::AcqRel) {
-                self.counters
-                    .connections_idle
-                    .fetch_add(1, Ordering::AcqRel);
-            }
-            self.counters
-                .queries_in_flight
-                .fetch_sub(1, Ordering::AcqRel);
-            self.counters.publish(self.metrics.as_ref());
-        }
-        self.touch();
-    }
-
-    pub(crate) fn touch(&self) {
-        *self
-            .last_activity
-            .lock()
-            .expect("connection activity mutex poisoned") = Instant::now();
-        self.activity.notify_one();
-    }
-
-    fn idle_deadline(&self, timeout: Duration) -> Instant {
-        *self
-            .last_activity
-            .lock()
-            .expect("connection activity mutex poisoned")
-            + timeout
-    }
-
-    fn idle_for_at_least(&self, timeout: Duration) -> bool {
-        self.last_activity
-            .lock()
-            .expect("connection activity mutex poisoned")
-            .elapsed()
-            >= timeout
-    }
-
-    fn query_is_in_flight(&self) -> bool {
-        self.query_in_flight.load(Ordering::Acquire)
-    }
-}
-
-fn decrement_if_positive(counter: &AtomicI64) -> bool {
-    loop {
-        let current = counter.load(Ordering::Acquire);
-        if current <= 0 {
-            return false;
-        }
-        if counter
-            .compare_exchange(current, current - 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            return true;
-        }
-    }
-}
-
-pub(crate) struct QueryGuard {
-    activity: Arc<ConnectionActivity>,
-}
-
-impl Drop for QueryGuard {
-    fn drop(&mut self) {
-        self.activity.finish_query();
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ConnectionEnd {
-    IdleTimeout,
-    Shutdown,
-}
-
-async fn wait_for_connection_end(
-    activity: Arc<ConnectionActivity>,
-    idle_timeout: Duration,
-    mut draining: watch::Receiver<bool>,
-) -> ConnectionEnd {
-    loop {
-        if *draining.borrow() && !activity.query_is_in_flight() {
-            return ConnectionEnd::Shutdown;
-        }
-
-        let activity_changed = activity.activity.notified();
-        let draining_changed = draining.changed();
-        if activity.query_is_in_flight() {
-            tokio::select! {
-                _ = activity_changed => {}
-                result = draining_changed => {
-                    if result.is_err() || *draining.borrow() && !activity.query_is_in_flight() {
-                        return ConnectionEnd::Shutdown;
-                    }
-                }
-            }
-        } else {
-            let deadline = activity.idle_deadline(idle_timeout);
-            tokio::select! {
-                _ = activity_changed => {}
-                result = draining_changed => {
-                    if (result.is_err() || *draining.borrow()) && !activity.query_is_in_flight() {
-                        return ConnectionEnd::Shutdown;
-                    }
-                }
-                _ = tokio::time::sleep_until(deadline.into()) => {
-                    if !activity.query_is_in_flight() && activity.idle_for_at_least(idle_timeout) {
-                        return ConnectionEnd::IdleTimeout;
-                    }
-                }
-            }
-        }
-    }
-}
 
 async fn reject_connection(
     mut socket: tokio::net::TcpStream,
@@ -566,7 +363,7 @@ pub async fn run_server_with_shutdown_mode(
                 let es = extension_schemas.clone();
                 let counters_ref = counters.clone();
                 let metrics_task = metrics_ref.clone();
-                let activity = ConnectionActivity::new(
+                let connection_context = ConnectionContext::new(
                     counters_ref.clone(),
                     metrics_task.clone(),
                     draining.clone(),
@@ -581,7 +378,7 @@ pub async fn run_server_with_shutdown_mode(
                 let drain_rx = drain_tx.subscribe();
 
                 tokio::spawn(async move {
-                    let _permit = permit;
+                    let _permit = crate::lifecycle::AdmissionPermit::connection(permit);
                     let handlers = RockLakeServerHandlers::new_with_config_mode_and_limits_and_lifecycle(
                         catalog,
                         auth,
@@ -594,8 +391,7 @@ pub async fn run_server_with_shutdown_mode(
                         config.max_buffered_rows,
                         config.max_response_bytes,
                         config.slow_operation_threshold,
-                        metrics_task.clone(),
-                        activity.clone(),
+                        connection_context.clone(),
                     );
                     let connection_id = handlers.handler.connection_id();
                     let span = info_span!("pgwire_connection", connection_id = %connection_id);
@@ -611,7 +407,7 @@ pub async fn run_server_with_shutdown_mode(
                             }
                         }
                         reason = wait_for_connection_end(
-                            activity.clone(),
+                            connection_context.activity().clone(),
                             idle_connection_timeout,
                             drain_rx,
                         ) => {
@@ -625,9 +421,7 @@ pub async fn run_server_with_shutdown_mode(
                     }
                     debug!(connection_id = %connection_id, peer = %addr, "connection closed");
 
-                    if activity.query_is_in_flight() {
-                        activity.finish_query();
-                    }
+                    connection_context.cancel();
                     counters_ref
                         .connections_open
                         .fetch_sub(1, Ordering::AcqRel);
@@ -665,6 +459,7 @@ pub async fn run_server_with_shutdown_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::{ConnectionActivity, ConnectionEnd};
 
     #[tokio::test]
     async fn connection_activity_tracks_query_and_idle_state() {
@@ -713,7 +508,7 @@ mod tests {
 
     #[tokio::test]
     async fn idle_timeout_closes_idle_connection() {
-        let activity = ConnectionActivity::standalone();
+        let activity = ConnectionContext::standalone(None).activity().clone();
         let (_drain_tx, drain_rx) = watch::channel(false);
         let result = tokio::time::timeout(
             Duration::from_secs(1),

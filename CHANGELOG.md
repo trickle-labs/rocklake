@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.53.0] — 2026-09-09
+
+### Added
+
+- Added shared `ConnectionContext` and `RequestContext` ownership for PG-wire
+  identity, session state, cancellation, timing, tracing, and terminal state.
+- Added typed, non-cloneable admission permits and an exactly-once
+  `ResponseObserver` for simple query, extended query, and COPY paths.
+
+### Changed
+
+- Consolidated request lifecycle, response accounting, error logging, and
+  connection activity handling without changing the supported SQL surface.
+- Updated workspace, binding, binary, and release documentation metadata to
+  v0.53.0.
+
 ## [0.52.0] — 2026-09-09
 
 ### Added

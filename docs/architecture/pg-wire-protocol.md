@@ -116,6 +116,21 @@ The `BackendKeyData` message provides a process ID and secret key that the clien
 
 Finally, `ReadyForQuery` with transaction status `'I'` (idle) signals that the connection is ready to accept queries.
 
+### Lifecycle ownership
+
+The server keeps one `ConnectionContext` per accepted connection. It owns the
+connection ID, startup identity, shared `SessionState`, protocol and
+transaction state, connection activity, and cancellation token. Each simple,
+extended, or COPY operation creates a `RequestContext` for its request ID,
+operation class, timing, tracing span, admission, cancellation, and terminal
+state.
+
+`AdmissionPermit` values are non-cloneable leases for connection, scan,
+administrative, and response-buffer capacity. A `ResponseObserver` owns
+exactly-once response accounting for rows, bytes, first-row timing, and
+terminal state. This keeps COPY input, COPY output, simple queries, and
+extended queries on the same completion path.
+
 ### Phase 5: Query Execution
 
 The connection enters the main query loop, handling messages until the client sends `Terminate` or the connection is interrupted.
