@@ -17,6 +17,7 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
+use rocklake_router::CatalogRouter;
 
 use crate::handler::RockLakeServerHandlers;
 pub use crate::lifecycle::SessionCounters;
@@ -270,6 +271,55 @@ pub async fn run_server_with_shutdown_mode(
     shutdown: tokio::sync::oneshot::Receiver<()>,
     access_mode: crate::executor::AccessMode,
 ) -> std::io::Result<()> {
+    run_server_with_shutdown_mode_inner(config, catalog, None, shutdown, access_mode).await
+}
+
+/// Run the server with a static multi-catalog router and a pre-opened default handle.
+pub async fn run_server_with_router(
+    config: ServerConfig,
+    router: Arc<CatalogRouter>,
+    access_mode: crate::executor::AccessMode,
+) -> std::io::Result<()> {
+    let default = router
+        .open_default()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    run_server_with_router_and_catalog(config, router, default, access_mode).await
+}
+
+/// Run the server with a static multi-catalog router and a pre-opened default handle.
+pub async fn run_server_with_router_and_catalog(
+    config: ServerConfig,
+    router: Arc<CatalogRouter>,
+    catalog: Arc<Mutex<CatalogStore>>,
+    access_mode: crate::executor::AccessMode,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let shutdown_signal = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        sigterm.recv().await;
+    };
+    #[cfg(not(unix))]
+    let shutdown_signal = tokio::signal::ctrl_c();
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let _ = shutdown_signal.await;
+        let _ = shutdown_tx.send(());
+    });
+    run_server_with_shutdown_mode_inner(config, catalog, Some(router), shutdown_rx, access_mode)
+        .await
+}
+
+async fn run_server_with_shutdown_mode_inner(
+    config: ServerConfig,
+    catalog: Arc<Mutex<CatalogStore>>,
+    router: Option<Arc<CatalogRouter>>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
+    access_mode: crate::executor::AccessMode,
+) -> std::io::Result<()> {
     let tls_acceptor = if config.tls.is_enabled() {
         Some(build_tls_acceptor(&config.tls)?)
     } else if config.tls.required {
@@ -360,6 +410,7 @@ pub async fn run_server_with_shutdown_mode(
                 }
 
                 let catalog = catalog.clone();
+                let router = router.clone();
                 let scans = scan_semaphore.clone();
                 let tls = tls_acceptor.clone();
                 let auth = auth_config.clone();
@@ -383,7 +434,7 @@ pub async fn run_server_with_shutdown_mode(
 
                 tokio::spawn(async move {
                     let _permit = crate::lifecycle::AdmissionPermit::connection(permit);
-                    let handlers = RockLakeServerHandlers::new_with_config_mode_and_limits_and_lifecycle(
+                    let handlers = RockLakeServerHandlers::new_with_config_mode_and_limits_and_lifecycle_and_router(
                         catalog,
                         auth,
                         tls_required,
@@ -396,6 +447,7 @@ pub async fn run_server_with_shutdown_mode(
                         config.max_response_bytes,
                         config.slow_operation_threshold,
                         connection_context.clone(),
+                        router,
                     );
                     let connection_id = handlers.handler.connection_id();
                     let span = info_span!("pgwire_connection", connection_id = %connection_id);

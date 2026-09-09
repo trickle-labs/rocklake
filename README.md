@@ -79,7 +79,7 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.53.2 is distributed and tested as a standalone binary. There is no published
+RockLake v0.54.0 is distributed and tested as a standalone binary. There is no published
 Docker image; release binaries are the primary supported installation path.
 
 ### Install Release Binary
@@ -90,8 +90,8 @@ single `SHA256SUMS`, and `release-manifest.json`.
 
 ```bash
 # Download binary and checksum
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.53.2/rocklake-linux-x86_64
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.53.2/rocklake-linux-x86_64.sha256
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.54.0/rocklake-linux-x86_64
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.54.0/rocklake-linux-x86_64.sha256
 
 # Verify checksum
 sha256sum -c rocklake-linux-x86_64.sha256
@@ -204,7 +204,8 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | **v0.52.0** | LocalFS and MinIO scale evidence | Done |
 | **v0.53.0** | Request lifecycle ownership consolidation | Done |
 | **v0.53.1** | Unified bounded metadata streaming | Done |
-| **v0.53.2** | Bounded administrative jobs | **Current** |
+| **v0.53.2** | Bounded administrative jobs | Done |
+| **v0.54.0** | Static multi-catalog router | **Current** |
 | Next | See [ROADMAP.md](ROADMAP.md) for the live Now/Next/Later plan | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.

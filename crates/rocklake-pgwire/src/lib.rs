@@ -19,4 +19,7 @@ pub mod types;
 
 pub use error::RockLakeError;
 pub use notify::{ConnectionSubscriptions, Notification, NotifyManager};
-pub use server::{run_server_with_shutdown, AuthConfig, ServerConfig, TlsConfig};
+pub use server::{
+    run_server_with_router, run_server_with_router_and_catalog, run_server_with_shutdown,
+    AuthConfig, ServerConfig, TlsConfig,
+};

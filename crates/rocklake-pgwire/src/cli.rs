@@ -53,6 +53,10 @@ pub enum Commands {
     #[command(subcommand)]
     Catalog(CatalogSubcommand),
 
+    /// Inspect and validate static multi-catalog routes.
+    #[command(subcommand)]
+    Catalogs(CatalogsSubcommand),
+
     /// Diagnostic and debugging operations.
     #[command(subcommand)]
     Debug(DebugSubcommand),
@@ -208,6 +212,25 @@ pub enum CatalogSubcommand {
     /// Inspect and control durable administrative jobs.
     #[command(subcommand)]
     Jobs(JobSubcommand),
+}
+
+/// Static multi-catalog router operations.
+#[derive(Debug, Subcommand)]
+pub enum CatalogsSubcommand {
+    /// Validate the static route configuration.
+    Validate,
+    /// List configured catalogs without opening them.
+    List {
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
+    /// Show configured catalogs and current open-handle state.
+    Status {
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
+    },
 }
 
 /// Durable administrative job controls.

@@ -8,6 +8,9 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
     pub catalog: Option<String>,
+    pub router: Option<rocklake_router::RouterSettings>,
+    #[serde(default)]
+    pub catalogs: Vec<rocklake_router::CatalogConfig>,
     pub bind: Option<String>,
     pub max_sessions: Option<usize>,
     pub metrics_port: Option<u16>,
@@ -52,7 +55,7 @@ pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), St
 }
 
 pub fn example() -> &'static str {
-    r#"# RockLake v0.53.2 configuration
+    r#"# RockLake v0.54.0 configuration
 catalog = "./lake"
 bind = "127.0.0.1:5432"
 mode = "writer"
@@ -70,5 +73,56 @@ slow_operation_threshold_ms = 1000
 # auth_user = "ducklake"
 # auth_password_file = "/run/secrets/rocklake-auth-password"
 # encryption_key_file = "/run/secrets/rocklake-encryption-key"
+
+# Static multi-catalog routing (omit `catalog` when this is configured):
+# [router]
+# mode = "static"
+# default_catalog = "analytics"
+# max_open_catalogs = 64
+# catalog_idle_timeout = 300
+# [[catalogs]]
+# id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9"
+# aliases = ["analytics", "analytics_prod"]
+# catalog = "s3://company-rocklake/catalogs/analytics"
+# data = "s3://company-data/analytics"
+# mode = "read-write"
+# credential_provider = "aws-default"
 "#
+}
+
+pub fn static_router(config: &ConfigFile) -> Result<Option<rocklake_router::StaticConfig>, String> {
+    if config.router.is_none() && config.catalogs.is_empty() {
+        return Ok(None);
+    }
+    rocklake_router::StaticConfig::new(
+        config.router.clone().unwrap_or_default(),
+        config.catalogs.clone(),
+    )
+    .map(Some)
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_and_validates_static_router_config() {
+        let config: ConfigFile = toml::from_str(
+            r#"
+                [router]
+                default_catalog = "main"
+                [[catalogs]]
+                id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9"
+                aliases = ["main"]
+                catalog = "file:///tmp/rocklake-config-catalog"
+                data = "file:///tmp/rocklake-config-data"
+                credential_provider = "env"
+            "#,
+        )
+        .unwrap();
+        let router = static_router(&config).unwrap().unwrap();
+        assert_eq!(router.settings.default_catalog.as_deref(), Some("main"));
+        assert_eq!(router.catalogs.len(), 1);
+    }
 }

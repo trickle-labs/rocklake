@@ -12,6 +12,7 @@ use pgwire::api::PgWireConnectionState;
 use pgwire::error::{ErrorInfo, PgWireError};
 use pgwire::messages::response::TransactionStatus;
 use rocklake_catalog::metrics::CatalogMetrics;
+use rocklake_router::CatalogId;
 use tokio::sync::{watch, Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{info_span, warn, Span};
@@ -335,6 +336,7 @@ pub struct ConnectionContext {
     session: Arc<Mutex<SessionState>>,
     principal: StdMutex<Option<String>>,
     catalog_route: StdMutex<Option<String>>,
+    catalog_id: StdMutex<Option<CatalogId>>,
     protocol_state: StdMutex<PgWireConnectionState>,
     transaction_status: StdMutex<TransactionStatus>,
     cancellation: CancellationToken,
@@ -352,6 +354,7 @@ impl ConnectionContext {
             session: Arc::new(Mutex::new(SessionState::new())),
             principal: StdMutex::new(None),
             catalog_route: StdMutex::new(None),
+            catalog_id: StdMutex::new(None),
             protocol_state: StdMutex::new(PgWireConnectionState::AwaitingSslRequest),
             transaction_status: StdMutex::new(TransactionStatus::Idle),
             cancellation: CancellationToken::new(),
@@ -421,6 +424,22 @@ impl ConnectionContext {
         self.catalog_route
             .lock()
             .expect("catalog route mutex poisoned")
+            .clone()
+    }
+
+    /// Bind this connection to a stable catalog identity after route resolution.
+    pub fn bind_catalog_id(&self, id: CatalogId) {
+        let mut bound = self.catalog_id.lock().expect("catalog id mutex poisoned");
+        if bound.is_none() {
+            *bound = Some(id);
+        }
+    }
+
+    /// Return the stable catalog identity bound to this connection.
+    pub fn catalog_id(&self) -> Option<CatalogId> {
+        self.catalog_id
+            .lock()
+            .expect("catalog id mutex poisoned")
             .clone()
     }
 

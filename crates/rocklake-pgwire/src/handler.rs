@@ -43,6 +43,7 @@ use tracing::Instrument;
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
 use rocklake_core::rows::ColumnRow;
+use rocklake_router::{CatalogMode, CatalogRouter, RouterError};
 use rocklake_sql::{classify_statement, ParamValues, StatementKind};
 
 use crate::copy_parser;
@@ -62,6 +63,7 @@ pub struct RockLakeCopyHandler {
     connection: Arc<ConnectionContext>,
     copy_request: Arc<StdMutex<Option<RequestContext>>>,
     mode: executor::AccessMode,
+    router: Option<Arc<CatalogRouter>>,
 }
 
 impl RockLakeCopyHandler {
@@ -75,16 +77,38 @@ impl RockLakeCopyHandler {
             connection: ConnectionContext::standalone(None),
             copy_request: Arc::new(StdMutex::new(None)),
             mode,
+            router: None,
         }
     }
 
     fn new_with_connection(connection: Arc<ConnectionContext>, mode: executor::AccessMode) -> Self {
+        Self::new_with_connection_and_router(connection, mode, None)
+    }
+
+    fn new_with_connection_and_router(
+        connection: Arc<ConnectionContext>,
+        mode: executor::AccessMode,
+        router: Option<Arc<CatalogRouter>>,
+    ) -> Self {
         Self {
             session: connection.session(),
             connection,
             copy_request: Arc::new(StdMutex::new(None)),
             mode,
+            router,
         }
+    }
+
+    async fn is_read_only(&self) -> bool {
+        if self.mode == executor::AccessMode::Reader {
+            return true;
+        }
+        self.router.as_ref().is_some_and(|router| {
+            self.connection
+                .catalog_id()
+                .and_then(|id| router.mode_for_id(&id))
+                == Some(CatalogMode::ReadOnly)
+        })
     }
 
     fn begin_copy_request(&self) -> RequestContext {
@@ -124,7 +148,7 @@ impl CopyHandler for RockLakeCopyHandler {
     {
         let query = self.begin_copy_request();
         self.connection.touch();
-        if self.mode == executor::AccessMode::Reader {
+        if self.is_read_only().await {
             let error = read_only_error();
             query.record_error(&error);
             query.finish(RequestTerminalState::Error);
@@ -158,7 +182,7 @@ impl CopyHandler for RockLakeCopyHandler {
         let query = self.take_copy_request();
         let mut observation = query.response_observer();
         self.connection.touch();
-        if self.mode == executor::AccessMode::Reader {
+        if self.is_read_only().await {
             let error = read_only_error();
             observation.set_terminal(RequestTerminalState::Error);
             query.record_error(&error);
@@ -316,6 +340,7 @@ where
 /// The main RockLake query handler.
 pub struct RockLakeHandler {
     pub catalog: Arc<Mutex<CatalogStore>>,
+    router: Option<Arc<CatalogRouter>>,
     pub connection: Arc<ConnectionContext>,
     pub parser: Arc<RockLakeQueryParser>,
     pub auth: Arc<AuthConfig>,
@@ -449,6 +474,7 @@ impl RockLakeHandler {
         let connection = ConnectionContext::standalone(None);
         Self {
             catalog,
+            router: None,
             connection,
             parser: Arc::new(RockLakeQueryParser),
             auth: Arc::new(AuthConfig::default()),
@@ -476,6 +502,7 @@ impl RockLakeHandler {
         let connection = ConnectionContext::standalone(None);
         Self {
             catalog,
+            router: None,
             connection,
             parser: Arc::new(RockLakeQueryParser),
             auth,
@@ -571,8 +598,40 @@ impl RockLakeHandler {
         slow_operation_threshold: Duration,
         connection: Arc<ConnectionContext>,
     ) -> Self {
+        Self::new_with_config_mode_and_limits_and_lifecycle_and_router(
+            catalog,
+            auth,
+            notify_manager,
+            extension_schemas,
+            access_mode,
+            scan_semaphore,
+            max_active_scans,
+            max_buffered_rows,
+            max_response_bytes,
+            slow_operation_threshold,
+            connection,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_config_mode_and_limits_and_lifecycle_and_router(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+        scan_semaphore: Arc<Semaphore>,
+        max_active_scans: usize,
+        max_buffered_rows: usize,
+        max_response_bytes: usize,
+        slow_operation_threshold: Duration,
+        connection: Arc<ConnectionContext>,
+        router: Option<Arc<CatalogRouter>>,
+    ) -> Self {
         Self {
             catalog,
+            router,
             connection,
             parser: Arc::new(RockLakeQueryParser),
             auth,
@@ -595,6 +654,41 @@ impl RockLakeHandler {
 
     pub(crate) fn connection_id(&self) -> uuid::Uuid {
         self.connection.connection_id()
+    }
+
+    async fn catalog_for_connection(&self) -> PgWireResult<Arc<Mutex<CatalogStore>>> {
+        let Some(router) = &self.router else {
+            return Ok(self.catalog.clone());
+        };
+        let route = if let Some(id) = self.connection.catalog_id() {
+            router.resolve_id(&id)
+        } else {
+            let alias = self.connection.catalog_route();
+            let route = router.resolve(alias.as_deref());
+            if let Ok(route) = &route {
+                self.connection.bind_catalog_id(route.id.clone());
+            }
+            route
+        }
+        .map_err(router_error)?;
+        router.open_id(&route.id).await.map_err(router_error)
+    }
+
+    fn effective_access_mode(&self) -> executor::AccessMode {
+        if self.access_mode == executor::AccessMode::Reader {
+            return executor::AccessMode::Reader;
+        }
+        self.router
+            .as_ref()
+            .and_then(|router| {
+                self.connection
+                    .catalog_id()
+                    .and_then(|id| router.mode_for_id(&id))
+            })
+            .map_or(executor::AccessMode::Writer, |mode| match mode {
+                CatalogMode::ReadWrite => executor::AccessMode::Writer,
+                CatalogMode::ReadOnly => executor::AccessMode::Reader,
+            })
     }
 
     fn classify_sql(&self, sql: &str, query: &RequestContext) -> StatementKind {
@@ -668,6 +762,7 @@ impl RockLakeHandler {
         client: &mut C,
         kind: &StatementKind,
         query: &RequestContext,
+        catalog: &Arc<Mutex<CatalogStore>>,
     ) -> PgWireResult<Option<usize>>
     where
         C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
@@ -689,11 +784,11 @@ impl RockLakeHandler {
             result = executor::execute_sql_with_mode(
                 inner_sql,
                 &params,
-                &self.catalog,
+                catalog,
                 &mut session,
                 &self.notify_manager,
                 &self.extension_schemas,
-                self.access_mode,
+                self.effective_access_mode(),
             ) => result,
             _ = query.cancelled() => {
                 query.record_execution(execution_started);
@@ -811,6 +906,20 @@ impl RockLakeHandler {
 
         Ok(Some(row_count))
     }
+}
+
+fn router_error(error: RouterError) -> PgWireError {
+    let code = match &error {
+        RouterError::UnknownCatalog(_) => "3D000",
+        RouterError::Capacity => "53300",
+        RouterError::InvalidConfig(_) => "XX000",
+        RouterError::Open(_) => "08006",
+    };
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        "ERROR".to_string(),
+        code.to_string(),
+        error.to_string(),
+    )))
 }
 
 fn binary_copy_header() -> Bytes {
@@ -1314,8 +1423,12 @@ impl RockLakeHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        let catalog = self.catalog_for_connection().await?;
         let kind = self.classify_sql(sql, query);
-        if let Some(rows) = self.try_stream_copy_to_stdout(client, &kind, query).await? {
+        if let Some(rows) = self
+            .try_stream_copy_to_stdout(client, &kind, query, &catalog)
+            .await?
+        {
             return Ok((
                 vec![Response::Execution(
                     pgwire::api::results::Tag::new("COPY").with_rows(rows),
@@ -1333,11 +1446,11 @@ impl RockLakeHandler {
             result = executor::execute_sql_with_mode(
                 sql,
                 &params,
-                &self.catalog,
+                &catalog,
                 &mut session,
                 &self.notify_manager,
                 &self.extension_schemas,
-                self.access_mode,
+                self.effective_access_mode(),
             ) => result,
             _ = query.cancelled() => {
                 query.record_execution(execution_started);
@@ -1363,9 +1476,13 @@ impl RockLakeHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
+        let catalog = self.catalog_for_connection().await?;
         let sql = &portal.statement.statement;
         let kind = self.classify_sql(sql, query);
-        if let Some(rows) = self.try_stream_copy_to_stdout(client, &kind, query).await? {
+        if let Some(rows) = self
+            .try_stream_copy_to_stdout(client, &kind, query, &catalog)
+            .await?
+        {
             return Ok((
                 Some(Response::Execution(
                     pgwire::api::results::Tag::new("COPY").with_rows(rows),
@@ -1422,11 +1539,11 @@ impl RockLakeHandler {
             result = executor::execute_sql_with_mode(
                 sql,
                 &params,
-                &self.catalog,
+                &catalog,
                 &mut session,
                 &self.notify_manager,
                 &self.extension_schemas,
-                self.access_mode,
+                self.effective_access_mode(),
             ) => result,
             _ = query.cancelled() => {
                 query.record_execution(execution_started);
@@ -1866,7 +1983,8 @@ impl ExtendedQueryHandler for RockLakeHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         let sql = &stmt.statement;
-        let fields = describe_fields_for_sql_with_catalog(sql, &self.catalog).await;
+        let catalog = self.catalog_for_connection().await?;
+        let fields = describe_fields_for_sql_with_catalog(sql, &catalog).await;
 
         // Return precise parameter types so the client can correctly serialize
         // typed values (e.g. i64 → INT8). When the client provided type hints in
@@ -1895,7 +2013,8 @@ impl ExtendedQueryHandler for RockLakeHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         let sql = &portal.statement.statement;
-        let fields = describe_fields_for_sql_with_catalog(sql, &self.catalog).await;
+        let catalog = self.catalog_for_connection().await?;
+        let fields = describe_fields_for_sql_with_catalog(sql, &catalog).await;
         Ok(DescribePortalResponse::new(fields))
     }
 }
@@ -2039,8 +2158,41 @@ impl RockLakeServerHandlers {
         slow_operation_threshold: Duration,
         connection: Arc<ConnectionContext>,
     ) -> Self {
+        Self::new_with_config_mode_and_limits_and_lifecycle_and_router(
+            catalog,
+            auth,
+            tls_required,
+            notify_manager,
+            extension_schemas,
+            access_mode,
+            scan_semaphore,
+            max_active_scans,
+            max_buffered_rows,
+            max_response_bytes,
+            slow_operation_threshold,
+            connection,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_config_mode_and_limits_and_lifecycle_and_router(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        tls_required: bool,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+        scan_semaphore: Arc<Semaphore>,
+        max_active_scans: usize,
+        max_buffered_rows: usize,
+        max_response_bytes: usize,
+        slow_operation_threshold: Duration,
+        connection: Arc<ConnectionContext>,
+        router: Option<Arc<CatalogRouter>>,
+    ) -> Self {
         let handler = Arc::new(
-            RockLakeHandler::new_with_config_mode_and_limits_and_lifecycle(
+            RockLakeHandler::new_with_config_mode_and_limits_and_lifecycle_and_router(
                 catalog,
                 auth.clone(),
                 notify_manager,
@@ -2052,11 +2204,13 @@ impl RockLakeServerHandlers {
                 max_response_bytes,
                 slow_operation_threshold,
                 connection.clone(),
+                router.clone(),
             ),
         );
-        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_connection(
+        let copy_handler = Arc::new(RockLakeCopyHandler::new_with_connection_and_router(
             connection.clone(),
             access_mode,
+            router,
         ));
         Self {
             handler,

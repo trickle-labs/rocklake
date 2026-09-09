@@ -122,6 +122,7 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
             cli::CatalogSubcommand::Repair(args) => cmd_repair(args).await?,
             cli::CatalogSubcommand::Jobs(sub) => cmd_jobs(sub).await?,
         },
+        Commands::Catalogs(command) => cmd_catalogs(command, config_path.as_deref()).await?,
         Commands::Debug(command) => match command {
             cli::DebugSubcommand::Diagnose(args) => cmd_diagnose(args).await?,
             cli::DebugSubcommand::Inspect(sub) => cmd_inspect(sub).await?,
@@ -301,6 +302,80 @@ where
 
 // ─── serve ─────────────────────────────────────────────────────────────────
 
+async fn cmd_catalogs(
+    command: cli::CatalogsSubcommand,
+    config_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, file_config) = config::load(config_path)?;
+    let router = config::static_router(&file_config)?
+        .ok_or("no static router configured; add [router] and [[catalogs]] to rocklake.toml")?;
+    let rows: Vec<_> = router
+        .catalogs
+        .iter()
+        .map(|catalog| {
+            serde_json::json!({
+                "id": catalog.id.to_string(),
+                "aliases": catalog.aliases.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "catalog": redact_router_location(&catalog.catalog),
+                "data": redact_router_location(&catalog.data),
+                "mode": match catalog.mode {
+                    rocklake_router::CatalogMode::ReadWrite => "read-write",
+                    rocklake_router::CatalogMode::ReadOnly => "read-only",
+                },
+                "credential_provider": catalog.credential_provider.clone(),
+            })
+        })
+        .collect();
+    match command {
+        cli::CatalogsSubcommand::Validate => println!("Static router configuration is valid."),
+        cli::CatalogsSubcommand::List { output } => match output {
+            cli::OutputFormat::Json => println!("{}", serde_json::json!({"catalogs": rows})),
+            cli::OutputFormat::Human => {
+                for row in rows {
+                    println!("{}  {}  {:?}", row["id"], row["aliases"], row["mode"]);
+                }
+            }
+        },
+        cli::CatalogsSubcommand::Status { output } => match output {
+            cli::OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({
+                    "router_mode": router.settings.mode,
+                    "default_catalog": router.settings.default_catalog,
+                    "max_open_catalogs": router.settings.max_open_catalogs,
+                    "catalog_idle_timeout": router.settings.catalog_idle_timeout,
+                    "open_handles": 0,
+                    "catalogs": rows,
+                })
+            ),
+            cli::OutputFormat::Human => {
+                println!("Router mode       {}", router.settings.mode);
+                println!(
+                    "Default catalog   {}",
+                    router.settings.default_catalog.unwrap_or_default()
+                );
+                println!(
+                    "Open handles      0 / {}",
+                    router.settings.max_open_catalogs
+                );
+                println!("Configured        {}", router.catalogs.len());
+            }
+        },
+    }
+    Ok(())
+}
+
+fn redact_router_location(location: &rocklake_router::CatalogLocation) -> String {
+    if location.scheme() == "file" {
+        return "file://[redacted]".to_string();
+    }
+    format!(
+        "{}://{}/[redacted]",
+        location.scheme(),
+        location.authority()
+    )
+}
+
 async fn cmd_serve(
     args: cli::ServeArgs,
     config_path: Option<&std::path::Path>,
@@ -314,6 +389,7 @@ async fn cmd_serve(
             || std::env::var_os("ROCKLAKE_STREAM_QUEUE_DEPTH").is_some()
             || std::env::var_os("ROCKLAKE_MAX_BUFFERED_ROWS").is_some(),
     );
+    let static_router = config::static_router(&file_config)?;
     let catalog_url = setting(
         args.catalog.or(args.path),
         "ROCKLAKE_CATALOG",
@@ -321,6 +397,18 @@ async fn cmd_serve(
         None,
         "catalog",
     )?
+    .or_else(|| {
+        static_router
+            .as_ref()
+            .and_then(|router| {
+                router.catalogs.iter().find(|catalog| {
+                    catalog.aliases.iter().any(|alias| {
+                        Some(alias.as_str()) == router.settings.default_catalog.as_deref()
+                    })
+                })
+            })
+            .map(|catalog| catalog.catalog.display_uri())
+    })
     .ok_or("a catalog path is required (use `serve ./lake` or --catalog)")?;
     let mode = if args.read_only.unwrap_or(false) {
         "reader".to_string()
@@ -441,6 +529,7 @@ async fn cmd_serve(
         .unwrap_or_else(|| vec!["public".to_string(), "pgtrickle".to_string()]);
     let config = ServeConfig {
         catalog_url,
+        router: static_router,
         bind_addr: bind,
         max_sessions,
         metrics_port: setting(
@@ -593,16 +682,48 @@ async fn cmd_serve(
         endpoint: config.s3_endpoint.clone(),
         path_style: config.s3_path_style,
     };
+    let router_default = config.router.as_ref().map(|router| {
+        router
+            .settings
+            .default_catalog
+            .as_deref()
+            .expect("validated router has a default catalog")
+            .to_string()
+    });
+    let catalog_url = if let Some(router) = &config.router {
+        let alias = router_default.as_deref();
+        router
+            .catalogs
+            .iter()
+            .find(|catalog| {
+                catalog
+                    .aliases
+                    .iter()
+                    .any(|candidate| Some(candidate.as_str()) == alias)
+            })
+            .map(|catalog| catalog.catalog.display_uri())
+            .expect("validated router default exists")
+    } else {
+        config.catalog_url.clone()
+    };
     let (catalog_path, object_store) =
-        resolve_catalog_with_opts_mode(&config.catalog_url, &s3_opts, config.mode != "reader")?;
+        resolve_catalog_with_opts_mode(&catalog_url, &s3_opts, config.mode != "reader")?;
 
     let opts = OpenOptions {
         object_store: object_store.clone(),
         path: catalog_path,
-        encryption,
+        encryption: encryption.clone(),
     };
 
-    let store = if config.mode == "reader" {
+    let default_read_only = config.mode == "reader"
+        || config.router.as_ref().is_some_and(|router| {
+            router
+                .catalogs
+                .iter()
+                .find(|catalog| catalog.catalog.display_uri() == catalog_url)
+                .is_some_and(|catalog| catalog.mode == rocklake_router::CatalogMode::ReadOnly)
+        });
+    let store = if default_read_only {
         // Read-only mode: skip the writer-epoch CAS so that any number of
         // reader replicas can open the same catalog concurrently without
         // contending on the epoch key.
@@ -685,7 +806,28 @@ async fn cmd_serve(
         drain_timeout: std::time::Duration::from_secs(config.drain_timeout_secs),
     };
 
-    run_server_with_mode(server_config, catalog, access_mode).await?;
+    if let Some(router_config) = config.router {
+        let router = rocklake_router::CatalogRouter::new(
+            router_config,
+            rocklake_router::RouterOpenOptions {
+                s3_endpoint: s3_opts.endpoint,
+                s3_path_style: s3_opts.path_style,
+                encryption,
+                force_read_only: config.mode == "reader",
+            },
+        );
+        let route = router.resolve(router_default.as_deref())?;
+        router.install_handle(route.id, catalog.clone()).await?;
+        rocklake_pgwire::server::run_server_with_router_and_catalog(
+            server_config,
+            router,
+            catalog,
+            access_mode,
+        )
+        .await?;
+    } else {
+        run_server_with_mode(server_config, catalog, access_mode).await?;
+    }
     Ok(())
 }
 
@@ -750,9 +892,23 @@ fn generate_duckdb_attach(config: &ServeConfig) -> String {
 fn print_startup_summary(config: &ServeConfig, _store: &CatalogStore) {
     let tls = config.tls_cert.is_some() && config.tls_key.is_some();
     let auth = config.auth_username.is_some() && config.auth_password.is_some();
+    let catalog_display = config
+        .router
+        .as_ref()
+        .and_then(|router| {
+            let default = router.settings.default_catalog.as_deref()?;
+            router.catalogs.iter().find(|catalog| {
+                catalog
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.as_str() == default)
+            })
+        })
+        .map(|catalog| redact_router_location(&catalog.catalog))
+        .unwrap_or_else(|| redact_catalog_url(&config.catalog_url));
     println!("RockLake {}", env!("CARGO_PKG_VERSION"));
     println!();
-    println!("Catalog       {}", redact_catalog_url(&config.catalog_url));
+    println!("Catalog       {catalog_display}");
     println!("Mode          {}", config.mode);
     println!("DuckLake      1.0");
     println!("Listener      {}", config.bind_addr);
@@ -874,6 +1030,7 @@ mod tests {
     fn test_generate_duckdb_attach() {
         let config_plain = super::ServeConfig {
             catalog_url: "file:///tmp/lake".to_string(),
+            router: None,
             bind_addr: "127.0.0.1:5432".parse().unwrap(),
             max_sessions: 64,
             metrics_port: None,
@@ -917,6 +1074,7 @@ mod tests {
 #[derive(Clone)]
 struct ServeConfig {
     catalog_url: String,
+    router: Option<rocklake_router::StaticConfig>,
     bind_addr: SocketAddr,
     max_sessions: usize,
     metrics_port: Option<u16>,
@@ -2721,12 +2879,15 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
     if let Some(key) = config.encryption_key.as_deref() {
         rocklake_catalog::EncryptionConfig::from_hex(key).map_err(|e| e.to_string())?;
     }
+    config::static_router(config)?;
     Ok(())
 }
 
 fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
     serde_json::json!({
         "catalog": config.catalog,
+        "router": config.router.as_ref().map(|_| "static"),
+        "catalogs": config.catalogs.len(),
         "bind": config.bind,
         "max_sessions": config.max_sessions,
         "metrics_port": config.metrics_port,

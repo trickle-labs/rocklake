@@ -91,7 +91,8 @@ These track interactions with the underlying object store (S3/GCS/Azure/local):
 The v0.51.3 lifecycle names replace the deprecated aliases
 `rocklake_active_sessions` (`rocklake_connections_open`) and
 `rocklake_idle_sessions` (`rocklake_connections_idle`). The aliases remain
-available through v0.53.x. Do not remove them before v0.54.0.
+available as compatibility aliases. Remove them only with a documented client
+migration.
 
 ### Query and Resource Metrics
 

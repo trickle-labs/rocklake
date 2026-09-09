@@ -1,0 +1,16 @@
+[package]
+name = "rocklake-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rocklake-catalog = { path = "../rocklake-catalog" }
+object_store = { workspace = true, features = ["aws", "gcp", "azure"] }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

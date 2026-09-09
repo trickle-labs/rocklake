@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.53.2 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.54.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -10,6 +10,7 @@ binary or a command for the complete generated reference.
 serve
 doctor
 status
+catalogs validate|list|status
 catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair|jobs
 debug diagnose|inspect|corpus|rebuild|sweep-orphans|pg-migrate|tune|warmup
 config check|example
@@ -72,6 +73,9 @@ rocklake catalog jobs list --catalog ./lake --output json
 rocklake catalog jobs status --catalog ./lake --id <job-uuid> --output json
 rocklake catalog jobs cancel --catalog ./lake --id <job-uuid>
 rocklake catalog jobs resume --catalog ./lake --id <job-uuid>
+rocklake catalogs validate
+rocklake catalogs list --output json
+rocklake catalogs status
 ~~~
 
 ```bash

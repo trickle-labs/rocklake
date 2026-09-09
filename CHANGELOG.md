@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.54.0] — 2026-09-09
+
+### Added
+
+- Added static multi-catalog routing by PostgreSQL database alias with stable
+  catalog IDs and independently opened catalog locations.
+- Added validated route locations with credential, traversal, and prefix-overlap
+  rejection, immutable reload support, and bounded single-flight handle caching.
+- Added `rocklake catalogs validate|list|status`.
+
+### Changed
+
+- Routed authenticated PG-wire sessions to the catalog selected by their startup
+  `database` parameter while keeping sessions bound to the stable catalog ID.
+- Updated workspace, binding, binary, and release documentation metadata to
+  v0.54.0.
+
 ## [0.53.2] — 2026-09-09
 
 ### Added

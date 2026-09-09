@@ -73,7 +73,8 @@ request's final completion message. Its buckets are cumulative, and its
 ### Lifecycle metric aliases
 
 The v0.51.3 lifecycle names replace these older names. The old names remain
-available as aliases through v0.53.x. Do not remove them before v0.54.0.
+available as compatibility aliases; remove them only with a documented client
+migration.
 
 | Current metric | Deprecated alias |
 |----------------|------------------|

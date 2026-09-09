@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.53.2 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.54.0 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 
@@ -18,6 +18,47 @@ with `rocklake config check --file rocklake.toml`.
 ```bash
 rocklake serve --catalog <file://...,s3://...,gs://...,az://...>
 ```
+
+## Static multi-catalog routing
+
+Put multiple independent catalogs in `rocklake.toml`. The PostgreSQL startup
+`database` name selects an alias; aliases are not used as storage prefixes.
+
+```toml
+[router]
+mode = "static"
+default_catalog = "analytics"
+max_open_catalogs = 64
+catalog_idle_timeout = 300
+
+[[catalogs]]
+id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9"
+aliases = ["analytics", "analytics_prod"]
+catalog = "s3://company-rocklake/catalogs/analytics"
+data = "s3://company-data/analytics"
+mode = "read-write"
+credential_provider = "aws-default"
+
+[[catalogs]]
+id = "018f4f4d-d520-7d91-b9f0-7018b7b50d13"
+aliases = ["research"]
+catalog = "s3://company-rocklake/catalogs/research"
+data = "s3://company-data/research"
+mode = "read-only"
+credential_provider = "aws-default"
+```
+
+Validate routes without opening a catalog, or inspect the redacted route table:
+
+```bash
+rocklake catalogs validate
+rocklake catalogs list --output json
+rocklake catalogs status
+```
+
+Catalog and data locations must use provider credentials from the environment
+or a named provider. Embedded URL credentials, traversal segments, and any
+equal or ancestor/descendant prefix overlap are rejected.
 
 ## Common options
 
