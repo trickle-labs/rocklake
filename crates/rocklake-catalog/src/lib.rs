@@ -20,6 +20,7 @@ pub mod fault_injection;
 pub mod gc;
 pub mod init;
 pub mod inspect;
+pub mod jobs;
 pub mod key_migration;
 pub mod lease;
 pub mod manifest;
@@ -55,6 +56,10 @@ pub use error::{is_transient, with_transient_retry, CatalogError, CatalogResult}
 pub use extension::{
     create_extension_table, delete_extension_rows, insert_extension_row, is_registered_extension,
     resolve_extension_id, select_extension_rows, EXTENSION_PGTRICKLE,
+};
+pub use jobs::{
+    JobAdmission, JobCheckpoint, JobError, JobId, JobKind, JobLedger, JobProgress, JobRecord,
+    JobRequest, JobResourceClass, JobState, JOB_LEDGER_FORMAT_VERSION,
 };
 pub use lease::{hold_snapshot, list_active_leases, minimum_leased_snapshot, release_snapshot};
 pub use metrics::CatalogMetrics;

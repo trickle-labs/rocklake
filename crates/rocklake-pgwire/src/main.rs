@@ -12,6 +12,7 @@
 mod cli;
 mod config;
 
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -119,6 +120,7 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
             cli::CatalogSubcommand::Migrate(args) => cmd_migrate(args).await?,
             cli::CatalogSubcommand::Verify(sub) => cmd_verify(sub).await?,
             cli::CatalogSubcommand::Repair(args) => cmd_repair(args).await?,
+            cli::CatalogSubcommand::Jobs(sub) => cmd_jobs(sub).await?,
         },
         Commands::Debug(command) => match command {
             cli::DebugSubcommand::Diagnose(args) => cmd_diagnose(args).await?,
@@ -156,6 +158,145 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
         Commands::SweepOrphans(args) => cmd_sweep_orphans(args).await?,
     }
     Ok(())
+}
+
+// ─── jobs ─────────────────────────────────────────────────────────────────
+
+async fn cmd_jobs(command: cli::JobSubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = match &command {
+        cli::JobSubcommand::List(args) => &args.catalog,
+        cli::JobSubcommand::Status(args) => &args.catalog,
+        cli::JobSubcommand::Cancel(args) => &args.catalog,
+        cli::JobSubcommand::Resume(args) => &args.catalog,
+    };
+    let output = match &command {
+        cli::JobSubcommand::List(args) => Some(args.output),
+        cli::JobSubcommand::Status(args) => Some(args.output),
+        cli::JobSubcommand::Cancel(_) | cli::JobSubcommand::Resume(_) => None,
+    };
+    let (catalog_path, object_store) = resolve_catalog(catalog_url)?;
+    let db = slatedb::Db::open(catalog_path, object_store).await?;
+    let ledger = rocklake_catalog::JobLedger::new(&db);
+
+    match command {
+        cli::JobSubcommand::List(_) => {
+            let jobs = ledger.list().await?;
+            match output.expect("list output") {
+                cli::OutputFormat::Json => {
+                    println!("{}", serde_json::json!({"schema_version": 1, "jobs": jobs}))
+                }
+                cli::OutputFormat::Human => {
+                    if jobs.is_empty() {
+                        println!("No administrative jobs.");
+                    } else {
+                        for job in jobs {
+                            println!(
+                                "{}  {:?}  {:?}  {}/{}",
+                                job.id,
+                                job.kind,
+                                job.state,
+                                job.progress.items_done,
+                                job.progress
+                                    .items_total
+                                    .map_or_else(|| "?".to_string(), |total| total.to_string())
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        cli::JobSubcommand::Status(args) => {
+            let id: rocklake_catalog::JobId = args.id.parse()?;
+            let job = ledger
+                .get(&id)
+                .await?
+                .ok_or_else(|| format!("job {id} not found"))?;
+            match args.output {
+                cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&job)?),
+                cli::OutputFormat::Human => print_job_human(&job),
+            }
+        }
+        cli::JobSubcommand::Cancel(args) => {
+            let id: rocklake_catalog::JobId = args.id.parse()?;
+            let job = ledger.request_cancel(&id).await?;
+            println!(
+                "Cancellation requested for job {} ({:?}).",
+                job.id, job.state
+            );
+        }
+        cli::JobSubcommand::Resume(args) => {
+            let id: rocklake_catalog::JobId = args.id.parse()?;
+            let job = ledger.resume(&id).await?;
+            println!("Job {} requeued ({:?}).", job.id, job.state);
+        }
+    }
+
+    db.close().await?;
+    Ok(())
+}
+
+fn print_job_human(job: &rocklake_catalog::JobRecord) {
+    println!("Job {}:", job.id);
+    println!("  Kind: {:?}", job.kind);
+    println!("  State: {:?}", job.state);
+    println!("  Resource class: {:?}", job.resource_class);
+    println!("  Items: {}", job.progress.items_done);
+    if let Some(total) = job.progress.items_total {
+        println!("  Items total: {total}");
+    }
+    println!("  Bytes: {}", job.progress.bytes_done);
+    println!("  Checkpoint: {}", job.checkpoint.sequence);
+    if let Some(cursor) = &job.checkpoint.cursor {
+        println!("  Cursor: {cursor}");
+    }
+    if let Some(error) = &job.error {
+        println!("  Error: {}", error.message);
+    }
+}
+
+async fn run_job<T, F, Fut>(
+    db: &slatedb::Db,
+    kind: rocklake_catalog::JobKind,
+    parameters: serde_json::Value,
+    idempotency_key: Option<String>,
+    operation: F,
+) -> Result<(T, rocklake_catalog::JobId), Box<dyn std::error::Error>>
+where
+    F: FnOnce(slatedb::Db) -> Fut,
+    Fut: Future<Output = Result<T, Box<dyn std::error::Error>>>,
+{
+    let ledger = rocklake_catalog::JobLedger::new(db);
+    let record = ledger
+        .create(rocklake_catalog::JobRequest::new(
+            kind,
+            None,
+            parameters,
+            idempotency_key,
+        ))
+        .await?;
+    let id = record.id.clone();
+    ledger.start(&id).await?;
+    match operation(db.clone()).await {
+        Ok(result) => {
+            ledger
+                .complete(&id, serde_json::json!({"completed": true}))
+                .await?;
+            Ok((result, id))
+        }
+        Err(error) => {
+            let _ = ledger
+                .fail(
+                    &id,
+                    rocklake_catalog::JobError {
+                        code: "operation_failed".to_string(),
+                        message: error.to_string(),
+                        retryable: true,
+                    },
+                )
+                .await;
+            Err(error)
+        }
+    }
 }
 
 // ─── serve ─────────────────────────────────────────────────────────────────
@@ -817,9 +958,17 @@ struct ServeConfig {
 // ─── gc ────────────────────────────────────────────────────────────────────
 
 async fn cmd_gc(command: cli::GcSubcommand) -> Result<(), Box<dyn std::error::Error>> {
-    let (catalog_url, retention_days, apply, output) = match command {
-        cli::GcSubcommand::Plan(args) => (args.catalog, args.retention_days, false, args.output),
-        cli::GcSubcommand::Apply(args) => (args.catalog, args.retention_days, true, args.output),
+    let (catalog_url, retention_days, apply, output, idempotency_key) = match command {
+        cli::GcSubcommand::Plan(args) => {
+            (args.catalog, args.retention_days, false, args.output, None)
+        }
+        cli::GcSubcommand::Apply(args) => (
+            args.catalog,
+            args.retention_days,
+            true,
+            args.output,
+            args.idempotency_key,
+        ),
     };
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
@@ -853,7 +1002,23 @@ async fn cmd_gc(command: cli::GcSubcommand) -> Result<(), Box<dyn std::error::Er
         }
     } else {
         let plan = rocklake_catalog::gc::gc_plan(&db, retention_days).await?;
-        let result = rocklake_catalog::gc::gc_apply(&db, plan.proposed_retain_from).await?;
+        let proposed_retain_from = plan.proposed_retain_from;
+        let (result, job_id) = run_job(
+            &db,
+            rocklake_catalog::JobKind::Retention,
+            serde_json::json!({
+                "catalog": catalog_url,
+                "retention_days": retention_days,
+                "proposed_retain_from": proposed_retain_from
+            }),
+            idempotency_key,
+            |job_db| async move {
+                rocklake_catalog::gc::gc_apply(&job_db, proposed_retain_from)
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+            },
+        )
+        .await?;
         match output {
             cli::OutputFormat::Json => println!(
                 "{}",
@@ -861,7 +1026,8 @@ async fn cmd_gc(command: cli::GcSubcommand) -> Result<(), Box<dyn std::error::Er
                     "schema_version": 1,
                     "previous_retain_from": result.previous_retain_from,
                     "new_retain_from": result.new_retain_from,
-                    "snapshots_hidden": result.snapshots_hidden
+                    "snapshots_hidden": result.snapshots_hidden,
+                    "job_id": job_id
                 })
             ),
             cli::OutputFormat::Human => {
@@ -869,6 +1035,7 @@ async fn cmd_gc(command: cli::GcSubcommand) -> Result<(), Box<dyn std::error::Er
                 println!("  Previous retain-from: {}", result.previous_retain_from);
                 println!("  New retain-from: {}", result.new_retain_from);
                 println!("  Snapshots hidden: {}", result.snapshots_hidden);
+                println!("  Job: {job_id}");
             }
         }
     }
@@ -880,9 +1047,15 @@ async fn cmd_gc(command: cli::GcSubcommand) -> Result<(), Box<dyn std::error::Er
 // ─── excise ────────────────────────────────────────────────────────────────
 
 async fn cmd_excise(command: cli::ExciseSubcommand) -> Result<(), Box<dyn std::error::Error>> {
-    let (catalog_url, before, apply, output) = match command {
-        cli::ExciseSubcommand::Plan(args) => (args.catalog, args.before, false, args.output),
-        cli::ExciseSubcommand::Apply(args) => (args.catalog, args.before, true, args.output),
+    let (catalog_url, before, apply, output, idempotency_key) = match command {
+        cli::ExciseSubcommand::Plan(args) => (args.catalog, args.before, false, args.output, None),
+        cli::ExciseSubcommand::Apply(args) => (
+            args.catalog,
+            args.before,
+            true,
+            args.output,
+            args.idempotency_key,
+        ),
     };
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
@@ -919,7 +1092,18 @@ async fn cmd_excise(command: cli::ExciseSubcommand) -> Result<(), Box<dyn std::e
             }
         }
     } else {
-        let result = rocklake_catalog::excise::excise_apply(&db, before, "operator").await?;
+        let (result, job_id) = run_job(
+            &db,
+            rocklake_catalog::JobKind::Excision,
+            serde_json::json!({"catalog": catalog_url, "before_snapshot": before}),
+            idempotency_key,
+            |job_db| async move {
+                rocklake_catalog::excise::excise_apply(&job_db, before, "operator")
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+            },
+        )
+        .await?;
         match output {
             cli::OutputFormat::Json => println!(
                 "{}",
@@ -927,7 +1111,8 @@ async fn cmd_excise(command: cli::ExciseSubcommand) -> Result<(), Box<dyn std::e
                     "schema_version": 1,
                     "keys_deleted": result.keys_deleted,
                     "keys_failed": result.keys_failed,
-                    "audit_entry_id": result.audit_entry_id
+                    "audit_entry_id": result.audit_entry_id,
+                    "job_id": job_id
                 })
             ),
             cli::OutputFormat::Human => {
@@ -935,6 +1120,7 @@ async fn cmd_excise(command: cli::ExciseSubcommand) -> Result<(), Box<dyn std::e
                 println!("  Keys deleted: {}", result.keys_deleted);
                 println!("  Keys failed: {}", result.keys_failed);
                 println!("  Audit entry ID: {}", result.audit_entry_id);
+                println!("  Job: {job_id}");
             }
         }
         if result.keys_failed > 0 {
@@ -1033,15 +1219,28 @@ async fn cmd_export(args: cli::ExportArgs) -> Result<(), Box<dyn std::error::Err
 
     let output_path = args.output;
     let snapshot_id = args.snapshot_id;
-
-    let mut file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Cannot create output file: {e}"))?;
-
-    let result = rocklake_catalog::export::export_catalog(&db, snapshot_id, &mut file).await?;
+    let job_output_path = output_path.clone();
+    let (result, job_id) = run_job(
+        &db,
+        rocklake_catalog::JobKind::Export,
+        serde_json::json!({
+            "catalog": args.catalog,
+            "output": output_path.clone(),
+            "snapshot_id": snapshot_id
+        }),
+        args.idempotency_key,
+        |job_db| async move {
+            let mut file = std::fs::File::create(&job_output_path)
+                .map_err(|e| format!("Cannot create output file: {e}"))?;
+            Ok(rocklake_catalog::export::export_catalog(&job_db, snapshot_id, &mut file).await?)
+        },
+    )
+    .await?;
     println!("Export complete:");
     println!("  Rows exported: {}", result.rows_exported);
     println!("  Tables exported: {}", result.tables_exported);
     println!("  Output: {output_path}");
+    println!("  Job: {job_id}");
 
     db.close().await?;
     Ok(())
@@ -1054,15 +1253,25 @@ async fn cmd_import(args: cli::ImportArgs) -> Result<(), Box<dyn std::error::Err
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
     let input_path = args.input;
-
-    let file =
-        std::fs::File::open(&input_path).map_err(|e| format!("Cannot open input file: {e}"))?;
-    let reader = std::io::BufReader::new(file);
-
-    let result = rocklake_catalog::export::import_catalog(&db, reader).await?;
+    let (result, job_id) = run_job(
+        &db,
+        rocklake_catalog::JobKind::Import,
+        serde_json::json!({"catalog": args.catalog, "input": input_path}),
+        args.idempotency_key,
+        |job_db| async move {
+            let file = std::fs::File::open(&input_path)
+                .map_err(|e| format!("Cannot open input file: {e}"))?;
+            Ok(
+                rocklake_catalog::export::import_catalog(&job_db, std::io::BufReader::new(file))
+                    .await?,
+            )
+        },
+    )
+    .await?;
     println!("Import complete:");
     println!("  Rows imported: {}", result.rows_imported);
     println!("  Tables imported: {}", result.tables_imported);
+    println!("  Job: {job_id}");
 
     db.close().await?;
     Ok(())
@@ -1115,8 +1324,18 @@ async fn cmd_rebuild(args: cli::RebuildArgs) -> Result<(), Box<dyn std::error::E
         }
     }
 
-    let count = rocklake_catalog::export::rebuild_catalog(&db, &data_paths).await?;
+    let (count, job_id) = run_job(
+        &db,
+        rocklake_catalog::JobKind::Rebuild,
+        serde_json::json!({"catalog": args.catalog, "data_root": data_path}),
+        args.idempotency_key,
+        |job_db| async move {
+            Ok(rocklake_catalog::export::rebuild_catalog(&job_db, &data_paths).await?)
+        },
+    )
+    .await?;
     println!("Rebuild complete: {count} files registered.");
+    println!("Job: {job_id}");
 
     db.close().await?;
     Ok(())
@@ -1259,8 +1478,17 @@ async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::e
     let db = slatedb::Db::open(catalog_path, object_store.clone()).await?;
 
     match command {
-        cli::VerifySubcommand::Catalog(_) => {
-            let result = rocklake_catalog::verify::verify_catalog(&db).await?;
+        cli::VerifySubcommand::Catalog(args) => {
+            let (result, job_id) = run_job(
+                &db,
+                rocklake_catalog::JobKind::Verification,
+                serde_json::json!({"catalog": args.catalog, "target": "catalog"}),
+                args.idempotency_key,
+                |job_db| async move {
+                    Ok(rocklake_catalog::verify::verify_catalog(&job_db).await?)
+                },
+            )
+            .await?;
             match output {
                 cli::OutputFormat::Json => println!(
                     "{}",
@@ -1270,7 +1498,8 @@ async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::e
                         "rows_checked": result.rows_checked,
                         "errors": result.errors,
                         "warnings": result.warnings,
-                        "ok": result.is_ok()
+                        "ok": result.is_ok(),
+                        "job_id": job_id
                     })
                 ),
                 cli::OutputFormat::Human => {
@@ -1291,11 +1520,24 @@ async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::e
                             println!("    - {warn}");
                         }
                     }
+                    println!("  Job: {job_id}");
                 }
             }
         }
-        cli::VerifySubcommand::DataFiles(_) => {
-            let result = rocklake_catalog::cleanup::verify_data_files(&db, &object_store).await?;
+        cli::VerifySubcommand::DataFiles(args) => {
+            let (result, job_id) = run_job(
+                &db,
+                rocklake_catalog::JobKind::Verification,
+                serde_json::json!({"catalog": args.catalog, "target": "data_files"}),
+                args.idempotency_key,
+                |job_db| async move {
+                    Ok(
+                        rocklake_catalog::cleanup::verify_data_files(&job_db, &object_store)
+                            .await?,
+                    )
+                },
+            )
+            .await?;
             match output {
                 cli::OutputFormat::Json => println!(
                     "{}",
@@ -1304,7 +1546,8 @@ async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::e
                         "files_ok": result.files_ok,
                         "files_missing": result.files_missing,
                         "files_error": result.files_error,
-                        "total_checked": result.total_checked
+                        "total_checked": result.total_checked,
+                        "job_id": job_id
                     })
                 ),
                 cli::OutputFormat::Human => {
@@ -1319,6 +1562,7 @@ async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::e
                             println!("    - {path}");
                         }
                     }
+                    println!("  Job: {job_id}");
                 }
             }
         }
@@ -1370,7 +1614,17 @@ async fn cmd_repair(args: cli::RepairArgs) -> Result<(), Box<dyn std::error::Err
         }
 
         if args.apply && !plan.has_unrecoverable() {
-            let result = rocklake_catalog::repair::repair_apply(&db, &plan).await?;
+            let plan_for_job = plan.clone();
+            let (result, job_id) = run_job(
+                &db,
+                rocklake_catalog::JobKind::Repair,
+                serde_json::json!({"catalog": args.catalog, "action": "apply"}),
+                args.idempotency_key,
+                |job_db| async move {
+                    Ok(rocklake_catalog::repair::repair_apply(&job_db, &plan_for_job).await?)
+                },
+            )
+            .await?;
             match output {
                 cli::OutputFormat::Json => println!(
                     "{}",
@@ -1380,13 +1634,15 @@ async fn cmd_repair(args: cli::RepairArgs) -> Result<(), Box<dyn std::error::Err
                         "unrecoverable_errors": plan.unrecoverable_errors,
                         "applied": true,
                         "actions_applied": result.actions_applied,
-                        "actions_failed": result.actions_failed
+                        "actions_failed": result.actions_failed,
+                        "job_id": job_id
                     })
                 ),
                 cli::OutputFormat::Human => {
                     println!("Repair Applied:");
                     println!("  Actions applied: {}", result.actions_applied);
                     println!("  Actions failed: {}", result.actions_failed);
+                    println!("  Job: {job_id}");
                 }
             }
         } else if !args.apply && matches!(output, cli::OutputFormat::Human) {
@@ -1797,19 +2053,33 @@ async fn cmd_export_catalog(
     let catalog_url = args.catalog;
     let output_path = args.out;
     let snapshot_id = args.at_snapshot;
+    let job_output_path = output_path.clone();
 
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
 
-    let mut file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Cannot create output file {output_path}: {e}"))?;
-
-    let result = rocklake_catalog::export::export_catalog(&db, snapshot_id, &mut file).await?;
+    let (result, job_id) = run_job(
+        &db,
+        rocklake_catalog::JobKind::Export,
+        serde_json::json!({
+            "catalog": catalog_url,
+            "output": output_path.clone(),
+            "snapshot_id": snapshot_id
+        }),
+        args.idempotency_key,
+        |job_db| async move {
+            let mut file = std::fs::File::create(&job_output_path)
+                .map_err(|e| format!("Cannot create output file {job_output_path}: {e}"))?;
+            Ok(rocklake_catalog::export::export_catalog(&job_db, snapshot_id, &mut file).await?)
+        },
+    )
+    .await?;
 
     println!("Export complete (28 DuckLake spec + 4 extension catalog tables):");
     println!("  Rows exported:   {}", result.rows_exported);
     println!("  Tables exported: {}", result.tables_exported);
     println!("  Output:          {output_path}");
+    println!("  Job:             {job_id}");
 
     db.close().await?;
     Ok(())
@@ -2492,10 +2762,32 @@ async fn cmd_backup(command: cli::BackupSubcommand) -> Result<(), Box<dyn std::e
             let (catalog_path, object_store) =
                 resolve_catalog_with_opts_mode(&args.catalog, &S3Options::default(), false)?;
             let db = slatedb::Db::open(catalog_path, object_store).await?;
-            let info =
-                rocklake_catalog::create_backup(&db, &args.out, &args.catalog, args.snapshot_id)
-                    .await?;
+            let output_path = args.out.clone();
+            let catalog_identity = args.catalog.clone();
+            let snapshot_id = args.snapshot_id;
+            let (info, job_id) = run_job(
+                &db,
+                rocklake_catalog::JobKind::Backup,
+                serde_json::json!({
+                    "catalog": catalog_identity,
+                    "output": output_path,
+                    "snapshot_id": snapshot_id
+                }),
+                args.idempotency_key,
+                |job_db| async move {
+                    rocklake_catalog::create_backup(
+                        &job_db,
+                        &output_path,
+                        &catalog_identity,
+                        snapshot_id,
+                    )
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+                },
+            )
+            .await?;
             db.close().await?;
+            println!("Job: {job_id}");
             println!("Backup created: {}", info.path.display());
             println!("  Snapshot: {}", info.manifest.snapshot_id);
             println!("  Rows: {}", info.manifest.row_count);
@@ -2556,11 +2848,20 @@ async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std:
         resolve_catalog_with_opts_mode(&args.catalog, &S3Options::default(), apply)?;
     let db = slatedb::Db::open(catalog_path, object_store).await?;
     let mut existing = db.scan::<&[u8], _>(std::ops::RangeFull).await?;
-    let target_empty = existing
+    let mut target_empty = true;
+    while let Some(kv) = existing
         .next()
         .await
         .map_err(|e| format!("scan restore target: {e}"))?
-        .is_none();
+    {
+        if !kv
+            .key
+            .starts_with(&rocklake_core::keys::key_system(b"jobs:"))
+        {
+            target_empty = false;
+            break;
+        }
+    }
     if !target_empty && apply && !args.overwrite {
         db.close().await?;
         return Err(
@@ -2596,34 +2897,60 @@ async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std:
         return Ok(());
     }
     let data_path = args.backup.join("catalog.ndjson");
-    let file = std::fs::File::open(&data_path)?;
-    if !target_empty {
-        let mut delete_batch = slatedb::WriteBatch::new();
-        let mut keys_deleted = 0usize;
-        let mut keys = db.scan::<&[u8], _>(std::ops::RangeFull).await?;
-        while let Some(kv) = keys
-            .next()
-            .await
-            .map_err(|e| format!("scan restore target for overwrite: {e}"))?
-        {
-            delete_batch.delete(&kv.key);
-            keys_deleted += 1;
-        }
-        if keys_deleted > 0 {
-            db.write(delete_batch).await?;
-        }
-    }
-    let result =
-        rocklake_catalog::export::import_catalog(&db, std::io::BufReader::new(file)).await?;
-    let restored = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
+    let backup_snapshot = backup.manifest.snapshot_id;
+    let catalog_identity = args.catalog.clone();
+    let backup_path = args.backup.clone();
+    let (result, job_id) = run_job(
+        &db,
+        rocklake_catalog::JobKind::Restore,
+        serde_json::json!({
+            "backup": backup_path,
+            "catalog": catalog_identity,
+            "overwrite": args.overwrite
+        }),
+        args.idempotency_key,
+        |job_db| async move {
+            let file = std::fs::File::open(data_path)?;
+            if !target_empty {
+                let mut delete_batch = slatedb::WriteBatch::new();
+                let mut keys_deleted = 0usize;
+                let mut keys = job_db.scan::<&[u8], _>(std::ops::RangeFull).await?;
+                while let Some(kv) = keys
+                    .next()
+                    .await
+                    .map_err(|e| format!("scan restore target for overwrite: {e}"))?
+                {
+                    if kv
+                        .key
+                        .starts_with(&rocklake_core::keys::key_system(b"jobs:"))
+                    {
+                        continue;
+                    }
+                    delete_batch.delete(&kv.key);
+                    keys_deleted += 1;
+                }
+                if keys_deleted > 0 {
+                    job_db.write(delete_batch).await?;
+                }
+            }
+            let result = rocklake_catalog::export::import_catalog(
+                    &job_db,
+                std::io::BufReader::new(file),
+            )
+            .await?;
+            let restored = rocklake_catalog::inspect::inspect_snapshot(&job_db).await?;
+            if restored.latest_snapshot_id != backup_snapshot {
+                return Err(format!(
+                    "restore verification failed: restored snapshot {} differs from backup snapshot {}",
+                    restored.latest_snapshot_id, backup_snapshot
+                )
+                .into());
+            }
+            Ok(result)
+        },
+    )
+    .await?;
     db.close().await?;
-    if restored.latest_snapshot_id != backup.manifest.snapshot_id {
-        return Err(format!(
-            "restore verification failed: restored snapshot {} differs from backup snapshot {}",
-            restored.latest_snapshot_id, backup.manifest.snapshot_id
-        )
-        .into());
-    }
     match args.output {
         cli::OutputFormat::Json => println!(
             "{}",
@@ -2632,12 +2959,13 @@ async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std:
                 "restored": true,
                 "rows_imported": result.rows_imported,
                 "tables_imported": result.tables_imported,
-                "verified": true
+                "verified": true,
+                "job_id": job_id
             })
         ),
         cli::OutputFormat::Human => println!(
-            "Restore applied: {} rows imported and verified",
-            result.rows_imported
+            "Restore applied: {} rows imported and verified (job {})",
+            result.rows_imported, job_id
         ),
     }
     Ok(())
@@ -2657,6 +2985,7 @@ async fn cmd_sweep_orphans(args: cli::SweepOrphansArgs) -> Result<(), Box<dyn st
     let grace_period_hours = args.grace_period_hours;
     let apply = args.apply;
     let output = args.output;
+    let idempotency_key = args.idempotency_key;
 
     let (catalog_path, object_store) = resolve_catalog(&catalog_url)?;
     let db = slatedb::Db::open(catalog_path, object_store.clone()).await?;
@@ -2667,7 +2996,22 @@ async fn cmd_sweep_orphans(args: cli::SweepOrphansArgs) -> Result<(), Box<dyn st
         data_root: data_root.clone(),
     };
 
-    let result = rocklake_catalog::sweep_orphans(&db, object_store, &config).await?;
+    let object_store_for_job = object_store.clone();
+    let (result, job_id) = run_job(
+        &db,
+        rocklake_catalog::JobKind::OrphanSweep,
+        serde_json::json!({
+            "catalog": catalog_url,
+            "data_root": data_root,
+            "grace_period_hours": grace_period_hours,
+            "apply": apply
+        }),
+        idempotency_key,
+        |job_db| async move {
+            Ok(rocklake_catalog::sweep_orphans(&job_db, object_store_for_job, &config).await?)
+        },
+    )
+    .await?;
     db.close().await?;
 
     match output {
@@ -2681,7 +3025,8 @@ async fn cmd_sweep_orphans(args: cli::SweepOrphansArgs) -> Result<(), Box<dyn st
                 "files_deleted": result.deleted,
                 "deletion_failures": &result.deletion_failures,
                 "grace_period_hours": grace_period_hours,
-                "applied": apply
+                "applied": apply,
+                "job_id": job_id
             })
         ),
         cli::OutputFormat::Human => {
@@ -2696,6 +3041,7 @@ async fn cmd_sweep_orphans(args: cli::SweepOrphansArgs) -> Result<(), Box<dyn st
             println!("  Files deleted:      {}", result.deleted);
             println!("  Deletion failures:  {}", result.deletion_failures.len());
             println!("  Grace period:       {grace_period_hours}h");
+            println!("  Job:                {job_id}");
             if !result.orphan_files.is_empty() {
                 println!("\nOrphan files:");
                 for f in &result.orphan_files {

@@ -5,7 +5,9 @@ use crate::export::{export_catalog, ExportManifest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use slatedb::Db;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncBufReadExt;
 
 const MANIFEST_FILE: &str = "manifest.json";
 const DATA_FILE: &str = "catalog.ndjson";
@@ -52,24 +54,26 @@ pub async fn create_backup(
     tokio::fs::create_dir_all(directory)
         .await
         .map_err(|e| CatalogError::InvalidInput(format!("create backup directory: {e}")))?;
-    let mut data = Vec::new();
-    let export = export_catalog(db, snapshot_id, &mut data).await?;
-    let export_manifest: ExportManifest = data
-        .split(|byte| *byte == b'\n')
-        .find(|line| !line.is_empty())
-        .and_then(|line| serde_json::from_slice(line).ok())
+    let file = std::fs::File::create(directory.join(DATA_FILE))
+        .map_err(|e| CatalogError::InvalidInput(format!("create backup data: {e}")))?;
+    let mut writer = DigestWriter::new(file);
+    let export = export_catalog(db, snapshot_id, &mut writer).await?;
+    writer
+        .flush()
+        .map_err(|e| CatalogError::InvalidInput(format!("flush backup data: {e}")))?;
+    let selected_snapshot = writer
+        .snapshot_id()
+        .or(snapshot_id)
         .ok_or_else(|| CatalogError::Corruption("export did not contain a manifest".into()))?;
-    tokio::fs::write(directory.join(DATA_FILE), &data)
-        .await
-        .map_err(|e| CatalogError::InvalidInput(format!("write backup data: {e}")))?;
+    let (byte_count, sha256) = writer.finish();
     let manifest = BackupManifest {
         version: BACKUP_FORMAT_VERSION,
         source_identity: source_identity.into(),
         created_at: chrono::Utc::now().to_rfc3339(),
-        snapshot_id: export_manifest.snapshot_id,
+        snapshot_id: selected_snapshot,
         row_count: export.rows_exported,
-        byte_count: data.len() as u64,
-        sha256: sha256_hex(&data),
+        byte_count,
+        sha256,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| CatalogError::Internal(format!("serialize backup manifest: {e}")))?;
@@ -97,20 +101,33 @@ pub async fn inspect_backup(directory: impl AsRef<Path>) -> CatalogResult<Backup
             manifest.version, BACKUP_FORMAT_VERSION
         )));
     }
-    let data = tokio::fs::read(directory.join(DATA_FILE))
+    let file = tokio::fs::File::open(directory.join(DATA_FILE))
         .await
         .map_err(|e| CatalogError::InvalidInput(format!("read backup data: {e}")))?;
-    if manifest.byte_count != data.len() as u64 || manifest.sha256 != sha256_hex(&data) {
+    let mut reader = tokio::io::BufReader::new(file);
+    let mut line = String::new();
+    let mut byte_count = 0u64;
+    let mut row_count = 0u64;
+    let mut digest = Sha256::new();
+    while reader
+        .read_line(&mut line)
+        .await
+        .map_err(|e| CatalogError::InvalidInput(format!("read backup data: {e}")))?
+        > 0
+    {
+        digest.update(line.as_bytes());
+        byte_count += line.len() as u64;
+        if !line.trim().is_empty() {
+            row_count += 1;
+        }
+        line.clear();
+    }
+    if manifest.byte_count != byte_count || manifest.sha256 != digest_hex(digest.finalize()) {
         return Err(CatalogError::Corruption(
             "backup checksum or byte count mismatch".into(),
         ));
     }
-    let row_count = data
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .count()
-        .saturating_sub(1) as u64;
-    if manifest.row_count != row_count {
+    if row_count == 0 || manifest.row_count != row_count - 1 {
         return Err(CatalogError::Corruption("backup row count mismatch".into()));
     }
     Ok(BackupInfo {
@@ -119,11 +136,65 @@ pub async fn inspect_backup(directory: impl AsRef<Path>) -> CatalogResult<Backup
     })
 }
 
+#[cfg(test)]
 fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
+    digest_hex(Sha256::digest(data))
+}
+
+fn digest_hex(digest: impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+struct DigestWriter {
+    file: std::fs::File,
+    digest: Sha256,
+    bytes_written: u64,
+    header: Vec<u8>,
+}
+
+impl DigestWriter {
+    fn new(file: std::fs::File) -> Self {
+        Self {
+            file,
+            digest: Sha256::new(),
+            bytes_written: 0,
+            header: Vec::new(),
+        }
+    }
+
+    fn snapshot_id(&self) -> Option<u64> {
+        let line = self.header.split(|byte| *byte == b'\n').next()?;
+        serde_json::from_slice::<ExportManifest>(line)
+            .ok()
+            .map(|manifest| manifest.snapshot_id)
+    }
+
+    fn finish(self) -> (u64, String) {
+        (self.bytes_written, digest_hex(self.digest.finalize()))
+    }
+}
+
+impl Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.file.write(bytes)?;
+        self.digest.update(&bytes[..written]);
+        self.bytes_written += written as u64;
+        if !self.header.contains(&b'\n') {
+            self.header.extend_from_slice(&bytes[..written]);
+            if self.header.len() > 1024 * 1024 {
+                self.header.clear();
+            }
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
 }
 
 #[cfg(test)]

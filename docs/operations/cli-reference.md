@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.53.1 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.53.2 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -10,7 +10,7 @@ binary or a command for the complete generated reference.
 serve
 doctor
 status
-catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair
+catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair|jobs
 debug diagnose|inspect|corpus|rebuild|sweep-orphans|pg-migrate|tune|warmup
 config check|example
 completions
@@ -68,6 +68,10 @@ rocklake backup create --catalog ./lake --out ./lake-backup
 rocklake backup inspect ./lake-backup --output json
 rocklake restore plan --backup ./lake-backup --catalog ./restored
 rocklake restore apply --backup ./lake-backup --catalog ./restored
+rocklake catalog jobs list --catalog ./lake --output json
+rocklake catalog jobs status --catalog ./lake --id <job-uuid> --output json
+rocklake catalog jobs cancel --catalog ./lake --id <job-uuid>
+rocklake catalog jobs resume --catalog ./lake --id <job-uuid>
 ~~~
 
 ```bash
@@ -100,6 +104,13 @@ default. `export` accepts `--snapshot-id`; `export-catalog` accepts
 
 GC and excision expose separate `plan` and `apply` subcommands. `repair` and
 `migrate` expose explicit `--dry-run` and `--apply` options. All destructive
+operations remain explicit in the command syntax.
+
+Long-running backup, restore, export, import, verification, repair, retention,
+excision, orphan-sweep, and rebuild operations record a durable job. Pass
+`--idempotency-key` to reuse a retry identity. A failed, cancelled, or
+abandoned job is never resumed automatically; inspect its checkpoint and use
+`catalog jobs resume` explicitly.
 operations remain explicit in the command syntax.
 
 ## Environment variables

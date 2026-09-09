@@ -204,6 +204,63 @@ pub enum CatalogSubcommand {
 
     /// Repair catalog issues.
     Repair(RepairArgs),
+
+    /// Inspect and control durable administrative jobs.
+    #[command(subcommand)]
+    Jobs(JobSubcommand),
+}
+
+/// Durable administrative job controls.
+#[derive(Debug, Subcommand)]
+pub enum JobSubcommand {
+    /// List jobs, newest update first.
+    List(JobListArgs),
+    /// Show one job and its last safe checkpoint.
+    Status(JobStatusArgs),
+    /// Request cancellation at the next safe checkpoint.
+    Cancel(JobControlArgs),
+    /// Explicitly requeue a failed, cancelled, or abandoned job.
+    Resume(JobControlArgs),
+}
+
+/// Options for listing jobs.
+#[derive(Debug, Parser)]
+pub struct JobListArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+/// Options for showing one job.
+#[derive(Debug, Parser)]
+pub struct JobStatusArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+
+    /// Job UUID.
+    #[arg(long)]
+    pub id: String,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+/// Options for changing one job's lifecycle state.
+#[derive(Debug, Parser)]
+pub struct JobControlArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+
+    /// Job UUID.
+    #[arg(long)]
+    pub id: String,
 }
 
 /// Diagnostic and debugging operations.
@@ -441,6 +498,9 @@ pub struct BackupCreateArgs {
     /// Snapshot to back up (latest by default).
     #[arg(long)]
     pub snapshot_id: Option<u64>,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -471,6 +531,9 @@ pub struct RestoreArgs {
     /// Explicitly allow replacing a target catalog after validation.
     #[arg(long, action = ArgAction::SetTrue)]
     pub overwrite: bool,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
     /// Output format.
     #[arg(long, value_enum, default_value_t)]
     pub output: OutputFormat,
@@ -495,6 +558,9 @@ pub struct GcArgs {
     /// Retention period in days (snapshots older than this are eligible for GC).
     #[arg(long, default_value = "30")]
     pub retention_days: u64,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t)]
@@ -520,6 +586,9 @@ pub struct ExciseArgs {
     /// Delete facts for all snapshots strictly before this ID.
     #[arg(long)]
     pub before: u64,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t)]
@@ -614,6 +683,9 @@ pub struct ExportArgs {
     /// Export only this snapshot ID (default: latest).
     #[arg(long)]
     pub snapshot_id: Option<u64>,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 }
 
 // ─── import ────────────────────────────────────────────────────────────────
@@ -627,6 +699,9 @@ pub struct ImportArgs {
     /// Input NDJSON file path.
     #[arg(long)]
     pub input: String,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 }
 
 // ─── pg-migrate ────────────────────────────────────────────────────────────
@@ -657,6 +732,9 @@ pub struct RebuildArgs {
     /// Use S3 path-style addressing.
     #[arg(long, action = ArgAction::SetTrue)]
     pub s3_path_style: bool,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 }
 
 // ─── inspect ───────────────────────────────────────────────────────────────
@@ -704,6 +782,9 @@ pub struct VerifyArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t)]
     pub output: OutputFormat,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 }
 
 // ─── repair ────────────────────────────────────────────────────────────────
@@ -721,6 +802,9 @@ pub struct RepairArgs {
     /// Apply repairs.
     #[arg(long, action = ArgAction::SetTrue)]
     pub apply: bool,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t)]
@@ -834,6 +918,9 @@ pub struct ExportCatalogArgs {
     /// Export only this snapshot ID (default: latest).
     #[arg(long)]
     pub at_snapshot: Option<u64>,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 }
 
 // ─── diagnose ──────────────────────────────────────────────────────────────
@@ -876,6 +963,9 @@ pub struct SweepOrphansArgs {
     /// Delete orphan files (default: dry-run only).
     #[arg(long, action = ArgAction::SetTrue)]
     pub apply: bool,
+    /// Reuse the same job when retrying this operation.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t)]

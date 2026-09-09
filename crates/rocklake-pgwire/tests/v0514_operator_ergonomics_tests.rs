@@ -152,6 +152,24 @@ fn test_status_and_backup_restore_workflow() {
         String::from_utf8_lossy(&backup_out.stderr)
     );
 
+    let jobs_out = Command::new(&bin)
+        .args([
+            "catalog",
+            "jobs",
+            "list",
+            "--catalog",
+            lake_path,
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("jobs list");
+    assert!(jobs_out.status.success());
+    let jobs_json: serde_json::Value =
+        serde_json::from_slice(&jobs_out.stdout).expect("parse jobs json");
+    assert_eq!(jobs_json["jobs"][0]["kind"], "backup");
+    assert_eq!(jobs_json["jobs"][0]["state"], "completed");
+
     // 4. Inspect backup via `catalog backup inspect`
     let inspect_out = Command::new(&bin)
         .args([

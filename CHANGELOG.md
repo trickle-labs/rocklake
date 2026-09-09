@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.53.2] — 2026-09-09
+
+### Added
+
+- Added a versioned administrative job ledger with durable progress,
+  resumable checkpoints, explicit cancellation, idempotency keys, and
+  resource-class conflict rules.
+- Added `rocklake catalog jobs list|status|cancel|resume`.
+- Routed backup, restore, export, import, verification, repair, retention,
+  excision, orphan-sweep, and rebuild commands through the job lifecycle.
+
+### Changed
+
+- Backup creation and inspection now stream through bounded file I/O instead
+  of buffering the complete catalog export in memory.
+- Updated workspace, binding, binary, and release documentation metadata to
+  v0.53.2.
+
 ## [0.53.1] — 2026-09-09
 
 ### Added

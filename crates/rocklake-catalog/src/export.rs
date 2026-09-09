@@ -1517,12 +1517,20 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
     use base64::Engine as _;
 
     let mut existing = db.scan::<&[u8], _>(std::ops::RangeFull).await?;
-    if existing
+    let mut has_catalog_data = false;
+    while let Some(kv) = existing
         .next()
         .await
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        .is_some()
     {
+        // Administrative job records are deliberately outside the catalog
+        // keyspace and must not make a fresh restore target non-empty.
+        if !kv.key.starts_with(&keys::key_system(b"jobs:")) {
+            has_catalog_data = true;
+            break;
+        }
+    }
+    if has_catalog_data {
         return Err(CatalogError::Import {
             line: 0,
             table: "catalog".to_string(),
