@@ -43,7 +43,7 @@ The proposal is based on the current repository direction recorded in:
 The recommended pre-1.0 sequence is:
 
 1. Repair the binary distribution contract.
-2. Produce reproducible local, MinIO, AWS, multi-node, GCS, and Azure evidence.
+2. Produce reproducible local and MinIO evidence.
 3. Consolidate the request lifecycle and bounded administrative operations.
 4. Add a multi-catalog router over independent catalog locations.
 5. Add a managed catalog registry, lifecycle operations, authorization, quotas,
@@ -52,7 +52,9 @@ The recommended pre-1.0 sequence is:
    distributed multi-writer semantics.
 7. Complete disaster-recovery, security, migration, performance, public-surface,
    and field-validation gates.
-8. Enter release-candidate mode with no new features or format changes.
+8. After v0.63.0, complete the deferred multi-node and AWS S3, GCS, and Azure
+   evidence gates.
+9. Enter release-candidate mode with no new features or format changes.
 
 The target v1.0 product is a **boring, measurable, recoverable DuckLake catalog
 appliance** that can run either one catalog or many independently isolated
@@ -72,9 +74,8 @@ The v1.0 supported path should be limited to:
   location, writer epoch, retention floor, backup history, limits, and metrics.
 - Local filesystem for development and certification.
 - MinIO or an explicitly certified S3-compatible service.
-- AWS S3.
-- GCS and Azure only if their real-cloud evidence gates pass before the public
-  surface freeze.
+- AWS S3 after the v0.64.0 real-cloud evidence gate.
+- GCS and Azure after the v0.64.2 real-cloud evidence gates.
 
 The Rust client, read-only API, DataFusion integration, and language bindings
 must retain explicit support levels. They do not automatically become Supported
@@ -185,9 +186,6 @@ and real-cloud baselines before release.
 |---|---|---|
 | **v0.51.5** | Distribution correctness | Published installation instructions execute successfully against the exact release assets on every supported platform. |
 | **v0.52.0** | Local and MinIO evidence | Fresh-process evidence covers 10k, 100k, and 1M-file catalogs without hidden materialization or unbounded memory growth. |
-| **v0.52.1** | AWS S3 evidence | Real-S3 results cover performance, recovery, reader scale, failures, request volume, bytes, and cost. |
-| **v0.52.2** | Multi-node soak | A 24-hour workload preserves catalog invariants and avoids progressive resource or latency degradation. |
-| **v0.52.3** | GCS, Azure, and evidence closure | Each cloud has an independent evidence decision, and all scale/support claims are reconciled with published results. |
 | **v0.53.0** | Request lifecycle consolidation | Connection, request, admission, execution, cancellation, and response observation have explicit ownership boundaries. |
 | **v0.53.1** | Unified metadata streaming | All high-cardinality PG-wire metadata responses use one bounded, cancellation-safe encoding pipeline. |
 | **v0.53.2** | Bounded administrative jobs | Long-running catalog operations expose resumable progress and bounded resource contracts. |
@@ -202,6 +200,9 @@ and real-cloud baselines before release.
 | **v0.62.0** | Public surface freeze | CLI, configuration, metrics, errors, artifacts, logs, and operator workflows are frozen and documented. |
 | **v0.63.0** | Production beta | The feature-complete system enters design-partner production with no new feature work. |
 | **v0.63.1** | Beta fixes and readiness audit | All release-blocking beta findings are closed and the complete v1.0 audit is published. |
+| **v0.64.0** | AWS S3 evidence (deferred from v0.52.1) | Real-S3 results cover performance, recovery, reader scale, failures, request volume, bytes, and cost. |
+| **v0.64.1** | Multi-node soak (deferred from v0.52.2) | A 24-hour workload preserves catalog invariants and avoids progressive resource or latency degradation. |
+| **v0.64.2** | GCS, Azure, and evidence closure (deferred from v0.52.3) | Each cloud has an independent evidence decision, and all scale/support claims are reconciled with published results. |
 | **v1.0.0-rc.1** | First release candidate | No unresolved P0/P1 finding, no format change, and the complete certification matrix passes. |
 | **v1.0.0-rc.2** | Final release candidate | Only blocker fixes differ from RC1, and the full matrix and observation gate pass again. |
 
@@ -211,7 +212,7 @@ and real-cloud baselines before release.
 v0.51.5 distribution repair
         |
         v
-v0.52.x evidence -------------------------------+
+v0.52.0 local/MinIO evidence -------------------+
         |                                        |
         v                                        |
 v0.53.x consolidation                            |
@@ -243,6 +244,12 @@ v0.54.0 static router -> v0.55.0 registry        |
                                 |
                                 v
                      v0.63.x production beta
+                                |
+                                v
+              v0.64.0 AWS S3 -> v0.64.1 soak
+                                |
+                                v
+                   v0.64.2 GCS/Azure closure
                                 |
                                 v
                    v1.0.0-rc.1 -> rc.2 -> v1.0.0
@@ -428,7 +435,7 @@ envelope rather than a qualitative scale claim.
 
 ---
 
-### v0.52.1 — AWS S3 production evidence
+### v0.64.0 — Deferred AWS S3 production evidence
 
 #### Scope
 
@@ -501,7 +508,7 @@ behavior, and cost assumptions.
 
 ---
 
-### v0.52.2 — Multi-node 24-hour soak and fault matrix
+### v0.64.1 — Deferred multi-node 24-hour soak and fault matrix
 
 #### Scope
 
@@ -569,13 +576,13 @@ cases.
 
 ---
 
-### v0.52.3 — GCS, Azure, and evidence closure
+### v0.64.2 — Deferred GCS, Azure, and evidence closure
 
 #### Scope
 
 Apply the evidence contract to Google Cloud Storage and Azure Blob Storage,
-repair emulator coverage where necessary, and close the v0.52 evidence phase
-with an authoritative support matrix.
+repair emulator coverage where necessary, and close the deferred cloud evidence
+phase with an authoritative support matrix.
 
 #### User outcome
 
@@ -601,7 +608,7 @@ not hidden behind a generic “object storage supported” statement.
 - [ ] Add `EVIDENCE.md` as the index of all certified bundles, schemas, machines,
       backends, dependency versions, and supported envelopes.
 - [ ] Reconcile `README.md`, `COMPATIBILITY.md`, deployment guides, and product
-      claims with the complete v0.52 results.
+      claims with the complete v0.64 results.
 - [ ] Add a release gate that rejects a support-matrix change unless it links to
       a valid evidence bundle and exact Git SHA.
 
@@ -618,7 +625,7 @@ not hidden behind a generic “object storage supported” statement.
 - LocalFS, MinIO, AWS, GCS, and Azure each have a separate decision for
   functional support, recovery certification, and scale certification.
 - No generic cloud claim exceeds the least-supported named backend.
-- The v0.52 evidence index can reproduce every published chart and table from
+- The v0.64 evidence index can reproduce every published chart and table from
   raw data.
 - Any backend that fails remains explicitly Preview or functionally supported
   only, with a named gap and owner.
@@ -693,7 +700,7 @@ and failover can be added without duplicating correctness logic.
 - Metrics totals reconcile with completed request states.
 - No duplicate connection/session lifecycle implementation remains in the
   supported path.
-- The v0.52 evidence matrix shows no material behavior regression.
+- The v0.52.0 evidence matrix shows no material behavior regression.
 
 #### Non-goals
 
@@ -762,7 +769,7 @@ truncation.
   encoder path.
 - No successful response can hide a mid-stream storage or encoding error.
 - Page, stream, legacy, simple-query, extended-query, and COPY ordering match.
-- Incremental memory stays within the v0.52 boundedness contract.
+- Incremental memory stays within the v0.52.0 boundedness contract.
 
 #### Non-goals
 
@@ -852,7 +859,7 @@ No catalog key format changes are permitted.
 
 - At least two named user workloads require multiple logical catalogs.
 - A maintainer owns routing, authentication integration, and operator contracts.
-- The catalog-routing ADR is reaffirmed after the v0.52 evidence results.
+- The catalog-routing ADR is reaffirmed after the v0.52.0 evidence results.
 
 #### User outcome
 
@@ -1313,15 +1320,15 @@ maintenance, and rehearse disaster recovery without internal code knowledge.
 
 #### Test and evidence plan
 
-- Restore v0.51.4, latest v0.52.x, and every format-changing fixture to the
+- Restore v0.51.4, v0.52.0, and every format-changing fixture to the
   current release.
 - Interrupt backup and restore at every job checkpoint.
 - Restore one catalog from a multi-catalog set without changing the others.
 - Run maintenance during sustained reads/writes and writer failover.
 - Simulate missing referenced data, stale encryption keys, wrong registry
   generation, and conflicting destination prefixes.
-- Measure recovery on LocalFS, MinIO, and AWS S3; add other clouds only if they
-  are certified.
+- Measure recovery on LocalFS and MinIO. Defer real-cloud measurements to
+  v0.64.0–v0.64.2.
 
 #### Exit conditions
 
@@ -1510,7 +1517,7 @@ clear failure before any unsafe downgrade writes occur.
       of no return.
 - [ ] Add mixed-version compatibility tests for the supported rolling window.
 - [ ] Define the stable v1.0 support window and minimum direct-upgrade sources.
-      At minimum, preserve fixtures for v0.51.4, the latest v0.52.x evidence
+      At minimum, preserve fixtures for v0.51.4, the v0.52.0 evidence
       baseline, and every later format-changing release.
 
 #### Test plan
@@ -1545,7 +1552,7 @@ clear failure before any unsafe downgrade writes occur.
 
 #### Scope
 
-Optimize only the bottlenecks demonstrated by v0.52–v0.60 evidence. Freeze the
+Optimize only the bottlenecks demonstrated by v0.52.0–v0.64.2 evidence. Freeze the
 performance regression process and publish the supported capacity model for
 v1.0.
 
@@ -1726,7 +1733,9 @@ clarification.
 
 #### Entry gate
 
-- v0.52 evidence is complete for every backend intended to be Supported.
+- v0.52.0 LocalFS and MinIO evidence is complete.
+- AWS S3, GCS, and Azure evidence is deferred to v0.64.0–v0.64.2. These
+  backends are not called scale certified before their deferred gates pass.
 - Multi-catalog isolation has passed v0.56.
 - Writer ownership, DR, security, migration, performance, and public-surface
   gates are complete.
@@ -1968,9 +1977,9 @@ be created only when all of the following are true.
 |---|---:|---|
 | Artifact-only installation | v0.51.5 | All supported platforms and every release candidate |
 | Fresh-process scale schema | v0.52.0 | Every material storage/runtime dependency change |
-| Real AWS recovery and cost | v0.52.1 | Every material object-store/SlateDB change |
-| Sustained mixed-workload soak | v0.52.2 | Availability, job, cache, and routing changes |
-| GCS/Azure evidence | v0.52.3 | Only for backends that remain Supported |
+| Real AWS recovery and cost | v0.64.0 | Every material object-store/SlateDB change |
+| Sustained mixed-workload soak | v0.64.1 | Availability, job, cache, and routing changes |
+| GCS/Azure evidence | v0.64.2 | Only for backends that remain Supported |
 | Request lifecycle state machine | v0.53.0 | Every protocol and server change |
 | Unified bounded encoding | v0.53.1 | Every metadata schema or encoder change |
 | Resumable job contract | v0.53.2 | Every maintenance operation |
@@ -1995,9 +2004,6 @@ plans/
 ├── pre-1.0-roadmap.md
 ├── v0.51.5.md
 ├── v0.52.0.md
-├── v0.52.1.md
-├── v0.52.2.md
-├── v0.52.3.md
 ├── v0.53.0.md
 ├── v0.53.1.md
 ├── v0.53.2.md
@@ -2012,6 +2018,9 @@ plans/
 ├── v0.62.0.md
 ├── v0.63.0.md
 ├── v0.63.1.md
+├── v0.64.0.md
+├── v0.64.1.md
+├── v0.64.2.md
 ├── v1.0.0-rc.1.md
 └── v1.0.0-rc.2.md
 ```
@@ -2074,7 +2083,7 @@ Additional required ownership:
 | Risk | Consequence | Mitigation and owning release |
 |---|---|---|
 | Evidence is run on convenient but unrepresentative hardware | Misleading scale claims | Fresh-process schema, pinned environments, and raw data in v0.52.0 |
-| Cloud emulator behavior is treated as production evidence | Recovery or retry surprises | Real-cloud gates in v0.52.1 and v0.52.3 |
+| Cloud emulator behavior is treated as production evidence | Recovery or retry surprises | Real-cloud gates in v0.64.0 and v0.64.2 |
 | Multi-catalog routing leaks identity through aliases, caches, logs, or metrics | Cross-tenant disclosure | Stable CatalogId, prefix proof, auth-before-disclosure, and adversarial certification in v0.54–v0.56 |
 | Registry becomes a new single point of failure | Service-wide route outage | Independent registry backup, immutable snapshots, emergency read-only mode, and DR in v0.55/v0.58 |
 | Writer ownership weakens fencing | Split-brain writes | Fencing remains authoritative; assignment is only an availability layer in v0.57 |
@@ -2120,7 +2129,7 @@ replacement release table is:
 | Release | Theme | Status |
 |---|---|---|
 | v0.51.5 | Distribution correctness | Planned |
-| v0.52.0–v0.52.3 | Reproducible scale and cloud evidence | Planned |
+| v0.52.0 | Reproducible LocalFS and MinIO evidence | Planned |
 | v0.53.0–v0.53.2 | Request, streaming, and job consolidation | Planned |
 | v0.54.0 | Static multi-catalog router | Planned |
 | v0.55.0 | Managed catalog registry | Planned |
@@ -2132,6 +2141,7 @@ replacement release table is:
 | v0.61.0 | Performance, cost, and capacity contract | Planned |
 | v0.62.0 | Public surface freeze | Planned |
 | v0.63.0–v0.63.1 | Production beta and readiness audit | Planned |
+| v0.64.0–v0.64.2 | Deferred multi-node and cloud evidence | Planned |
 | v1.0.0-rc.1–rc.2 | Release candidates | Planned |
 | v1.0.0 | Stable release | Gate-based |
 ```
@@ -2141,8 +2151,9 @@ replacement release table is:
 Adopt this roadmap with three immediate actions:
 
 1. Cut v0.51.5 as a release-distribution and platform-correctness patch.
-2. Open the four v0.52 evidence epics and freeze the evidence schema before any
-   performance claim or optimization work.
+2. Open the v0.52.0 LocalFS and MinIO evidence epic and freeze the evidence
+   schema. Defer the multi-node and cloud evidence epics to v0.64.0–v0.64.2,
+   after v0.63.0.
 3. Convert issue #92 into the v0.54–v0.56 multi-catalog epic, explicitly stating
    that the supported design routes to independent catalog locations and will
    not add tenant IDs to the shared RockLake keyspace.
