@@ -223,6 +223,7 @@ jobs:
           path: .
           format: spdx-json
           output-file: rocklake-v${{ needs.prepare.outputs.version }}.sbom.spdx.json
+          upload-release-assets: false
       - uses: actions/upload-artifact@v4
         with:
           name: release-sbom
