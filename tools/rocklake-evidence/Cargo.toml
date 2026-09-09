@@ -1,0 +1,19 @@
+[package]
+name = "rocklake-evidence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+libc = { workspace = true }
+object_store = { workspace = true }
+rocklake-catalog = { path = "../../crates/rocklake-catalog" }
+rocklake-core = { path = "../../crates/rocklake-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }

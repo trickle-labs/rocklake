@@ -8,11 +8,12 @@ members = [
     "crates/rocklake-client",
     "crates/rocklake-datafusion",
     "crates/rocklake-testkit",
+    "tools/rocklake-evidence",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.51.5"
+version = "0.52.0"
 edition = "2021"
 rust-version = "1.93"
 license = "Apache-2.0"
@@ -65,6 +66,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 toml = "0.8"
 sha2 = "0.11"
+libc = "0.2"
 
 [patch.crates-io]
 fastant = { path = "vendor/fastant" }

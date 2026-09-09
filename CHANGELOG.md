@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.52.0] — 2026-09-09
+
+### Added
+
+- Added the internal `rocklake-evidence` runner for fresh-process LocalFS and
+  MinIO scale measurements across deterministic 10k, 100k, and 1M-file
+  datasets.
+- Added versioned JSON and JSONL evidence output with correctness digests,
+  RSS, CPU, latency, and object-store operation measurements.
+- Added the v0.52.0 evidence schema, summary command, and operator guide.
+
+### Changed
+
+- Updated workspace, binding, binary, and release documentation metadata to
+  v0.52.0.
+
 ## [0.51.5] — 2026-09-08
 
 ### Added

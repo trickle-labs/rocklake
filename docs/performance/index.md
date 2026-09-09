@@ -32,6 +32,10 @@ Before diving into specific pages, some context about what "performance" means f
 
     Reproducible benchmark methodology and baseline results. Point operations, scan operations, and write operations measured on standardized hardware with statistical rigor. Instructions for running benchmarks in your environment.
 
+-   **[v0.52.0 Scale Evidence](evidence-v0.52.0.md)**
+
+    Fresh-process LocalFS and MinIO evidence with deterministic correctness digests and bounded-read measurements.
+
 -   **[Tuning](tuning.md)**
 
     ---

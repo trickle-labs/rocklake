@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RockLake v0.52.0 evidence report",
+  "type": "object",
+  "required": [
+    "kind",
+    "release",
+    "schema_version",
+    "generated_at",
+    "backend",
+    "dataset_sizes",
+    "operations",
+    "machine",
+    "results"
+  ],
+  "properties": {
+    "kind": { "const": "evidence-report" },
+    "release": { "const": "v0.52.0" },
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "backend": { "enum": ["local", "localfs", "minio"] },
+    "dataset_sizes": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+    "operations": { "type": "array", "items": { "type": "string" } },
+    "machine": { "$ref": "#/$defs/machine" },
+    "results": { "type": "array", "items": { "$ref": "#/$defs/measurement" } }
+  },
+  "$defs": {
+    "machine": {
+      "type": "object",
+      "required": ["git_sha", "binary_sha256", "os", "arch", "cpu_count", "rust_version", "dependencies"],
+      "properties": {
+        "git_sha": { "type": "string" },
+        "binary_sha256": { "type": ["string", "null"] },
+        "os": { "type": "string" },
+        "arch": { "type": "string" },
+        "kernel": { "type": ["string", "null"] },
+        "cpu_count": { "type": "integer", "minimum": 1 },
+        "memory_bytes": { "type": ["integer", "null"] },
+        "rust_version": { "type": "string" },
+        "container_image": { "type": ["string", "null"] },
+        "dependencies": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "required": [
+        "kind",
+        "release",
+        "schema_version",
+        "backend",
+        "backend_version",
+        "dataset_size",
+        "dataset_seed",
+        "table_id",
+        "snapshot_id",
+        "expected_digest",
+        "operation",
+        "rows",
+        "bytes",
+        "open_us",
+        "operation_us",
+        "close_us",
+        "wall_us",
+        "object_store_operations",
+        "object_store_bytes",
+        "machine",
+        "configuration"
+      ],
+      "properties": {
+        "kind": { "const": "measurement" },
+        "release": { "const": "v0.52.0" },
+        "schema_version": { "const": 1 },
+        "backend": { "enum": ["local", "localfs", "minio"] },
+        "backend_version": { "type": "string" },
+        "dataset_size": { "type": "integer", "minimum": 1 },
+        "dataset_seed": { "type": "integer", "minimum": 0 },
+        "table_id": { "type": "integer", "minimum": 1 },
+        "snapshot_id": { "type": "integer", "minimum": 1 },
+        "expected_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "operation": { "type": "string" },
+        "rows": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "observed_digest": { "type": ["string", "null"] },
+        "matches_expected_digest": { "type": ["boolean", "null"] },
+        "open_us": { "type": "integer", "minimum": 0 },
+        "first_row_us": { "type": ["integer", "null"] },
+        "operation_us": { "type": "integer", "minimum": 0 },
+        "close_us": { "type": "integer", "minimum": 0 },
+        "wall_us": { "type": "integer", "minimum": 0 },
+        "cpu_us": { "type": ["integer", "null"] },
+        "baseline_rss_bytes": { "type": ["integer", "null"] },
+        "peak_rss_bytes": { "type": ["integer", "null"] },
+        "post_close_rss_bytes": { "type": ["integer", "null"] },
+        "object_store_operations": { "type": "integer", "minimum": 0 },
+        "object_store_bytes": { "type": "integer", "minimum": 0 },
+        "machine": { "$ref": "#/$defs/machine" },
+        "configuration": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    }
+  }
+}
