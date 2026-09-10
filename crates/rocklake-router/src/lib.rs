@@ -6,7 +6,7 @@ pub use registry::*;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -250,6 +250,10 @@ impl CatalogLocation {
     /// Canonical path/prefix.
     pub fn prefix(&self) -> &str {
         &self.prefix
+    }
+
+    pub(crate) fn local_path(&self) -> Option<&Path> {
+        self.local_path.as_deref()
     }
 
     /// Canonical URI safe for diagnostics.

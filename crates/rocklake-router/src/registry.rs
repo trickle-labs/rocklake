@@ -69,8 +69,10 @@ impl RegistryOpenOptions {
     ) -> Result<Self, RouterError> {
         let location = CatalogLocation::parse(location)?;
         if location.scheme() == "file" {
-            std::fs::create_dir_all(location.prefix())
-                .map_err(|error| RouterError::Open(error.to_string()))?;
+            let path = location
+                .local_path()
+                .unwrap_or_else(|| Path::new(location.prefix()));
+            std::fs::create_dir_all(path).map_err(|error| RouterError::Open(error.to_string()))?;
         }
         let (path, object_store) = location.object_store_path(router_options)?;
         Ok(Self {
