@@ -1,9 +1,11 @@
 //! Routing for independent RockLake catalogs.
 
 mod authorization;
+mod backup_set;
 mod registry;
 
 pub use authorization::*;
+pub use backup_set::*;
 pub use registry::*;
 
 use std::collections::{BTreeMap, HashMap};

@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.58.0] — 2026-09-10
+
+### Added
+
+- Added versioned catalog backup manifests with retention, checkpoint, job,
+  format, encryption-key, and referenced-data metadata.
+- Added full-service and selected-catalog backup sets tied to registry
+  generations, with optional bounded data-file HEAD verification.
+- Added restore planning with explicit overwrite tokens and read-only route
+  publication after metadata verification.
+- Added durable maintenance schedules with UTC windows, blackouts, bounded due
+  claims, and durable job-ledger submission.
+- Added machine-readable recovery-drill reports with measured RPO/RTO fields.
+
+### Changed
+
+- Metadata backups continue to contain catalog facts and data-file references,
+  never an implicit copy of referenced Parquet data.
+- Updated workspace, binding, compatibility, binary, and release documentation
+  metadata to v0.58.0.
+
+### Deferred
+
+- Cross-region data replication and scheduled physical excision remain
+  explicitly deferred.
+
 ## [0.57.0] — 2026-09-10
 
 ### Added

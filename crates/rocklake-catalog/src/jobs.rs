@@ -80,6 +80,8 @@ pub enum JobKind {
     Excision,
     /// Find and optionally remove unreferenced data files.
     OrphanSweep,
+    /// Create a full logical catalog checkpoint.
+    Checkpoint,
     /// Rebuild catalog metadata from data files.
     Rebuild,
 }
@@ -97,7 +99,8 @@ impl JobKind {
             | Self::Retention
             | Self::Excision
             | Self::OrphanSweep
-            | Self::Rebuild => JobResourceClass::OfflineExclusive,
+            | Self::Rebuild
+            | Self::Checkpoint => JobResourceClass::OfflineExclusive,
         }
     }
 
@@ -604,6 +607,7 @@ impl JobKind {
             Self::Excision => "excision",
             Self::OrphanSweep => "orphan_sweep",
             Self::Rebuild => "rebuild",
+            Self::Checkpoint => "checkpoint",
         }
     }
 }

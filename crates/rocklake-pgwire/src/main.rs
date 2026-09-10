@@ -125,6 +125,11 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
             cli::CatalogSubcommand::Verify(sub) => cmd_verify(sub).await?,
             cli::CatalogSubcommand::Repair(args) => cmd_repair(args).await?,
             cli::CatalogSubcommand::Jobs(sub) => cmd_jobs(sub).await?,
+            cli::CatalogSubcommand::Maintenance(sub) => cmd_maintenance(sub).await?,
+            cli::CatalogSubcommand::Recovery(sub) => cmd_recovery(sub).await?,
+            cli::CatalogSubcommand::BackupSet(sub) => {
+                cmd_backup_set(sub, config_path.as_deref()).await?
+            }
         },
         Commands::Catalogs(command) => cmd_catalogs(command, config_path.as_deref()).await?,
         Commands::Registry(command) => cmd_registry(command, config_path.as_deref()).await?,
@@ -238,6 +243,359 @@ async fn cmd_jobs(command: cli::JobSubcommand) -> Result<(), Box<dyn std::error:
     }
 
     db.close().await?;
+    Ok(())
+}
+
+async fn cmd_maintenance(
+    command: cli::MaintenanceSubcommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog_url = match &command {
+        cli::MaintenanceSubcommand::Schedule(args) => &args.catalog,
+        cli::MaintenanceSubcommand::List(args) => &args.catalog,
+        cli::MaintenanceSubcommand::Remove(args) => &args.catalog,
+        cli::MaintenanceSubcommand::Run(args) => &args.catalog,
+    };
+    let (catalog_path, object_store) = resolve_catalog(catalog_url)?;
+    let db = slatedb::Db::open(catalog_path, object_store).await?;
+    let scheduler = rocklake_catalog::MaintenanceScheduler::new(&db);
+
+    match command {
+        cli::MaintenanceSubcommand::Schedule(args) => {
+            let window = match (args.window_start_minute, args.window_end_minute) {
+                (None, None) => None,
+                (Some(start_minute), Some(end_minute)) => {
+                    Some(rocklake_catalog::MaintenancePeriod {
+                        start_minute,
+                        end_minute,
+                    })
+                }
+                _ => return Err("maintenance windows require both start and end minutes".into()),
+            };
+            let task = match args.task {
+                cli::MaintenanceTaskArg::Backup => rocklake_catalog::MaintenanceTask::Backup,
+                cli::MaintenanceTaskArg::Verification => {
+                    rocklake_catalog::MaintenanceTask::Verification
+                }
+                cli::MaintenanceTaskArg::Retention => rocklake_catalog::MaintenanceTask::Retention,
+                cli::MaintenanceTaskArg::Checkpoint => {
+                    rocklake_catalog::MaintenanceTask::Checkpoint
+                }
+                cli::MaintenanceTaskArg::OrphanSweep => {
+                    rocklake_catalog::MaintenanceTask::OrphanSweep
+                }
+            };
+            scheduler
+                .upsert(rocklake_catalog::MaintenanceSchedule {
+                    id: args.id,
+                    task,
+                    interval_seconds: args.interval_seconds,
+                    next_run_at_unix_ms: args.next_run_at_ms,
+                    enabled: true,
+                    window,
+                    blackouts: Vec::new(),
+                })
+                .await?;
+            println!("Maintenance schedule saved.");
+        }
+        cli::MaintenanceSubcommand::List(args) => {
+            let schedules = scheduler.list().await?;
+            match args.output {
+                cli::OutputFormat::Json => {
+                    println!("{}", serde_json::json!({"schedules": schedules}))
+                }
+                cli::OutputFormat::Human => {
+                    for schedule in schedules {
+                        println!(
+                            "{}  {:?}  every {}s  next {}",
+                            schedule.id,
+                            schedule.task,
+                            schedule.interval_seconds,
+                            schedule.next_run_at_unix_ms
+                        );
+                    }
+                }
+            }
+        }
+        cli::MaintenanceSubcommand::Remove(args) => {
+            scheduler.remove(&args.id).await?;
+            println!("Maintenance schedule removed: {}", args.id);
+        }
+        cli::MaintenanceSubcommand::Run(args) => {
+            let now = args.now_ms.unwrap_or(unix_now_ms()?);
+            let due = scheduler.claim_due(now, args.limit).await?;
+            let ledger = rocklake_catalog::JobLedger::new(&db);
+            let mut jobs = Vec::with_capacity(due.len());
+            for item in due {
+                let record = ledger
+                    .create(rocklake_catalog::JobRequest::new(
+                        item.job_kind,
+                        None,
+                        serde_json::json!({"schedule_id": item.schedule.id, "claimed_at_ms": now}),
+                        None,
+                    ))
+                    .await?;
+                jobs.push(record.id.to_string());
+            }
+            match args.output {
+                cli::OutputFormat::Json => println!("{}", serde_json::json!({"jobs": jobs})),
+                cli::OutputFormat::Human => {
+                    for job in jobs {
+                        println!("Maintenance job queued: {job}");
+                    }
+                }
+            }
+        }
+    }
+    db.close().await?;
+    Ok(())
+}
+
+async fn cmd_backup_set(
+    command: cli::BackupSetSubcommand,
+    config_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, file_config) = config::load(config_path)?;
+    match command {
+        cli::BackupSetSubcommand::Create(args) => {
+            let registry = open_registry(&args.registry, &file_config).await?;
+            let catalog_ids = args
+                .catalog_ids
+                .iter()
+                .map(|id| id.parse())
+                .collect::<Result<Vec<rocklake_router::CatalogId>, _>>()?;
+            let info = rocklake_router::create_backup_set(
+                &registry,
+                &args.output,
+                rocklake_router::BackupSetOptions {
+                    catalog_ids,
+                    include_data_inventory: args.include_data,
+                    verify_data: args.verify_data,
+                    router: router_open_options(&file_config),
+                },
+            )
+            .await?;
+            registry.close().await?;
+            println!(
+                "Backup set created: {} (generation {}, {} catalogs)",
+                info.path.display(),
+                info.manifest.registry_generation,
+                info.manifest.catalogs.len()
+            );
+        }
+        cli::BackupSetSubcommand::Inspect(args) => {
+            let info = rocklake_router::inspect_backup_set(&args.input).await?;
+            match args.output {
+                cli::OutputFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&info.manifest)?)
+                }
+                cli::OutputFormat::Human => println!(
+                    "Backup set: {}\n  Generation: {}\n  Catalogs: {}",
+                    info.path.display(),
+                    info.manifest.registry_generation,
+                    info.manifest.catalogs.len()
+                ),
+            }
+        }
+        cli::BackupSetSubcommand::Plan(args) => {
+            let info = rocklake_router::inspect_backup_set(&args.input).await?;
+            let token = backup_overwrite_token(&info.manifest, &args.registry);
+            let existing = registry_exists(&args.registry, &file_config).await?;
+            let plan = backup_set_restore_plan(&info, &args, existing, &token);
+            print_backup_set_plan(plan, args.output)?;
+        }
+        cli::BackupSetSubcommand::Apply(args) => {
+            let info = rocklake_router::inspect_backup_set(&args.input).await?;
+            let token = backup_overwrite_token(&info.manifest, &args.registry);
+            let existing = registry_exists(&args.registry, &file_config).await?;
+            if existing {
+                if args.overwrite_token.as_deref() != Some(token.as_str()) {
+                    return Err(format!(
+                        "restore destination exists; run plan and pass --overwrite-token {token}"
+                    )
+                    .into());
+                }
+                return Err(
+                    "existing backup-set destinations are not overwritten; restore to a new registry location"
+                        .into(),
+                );
+            }
+            let registry = open_registry(&args.registry, &file_config).await?;
+            registry.init().await?;
+            let s3_options = S3Options {
+                endpoint: file_config.s3_endpoint.clone(),
+                path_style: file_config.s3_path_style.unwrap_or(false),
+            };
+            let mut restored = Vec::new();
+            for child in &info.manifest.catalogs {
+                let catalog_location = join_location(&args.catalog_root, &child.id.to_string());
+                let data_location = join_location(&args.data_root, &child.id.to_string());
+                let (path, store) =
+                    resolve_catalog_with_opts_mode(&catalog_location, &s3_options, true)?;
+                let db = slatedb::Db::open(path, store).await?;
+                let input =
+                    std::fs::File::open(args.input.join(&child.backup).join("catalog.ndjson"))?;
+                let catalog_location_for_job = catalog_location.clone();
+                let result = run_job(
+                    &db,
+                    rocklake_catalog::JobKind::Restore,
+                    serde_json::json!({
+                        "backup_set": args.input,
+                        "catalog_id": child.id,
+                        "catalog": catalog_location_for_job
+                    }),
+                    None,
+                    |job_db| async move {
+                        let imported = rocklake_catalog::export::import_catalog(
+                            &job_db,
+                            std::io::BufReader::new(input),
+                        )
+                        .await?;
+                        let verified = rocklake_catalog::verify::verify_catalog(&job_db).await?;
+                        if !verified.is_ok() {
+                            return Err(format!(
+                                "restored catalog {} failed verification: {:?}",
+                                child.id, verified.errors
+                            )
+                            .into());
+                        }
+                        Ok(imported)
+                    },
+                )
+                .await?;
+                db.close().await?;
+                registry
+                    .create(
+                        rocklake_router::restored_catalog_config(
+                            child,
+                            catalog_location,
+                            data_location,
+                        )?,
+                        &format!("restore-{}", child.id),
+                    )
+                    .await?;
+                restored.push(serde_json::json!({
+                    "catalog_id": child.id,
+                    "rows_imported": result.0.rows_imported,
+                    "job_id": result.1
+                }));
+            }
+            match args.output {
+                cli::OutputFormat::Json => println!(
+                    "{}",
+                    serde_json::json!({"restored": restored, "published_as": "read_only"})
+                ),
+                cli::OutputFormat::Human => println!(
+                    "Backup set restored and verified: {} catalogs published read-only.",
+                    restored.len()
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_recovery(command: cli::RecoverySubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        cli::RecoverySubcommand::Report(args) => {
+            let drill = match args.drill {
+                cli::RecoveryDrillArg::LostProcess => rocklake_catalog::RecoveryDrill::LostProcess,
+                cli::RecoveryDrillArg::LostRegistryPrefix => {
+                    rocklake_catalog::RecoveryDrill::LostRegistryPrefix
+                }
+                cli::RecoveryDrillArg::AccidentalRouteDeletion => {
+                    rocklake_catalog::RecoveryDrill::AccidentalRouteDeletion
+                }
+                cli::RecoveryDrillArg::DamagedCatalogPrefix => {
+                    rocklake_catalog::RecoveryDrill::DamagedCatalogPrefix
+                }
+                cli::RecoveryDrillArg::LostCredentials => {
+                    rocklake_catalog::RecoveryDrill::LostCredentials
+                }
+                cli::RecoveryDrillArg::RegionRestore => {
+                    rocklake_catalog::RecoveryDrill::RegionRestore
+                }
+            };
+            let report = rocklake_catalog::RecoveryReport::completed(
+                drill,
+                args.started_at,
+                args.rpo_seconds,
+                args.rto_seconds,
+                args.verified,
+                args.details,
+            );
+            report.write_json(&args.output).await?;
+            println!("Recovery report written: {}", args.output.display());
+        }
+    }
+    Ok(())
+}
+
+fn backup_overwrite_token(manifest: &rocklake_router::BackupSetManifest, registry: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(manifest.registry_generation.to_string().as_bytes());
+    digest.update(b":");
+    digest.update(registry.as_bytes());
+    let suffix = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("restore-{suffix}")
+}
+
+async fn registry_exists(
+    location: &str,
+    config: &config::ConfigFile,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let registry = open_registry(location, config).await?;
+    let result = registry.snapshot().await;
+    registry.close().await?;
+    match result {
+        Ok(_) => Ok(true),
+        Err(rocklake_router::RegistryError::NotInitialized) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn join_location(root: &str, child: &str) -> String {
+    format!("{}/{}", root.trim_end_matches('/'), child)
+}
+
+fn backup_set_restore_plan(
+    info: &rocklake_router::BackupSetInfo,
+    args: &cli::BackupSetRestoreArgs,
+    existing: bool,
+    token: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "backup_set": info.path,
+        "registry": args.registry,
+        "registry_generation": info.manifest.registry_generation,
+        "catalogs": info.manifest.catalogs.iter().map(|catalog| serde_json::json!({
+            "id": catalog.id,
+            "catalog": join_location(&args.catalog_root, &catalog.id.to_string()),
+            "data": join_location(&args.data_root, &catalog.id.to_string()),
+            "published_as": "read_only"
+        })).collect::<Vec<_>>(),
+        "destination_exists": existing,
+        "overwrite_token": existing.then_some(token),
+        "action": if existing { "requires_explicit_overwrite_token" } else { "create_new_prefixes" }
+    })
+}
+
+fn print_backup_set_plan(
+    plan: serde_json::Value,
+    output: cli::OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output {
+        cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&plan)?),
+        cli::OutputFormat::Human => println!(
+            "Backup-set restore plan:\n{}",
+            serde_json::to_string_pretty(&plan)?
+        ),
+    }
     Ok(())
 }
 
@@ -3450,21 +3808,38 @@ async fn cmd_backup(command: cli::BackupSubcommand) -> Result<(), Box<dyn std::e
             let output_path = args.out.clone();
             let catalog_identity = args.catalog.clone();
             let snapshot_id = args.snapshot_id;
+            let (data_root, data_store) = if let Some(data_root) = &args.data_root {
+                let (path, store) =
+                    resolve_catalog_with_opts_mode(data_root, &S3Options::default(), false)?;
+                (Some(path), Some(store))
+            } else {
+                (None, None)
+            };
             let (info, job_id) = run_job(
                 &db,
                 rocklake_catalog::JobKind::Backup,
                 serde_json::json!({
                     "catalog": catalog_identity,
                     "output": output_path,
-                    "snapshot_id": snapshot_id
+                    "snapshot_id": snapshot_id,
+                    "data_root": args.data_root,
+                    "include_data": args.include_data,
+                    "verify_data": args.verify_data
                 }),
                 args.idempotency_key,
                 |job_db| async move {
-                    rocklake_catalog::create_backup(
+                    rocklake_catalog::create_backup_with_options(
                         &job_db,
                         &output_path,
-                        &catalog_identity,
-                        snapshot_id,
+                        rocklake_catalog::BackupOptions {
+                            source_identity: catalog_identity,
+                            snapshot_id,
+                            data_store,
+                            data_root,
+                            include_data_inventory: args.include_data,
+                            verify_data: args.verify_data,
+                            ..rocklake_catalog::BackupOptions::default()
+                        },
                     )
                     .await
                     .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
@@ -3505,6 +3880,7 @@ async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std:
         cli::RestoreSubcommand::Apply(args) => (args, true),
     };
     let backup = rocklake_catalog::inspect_backup(&args.backup).await?;
+    let overwrite_token = catalog_overwrite_token(&backup.manifest, &args.catalog);
     let local_target_missing = !apply
         && args
             .catalog
@@ -3519,6 +3895,7 @@ async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std:
             "snapshot_id": backup.manifest.snapshot_id,
             "rows": backup.manifest.row_count,
             "target_empty": true,
+            "overwrite_token": serde_json::Value::Null,
             "action": "import",
         });
         match args.output {
@@ -3547,12 +3924,15 @@ async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std:
             break;
         }
     }
-    if !target_empty && apply && !args.overwrite {
+    if !target_empty
+        && apply
+        && (!args.overwrite || args.overwrite_token.as_deref() != Some(overwrite_token.as_str()))
+    {
         db.close().await?;
-        return Err(
-            "restore target is not empty; pass --overwrite explicitly or use a new catalog path"
-                .into(),
-        );
+        return Err(format!(
+            "restore target is not empty; run restore plan and pass --overwrite --overwrite-token {overwrite_token}"
+        )
+        .into());
     }
     let plan = serde_json::json!({
         "schema_version": 1,
@@ -3561,6 +3941,7 @@ async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std:
         "snapshot_id": backup.manifest.snapshot_id,
         "rows": backup.manifest.row_count,
         "target_empty": target_empty,
+        "overwrite_token": (!target_empty).then_some(&overwrite_token),
         "action": if apply && !target_empty && args.overwrite {
             "overwrite and import"
         } else if apply {
@@ -3654,6 +4035,20 @@ async fn cmd_restore(command: cli::RestoreSubcommand) -> Result<(), Box<dyn std:
         ),
     }
     Ok(())
+}
+
+fn catalog_overwrite_token(manifest: &rocklake_catalog::BackupManifest, catalog: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(manifest.sha256.as_bytes());
+    digest.update(b":");
+    digest.update(catalog.as_bytes());
+    let suffix = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("restore-{suffix}")
 }
 
 // ─── sweep-orphans (v0.39.0) ───────────────────────────────────────────────

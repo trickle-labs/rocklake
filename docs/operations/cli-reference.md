@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.57.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.58.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -12,7 +12,7 @@ doctor
 status
 catalogs validate|list|status|create|register|promote|activate|rename|set-mode|disable|enable|remove
 registry init|status|backup|restore|verify|migrate-static|register-node|renew-node
-catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair|jobs
+catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair|jobs|maintenance|recovery|backup-set
 debug diagnose|inspect|corpus|rebuild|sweep-orphans|pg-migrate|tune|warmup
 config check|example
 completions
@@ -74,6 +74,17 @@ rocklake catalog jobs list --catalog ./lake --output json
 rocklake catalog jobs status --catalog ./lake --id <job-uuid> --output json
 rocklake catalog jobs cancel --catalog ./lake --id <job-uuid>
 rocklake catalog jobs resume --catalog ./lake --id <job-uuid>
+rocklake catalog maintenance schedule --catalog ./lake --id nightly \
+  --task backup --interval-seconds 86400
+rocklake catalog maintenance run --catalog ./lake --limit 1
+rocklake catalog recovery report --drill lost-process --started-at <rfc3339> \
+  --rpo-seconds <n> --rto-seconds <n> --verified --output recovery.json
+rocklake catalog backup-set create --registry <location> --output <directory>
+rocklake catalog backup-set inspect <directory> --output json
+rocklake catalog backup-set plan --input <directory> --registry <location> \
+  --catalog-root <new-catalog-root> --data-root <new-data-root>
+rocklake catalog backup-set apply --input <directory> --registry <location> \
+  --catalog-root <new-catalog-root> --data-root <new-data-root>
 rocklake catalogs validate
 rocklake catalogs list --output json
 rocklake catalogs status
@@ -135,6 +146,12 @@ default. `export` accepts `--snapshot-id`; `export-catalog` accepts
 GC and excision expose separate `plan` and `apply` subcommands. `repair` and
 `migrate` expose explicit `--dry-run` and `--apply` options. All destructive
 operations remain explicit in the command syntax.
+
+Restore plans for existing catalog destinations print an overwrite token.
+Applying such a plan requires both `--overwrite` and the exact
+`--overwrite-token`; new destinations do not need either flag. Backup sets are
+metadata-only unless their manifests explicitly include referenced-object
+inventory, so copying a backup never implies copying Parquet data.
 
 Long-running backup, restore, export, import, verification, repair, retention,
 excision, orphan-sweep, and rebuild operations record a durable job. Pass

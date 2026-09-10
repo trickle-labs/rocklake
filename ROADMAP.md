@@ -2134,8 +2134,8 @@ replacement release table is:
 | v0.54.0 | Static multi-catalog router | Planned |
 | v0.55.0 | Managed catalog registry | Planned |
 | v0.56.0 | Authorization, quotas, and isolation | Planned |
-| v0.57.0 | Writer availability and multi-node routing | Planned |
-| v0.58.0 | Disaster recovery and maintenance | Planned |
+| v0.57.0 | Writer availability and multi-node routing | Done |
+| v0.58.0 | Disaster recovery and maintenance | Done |
 | v0.59.0 | Security, secrets, audit, and governance | Planned |
 | v0.60.0 | Compatibility and migration freeze | Planned |
 | v0.61.0 | Performance, cost, and capacity contract | Planned |

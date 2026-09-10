@@ -216,6 +216,18 @@ pub enum CatalogSubcommand {
     /// Inspect and control durable administrative jobs.
     #[command(subcommand)]
     Jobs(JobSubcommand),
+
+    /// Manage durable maintenance policies and due work.
+    #[command(subcommand)]
+    Maintenance(MaintenanceSubcommand),
+
+    /// Emit a machine-readable recovery-drill report.
+    #[command(subcommand)]
+    Recovery(RecoverySubcommand),
+
+    /// Create, inspect, and restore managed backup sets.
+    #[command(subcommand)]
+    BackupSet(BackupSetSubcommand),
 }
 
 /// Static multi-catalog router operations.
@@ -531,6 +543,138 @@ pub enum JobSubcommand {
     Resume(JobControlArgs),
 }
 
+/// Durable maintenance policy operations.
+#[derive(Debug, Subcommand)]
+pub enum MaintenanceSubcommand {
+    /// Create or replace a maintenance schedule.
+    Schedule(MaintenanceScheduleArgs),
+    /// List durable maintenance schedules.
+    List(MaintenanceListArgs),
+    /// Remove a maintenance schedule.
+    Remove(MaintenanceRemoveArgs),
+    /// Claim due schedules as durable administrative jobs.
+    Run(MaintenanceRunArgs),
+}
+
+/// Recovery report operations.
+#[derive(Debug, Subcommand)]
+pub enum RecoverySubcommand {
+    /// Record measured results from a completed drill.
+    Report(RecoveryReportArgs),
+}
+
+/// Options for writing a recovery report.
+#[derive(Debug, Parser)]
+pub struct RecoveryReportArgs {
+    /// Drill scenario.
+    #[arg(long, value_enum)]
+    pub drill: RecoveryDrillArg,
+    /// RFC 3339 start time.
+    #[arg(long)]
+    pub started_at: String,
+    /// Measured durable-commit RPO in seconds.
+    #[arg(long)]
+    pub rpo_seconds: u64,
+    /// Measured recovery RTO in seconds.
+    #[arg(long)]
+    pub rto_seconds: u64,
+    /// Whether metadata and referenced-data verification passed.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub verified: bool,
+    /// Bounded operator detail.
+    #[arg(long, default_value = "operator-recorded drill")]
+    pub details: String,
+    /// JSON report output path.
+    #[arg(long)]
+    pub output: std::path::PathBuf,
+}
+
+/// Recovery drill scenarios.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum RecoveryDrillArg {
+    LostProcess,
+    LostRegistryPrefix,
+    AccidentalRouteDeletion,
+    DamagedCatalogPrefix,
+    LostCredentials,
+    RegionRestore,
+}
+
+/// Supported maintenance task names.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum MaintenanceTaskArg {
+    Backup,
+    Verification,
+    Retention,
+    Checkpoint,
+    OrphanSweep,
+}
+
+/// Options for creating a maintenance schedule.
+#[derive(Debug, Parser)]
+pub struct MaintenanceScheduleArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+    /// Stable schedule identifier.
+    #[arg(long)]
+    pub id: String,
+    /// Maintenance operation.
+    #[arg(long, value_enum)]
+    pub task: MaintenanceTaskArg,
+    /// Minimum interval between runs.
+    #[arg(long)]
+    pub interval_seconds: u64,
+    /// First eligible run as Unix milliseconds.
+    #[arg(long, default_value = "0")]
+    pub next_run_at_ms: u64,
+    /// Optional window start minute in UTC.
+    #[arg(long)]
+    pub window_start_minute: Option<u16>,
+    /// Optional window end minute in UTC.
+    #[arg(long)]
+    pub window_end_minute: Option<u16>,
+}
+
+/// Options for listing maintenance schedules.
+#[derive(Debug, Parser)]
+pub struct MaintenanceListArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+/// Options for removing a maintenance schedule.
+#[derive(Debug, Parser)]
+pub struct MaintenanceRemoveArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+    /// Schedule identifier.
+    #[arg(long)]
+    pub id: String,
+}
+
+/// Options for claiming due maintenance work.
+#[derive(Debug, Parser)]
+pub struct MaintenanceRunArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+    /// Override the current Unix time in milliseconds.
+    #[arg(long)]
+    pub now_ms: Option<u64>,
+    /// Maximum number of schedules to claim.
+    #[arg(long, default_value = "1")]
+    pub limit: usize,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
 /// Options for listing jobs.
 #[derive(Debug, Parser)]
 pub struct JobListArgs {
@@ -795,6 +939,72 @@ pub enum BackupSubcommand {
     Inspect(BackupInspectArgs),
 }
 
+/// Managed registry and catalog backup-set operations.
+#[derive(Debug, Subcommand)]
+pub enum BackupSetSubcommand {
+    /// Create a full-service or selected-catalog backup set.
+    Create(BackupSetCreateArgs),
+    /// Validate a backup set and every child artifact.
+    Inspect(BackupSetInspectArgs),
+    /// Plan a restore into new registry and catalog prefixes.
+    Plan(BackupSetRestoreArgs),
+    /// Restore and verify catalogs, publishing them as read-only routes.
+    Apply(BackupSetRestoreArgs),
+}
+
+/// Options for creating a managed backup set.
+#[derive(Debug, Parser)]
+pub struct BackupSetCreateArgs {
+    /// Managed registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: String,
+    /// Output backup-set directory.
+    #[arg(long)]
+    pub output: std::path::PathBuf,
+    /// Stable catalog ID to include; repeat for a selected-catalog set.
+    #[arg(long = "catalog-id")]
+    pub catalog_ids: Vec<String>,
+    /// Include referenced data-file inventory.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub include_data: bool,
+    /// HEAD referenced data files and fail when one is missing.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub verify_data: bool,
+}
+
+/// Options for inspecting a managed backup set.
+#[derive(Debug, Parser)]
+pub struct BackupSetInspectArgs {
+    /// Backup-set directory.
+    pub input: std::path::PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
+/// Options for planning or applying a managed backup-set restore.
+#[derive(Debug, Parser)]
+pub struct BackupSetRestoreArgs {
+    /// Backup-set directory.
+    #[arg(long)]
+    pub input: std::path::PathBuf,
+    /// Destination registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: String,
+    /// New root under which catalog metadata prefixes are created.
+    #[arg(long)]
+    pub catalog_root: String,
+    /// New root under which referenced data prefixes are expected.
+    #[arg(long)]
+    pub data_root: String,
+    /// Explicit confirmation token printed by the plan for existing targets.
+    #[arg(long)]
+    pub overwrite_token: Option<String>,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+}
+
 #[derive(Debug, Parser)]
 pub struct BackupCreateArgs {
     /// Catalog URL.
@@ -806,6 +1016,15 @@ pub struct BackupCreateArgs {
     /// Snapshot to back up (latest by default).
     #[arg(long)]
     pub snapshot_id: Option<u64>,
+    /// Object-store root containing referenced data files.
+    #[arg(long)]
+    pub data_root: Option<String>,
+    /// Include referenced data-file inventory.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub include_data: bool,
+    /// HEAD referenced data files and fail when one is missing.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub verify_data: bool,
     /// Reuse the same job when retrying this operation.
     #[arg(long)]
     pub idempotency_key: Option<String>,
@@ -839,6 +1058,9 @@ pub struct RestoreArgs {
     /// Explicitly allow replacing a target catalog after validation.
     #[arg(long, action = ArgAction::SetTrue)]
     pub overwrite: bool,
+    /// Confirmation token printed by `restore plan` for an existing target.
+    #[arg(long)]
+    pub overwrite_token: Option<String>,
     /// Reuse the same job when retrying this operation.
     #[arg(long)]
     pub idempotency_key: Option<String>,

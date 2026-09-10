@@ -23,6 +23,7 @@ pub mod inspect;
 pub mod jobs;
 pub mod key_migration;
 pub mod lease;
+pub mod maintenance;
 pub mod manifest;
 pub mod metrics;
 pub mod migrate;
@@ -31,6 +32,7 @@ pub mod partition;
 pub mod performance;
 pub mod reader;
 pub mod readonly;
+pub mod recovery;
 pub mod repair;
 pub mod store;
 pub mod streaming;
@@ -42,7 +44,9 @@ pub mod writer;
 
 pub use audit::{AuditChange, AuditEntry};
 pub use backup::{
-    create_backup, inspect_backup, BackupInfo, BackupManifest, BACKUP_FORMAT_VERSION,
+    create_backup, create_backup_with_options, inspect_backup, BackupInfo, BackupManifest,
+    BackupOptions, JobStatePolicy, ObjectHeadResult, ObjectReference, ObjectReferenceInventory,
+    BACKUP_FORMAT_VERSION,
 };
 pub use cache::{cache_utilization, CacheStats};
 pub use cdc::{CdcChangeKind, CdcEvent, CdcSnapshot, CdcTailer, WebhookPayload};
@@ -62,6 +66,10 @@ pub use jobs::{
     JobRequest, JobResourceClass, JobState, JOB_LEDGER_FORMAT_VERSION,
 };
 pub use lease::{hold_snapshot, list_active_leases, minimum_leased_snapshot, release_snapshot};
+pub use maintenance::{
+    DueMaintenance, MaintenanceAlerts, MaintenancePeriod, MaintenanceSchedule,
+    MaintenanceScheduler, MaintenanceTask,
+};
 pub use metrics::CatalogMetrics;
 pub use migrate::{migrate_apply, migrate_dry_run, MigrateDryRunResult, MigrateResult};
 pub use partition::{CatalogRegistry, DatasetEntry, PartitionedWriter};
@@ -71,6 +79,7 @@ pub use reader::{
     MAX_METADATA_PAGE_SIZE,
 };
 pub use readonly::ReadOnlyCatalog;
+pub use recovery::{RecoveryDrill, RecoveryReport, RECOVERY_REPORT_SCHEMA_VERSION};
 pub use store::{CatalogStore, OpenOptions};
 pub use streaming::{measure_ingest_throughput, IngestRecord, IngestResult, RockLakeSink};
 pub use sweep::{sweep_orphans, SweepOrphansConfig, SweepResult};
