@@ -737,7 +737,7 @@ async fn cmd_serve(
                 emergency_read_only = true;
                 None
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         }
     } else {
         None
