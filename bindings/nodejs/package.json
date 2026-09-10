@@ -1,6 +1,6 @@
 {
   "name": "@rocklake/client",
-  "version": "0.58.0",
+  "version": "0.59.0",
   "description": "Node.js bindings for the RockLake lakehouse catalog",
   "main": "index.js",
   "types": "index.d.ts",

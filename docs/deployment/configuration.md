@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.58.0 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.59.0 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 
@@ -21,7 +21,7 @@ rocklake serve --catalog <file://...,s3://...,gs://...,az://...>
 
 ## Managed catalog registry
 
-The v0.58.0 registry stores routing state separately from tenant catalogs. It
+The v0.59.0 registry stores routing state separately from tenant catalogs. It
 keeps aliases, lifecycle state, policy references, and credential-provider
 names; it never stores raw credentials. `remove` detaches a route and retains a
 tombstone. It does not delete catalog or data bytes.
@@ -71,6 +71,13 @@ Registry and tenant prefixes must be disjoint. Registry management is local;
 there is no remote management API in this release.
 
 ## Multi-principal authentication
+
+For a single binary principal, use a JSON SCRAM verifier file instead of a
+plaintext password:
+
+```bash
+rocklake serve --auth-verifier-file /run/secrets/rocklake-auth-verifier.json
+```
 
 Multi-principal mode uses opaque SCRAM verifiers and stable catalog IDs. Create
 the verifier with the `ScramVerifier` library API or a provisioning tool, then

@@ -91,13 +91,14 @@ impl TlsConfig {
 pub struct AuthConfig {
     /// Username for password authentication (None = no auth).
     pub username: Option<String>,
-    /// Password for password authentication.
+    /// Password for password authentication, or an encoded SCRAM verifier
+    /// loaded by the binary from `--auth-verifier-file`.
     pub password: Option<String>,
     /// Use SCRAM-SHA-256 instead of cleartext password authentication.
     ///
     /// When `true` the server initiates a SASL/SCRAM-SHA-256 exchange so
     /// that the plaintext credential is never transmitted over the wire.
-    /// Requires `username` and `password` to be set.
+    /// Requires `username` and `password` (or a verifier) to be set.
     pub scram_sha256: bool,
 }
 

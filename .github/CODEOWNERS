@@ -1,0 +1,10 @@
+# v0.59.0 security and release review owners.
+* @grove
+
+/crates/rocklake-catalog/ @grove
+/crates/rocklake-router/ @grove
+/crates/rocklake-pgwire/ @grove
+/crates/rocklake-core/src/keys.rs @grove
+/.github/workflows/ @grove
+/scripts/create_release_manifest.py @grove
+/SECURITY.md @grove

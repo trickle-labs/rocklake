@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.59.0] — 2026-09-10
+
+### Added
+
+- Added versioned AES-256-GCM block envelopes with non-secret key IDs and a
+  read key ring for safe key rotation while old blocks are rewritten.
+- Added hash-chain verification for catalog audit entries.
+- Added binary authentication from bounded JSON SCRAM verifier files, keeping
+  plaintext passwords out of the supported file-based authentication path.
+
+### Changed
+
+- Added release ownership, vulnerability-reporting, and security-governance
+  controls for the v0.59.0 security gate.
+- Updated workspace, binding, compatibility, binary, and release documentation
+  metadata to v0.59.0.
+
+### Deferred
+
+- TLS hot reload, KMS/HSM providers, and mTLS remain deferred until their
+  provider and mixed-workload certification paths exist.
+
 ## [0.58.0] — 2026-09-10
 
 ### Added

@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-RockLake v0.51.3 reads the variables below through its typed CLI. Command-line
+RockLake v0.59.0 reads the variables below through its typed CLI. Command-line
 flags take precedence over environment variables, which take precedence over
 `rocklake.toml`. Run `rocklake serve --help` for the authoritative option list.
 
@@ -13,6 +13,7 @@ flags take precedence over environment variables, which take precedence over
 | `ROCKLAKE_AUTH_USER` | `--auth-user` | Required connection username |
 | `ROCKLAKE_AUTH_PASSWORD` | `--auth-password` | Required connection password |
 | `ROCKLAKE_AUTH_PASSWORD_FILE` | `--auth-password-file` | Read connection password from a file |
+| `ROCKLAKE_AUTH_VERIFIER_FILE` | `--auth-verifier-file` | Read a JSON SCRAM verifier from a file |
 | `ROCKLAKE_ENCRYPTION_KEY_FILE` | `--encryption-key-file` | Read the encryption key from a file |
 | `ROCKLAKE_EXTENSION_SCHEMAS` | `--extension-schemas` | Comma-separated extension schemas |
 | `ROCKLAKE_OTLP_ENDPOINT` | `--otlp-endpoint` | OpenTelemetry HTTP endpoint |
@@ -27,7 +28,7 @@ The catalog path and server options can also be supplied directly:
 ```bash
 ROCKLAKE_CATALOG=file:///var/lib/rocklake/catalog \
 ROCKLAKE_AUTH_USER=ducklake \
-ROCKLAKE_AUTH_PASSWORD="$(< /run/secrets/rocklake-auth-password)" \
+ROCKLAKE_AUTH_VERIFIER_FILE=/run/secrets/rocklake-auth-verifier.json \
 rocklake serve
 ```
 

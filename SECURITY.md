@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest v0.49.x release receives security fixes. Older releases are
+Only the latest v0.59.x release receives security fixes. Older releases are
 unsupported. Upgrade before reporting a problem when the issue is fixed in a
 newer release.
 
@@ -32,6 +32,13 @@ We coordinate the disclosure date with the reporter. We publish a security
 advisory and credit the reporter unless the reporter asks to remain
 anonymous. We do not disclose exploit details before users have a reasonable
 upgrade path.
+
+## Supported-release policy
+
+Security fixes target the latest minor release. Patch releases may be issued
+for vulnerabilities, catalog correctness, supported-client compatibility, and
+release-artifact defects. Each release documents its supported security
+boundary and deferred integrations in `CHANGELOG.md`.
 
 ## Dependency policy
 

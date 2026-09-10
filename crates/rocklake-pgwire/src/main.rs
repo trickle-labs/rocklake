@@ -1297,6 +1297,40 @@ async fn cmd_serve(
         .as_deref(),
         "ROCKLAKE_AUTH_PASSWORD_FILE",
     )?;
+    let auth_verifier_file = setting(
+        args.auth_verifier_file,
+        "ROCKLAKE_AUTH_VERIFIER_FILE",
+        file_config.auth_verifier_file.clone(),
+        None,
+        "auth verifier file",
+    )?;
+    let auth_verifier = auth_verifier_file
+        .as_deref()
+        .map(read_scram_verifier_file)
+        .transpose()?;
+    let mut auth_username = setting(
+        args.auth_user,
+        "ROCKLAKE_AUTH_USER",
+        file_config.auth_user,
+        None,
+        "auth user",
+    )?;
+    let mut auth_password = auth_password;
+    if auth_verifier.is_some() && auth_password.is_some() {
+        return Err(
+            "auth verifier file cannot be combined with auth_password or auth_password_file".into(),
+        );
+    }
+    if let Some((verifier_username, verifier)) = auth_verifier {
+        if auth_username
+            .as_deref()
+            .is_some_and(|username| username != verifier_username)
+        {
+            return Err("auth user does not match SCRAM verifier file".into());
+        }
+        auth_username = Some(verifier_username);
+        auth_password = Some(verifier);
+    }
     let encryption_key = read_secret(
         setting(
             args.encryption_key,
@@ -1409,13 +1443,7 @@ async fn cmd_serve(
             "tls key",
         )?,
         tls_required,
-        auth_username: setting(
-            args.auth_user,
-            "ROCKLAKE_AUTH_USER",
-            file_config.auth_user,
-            None,
-            "auth user",
-        )?,
+        auth_username,
         auth_password,
         mode,
         cost_mode: cost_mode
@@ -1818,9 +1846,37 @@ fn read_secret(
         .map_err(|error| format!("failed to read {source_name} from {path}: {error}").into())
 }
 
+#[derive(serde::Deserialize)]
+struct ScramVerifierFile {
+    username: String,
+    scram_verifier: String,
+}
+
+fn read_scram_verifier_file(path: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
+    const MAX_VERIFIER_FILE_BYTES: usize = 16 * 1024;
+    let contents = std::fs::read(path)
+        .map_err(|error| format!("failed to read auth verifier file {path}: {error}"))?;
+    if contents.len() > MAX_VERIFIER_FILE_BYTES {
+        return Err(format!("auth verifier file {path} is too large").into());
+    }
+    let record: ScramVerifierFile = serde_json::from_slice(&contents)
+        .map_err(|error| format!("invalid auth verifier file {path}: {error}"))?;
+    if record.username.is_empty() || record.username.len() > 63 {
+        return Err(format!("invalid username in auth verifier file {path}").into());
+    }
+    let verifier = rocklake_pgwire::scram::ScramVerifier::decode(&record.scram_verifier)
+        .ok_or_else(|| format!("invalid SCRAM verifier in auth verifier file {path}"))?;
+    if verifier.iterations > 1_000_000 {
+        return Err(
+            format!("SCRAM iteration count is too high in auth verifier file {path}").into(),
+        );
+    }
+    Ok((record.username, record.scram_verifier))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{read_secret, redacted_config, setting, validate_config};
+    use super::{read_scram_verifier_file, read_secret, redacted_config, setting, validate_config};
     use crate::config::ConfigFile;
 
     #[test]
@@ -1867,6 +1923,30 @@ mod tests {
         };
         assert!(validate_config(&config).is_err());
         assert!(!redacted_config(&config).to_string().contains("secret"));
+    }
+
+    #[test]
+    fn verifier_file_is_parsed_without_exposing_a_password() {
+        let file = tempfile::NamedTempFile::new().expect("create verifier file");
+        let verifier = rocklake_pgwire::scram::ScramVerifier::from_password_with_salt(
+            "secret",
+            b"fixed-salt".to_vec(),
+            4096,
+        );
+        std::fs::write(
+            file.path(),
+            serde_json::json!({
+                "username": "admin",
+                "scram_verifier": verifier.encode()
+            })
+            .to_string(),
+        )
+        .expect("write verifier file");
+        let (username, encoded) =
+            read_scram_verifier_file(file.path().to_str().unwrap()).expect("parse verifier file");
+        assert_eq!(username, "admin");
+        assert_eq!(encoded, verifier.encode());
+        assert!(!encoded.contains("secret"));
     }
 
     #[test]
@@ -2509,7 +2589,11 @@ async fn cmd_verify(command: cli::VerifySubcommand) -> Result<(), Box<dyn std::e
                 serde_json::json!({"catalog": args.catalog, "target": "catalog"}),
                 args.idempotency_key,
                 |job_db| async move {
-                    Ok(rocklake_catalog::verify::verify_catalog(&job_db).await?)
+                    let mut result = rocklake_catalog::verify::verify_catalog(&job_db).await?;
+                    if let Err(error) = rocklake_catalog::verify_audit_chain(&job_db).await {
+                        result.errors.push(error.to_string());
+                    }
+                    Ok(result)
                 },
             )
             .await?;
@@ -3493,6 +3577,38 @@ async fn cmd_doctor(
         None,
         "auth user",
     )?;
+    if let Some(path) = setting(
+        args.auth_verifier_file,
+        "ROCKLAKE_AUTH_VERIFIER_FILE",
+        file_config.auth_verifier_file,
+        None,
+        "auth verifier file",
+    )?
+    .as_deref()
+    {
+        match read_scram_verifier_file(path) {
+            Ok((username, _)) if auth_user.as_deref().is_none_or(|user| user == username) => {
+                doctor_check(
+                    &mut checks,
+                    "authentication verifier",
+                    "pass",
+                    format!("valid SCRAM verifier for {username}"),
+                )
+            }
+            Ok(_) => doctor_check(
+                &mut checks,
+                "authentication verifier",
+                "fail",
+                "auth user does not match SCRAM verifier file",
+            ),
+            Err(error) => doctor_check(
+                &mut checks,
+                "authentication verifier",
+                "fail",
+                error.to_string(),
+            ),
+        }
+    }
     let tls = tls_cert.is_some() && tls_key.is_some();
     if !bind.ip().is_loopback() && !tls && auth_user.is_none() {
         let warning = "listener is non-loopback without TLS or authentication".to_string();
@@ -3711,6 +3827,14 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
     if config.auth_password.is_some() && config.auth_password_file.is_some() {
         return Err("auth_password and auth_password_file are mutually exclusive".to_string());
     }
+    if config.auth_verifier_file.is_some()
+        && (config.auth_password.is_some() || config.auth_password_file.is_some())
+    {
+        return Err(
+            "auth_verifier_file cannot be combined with auth_password or auth_password_file"
+                .to_string(),
+        );
+    }
     if config.encryption_key.is_some() && config.encryption_key_file.is_some() {
         return Err("encryption_key and encryption_key_file are mutually exclusive".to_string());
     }
@@ -3744,6 +3868,9 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
     }
     if let Some(key) = config.encryption_key.as_deref() {
         rocklake_catalog::EncryptionConfig::from_hex(key).map_err(|e| e.to_string())?;
+    }
+    if let Some(path) = config.auth_verifier_file.as_deref() {
+        read_scram_verifier_file(path).map_err(|error| error.to_string())?;
     }
     if let Some(registry) = &config.registry {
         CatalogLocation::parse(&registry.location)
@@ -3780,6 +3907,7 @@ fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
         "auth_user": config.auth_user,
         "auth_password": config.auth_password.as_ref().map(|_| "[redacted]"),
         "auth_password_file": config.auth_password_file,
+        "auth_verifier_file": config.auth_verifier_file,
         "mode": config.mode,
         "cost_mode": config.cost_mode,
         "s3_endpoint": config.s3_endpoint,

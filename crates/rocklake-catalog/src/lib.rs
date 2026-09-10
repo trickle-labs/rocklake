@@ -42,7 +42,7 @@ pub mod wal;
 pub mod warmup;
 pub mod writer;
 
-pub use audit::{AuditChange, AuditEntry};
+pub use audit::{verify_audit_chain, AuditChange, AuditEntry};
 pub use backup::{
     create_backup, create_backup_with_options, inspect_backup, BackupInfo, BackupManifest,
     BackupOptions, JobStatePolicy, ObjectHeadResult, ObjectReference, ObjectReferenceInventory,
@@ -55,7 +55,9 @@ pub use cost::{tune_for_cost_target, ApiCostReport, CostMode};
 pub use diagnose::{
     diagnose_catalog, format_report_text, DiagnoseReport, DiagnosticFinding, FindingSeverity,
 };
-pub use encryption::{EncryptionConfig, EncryptionError};
+pub use encryption::{
+    EncryptionConfig, EncryptionError, EncryptionKey, ENCRYPTION_ENVELOPE_VERSION,
+};
 pub use error::{is_transient, with_transient_retry, CatalogError, CatalogResult};
 pub use extension::{
     create_extension_table, delete_extension_rows, insert_extension_row, is_registered_extension,
