@@ -154,10 +154,11 @@ impl CatalogLocation {
                 "locations must not contain a query or fragment".into(),
             ));
         }
-        if rest.bytes().any(|byte| byte == b'\\')
-            || rest.to_ascii_lowercase().contains("%2e")
-            || rest.to_ascii_lowercase().contains("%2f")
-            || rest.to_ascii_lowercase().contains("%5c")
+        if input.contains("://")
+            && (rest.bytes().any(|byte| byte == b'\\')
+                || rest.to_ascii_lowercase().contains("%2e")
+                || rest.to_ascii_lowercase().contains("%2f")
+                || rest.to_ascii_lowercase().contains("%5c"))
         {
             return Err(RouterError::InvalidConfig(format!(
                 "location '{input}' contains traversal or platform-specific separators"
