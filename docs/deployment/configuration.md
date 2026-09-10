@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.55.0 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.56.0 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 
@@ -21,7 +21,7 @@ rocklake serve --catalog <file://...,s3://...,gs://...,az://...>
 
 ## Managed catalog registry
 
-The v0.55.0 registry stores routing state separately from tenant catalogs. It
+The v0.56.0 registry stores routing state separately from tenant catalogs. It
 keeps aliases, lifecycle state, policy references, and credential-provider
 names; it never stores raw credentials. `remove` detaches a route and retains a
 tombstone. It does not delete catalog or data bytes.
@@ -50,6 +50,30 @@ Use `rocklake registry migrate-static` to import the v0.54 static route table.
 Registry and tenant prefixes must be disjoint. Registry management is local;
 there is no remote management API in this release.
 
+## Multi-principal authentication
+
+Multi-principal mode uses opaque SCRAM verifiers and stable catalog IDs. Create
+the verifier with the `ScramVerifier` library API or a provisioning tool, then
+store only its encoded value in the configuration:
+
+```toml
+[[principals]]
+id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9"
+username = "analytics_reader"
+scram_verifier = "v=1,i=4096,s=<base64-salt>,sk=<stored-key-hex>,sv=<server-key-hex>"
+role = "user"
+
+[[grants]]
+principal_id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9"
+catalog_id = "018f4f4d-d520-7d91-b9f0-7018b7b50d13"
+permissions = ["CONNECT", "READ"]
+```
+
+Grants are checked against the resolved stable catalog ID after SCRAM
+authentication. Unknown users and unauthorized catalogs return the same
+catalog-unavailable response. A registry-backed deployment stores the same
+records in the managed registry.
+
 ## Static multi-catalog routing
 
 Put multiple independent catalogs in `rocklake.toml`. The PostgreSQL startup
@@ -69,6 +93,10 @@ catalog = "s3://company-rocklake/catalogs/analytics"
 data = "s3://company-data/analytics"
 mode = "read-write"
 credential_provider = "aws-default"
+
+[catalogs.limits]
+max_sessions = 50
+max_active_scans = 10
 
 [[catalogs]]
 id = "018f4f4d-d520-7d91-b9f0-7018b7b50d13"

@@ -26,7 +26,10 @@ use tracing_subscriber::EnvFilter;
 
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::{CatalogStore, OpenOptions};
-use rocklake_pgwire::server::{run_server_with_mode, ServerConfig};
+use rocklake_pgwire::server::{
+    run_server_with_mode, run_server_with_router_and_catalog_and_auth, MultiPrincipalAuth,
+    ServerConfig,
+};
 use rocklake_router::CatalogLocation;
 
 const MAIN_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
@@ -723,10 +726,22 @@ async fn cmd_serve(
     );
     let registry_settings = file_config.registry.clone();
     let mut emergency_read_only = false;
+    let mut registry_auth: Option<Arc<MultiPrincipalAuth>> = None;
     let managed_registry = if let Some(settings) = &registry_settings {
         match open_registry(&settings.location, &file_config).await {
             Ok(registry) => match registry.static_config().await {
-                Ok(_) => Some(registry),
+                Ok(_) => {
+                    let snapshot = registry.snapshot().await?;
+                    if !snapshot.principals.is_empty() {
+                        let principals =
+                            rocklake_pgwire::PrincipalStore::from_records(&snapshot.principals)?;
+                        registry_auth = Some(Arc::new(MultiPrincipalAuth {
+                            principals: Arc::new(principals),
+                            authorization: Arc::new(registry.authorization_policy().await?),
+                        }));
+                    }
+                    Some(registry)
+                }
                 Err(_error) if settings.emergency_read_only => {
                     emergency_read_only = true;
                     None
@@ -742,6 +757,20 @@ async fn cmd_serve(
     } else {
         None
     };
+    if registry_auth.is_none()
+        && (!file_config.principals.is_empty() || !file_config.grants.is_empty())
+    {
+        let principals = rocklake_pgwire::PrincipalStore::from_records(&file_config.principals)?;
+        let authorization = rocklake_router::AuthorizationPolicy::new(
+            0,
+            file_config.principals.clone(),
+            file_config.grants.clone(),
+        )?;
+        registry_auth = Some(Arc::new(MultiPrincipalAuth {
+            principals: Arc::new(principals),
+            authorization: Arc::new(authorization),
+        }));
+    }
     let static_router = if let Some(registry) = &managed_registry {
         Some(registry.static_config().await?)
     } else if emergency_read_only {
@@ -756,6 +785,9 @@ async fn cmd_serve(
     } else {
         config::static_router(&file_config)?
     };
+    if registry_auth.is_some() && static_router.is_none() {
+        return Err("multi-principal authentication requires catalog routing".into());
+    }
     let catalog_url = setting(
         args.catalog.or(args.path),
         "ROCKLAKE_CATALOG",
@@ -1184,13 +1216,24 @@ async fn cmd_serve(
         );
         let route = router.resolve(router_default.as_deref())?;
         router.install_handle(route.id, catalog.clone()).await?;
-        rocklake_pgwire::server::run_server_with_router_and_catalog(
-            server_config,
-            router,
-            catalog,
-            access_mode,
-        )
-        .await?;
+        if let Some(multi_auth) = registry_auth {
+            run_server_with_router_and_catalog_and_auth(
+                server_config,
+                router,
+                catalog,
+                access_mode,
+                multi_auth,
+            )
+            .await?;
+        } else {
+            rocklake_pgwire::server::run_server_with_router_and_catalog(
+                server_config,
+                router,
+                catalog,
+                access_mode,
+            )
+            .await?;
+        }
     } else {
         run_server_with_mode(server_config, catalog, access_mode).await?;
     }
@@ -3250,6 +3293,15 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
         CatalogLocation::parse(&registry.location)
             .map_err(|error| format!("invalid registry location: {error}"))?;
     }
+    if !config.principals.is_empty() || !config.grants.is_empty() {
+        rocklake_pgwire::PrincipalStore::from_records(&config.principals)?;
+        rocklake_router::AuthorizationPolicy::new(
+            0,
+            config.principals.clone(),
+            config.grants.clone(),
+        )
+        .map_err(|error| error.to_string())?;
+    }
     config::static_router(config)?;
     Ok(())
 }
@@ -3260,6 +3312,8 @@ fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
         "router": config.router.as_ref().map(|_| "static"),
         "registry": config.registry.as_ref().map(|_| "managed"),
         "catalogs": config.catalogs.len(),
+        "principals": config.principals.len(),
+        "grants": config.grants.len(),
         "bind": config.bind,
         "max_sessions": config.max_sessions,
         "metrics_port": config.metrics_port,

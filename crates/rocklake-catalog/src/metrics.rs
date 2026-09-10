@@ -141,6 +141,12 @@ pub struct CatalogMetrics {
     pub process_peak_rss_bytes: AtomicU64,
     pub resource_limit_exhaustions: AtomicU64,
     pub stream_backpressure_total: AtomicU64,
+    /// Authentication failures across all principals.
+    pub authentication_failures_total: AtomicU64,
+    /// Catalog grant denials across all principals.
+    pub authorization_denials_total: AtomicU64,
+    /// Quota rejections across all catalogs and principals.
+    pub quota_rejections_total: AtomicU64,
 }
 
 impl CatalogMetrics {
@@ -213,6 +219,9 @@ impl CatalogMetrics {
             process_peak_rss_bytes: AtomicU64::new(0),
             resource_limit_exhaustions: AtomicU64::new(0),
             stream_backpressure_total: AtomicU64::new(0),
+            authentication_failures_total: AtomicU64::new(0),
+            authorization_denials_total: AtomicU64::new(0),
+            quota_rejections_total: AtomicU64::new(0),
         }
     }
 
@@ -287,6 +296,20 @@ impl CatalogMetrics {
     pub fn increment_resource_limit_exhaustions(&self) {
         self.resource_limit_exhaustions
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn increment_authentication_failures(&self) {
+        self.authentication_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn increment_authorization_denials(&self) {
+        self.authorization_denials_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn increment_quota_rejections(&self) {
+        self.quota_rejections_total.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn increment_stream_backpressure(&self) {
@@ -882,6 +905,21 @@ impl CatalogMetrics {
         out.push_str(&format!(
             "rocklake_stream_backpressure_total {}\n",
             self.stream_backpressure_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_authentication_failures_total Authentication failures.\n# TYPE rocklake_authentication_failures_total counter\n");
+        out.push_str(&format!(
+            "rocklake_authentication_failures_total {}\n",
+            self.authentication_failures_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_authorization_denials_total Catalog grant denials.\n# TYPE rocklake_authorization_denials_total counter\n");
+        out.push_str(&format!(
+            "rocklake_authorization_denials_total {}\n",
+            self.authorization_denials_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_quota_rejections_total Resource quota rejections.\n# TYPE rocklake_quota_rejections_total counter\n");
+        out.push_str(&format!(
+            "rocklake_quota_rejections_total {}\n",
+            self.quota_rejections_total.load(Ordering::Relaxed)
         ));
 
         out

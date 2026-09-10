@@ -1,7 +1,9 @@
 //! Routing for independent RockLake catalogs.
 
+mod authorization;
 mod registry;
 
+pub use authorization::*;
 pub use registry::*;
 
 use std::collections::{BTreeMap, HashMap};
@@ -105,12 +107,22 @@ pub enum CatalogMode {
 
 /// Per-catalog resource limits.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, default)]
 pub struct CatalogLimits {
     /// Maximum sessions assigned to this catalog, when configured.
     pub max_sessions: Option<usize>,
     /// Maximum active scans assigned to this catalog, when configured.
     pub max_active_scans: Option<usize>,
+    /// Maximum queued requests assigned to this catalog, when configured.
+    pub max_queued_requests: Option<usize>,
+    /// Maximum concurrent writer transactions, when configured.
+    pub max_writer_transactions: Option<usize>,
+    /// Maximum concurrent administrative jobs, when configured.
+    pub max_admin_jobs: Option<usize>,
+    /// Maximum open handles owned by this catalog, when configured.
+    pub max_open_handles: Option<usize>,
+    /// Maximum in-flight response bytes, report-only until atomic accounting exists.
+    pub max_in_flight_response_bytes: Option<usize>,
 }
 
 /// A canonical storage location.
@@ -442,11 +454,7 @@ impl TryFrom<CatalogConfig> for CatalogDescriptor {
                 "catalog {id} must define at least one alias"
             )));
         }
-        if config.limits.max_sessions == Some(0) || config.limits.max_active_scans == Some(0) {
-            return Err(RouterError::InvalidConfig(format!(
-                "catalog {id} limits must be greater than zero"
-            )));
-        }
+        authorization::validate_limits(&config.limits)?;
         let catalog = CatalogLocation::parse(&config.catalog)?;
         let data = CatalogLocation::parse(&config.data)?;
         Ok(Self {
@@ -777,6 +785,16 @@ impl CatalogRouter {
             .by_id
             .get(id)
             .map(|descriptor| descriptor.mode)
+    }
+
+    /// Return per-catalog limits for admission control.
+    pub fn limits_for_id(&self, id: &CatalogId) -> Option<CatalogLimits> {
+        self.routes
+            .read()
+            .expect("router route lock poisoned")
+            .by_id
+            .get(id)
+            .map(|descriptor| descriptor.limits.clone())
     }
 
     /// Return a snapshot of all configured descriptors.

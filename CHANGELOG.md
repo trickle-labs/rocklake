@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.56.0] — 2026-09-10
+
+### Added
+
+- Added stable principal records, SCRAM verifier storage, fake-verifier
+  authentication for unknown users, and per-catalog permission grants.
+- Added registry persistence and CAS mutations for principals and grants.
+- Added per-catalog and per-principal session quotas, per-catalog scan quotas,
+  stable SQLSTATEs for authorization and quota rejection, and bounded
+  authentication/authorization/quota metrics.
+- Bound authenticated principal, grant generation, catalog ID, route
+  generation, and selected catalog mode to each connection.
+
+### Changed
+
+- Routed multi-principal authorization through stable catalog IDs after
+  authentication and before catalog disclosure or opening.
+- Added static TOML and managed-registry configuration paths for multi-principal
+  service mode while retaining the legacy library-only cleartext path.
+- Updated workspace, binding, binary, and release documentation metadata to
+  v0.56.0.
+
 ## [0.55.0] — 2026-09-09
 
 ### Added

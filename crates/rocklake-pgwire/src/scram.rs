@@ -15,9 +15,85 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use hmac::{Hmac, KeyInit, Mac};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// Stored SCRAM-SHA-256 verifier. It contains no plaintext password.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ScramVerifier {
+    pub salt: Vec<u8>,
+    pub iterations: u32,
+    pub stored_key: [u8; 32],
+    pub server_key: [u8; 32],
+}
+
+impl ScramVerifier {
+    /// Derive a verifier from a password for library callers and provisioning tools.
+    pub fn from_password(password: &str) -> Self {
+        let salt = uuid::Uuid::new_v4().as_bytes().to_vec();
+        Self::from_password_with_salt(password, salt, 4096)
+    }
+
+    /// Derive a deterministic verifier with caller-selected SCRAM parameters.
+    pub fn from_password_with_salt(password: &str, salt: Vec<u8>, iterations: u32) -> Self {
+        let salted_password = hi_sha256(password.as_bytes(), &salt, iterations.max(1));
+        Self {
+            salt,
+            iterations: iterations.max(1),
+            stored_key: sha256(&hmac_sha256(&salted_password, b"Client Key")),
+            server_key: hmac_sha256(&salted_password, b"Server Key"),
+        }
+    }
+
+    /// Return a fixed fake verifier used for unknown usernames.
+    pub fn fake() -> Self {
+        Self::from_password_with_salt(
+            "rocklake-invalid-user-fake-password",
+            b"rocklake-fake-salt".to_vec(),
+            4096,
+        )
+    }
+
+    /// Encode the verifier for a config or registry record.
+    pub fn encode(&self) -> String {
+        format!(
+            "v=1,i={},s={},sk={},sv={}",
+            self.iterations,
+            B64.encode(&self.salt),
+            hex_encode(&self.stored_key),
+            hex_encode(&self.server_key)
+        )
+    }
+
+    /// Decode the compact verifier representation emitted by [`Self::encode`].
+    pub fn decode(value: &str) -> Option<Self> {
+        let fields = value
+            .split(',')
+            .filter_map(|part| part.split_once('='))
+            .collect::<std::collections::HashMap<_, _>>();
+        if fields.get("v")? != &"1" {
+            return None;
+        }
+        let iterations = fields.get("i")?.parse::<u32>().ok()?;
+        if iterations == 0 {
+            return None;
+        }
+        let salt = B64.decode(fields.get("s")?).ok()?;
+        if salt.is_empty() {
+            return None;
+        }
+        let stored_key = hex_decode(fields.get("sk")?)?;
+        let server_key = hex_decode(fields.get("sv")?)?;
+        Some(Self {
+            salt,
+            iterations,
+            stored_key: stored_key.try_into().ok()?,
+            server_key: server_key.try_into().ok()?,
+        })
+    }
+}
 
 // ── Server-side SCRAM state ────────────────────────────────────────────────
 
@@ -32,8 +108,12 @@ pub struct ScramState {
     pub server_first: String,
     /// The client-first-message-bare (stripped of the GS2 header).
     pub client_first_bare: String,
-    /// SaltedPassword = Hi(password, salt, iterations).
-    pub salted_password: [u8; 32],
+    /// StoredKey used to verify the client proof.
+    pub stored_key: [u8; 32],
+    /// ServerKey used to create the server signature.
+    pub server_key: [u8; 32],
+    /// Whether the startup username resolved to a configured principal.
+    identity_valid: bool,
 }
 
 impl ScramState {
@@ -45,6 +125,18 @@ impl ScramState {
     pub fn from_client_first(
         client_first: &[u8],
         password: &str,
+        server_nonce_suffix: &str,
+    ) -> Option<Self> {
+        let verifier = ScramVerifier::from_password(password);
+        Self::from_client_first_with_verifier(client_first, &verifier, None, server_nonce_suffix)
+    }
+
+    /// Start a SCRAM exchange from a stored verifier, optionally checking the
+    /// username in the SCRAM message against the authenticated startup user.
+    pub fn from_client_first_with_verifier(
+        client_first: &[u8],
+        verifier: &ScramVerifier,
+        expected_username: Option<&str>,
         server_nonce_suffix: &str,
     ) -> Option<Self> {
         let msg = std::str::from_utf8(client_first).ok()?;
@@ -62,22 +154,35 @@ impl ScramState {
         let client_nonce = client_first_bare
             .split(',')
             .find_map(|part| part.strip_prefix("r="))?;
-
-        // Server-side random salt (16 bytes from a cryptographically random UUID).
-        let salt: Vec<u8> = uuid::Uuid::new_v4().as_bytes().to_vec();
-        let salt_b64 = B64.encode(&salt);
-        let iterations: u32 = 4096;
+        let username = client_first_bare
+            .split(',')
+            .find_map(|part| part.strip_prefix("n="))
+            .map(sasl_unescape)?;
 
         let nonce = format!("{client_nonce}{server_nonce_suffix}");
-        let server_first = format!("r={nonce},s={salt_b64},i={iterations}");
-        let salted_password = hi_sha256(password.as_bytes(), &salt, iterations);
+        let server_first = format!(
+            "r={nonce},s={},i={}",
+            B64.encode(&verifier.salt),
+            verifier.iterations
+        );
 
         Some(Self {
             nonce,
             server_first,
             client_first_bare: client_first_bare.to_string(),
-            salted_password,
+            stored_key: verifier.stored_key,
+            server_key: verifier.server_key,
+            identity_valid: expected_username.is_none_or(|expected| {
+                username
+                    .as_deref()
+                    .is_none_or(|actual| actual.is_empty() || actual == expected)
+            }),
         })
+    }
+
+    /// Mark an exchange invalid while still doing the full fake-verifier work.
+    pub fn invalidate_identity(&mut self) {
+        self.identity_valid = false;
     }
 
     /// Validate the `client-final-message` received from the client.
@@ -107,10 +212,6 @@ impl ScramState {
             return None;
         }
 
-        // Compute StoredKey = H(ClientKey).
-        let client_key = hmac_sha256(&self.salted_password, b"Client Key");
-        let stored_key = sha256(&client_key);
-
         // AuthMessage = client-first-bare + "," + server-first + "," + client-final-without-proof.
         let auth_message = format!(
             "{},{},{}",
@@ -118,7 +219,7 @@ impl ScramState {
         );
 
         // ClientSignature = HMAC(StoredKey, AuthMessage).
-        let client_signature = hmac_sha256(&stored_key, auth_message.as_bytes());
+        let client_signature = hmac_sha256(&self.stored_key, auth_message.as_bytes());
 
         // Recover the original ClientKey from the proof.
         let mut recovered_key = [0u8; 32];
@@ -128,13 +229,12 @@ impl ScramState {
 
         // Verify: H(recovered_key) == StoredKey.
         let recovered_stored = sha256(&recovered_key);
-        if !ct_bytes_eq(&recovered_stored, &stored_key) {
+        if !ct_bytes_eq(&recovered_stored, &self.stored_key) || !self.identity_valid {
             return None;
         }
 
         // Compute ServerSignature = HMAC(ServerKey, AuthMessage).
-        let server_key = hmac_sha256(&self.salted_password, b"Server Key");
-        let server_sig = hmac_sha256(&server_key, auth_message.as_bytes());
+        let server_sig = hmac_sha256(&self.server_key, auth_message.as_bytes());
         let server_final = format!("v={}", B64.encode(server_sig));
 
         Some(server_final.into_bytes())
@@ -219,4 +319,35 @@ pub fn random_server_nonce() -> String {
     let id = uuid::Uuid::new_v4().simple().to_string();
     // Take first 18 chars of the 32-char hex UUID string.
     id[..18].to_string()
+}
+
+fn sasl_unescape(value: &str) -> Option<String> {
+    let mut result = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(char) = chars.next() {
+        if char != '=' {
+            result.push(char);
+            continue;
+        }
+        match (chars.next()?, chars.next()?) {
+            ('2', 'C') => result.push(','),
+            ('3', 'D') => result.push('='),
+            _ => return None,
+        }
+    }
+    Some(result)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn hex_decode(value: &str) -> Option<Vec<u8>> {
+    if !value.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).ok())
+        .collect()
 }

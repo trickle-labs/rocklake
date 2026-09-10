@@ -12,8 +12,9 @@ use slatedb::{Db, ErrorKind, IsolationLevel};
 use thiserror::Error;
 
 use super::{
-    CatalogAlias, CatalogConfig, CatalogDescriptor, CatalogId, CatalogLimits, CatalogLocation,
-    CatalogMode, RouterError, RouterOpenOptions, RouterSettings, StaticConfig,
+    AuthorizationPolicy, CatalogAlias, CatalogConfig, CatalogDescriptor, CatalogGrant, CatalogId,
+    CatalogLimits, CatalogLocation, CatalogMode, PrincipalId, PrincipalRecord, RouterError,
+    RouterOpenOptions, RouterSettings, StaticConfig,
 };
 
 /// Current managed-registry format.
@@ -226,6 +227,12 @@ struct RegistryState {
     tombstones: BTreeMap<CatalogAlias, u64>,
     // ponytail: request dedupe is an in-state map; compact it when management volume needs it.
     requests: BTreeMap<String, RegistryRequest>,
+    /// Durable principal metadata and opaque SCRAM verifiers.
+    #[serde(default)]
+    principals: Vec<PrincipalRecord>,
+    /// Durable principal-to-catalog grants.
+    #[serde(default)]
+    grants: Vec<CatalogGrant>,
 }
 
 impl RegistryState {
@@ -239,6 +246,8 @@ impl RegistryState {
             alias_index: BTreeMap::new(),
             tombstones: BTreeMap::new(),
             requests: BTreeMap::new(),
+            principals: Vec::new(),
+            grants: Vec::new(),
         }
     }
 }
@@ -256,6 +265,10 @@ pub struct RegistrySnapshot {
     pub catalogs: Vec<RegistryCatalog>,
     /// Next audit sequence number.
     pub next_audit_sequence: u64,
+    /// Principal metadata, including opaque SCRAM verifiers.
+    pub principals: Vec<PrincipalRecord>,
+    /// Principal-to-catalog grants.
+    pub grants: Vec<CatalogGrant>,
 }
 
 /// Summary returned by registry status and verification.
@@ -462,6 +475,96 @@ impl CatalogRegistry {
         }
         entries.sort_by_key(|entry: &RegistryAuditEntry| entry.sequence);
         Ok(entries)
+    }
+
+    /// Return the immutable authorization policy represented by this snapshot.
+    pub async fn authorization_policy(&self) -> Result<AuthorizationPolicy, RegistryError> {
+        let state = self.load_state().await?;
+        AuthorizationPolicy::new(state.generation, state.principals, state.grants)
+            .map_err(RegistryError::Router)
+    }
+
+    /// Add or replace a principal and its opaque SCRAM verifier.
+    pub async fn upsert_principal(
+        &self,
+        principal: PrincipalRecord,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        let id = principal.id.clone();
+        self.mutate(request_id, None, "upsert-principal", move |state| {
+            if let Some(existing) = state.principals.iter_mut().find(|item| item.id == id) {
+                *existing = principal.clone();
+            } else if state
+                .principals
+                .iter()
+                .any(|item| item.username == principal.username)
+            {
+                return Err(RegistryError::InvalidInput(format!(
+                    "principal username already exists: {}",
+                    principal.username
+                )));
+            } else {
+                state.principals.push(principal.clone());
+            }
+            Ok(None)
+        })
+        .await
+    }
+
+    /// Add or replace a principal-to-catalog grant.
+    pub async fn grant(
+        &self,
+        grant: CatalogGrant,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        let catalog_id = grant.catalog_id.clone();
+        self.mutate(request_id, None, "grant", move |state| {
+            if !state
+                .principals
+                .iter()
+                .any(|item| item.id == grant.principal_id)
+            {
+                return Err(RegistryError::InvalidInput(format!(
+                    "grant references unknown principal {}",
+                    grant.principal_id
+                )));
+            }
+            if !state.catalogs.contains_key(&grant.catalog_id) {
+                return Err(RegistryError::CatalogNotFound(grant.catalog_id.to_string()));
+            }
+            if grant.permissions.is_empty() {
+                return Err(RegistryError::InvalidInput(
+                    "catalog grants must contain at least one permission".into(),
+                ));
+            }
+            if let Some(existing) = state.grants.iter_mut().find(|item| {
+                item.principal_id == grant.principal_id && item.catalog_id == grant.catalog_id
+            }) {
+                *existing = grant.clone();
+            } else {
+                state.grants.push(grant.clone());
+            }
+            Ok(Some(catalog_id.clone()))
+        })
+        .await
+    }
+
+    /// Remove all permissions for one principal and stable catalog ID.
+    pub async fn revoke(
+        &self,
+        principal_id: &PrincipalId,
+        catalog_id: &CatalogId,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        let principal_id = principal_id.clone();
+        let catalog_id = catalog_id.clone();
+        self.mutate(request_id, None, "revoke", move |state| {
+            state.grants.retain(|grant| {
+                grant.principal_id != principal_id || grant.catalog_id != catalog_id
+            });
+            Ok(Some(catalog_id.clone()))
+        })
+        .await
     }
 
     /// Create and publish a new lazily-created catalog route.
@@ -1167,6 +1270,41 @@ fn validate_state(
             "default catalog is not routed".into(),
         ));
     }
+    let mut principal_ids = BTreeSet::new();
+    let mut principal_names = BTreeSet::new();
+    for principal in &state.principals {
+        if !principal_ids.insert(principal.id.clone())
+            || !principal_names.insert(principal.username.clone())
+        {
+            return Err(RegistryError::Corrupt(
+                "principal IDs and usernames must be unique".into(),
+            ));
+        }
+        if principal.username.trim().is_empty() || principal.username.len() > 63 {
+            return Err(RegistryError::Corrupt(
+                "principal username must be 1-63 bytes".into(),
+            ));
+        }
+        if principal.limits.max_sessions == Some(0)
+            || principal.limits.max_requests_per_second == Some(0)
+        {
+            return Err(RegistryError::Corrupt(
+                "principal limits must be greater than zero".into(),
+            ));
+        }
+    }
+    let mut grant_keys = BTreeSet::new();
+    for grant in &state.grants {
+        if !principal_ids.contains(&grant.principal_id)
+            || !state.catalogs.contains_key(&grant.catalog_id)
+            || grant.permissions.is_empty()
+            || !grant_keys.insert((grant.principal_id.clone(), grant.catalog_id.clone()))
+        {
+            return Err(RegistryError::Corrupt(
+                "grant references an unknown subject or has no permissions".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1195,6 +1333,8 @@ fn snapshot_from_state(state: &RegistryState) -> RegistrySnapshot {
         default_catalog: state.default_catalog.clone(),
         catalogs: state.catalogs.values().cloned().collect(),
         next_audit_sequence: state.next_audit_sequence,
+        principals: state.principals.clone(),
+        grants: state.grants.clone(),
     }
 }
 
@@ -1230,6 +1370,7 @@ fn digest_hex(digest: impl AsRef<[u8]>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Permission, PrincipalLimits, PrincipalRole};
     use tempfile::TempDir;
 
     fn config(id: &str, alias: &str, root: &Path) -> CatalogConfig {
@@ -1353,6 +1494,51 @@ mod tests {
         assert!(left.is_ok());
         assert!(right.is_ok());
         assert_eq!(registry.status().await.unwrap().generation, 2);
+    }
+
+    #[tokio::test]
+    async fn principal_grants_survive_registry_round_trip() {
+        let (dir, registry) = registry().await;
+        let catalog_id: CatalogId = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9".parse().unwrap();
+        registry
+            .create(
+                config(&catalog_id.to_string(), "main", dir.path()),
+                "catalog-request",
+            )
+            .await
+            .unwrap();
+        let principal_id: PrincipalId = "018f4f4d-d520-7d91-b9f0-7018b7b50d13".parse().unwrap();
+        registry
+            .upsert_principal(
+                PrincipalRecord {
+                    id: principal_id.clone(),
+                    username: "alice".into(),
+                    scram_verifier: "opaque".into(),
+                    role: PrincipalRole::User,
+                    groups: Vec::new(),
+                    limits: PrincipalLimits::default(),
+                },
+                "principal-request",
+            )
+            .await
+            .unwrap();
+        registry
+            .grant(
+                CatalogGrant {
+                    principal_id: principal_id.clone(),
+                    catalog_id: catalog_id.clone(),
+                    permissions: [Permission::Connect, Permission::Read]
+                        .into_iter()
+                        .collect(),
+                },
+                "grant-request",
+            )
+            .await
+            .unwrap();
+
+        let policy = registry.authorization_policy().await.unwrap();
+        assert_eq!(policy.generation(), 3);
+        assert!(policy.allows(&principal_id, &catalog_id, Permission::Read));
     }
 
     #[test]

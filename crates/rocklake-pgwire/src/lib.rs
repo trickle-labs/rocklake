@@ -3,6 +3,7 @@
 //! Implements Strategy B: a sidecar process that speaks the PostgreSQL wire protocol
 //! and translates DuckLake catalog SQL into CatalogStore operations.
 
+pub mod auth;
 pub mod copy_parser;
 pub mod error;
 pub mod executor;
@@ -17,9 +18,11 @@ pub mod session;
 pub mod telemetry;
 pub mod types;
 
+pub use auth::{AuthPrincipal, PrincipalStore};
 pub use error::RockLakeError;
 pub use notify::{ConnectionSubscriptions, Notification, NotifyManager};
 pub use server::{
-    run_server_with_router, run_server_with_router_and_catalog, run_server_with_shutdown,
-    AuthConfig, ServerConfig, TlsConfig,
+    run_server_with_router, run_server_with_router_and_catalog,
+    run_server_with_router_and_catalog_and_auth, run_server_with_shutdown, AuthConfig,
+    MultiPrincipalAuth, ServerConfig, TlsConfig,
 };

@@ -19,9 +19,12 @@ use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
 use rocklake_router::CatalogRouter;
 
+use crate::auth::PrincipalStore;
 use crate::handler::RockLakeServerHandlers;
 pub use crate::lifecycle::SessionCounters;
-use crate::lifecycle::{decrement_if_positive, wait_for_connection_end, ConnectionContext};
+use crate::lifecycle::{
+    decrement_if_positive, wait_for_connection_end, CatalogQuotaManager, ConnectionContext,
+};
 use crate::notify::NotifyManager;
 
 async fn reject_connection(
@@ -102,6 +105,13 @@ impl AuthConfig {
     pub fn is_enabled(&self) -> bool {
         self.username.is_some() && self.password.is_some()
     }
+}
+
+/// Multi-principal authentication and catalog authorization provider.
+#[derive(Clone)]
+pub struct MultiPrincipalAuth {
+    pub principals: Arc<PrincipalStore>,
+    pub authorization: Arc<rocklake_router::AuthorizationPolicy>,
 }
 
 /// Server configuration.
@@ -271,7 +281,8 @@ pub async fn run_server_with_shutdown_mode(
     shutdown: tokio::sync::oneshot::Receiver<()>,
     access_mode: crate::executor::AccessMode,
 ) -> std::io::Result<()> {
-    run_server_with_shutdown_mode_inner(config, catalog, None, shutdown, access_mode).await
+    run_server_with_shutdown_mode_inner(config, catalog, None, None, None, shutdown, access_mode)
+        .await
 }
 
 /// Run the server with a static multi-catalog router and a pre-opened default handle.
@@ -309,14 +320,59 @@ pub async fn run_server_with_router_and_catalog(
         let _ = shutdown_signal.await;
         let _ = shutdown_tx.send(());
     });
-    run_server_with_shutdown_mode_inner(config, catalog, Some(router), shutdown_rx, access_mode)
-        .await
+    run_server_with_shutdown_mode_inner(
+        config,
+        catalog,
+        Some(router),
+        None,
+        None,
+        shutdown_rx,
+        access_mode,
+    )
+    .await
+}
+
+/// Run the routed server with multi-principal authentication and quotas.
+pub async fn run_server_with_router_and_catalog_and_auth(
+    config: ServerConfig,
+    router: Arc<CatalogRouter>,
+    catalog: Arc<Mutex<CatalogStore>>,
+    access_mode: crate::executor::AccessMode,
+    multi_auth: Arc<MultiPrincipalAuth>,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let shutdown_signal = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        sigterm.recv().await;
+    };
+    #[cfg(not(unix))]
+    let shutdown_signal = tokio::signal::ctrl_c();
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let _ = shutdown_signal.await;
+        let _ = shutdown_tx.send(());
+    });
+    run_server_with_shutdown_mode_inner(
+        config,
+        catalog,
+        Some(router),
+        Some(multi_auth),
+        None,
+        shutdown_rx,
+        access_mode,
+    )
+    .await
 }
 
 async fn run_server_with_shutdown_mode_inner(
     config: ServerConfig,
     catalog: Arc<Mutex<CatalogStore>>,
     router: Option<Arc<CatalogRouter>>,
+    multi_auth: Option<Arc<MultiPrincipalAuth>>,
+    quota_manager: Option<Arc<CatalogQuotaManager>>,
     shutdown: tokio::sync::oneshot::Receiver<()>,
     access_mode: crate::executor::AccessMode,
 ) -> std::io::Result<()> {
@@ -333,8 +389,8 @@ async fn run_server_with_shutdown_mode_inner(
     // Warn when authenticated connections are not protected by TLS. SCRAM
     // protects the password, while the explicit cleartext compatibility path
     // does not.
-    if config.auth.is_enabled() && tls_acceptor.is_none() {
-        if config.auth.scram_sha256 {
+    if (config.auth.is_enabled() || multi_auth.is_some()) && tls_acceptor.is_none() {
+        if config.auth.scram_sha256 || multi_auth.is_some() {
             warn!(
                 "SCRAM-SHA-256 authentication is enabled without TLS. Use --tls-cert / \
                  --tls-key to protect the connection and server identity."
@@ -357,6 +413,8 @@ async fn run_server_with_shutdown_mode_inner(
     let session_semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_sessions));
     let scan_semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_active_scans));
     let auth_config = Arc::new(config.auth);
+    let quota_manager =
+        quota_manager.or_else(|| router.as_ref().map(|_| CatalogQuotaManager::new()));
     let tls_required = config.tls.required;
     let notify_manager = Arc::new(NotifyManager::new());
     let extension_schemas = Arc::new(config.extension_schemas);
@@ -414,6 +472,8 @@ async fn run_server_with_shutdown_mode_inner(
                 let scans = scan_semaphore.clone();
                 let tls = tls_acceptor.clone();
                 let auth = auth_config.clone();
+                let multi_auth = multi_auth.clone();
+                let quota_manager = quota_manager.clone();
                 let nm = notify_manager.clone();
                 let es = extension_schemas.clone();
                 let counters_ref = counters.clone();
@@ -434,7 +494,7 @@ async fn run_server_with_shutdown_mode_inner(
 
                 tokio::spawn(async move {
                     let _permit = crate::lifecycle::AdmissionPermit::connection(permit);
-                    let handlers = RockLakeServerHandlers::new_with_config_mode_and_limits_and_lifecycle_and_router(
+                    let handlers = RockLakeServerHandlers::new_with_config_mode_and_limits_and_lifecycle_and_router_and_auth(
                         catalog,
                         auth,
                         tls_required,
@@ -448,6 +508,8 @@ async fn run_server_with_shutdown_mode_inner(
                         config.slow_operation_threshold,
                         connection_context.clone(),
                         router,
+                        multi_auth,
+                        quota_manager,
                     );
                     let connection_id = handlers.handler.connection_id();
                     let span = info_span!("pgwire_connection", connection_id = %connection_id);

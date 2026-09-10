@@ -12,6 +12,12 @@ pub struct ConfigFile {
     pub registry: Option<rocklake_router::RegistrySettings>,
     #[serde(default)]
     pub catalogs: Vec<rocklake_router::CatalogConfig>,
+    /// Multi-principal SCRAM verifier records.
+    #[serde(default)]
+    pub principals: Vec<rocklake_router::PrincipalRecord>,
+    /// Per-catalog permissions for configured principals.
+    #[serde(default)]
+    pub grants: Vec<rocklake_router::CatalogGrant>,
     pub bind: Option<String>,
     pub max_sessions: Option<usize>,
     pub metrics_port: Option<u16>,
@@ -56,7 +62,7 @@ pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), St
 }
 
 pub fn example() -> &'static str {
-    r#"# RockLake v0.55.0 configuration
+    r#"# RockLake v0.56.0 configuration
 catalog = "./lake"
 bind = "127.0.0.1:5432"
 mode = "writer"
@@ -94,6 +100,16 @@ slow_operation_threshold_ms = 1000
 # location = "file:///var/lib/rocklake/registry"
 # emergency_read_only = true
 # recovery_file = "/etc/rocklake/recovery.toml"
+
+# Multi-principal authentication uses SCRAM verifier strings, never plaintext passwords:
+# [[principals]]
+# id = "018f4f4d-d520-7d91-b9f0-7018b7b50d13"
+# username = "analytics_reader"
+# scram_verifier = "v=1,i=4096,s=...,sk=...,sv=..."
+# [[grants]]
+# principal_id = "018f4f4d-d520-7d91-b9f0-7018b7b50d13"
+# catalog_id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9"
+# permissions = ["CONNECT", "READ"]
 "#
 }
 

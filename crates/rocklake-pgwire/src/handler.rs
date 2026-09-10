@@ -43,16 +43,17 @@ use tracing::Instrument;
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_catalog::CatalogStore;
 use rocklake_core::rows::ColumnRow;
-use rocklake_router::{CatalogMode, CatalogRouter, RouterError};
+use rocklake_router::{CatalogMode, CatalogRouter, Permission, RouterError};
 use rocklake_sql::{classify_statement, ParamValues, StatementKind};
 
 use crate::copy_parser;
 use crate::executor;
 use crate::lifecycle::{
-    AdmissionPermit, ConnectionContext, OperationClass, RequestContext, RequestTerminalState,
+    AdmissionPermit, CatalogQuotaManager, ConnectionContext, OperationClass, RequestContext,
+    RequestTerminalState,
 };
 use crate::notify::NotifyManager;
-use crate::server::{server_shutting_down_error, AuthConfig};
+use crate::server::{server_shutting_down_error, AuthConfig, MultiPrincipalAuth};
 use crate::session::{BootstrapSchemaRow, SessionState};
 
 /// RockLake COPY handler: parses binary COPY FROM STDIN data for ducklake_*
@@ -344,6 +345,8 @@ pub struct RockLakeHandler {
     pub connection: Arc<ConnectionContext>,
     pub parser: Arc<RockLakeQueryParser>,
     pub auth: Arc<AuthConfig>,
+    multi_auth: Option<Arc<MultiPrincipalAuth>>,
+    quota_manager: Option<Arc<CatalogQuotaManager>>,
     /// Shared LISTEN/NOTIFY manager for this server instance.
     pub notify_manager: Arc<NotifyManager>,
     /// Allowed extension schema names (configurable via --extension-schemas).
@@ -478,6 +481,8 @@ impl RockLakeHandler {
             connection,
             parser: Arc::new(RockLakeQueryParser),
             auth: Arc::new(AuthConfig::default()),
+            multi_auth: None,
+            quota_manager: None,
             notify_manager: Arc::new(NotifyManager::new()),
             extension_schemas: Arc::new(vec!["pgtrickle".to_string()]),
             access_mode,
@@ -506,6 +511,8 @@ impl RockLakeHandler {
             connection,
             parser: Arc::new(RockLakeQueryParser),
             auth,
+            multi_auth: None,
+            quota_manager: None,
             notify_manager: Arc::new(NotifyManager::new()),
             extension_schemas: Arc::new(vec!["pgtrickle".to_string()]),
             access_mode,
@@ -629,12 +636,49 @@ impl RockLakeHandler {
         connection: Arc<ConnectionContext>,
         router: Option<Arc<CatalogRouter>>,
     ) -> Self {
+        Self::new_with_config_mode_and_limits_and_lifecycle_and_router_and_auth(
+            catalog,
+            auth,
+            notify_manager,
+            extension_schemas,
+            access_mode,
+            scan_semaphore,
+            max_active_scans,
+            max_buffered_rows,
+            max_response_bytes,
+            slow_operation_threshold,
+            connection,
+            router,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_config_mode_and_limits_and_lifecycle_and_router_and_auth(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+        scan_semaphore: Arc<Semaphore>,
+        max_active_scans: usize,
+        max_buffered_rows: usize,
+        max_response_bytes: usize,
+        slow_operation_threshold: Duration,
+        connection: Arc<ConnectionContext>,
+        router: Option<Arc<CatalogRouter>>,
+        multi_auth: Option<Arc<MultiPrincipalAuth>>,
+        quota_manager: Option<Arc<CatalogQuotaManager>>,
+    ) -> Self {
         Self {
             catalog,
             router,
             connection,
             parser: Arc::new(RockLakeQueryParser),
             auth,
+            multi_auth,
+            quota_manager,
             notify_manager,
             extension_schemas,
             access_mode,
@@ -664,14 +708,109 @@ impl RockLakeHandler {
             router.resolve_id(&id)
         } else {
             let alias = self.connection.catalog_route();
-            let route = router.resolve(alias.as_deref());
-            if let Ok(route) = &route {
-                self.connection.bind_catalog_id(route.id.clone());
-            }
-            route
+            router.resolve(alias.as_deref())
         }
-        .map_err(router_error)?;
+        .map_err(|error| {
+            if self.multi_auth.is_some() {
+                catalog_unavailable_error()
+            } else {
+                router_error(error)
+            }
+        })?;
+        if let Some(multi_auth) = &self.multi_auth {
+            let Some(principal_id) = self.connection.principal_id() else {
+                return Err(catalog_unavailable_error());
+            };
+            if !multi_auth
+                .authorization
+                .allows(&principal_id, &route.id, Permission::Connect)
+            {
+                if let Some(metrics) = self.connection.metrics() {
+                    metrics.increment_authorization_denials();
+                }
+                return Err(catalog_unavailable_error());
+            }
+            self.connection
+                .set_grant_generation(multi_auth.authorization.generation());
+        }
+        if self.connection.catalog_id().is_none() {
+            if let Some(quota_manager) = &self.quota_manager {
+                let principal_id = self.connection.principal_id();
+                let principal_limits = principal_id.as_ref().and_then(|id| {
+                    self.multi_auth
+                        .as_ref()
+                        .and_then(|auth| auth.authorization.principal_limits(id))
+                });
+                let permits = quota_manager
+                    .acquire_session(
+                        &route.id,
+                        &route.descriptor.limits,
+                        principal_id.as_ref(),
+                        principal_limits,
+                    )
+                    .await
+                    .map_err(|_| {
+                        if let Some(metrics) = self.connection.metrics() {
+                            metrics.increment_quota_rejections();
+                            metrics.increment_resource_limit_exhaustions();
+                        }
+                        resource_limit_error("catalog connection capacity exhausted")
+                    })?;
+                self.connection.add_catalog_session_permits(permits);
+            }
+        }
+        self.connection.bind_catalog_id(route.id.clone());
+        self.connection.set_route_generation(route.generation);
+        self.connection.set_selected_mode(route.descriptor.mode);
         router.open_id(&route.id).await.map_err(router_error)
+    }
+
+    async fn acquire_catalog_request(
+        &self,
+        query: &RequestContext,
+    ) -> PgWireResult<Option<tokio::sync::OwnedSemaphorePermit>> {
+        let (Some(quota_manager), Some(router), Some(catalog_id)) = (
+            &self.quota_manager,
+            &self.router,
+            self.connection.catalog_id(),
+        ) else {
+            return Ok(None);
+        };
+        let limits = router.limits_for_id(&catalog_id).unwrap_or_default();
+        quota_manager
+            .try_acquire_request(&catalog_id, &limits)
+            .await
+            .map_err(|_| {
+                if let Some(metrics) = query.metrics() {
+                    metrics.increment_quota_rejections();
+                    metrics.increment_resource_limit_exhaustions();
+                }
+                resource_limit_error("catalog request capacity exhausted")
+            })
+    }
+
+    fn authorize_statement(&self, kind: &StatementKind) -> PgWireResult<()> {
+        let Some(multi_auth) = &self.multi_auth else {
+            return Ok(());
+        };
+        let Some(principal_id) = self.connection.principal_id() else {
+            return Err(catalog_unavailable_error());
+        };
+        let Some(catalog_id) = self.connection.catalog_id() else {
+            return Err(catalog_unavailable_error());
+        };
+        let permission = required_permission(kind);
+        if permission.is_some_and(|permission| {
+            !multi_auth
+                .authorization
+                .allows(&principal_id, &catalog_id, permission)
+        }) {
+            if let Some(metrics) = self.connection.metrics() {
+                metrics.increment_authorization_denials();
+            }
+            return Err(permission_denied_error());
+        }
+        Ok(())
     }
 
     fn effective_access_mode(&self) -> executor::AccessMode {
@@ -707,6 +846,9 @@ impl RockLakeHandler {
             query_id = %query.query_id(),
             connection_id = %query.connection_id(),
             statement_kind = ?kind,
+            principal_id = ?self.connection.principal_id(),
+            catalog_id = ?self.connection.catalog_id(),
+            route_generation = self.connection.route_generation(),
             "classified SQL statement"
         );
         kind
@@ -741,14 +883,34 @@ impl RockLakeHandler {
         };
         query.record_admission(admission_started);
         let permit = permit?;
+        let catalog_permit = if let (Some(quota_manager), Some(router), Some(catalog_id)) = (
+            &self.quota_manager,
+            &self.router,
+            self.connection.catalog_id(),
+        ) {
+            let limits = router.limits_for_id(&catalog_id).unwrap_or_default();
+            quota_manager
+                .try_acquire_scan(&catalog_id, &limits)
+                .await
+                .map_err(|_| {
+                    if let Some(metrics) = query.metrics() {
+                        metrics.increment_quota_rejections();
+                        metrics.increment_resource_limit_exhaustions();
+                    }
+                    resource_limit_error("catalog scan capacity exhausted")
+                })?
+        } else {
+            None
+        };
         if let Some(metrics) = query.metrics() {
             metrics.set_active_scans(
                 self.max_active_scans
                     .saturating_sub(self.scan_semaphore.available_permits()) as u64,
             );
         }
-        Ok(Some(AdmissionPermit::scan(
+        Ok(Some(AdmissionPermit::scan_with_catalog(
             permit,
+            catalog_permit,
             self.scan_semaphore.clone(),
             self.max_active_scans,
             query.metrics(),
@@ -920,6 +1082,113 @@ fn router_error(error: RouterError) -> PgWireError {
         code.to_string(),
         error.to_string(),
     )))
+}
+
+fn catalog_unavailable_error() -> PgWireError {
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        "ERROR".to_string(),
+        "3D000".to_string(),
+        "catalog unavailable".to_string(),
+    )))
+}
+
+fn permission_denied_error() -> PgWireError {
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        "ERROR".to_string(),
+        "42501".to_string(),
+        "permission denied for catalog".to_string(),
+    )))
+}
+
+fn required_permission(kind: &StatementKind) -> Option<Permission> {
+    match kind {
+        StatementKind::Begin
+        | StatementKind::Commit
+        | StatementKind::Rollback
+        | StatementKind::SetVariable(_, _)
+        | StatementKind::ShowVariable(_)
+        | StatementKind::DiscardAll
+        | StatementKind::Listen { .. }
+        | StatementKind::Unlisten { .. }
+        | StatementKind::SelectOne
+        | StatementKind::SelectVersion
+        | StatementKind::SelectVersionWithRdsCheck
+        | StatementKind::SelectCurrentSchema
+        | StatementKind::SelectCurrentDatabase
+        | StatementKind::SelectPgType
+        | StatementKind::SelectToRegclass
+        | StatementKind::SelectExistsInfoSchema => None,
+        StatementKind::InsertSnapshot
+        | StatementKind::InsertSnapshotChanges
+        | StatementKind::InsertSchema
+        | StatementKind::InsertTable
+        | StatementKind::InsertColumn
+        | StatementKind::InsertDataFile
+        | StatementKind::InsertDeleteFile
+        | StatementKind::InsertTableStats
+        | StatementKind::InsertTableColumnStats
+        | StatementKind::InsertFileColumnStats
+        | StatementKind::InsertMetadata
+        | StatementKind::InsertInlinedDataTables
+        | StatementKind::InsertSchemaVersions
+        | StatementKind::InsertView
+        | StatementKind::InsertMacro
+        | StatementKind::InsertMacroImpl
+        | StatementKind::InsertMacroParameters
+        | StatementKind::UpdateEndSnapshot(_)
+        | StatementKind::UpdateTableStats
+        | StatementKind::UpdateTableColumnStats
+        | StatementKind::CreateInlinedTable
+        | StatementKind::CreateExtensionTable { .. }
+        | StatementKind::InsertInlinedRow
+        | StatementKind::UpdateInlinedRowEndSnapshot
+        | StatementKind::VirtualCatalogMutation { .. }
+        | StatementKind::InsertExtensionRow { .. }
+        | StatementKind::DeleteExtensionRows { .. }
+        | StatementKind::DeleteInlinedDataRows { .. }
+        | StatementKind::DeleteDuckLakeCatalogRows { .. }
+        | StatementKind::NextRowidRange { .. }
+        | StatementKind::HoldSnapshot { .. }
+        | StatementKind::ReleaseSnapshot { .. }
+        | StatementKind::CopyFromStdin { .. } => Some(Permission::Write),
+        StatementKind::CopyToStdout { .. }
+        | StatementKind::SelectMaxSnapshot
+        | StatementKind::SelectLatestSnapshotInfo
+        | StatementKind::SelectSnapshotStatsAndChanges
+        | StatementKind::SelectMaxSnapshotAfter
+        | StatementKind::SelectSchemas
+        | StatementKind::SelectTables
+        | StatementKind::SelectColumns
+        | StatementKind::SelectDataFiles
+        | StatementKind::SelectDataFilesWithLimit
+        | StatementKind::SelectDeleteFiles
+        | StatementKind::SelectFileColumnStats
+        | StatementKind::SelectTableStats
+        | StatementKind::SelectTableColumnStats
+        | StatementKind::SelectMetadata
+        | StatementKind::SelectSnapshot
+        | StatementKind::SelectFirstSnapshot
+        | StatementKind::SelectSnapshotChanges
+        | StatementKind::SelectInlinedData
+        | StatementKind::SelectViews
+        | StatementKind::SelectMacros
+        | StatementKind::SelectMacroImpls
+        | StatementKind::SelectMacroParameters
+        | StatementKind::SelectGenRandomUuid
+        | StatementKind::SelectLatestSnapshotId
+        | StatementKind::SelectTags
+        | StatementKind::SelectColumnTags
+        | StatementKind::SelectSortInfo
+        | StatementKind::SelectSchemaVersion
+        | StatementKind::SelectDuckLakeMetadataTable { .. }
+        | StatementKind::SelectInlinedRows
+        | StatementKind::VirtualCatalogScan { .. }
+        | StatementKind::TableChanges { .. }
+        | StatementKind::SelectExtensionTable { .. }
+        | StatementKind::PgCatalogScan
+        | StatementKind::SelectPgDatabaseSize => Some(Permission::Read),
+        StatementKind::Unsupported(_) => Some(Permission::Read),
+    }
 }
 
 fn binary_copy_header() -> Bytes {
@@ -1187,11 +1456,13 @@ fn copy_out_error(message: &str) -> PgWireError {
 /// connection is rejected immediately with a fatal error.
 pub struct RockLakeStartupHandler {
     auth: Arc<AuthConfig>,
+    multi_auth: Option<Arc<MultiPrincipalAuth>>,
     tls_required: bool,
     connection: Arc<ConnectionContext>,
     /// Per-connection SCRAM state (None until the client-first-message
     /// is received; Some during the challenge-response phase).
     scram_state: Mutex<Option<crate::scram::ScramState>>,
+    pending_principal_id: Mutex<Option<rocklake_router::PrincipalId>>,
 }
 
 impl RockLakeStartupHandler {
@@ -1212,11 +1483,28 @@ impl RockLakeStartupHandler {
         tls_required: bool,
         connection: Arc<ConnectionContext>,
     ) -> Self {
+        Self::new_with_tls_required_and_lifecycle_and_auth(auth, tls_required, connection, None)
+    }
+
+    pub(crate) fn new_with_tls_required_and_lifecycle_and_auth(
+        auth: Arc<AuthConfig>,
+        tls_required: bool,
+        connection: Arc<ConnectionContext>,
+        multi_auth: Option<Arc<MultiPrincipalAuth>>,
+    ) -> Self {
         Self {
             auth,
+            multi_auth,
             tls_required,
             connection,
             scram_state: Mutex::new(None),
+            pending_principal_id: Mutex::new(None),
+        }
+    }
+
+    fn record_authentication_failure(&self) {
+        if let Some(metrics) = self.connection.metrics() {
+            metrics.increment_authentication_failures();
         }
     }
 }
@@ -1253,18 +1541,23 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                 }
 
                 save_startup_parameters_to_metadata(client, startup);
-                if let Some(principal) = client.metadata().get(METADATA_USER) {
-                    self.connection.set_principal(principal.clone());
-                }
+                let provided_user = client
+                    .metadata()
+                    .get(METADATA_USER)
+                    .cloned()
+                    .unwrap_or_default();
                 if let Some(route) = client.metadata().get(METADATA_DATABASE) {
                     self.connection.select_catalog_route(route.clone());
                 }
-                if !self.auth.is_enabled() {
+                let auth_enabled = self.auth.is_enabled() || self.multi_auth.is_some();
+                if !auth_enabled {
+                    self.connection.set_principal(provided_user);
+                    self.connection.set_authenticated(true);
                     finish_authentication(client, &DefaultServerParameterProvider::default())
                         .await?;
                     self.connection
                         .set_protocol_state(PgWireConnectionState::ReadyForQuery);
-                } else if self.auth.scram_sha256 {
+                } else if self.multi_auth.is_some() || self.auth.scram_sha256 {
                     // Initiate SCRAM-SHA-256 SASL exchange.
                     client.set_state(PgWireConnectionState::AuthenticationInProgress);
                     self.connection
@@ -1277,12 +1570,8 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                 } else {
                     // Cleartext password path: verify username first.
                     let expected_user = self.auth.username.as_deref().unwrap_or("").to_owned();
-                    let provided_user = client
-                        .metadata()
-                        .get(METADATA_USER)
-                        .cloned()
-                        .unwrap_or_default();
                     if provided_user != expected_user {
+                        self.record_authentication_failure();
                         let error_info = ErrorInfo::new(
                             "FATAL".to_owned(),
                             "28P01".to_owned(),
@@ -1307,8 +1596,15 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                 }
             }
 
-            PgWireFrontendMessage::PasswordMessageFamily(pwd) if self.auth.is_enabled() => {
-                if self.auth.scram_sha256 {
+            PgWireFrontendMessage::PasswordMessageFamily(pwd)
+                if self.auth.is_enabled() || self.multi_auth.is_some() =>
+            {
+                let provided_user = client
+                    .metadata()
+                    .get(METADATA_USER)
+                    .cloned()
+                    .unwrap_or_default();
+                if self.multi_auth.is_some() || self.auth.scram_sha256 {
                     // Determine whether we are in SCRAM phase 1 (waiting for
                     // SASLInitialResponse) or phase 2 (waiting for SASLResponse).
                     let in_phase1 = self.scram_state.lock().await.is_none();
@@ -1318,18 +1614,39 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                         let initial = match pwd.into_sasl_initial_response() {
                             Ok(r) => r,
                             Err(_) => {
+                                self.record_authentication_failure();
                                 return send_auth_error(client, "SCRAM handshake error").await;
                             }
                         };
-                        let password = self.auth.password.as_deref().unwrap_or("");
                         let nonce_suffix = crate::scram::random_server_nonce();
                         let client_first = initial.data.as_deref().unwrap_or_default();
-                        match crate::scram::ScramState::from_client_first(
+                        let (verifier, known_principal) = if let Some(multi_auth) = &self.multi_auth
+                        {
+                            match multi_auth.principals.get(&provided_user) {
+                                Some(principal) => {
+                                    *self.pending_principal_id.lock().await =
+                                        Some(principal.id().clone());
+                                    (principal.verifier().clone(), true)
+                                }
+                                None => {
+                                    *self.pending_principal_id.lock().await = None;
+                                    (multi_auth.principals.fake_verifier().clone(), false)
+                                }
+                            }
+                        } else {
+                            let password = self.auth.password.as_deref().unwrap_or("");
+                            (crate::scram::ScramVerifier::from_password(password), true)
+                        };
+                        match crate::scram::ScramState::from_client_first_with_verifier(
                             client_first,
-                            password,
+                            &verifier,
+                            Some(&provided_user),
                             &nonce_suffix,
                         ) {
-                            Some(state) => {
+                            Some(mut state) => {
+                                if !known_principal {
+                                    state.invalidate_identity();
+                                }
                                 let server_first =
                                     Bytes::from(state.server_first.clone().into_bytes());
                                 *self.scram_state.lock().await = Some(state);
@@ -1340,6 +1657,7 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                                     .await?;
                             }
                             None => {
+                                self.record_authentication_failure();
                                 return send_auth_error(client, "SCRAM client-first parse error")
                                     .await;
                             }
@@ -1350,6 +1668,7 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                         let response = match pwd.into_sasl_response() {
                             Ok(r) => r,
                             Err(_) => {
+                                self.record_authentication_failure();
                                 return send_auth_error(client, "SCRAM handshake error").await;
                             }
                         };
@@ -1367,8 +1686,24 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                                 .await?;
                                 self.connection
                                     .set_protocol_state(PgWireConnectionState::ReadyForQuery);
+                                self.connection.set_authenticated(true);
+                                if let Some(multi_auth) = &self.multi_auth {
+                                    if let Some(principal_id) =
+                                        self.pending_principal_id.lock().await.take()
+                                    {
+                                        self.connection.set_principal_id(principal_id);
+                                    }
+                                    self.connection.set_principal(provided_user.clone());
+                                    self.connection.set_grant_generation(
+                                        multi_auth.authorization.generation(),
+                                    );
+                                } else if let Some(principal) = client.metadata().get(METADATA_USER)
+                                {
+                                    self.connection.set_principal(principal.clone());
+                                }
                             }
                             None => {
+                                self.record_authentication_failure();
                                 return send_auth_error(client, "SCRAM authentication failed")
                                     .await;
                             }
@@ -1383,7 +1718,10 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                             .await?;
                         self.connection
                             .set_protocol_state(PgWireConnectionState::ReadyForQuery);
+                        self.connection.set_principal(provided_user);
+                        self.connection.set_authenticated(true);
                     } else {
+                        self.record_authentication_failure();
                         return send_auth_error(client, "Password authentication failed").await;
                     }
                 }
@@ -1425,6 +1763,8 @@ impl RockLakeHandler {
     {
         let catalog = self.catalog_for_connection().await?;
         let kind = self.classify_sql(sql, query);
+        self.authorize_statement(&kind)?;
+        let mut catalog_request_permit = self.acquire_catalog_request(query).await?;
         if let Some(rows) = self
             .try_stream_copy_to_stdout(client, &kind, query, &catalog)
             .await?
@@ -1433,11 +1773,19 @@ impl RockLakeHandler {
                 vec![Response::Execution(
                     pgwire::api::results::Tag::new("COPY").with_rows(rows),
                 )],
-                None,
+                catalog_request_permit.map(AdmissionPermit::catalog_request),
             ));
         }
 
         let scan_permit = self.acquire_scan(&kind, query).await?;
+        let mut permit = scan_permit;
+        if let Some(request_permit) = catalog_request_permit.take() {
+            if let Some(permit) = &mut permit {
+                permit.add_permit(request_permit);
+            } else {
+                permit = Some(AdmissionPermit::catalog_request(request_permit));
+            }
+        }
         let params = ParamValues::default();
         let execution_started = Instant::now();
         let session_handle = self.connection.session();
@@ -1460,7 +1808,7 @@ impl RockLakeHandler {
         query.record_execution(execution_started);
         Ok((
             result.map_err(|error| -> PgWireError { error.into() })?,
-            scan_permit,
+            permit,
         ))
     }
 
@@ -1479,6 +1827,8 @@ impl RockLakeHandler {
         let catalog = self.catalog_for_connection().await?;
         let sql = &portal.statement.statement;
         let kind = self.classify_sql(sql, query);
+        self.authorize_statement(&kind)?;
+        let mut catalog_request_permit = self.acquire_catalog_request(query).await?;
         if let Some(rows) = self
             .try_stream_copy_to_stdout(client, &kind, query, &catalog)
             .await?
@@ -1487,11 +1837,19 @@ impl RockLakeHandler {
                 Some(Response::Execution(
                     pgwire::api::results::Tag::new("COPY").with_rows(rows),
                 )),
-                None,
+                catalog_request_permit.map(AdmissionPermit::catalog_request),
             ));
         }
 
         let scan_permit = self.acquire_scan(&kind, query).await?;
+        let mut permit = scan_permit;
+        if let Some(request_permit) = catalog_request_permit.take() {
+            if let Some(permit) = &mut permit {
+                permit.add_permit(request_permit);
+            } else {
+                permit = Some(AdmissionPermit::catalog_request(request_permit));
+            }
+        }
 
         // Extract parameters from the portal, including binary-encoded integers.
         let inferred_types = describe_params_for_sql(sql);
@@ -1552,7 +1910,7 @@ impl RockLakeHandler {
         };
         query.record_execution(execution_started);
         let mut responses = result.map_err(|error| -> PgWireError { error.into() })?;
-        Ok((responses.pop(), scan_permit))
+        Ok((responses.pop(), permit))
     }
 
     async fn send_query_response_with_telemetry<'a, C>(
@@ -1984,6 +2342,8 @@ impl ExtendedQueryHandler for RockLakeHandler {
     {
         let sql = &stmt.statement;
         let catalog = self.catalog_for_connection().await?;
+        let kind = classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
+        self.authorize_statement(&kind)?;
         let fields = describe_fields_for_sql_with_catalog(sql, &catalog).await;
 
         // Return precise parameter types so the client can correctly serialize
@@ -2014,6 +2374,8 @@ impl ExtendedQueryHandler for RockLakeHandler {
     {
         let sql = &portal.statement.statement;
         let catalog = self.catalog_for_connection().await?;
+        let kind = classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
+        self.authorize_statement(&kind)?;
         let fields = describe_fields_for_sql_with_catalog(sql, &catalog).await;
         Ok(DescribePortalResponse::new(fields))
     }
@@ -2191,8 +2553,45 @@ impl RockLakeServerHandlers {
         connection: Arc<ConnectionContext>,
         router: Option<Arc<CatalogRouter>>,
     ) -> Self {
+        Self::new_with_config_mode_and_limits_and_lifecycle_and_router_and_auth(
+            catalog,
+            auth,
+            tls_required,
+            notify_manager,
+            extension_schemas,
+            access_mode,
+            scan_semaphore,
+            max_active_scans,
+            max_buffered_rows,
+            max_response_bytes,
+            slow_operation_threshold,
+            connection,
+            router,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_config_mode_and_limits_and_lifecycle_and_router_and_auth(
+        catalog: Arc<Mutex<CatalogStore>>,
+        auth: Arc<AuthConfig>,
+        tls_required: bool,
+        notify_manager: Arc<NotifyManager>,
+        extension_schemas: Arc<Vec<String>>,
+        access_mode: executor::AccessMode,
+        scan_semaphore: Arc<Semaphore>,
+        max_active_scans: usize,
+        max_buffered_rows: usize,
+        max_response_bytes: usize,
+        slow_operation_threshold: Duration,
+        connection: Arc<ConnectionContext>,
+        router: Option<Arc<CatalogRouter>>,
+        multi_auth: Option<Arc<MultiPrincipalAuth>>,
+        quota_manager: Option<Arc<CatalogQuotaManager>>,
+    ) -> Self {
         let handler = Arc::new(
-            RockLakeHandler::new_with_config_mode_and_limits_and_lifecycle_and_router(
+            RockLakeHandler::new_with_config_mode_and_limits_and_lifecycle_and_router_and_auth(
                 catalog,
                 auth.clone(),
                 notify_manager,
@@ -2205,6 +2604,8 @@ impl RockLakeServerHandlers {
                 slow_operation_threshold,
                 connection.clone(),
                 router.clone(),
+                multi_auth.clone(),
+                quota_manager,
             ),
         );
         let copy_handler = Arc::new(RockLakeCopyHandler::new_with_connection_and_router(
@@ -2214,11 +2615,14 @@ impl RockLakeServerHandlers {
         ));
         Self {
             handler,
-            startup: Arc::new(RockLakeStartupHandler::new_with_tls_required_and_lifecycle(
-                auth,
-                tls_required,
-                connection,
-            )),
+            startup: Arc::new(
+                RockLakeStartupHandler::new_with_tls_required_and_lifecycle_and_auth(
+                    auth,
+                    tls_required,
+                    connection,
+                    multi_auth,
+                ),
+            ),
             copy_handler,
             error_handler: Arc::new(NoopErrorHandler),
         }

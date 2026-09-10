@@ -4,6 +4,7 @@
 //! timing, terminal state, and response observation. The protocol handlers only
 //! translate protocol messages into these operations.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -12,7 +13,7 @@ use pgwire::api::PgWireConnectionState;
 use pgwire::error::{ErrorInfo, PgWireError};
 use pgwire::messages::response::TransactionStatus;
 use rocklake_catalog::metrics::CatalogMetrics;
-use rocklake_router::CatalogId;
+use rocklake_router::{CatalogId, CatalogLimits, CatalogMode, PrincipalId, PrincipalLimits};
 use tokio::sync::{watch, Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{info_span, warn, Span};
@@ -32,6 +33,106 @@ pub struct SessionCounters {
     pub active_sessions: AtomicI64,
     /// Deprecated alias for `connections_idle` kept for source compatibility.
     pub idle_sessions: AtomicI64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuotaError;
+
+/// Per-catalog and per-principal admission limits layered over process limits.
+#[derive(Default)]
+pub struct CatalogQuotaManager {
+    catalog_sessions: Mutex<HashMap<CatalogId, Arc<Semaphore>>>,
+    catalog_scans: Mutex<HashMap<CatalogId, Arc<Semaphore>>>,
+    catalog_requests: Mutex<HashMap<CatalogId, Arc<Semaphore>>>,
+    principal_sessions: Mutex<HashMap<PrincipalId, Arc<Semaphore>>>,
+}
+
+impl CatalogQuotaManager {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Acquire the connection permits that apply after a route is authenticated.
+    pub async fn acquire_session(
+        &self,
+        catalog_id: &CatalogId,
+        limits: &CatalogLimits,
+        principal_id: Option<&PrincipalId>,
+        principal_limits: Option<&PrincipalLimits>,
+    ) -> Result<Vec<OwnedSemaphorePermit>, QuotaError> {
+        let mut permits = Vec::new();
+        if let Some(max) = limits.max_sessions {
+            let semaphore = self
+                .catalog_sessions
+                .lock()
+                .await
+                .entry(catalog_id.clone())
+                .or_insert_with(|| Arc::new(Semaphore::new(max)))
+                .clone();
+            permits.push(semaphore.try_acquire_owned().map_err(|_| QuotaError)?);
+        }
+        if let (Some(principal_id), Some(max)) = (
+            principal_id,
+            principal_limits.and_then(|limits| limits.max_sessions),
+        ) {
+            let semaphore = self
+                .principal_sessions
+                .lock()
+                .await
+                .entry(principal_id.clone())
+                .or_insert_with(|| Arc::new(Semaphore::new(max)))
+                .clone();
+            match semaphore.try_acquire_owned() {
+                Ok(permit) => permits.push(permit),
+                Err(_) => return Err(QuotaError),
+            }
+        }
+        Ok(permits)
+    }
+
+    /// Try to acquire the optional per-catalog scan permit.
+    pub async fn try_acquire_scan(
+        &self,
+        catalog_id: &CatalogId,
+        limits: &CatalogLimits,
+    ) -> Result<Option<OwnedSemaphorePermit>, QuotaError> {
+        let Some(max) = limits.max_active_scans else {
+            return Ok(None);
+        };
+        let semaphore = self
+            .catalog_scans
+            .lock()
+            .await
+            .entry(catalog_id.clone())
+            .or_insert_with(|| Arc::new(Semaphore::new(max)))
+            .clone();
+        semaphore
+            .try_acquire_owned()
+            .map(Some)
+            .map_err(|_| QuotaError)
+    }
+
+    /// Try to acquire the optional per-catalog request-capacity permit.
+    pub async fn try_acquire_request(
+        &self,
+        catalog_id: &CatalogId,
+        limits: &CatalogLimits,
+    ) -> Result<Option<OwnedSemaphorePermit>, QuotaError> {
+        let Some(max) = limits.max_queued_requests else {
+            return Ok(None);
+        };
+        let semaphore = self
+            .catalog_requests
+            .lock()
+            .await
+            .entry(catalog_id.clone())
+            .or_insert_with(|| Arc::new(Semaphore::new(max)))
+            .clone();
+        semaphore
+            .try_acquire_owned()
+            .map(Some)
+            .map_err(|_| QuotaError)
+    }
 }
 
 impl SessionCounters {
@@ -250,6 +351,7 @@ pub enum OperationClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdmissionKind {
     Connection,
+    CatalogRequest,
     InteractiveScan,
     Administrative,
     ResponseBuffer,
@@ -258,7 +360,7 @@ pub enum AdmissionKind {
 /// A non-cloneable lease for one server resource.
 pub struct AdmissionPermit {
     kind: AdmissionKind,
-    _permit: OwnedSemaphorePermit,
+    _permits: Vec<OwnedSemaphorePermit>,
     semaphore: Option<Arc<Semaphore>>,
     max: usize,
     metrics: Option<Arc<CatalogMetrics>>,
@@ -268,22 +370,41 @@ impl AdmissionPermit {
     pub(crate) fn connection(permit: OwnedSemaphorePermit) -> Self {
         Self {
             kind: AdmissionKind::Connection,
-            _permit: permit,
+            _permits: vec![permit],
             semaphore: None,
             max: 0,
             metrics: None,
         }
     }
 
-    pub(crate) fn scan(
+    pub(crate) fn catalog_request(permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            kind: AdmissionKind::CatalogRequest,
+            _permits: vec![permit],
+            semaphore: None,
+            max: 0,
+            metrics: None,
+        }
+    }
+
+    pub(crate) fn add_permit(&mut self, permit: OwnedSemaphorePermit) {
+        self._permits.push(permit);
+    }
+
+    pub(crate) fn scan_with_catalog(
         permit: OwnedSemaphorePermit,
+        catalog_permit: Option<OwnedSemaphorePermit>,
         semaphore: Arc<Semaphore>,
         max: usize,
         metrics: Option<Arc<CatalogMetrics>>,
     ) -> Self {
+        let mut permits = vec![permit];
+        if let Some(catalog_permit) = catalog_permit {
+            permits.push(catalog_permit);
+        }
         Self {
             kind: AdmissionKind::InteractiveScan,
-            _permit: permit,
+            _permits: permits,
             semaphore: Some(semaphore),
             max,
             metrics,
@@ -293,7 +414,7 @@ impl AdmissionPermit {
     pub fn administrative(permit: OwnedSemaphorePermit) -> Self {
         Self {
             kind: AdmissionKind::Administrative,
-            _permit: permit,
+            _permits: vec![permit],
             semaphore: None,
             max: 0,
             metrics: None,
@@ -303,7 +424,7 @@ impl AdmissionPermit {
     pub(crate) fn response_buffer(permit: OwnedSemaphorePermit) -> Self {
         Self {
             kind: AdmissionKind::ResponseBuffer,
-            _permit: permit,
+            _permits: vec![permit],
             semaphore: None,
             max: 0,
             metrics: None,
@@ -337,6 +458,12 @@ pub struct ConnectionContext {
     principal: StdMutex<Option<String>>,
     catalog_route: StdMutex<Option<String>>,
     catalog_id: StdMutex<Option<CatalogId>>,
+    principal_id: StdMutex<Option<PrincipalId>>,
+    authenticated: AtomicBool,
+    grant_generation: AtomicI64,
+    route_generation: AtomicI64,
+    selected_mode: StdMutex<Option<CatalogMode>>,
+    catalog_session_permits: StdMutex<Vec<OwnedSemaphorePermit>>,
     protocol_state: StdMutex<PgWireConnectionState>,
     transaction_status: StdMutex<TransactionStatus>,
     cancellation: CancellationToken,
@@ -355,6 +482,12 @@ impl ConnectionContext {
             principal: StdMutex::new(None),
             catalog_route: StdMutex::new(None),
             catalog_id: StdMutex::new(None),
+            principal_id: StdMutex::new(None),
+            authenticated: AtomicBool::new(false),
+            grant_generation: AtomicI64::new(0),
+            route_generation: AtomicI64::new(0),
+            selected_mode: StdMutex::new(None),
+            catalog_session_permits: StdMutex::new(Vec::new()),
             protocol_state: StdMutex::new(PgWireConnectionState::AwaitingSslRequest),
             transaction_status: StdMutex::new(TransactionStatus::Idle),
             cancellation: CancellationToken::new(),
@@ -384,6 +517,10 @@ impl ConnectionContext {
         &self.activity
     }
 
+    pub(crate) fn metrics(&self) -> Option<Arc<CatalogMetrics>> {
+        self.activity.metrics.clone()
+    }
+
     pub(crate) fn is_draining(&self) -> bool {
         self.activity.is_draining()
     }
@@ -404,6 +541,67 @@ impl ConnectionContext {
 
     pub fn set_principal(&self, principal: impl Into<String>) {
         *self.principal.lock().expect("principal mutex poisoned") = Some(principal.into());
+    }
+
+    pub fn set_principal_id(&self, principal_id: PrincipalId) {
+        *self
+            .principal_id
+            .lock()
+            .expect("principal id mutex poisoned") = Some(principal_id);
+    }
+
+    pub fn principal_id(&self) -> Option<PrincipalId> {
+        self.principal_id
+            .lock()
+            .expect("principal id mutex poisoned")
+            .clone()
+    }
+
+    pub fn set_authenticated(&self, authenticated: bool) {
+        self.authenticated.store(authenticated, Ordering::Release);
+    }
+
+    pub fn authenticated(&self) -> bool {
+        self.authenticated.load(Ordering::Acquire)
+    }
+
+    pub fn set_grant_generation(&self, generation: u64) {
+        self.grant_generation
+            .store(generation.min(i64::MAX as u64) as i64, Ordering::Release);
+    }
+
+    pub fn grant_generation(&self) -> u64 {
+        self.grant_generation.load(Ordering::Acquire).max(0) as u64
+    }
+
+    pub fn set_route_generation(&self, generation: u64) {
+        self.route_generation
+            .store(generation.min(i64::MAX as u64) as i64, Ordering::Release);
+    }
+
+    pub fn route_generation(&self) -> u64 {
+        self.route_generation.load(Ordering::Acquire).max(0) as u64
+    }
+
+    pub fn set_selected_mode(&self, mode: CatalogMode) {
+        *self
+            .selected_mode
+            .lock()
+            .expect("selected mode mutex poisoned") = Some(mode);
+    }
+
+    pub fn selected_mode(&self) -> Option<CatalogMode> {
+        *self
+            .selected_mode
+            .lock()
+            .expect("selected mode mutex poisoned")
+    }
+
+    pub(crate) fn add_catalog_session_permits(&self, permits: Vec<OwnedSemaphorePermit>) {
+        self.catalog_session_permits
+            .lock()
+            .expect("catalog quota mutex poisoned")
+            .extend(permits);
     }
 
     pub fn principal(&self) -> Option<String> {
@@ -819,5 +1017,30 @@ mod tests {
         let permit = semaphore.clone().try_acquire_owned().unwrap();
         let permit = AdmissionPermit::response_buffer(permit);
         assert_eq!(permit.kind(), AdmissionKind::ResponseBuffer);
+    }
+
+    #[tokio::test]
+    async fn catalog_request_quota_releases_on_drop() {
+        let manager = CatalogQuotaManager::new();
+        let catalog_id: CatalogId = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9".parse().unwrap();
+        let limits = CatalogLimits {
+            max_queued_requests: Some(1),
+            ..CatalogLimits::default()
+        };
+        let first = manager
+            .try_acquire_request(&catalog_id, &limits)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(manager
+            .try_acquire_request(&catalog_id, &limits)
+            .await
+            .is_err());
+        drop(first);
+        assert!(manager
+            .try_acquire_request(&catalog_id, &limits)
+            .await
+            .unwrap()
+            .is_some());
     }
 }
