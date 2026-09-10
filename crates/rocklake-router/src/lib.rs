@@ -259,6 +259,12 @@ impl CatalogLocation {
     /// Canonical URI safe for diagnostics.
     pub fn display_uri(&self) -> String {
         if self.scheme == "file" {
+            if let Some(path) = &self.local_path {
+                let path = path.to_string_lossy();
+                if path.starts_with(r"\\?\") {
+                    return path.into_owned();
+                }
+            }
             format!("file://{}", self.prefix)
         } else if self.prefix.is_empty() {
             format!("{}://{}", self.scheme, self.authority)
@@ -1022,6 +1028,15 @@ mod tests {
     #[test]
     fn accepts_local_paths_with_uri_delimiters() {
         assert!(CatalogLocation::parse(r"\\?\C:\tmp\rocklake").is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_display_path_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let location = CatalogLocation::parse(dir.path().to_str().unwrap()).unwrap();
+        let reparsed = CatalogLocation::parse(&location.display_uri()).unwrap();
+        assert_eq!(reparsed.local_path(), location.local_path());
     }
 
     #[test]
