@@ -149,7 +149,7 @@ impl CatalogLocation {
                 "locations must not contain embedded credentials".into(),
             ));
         }
-        if rest.contains('?') || rest.contains('#') {
+        if input.contains("://") && (rest.contains('?') || rest.contains('#')) {
             return Err(RouterError::InvalidConfig(
                 "locations must not contain a query or fragment".into(),
             ));
@@ -1017,6 +1017,11 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("overlaps"));
         assert!(CatalogLocation::parse("s3://user:pass@bucket/a").is_err());
+    }
+
+    #[test]
+    fn accepts_local_paths_with_uri_delimiters() {
+        assert!(CatalogLocation::parse(r"\\?\C:\tmp\rocklake").is_ok());
     }
 
     #[test]
