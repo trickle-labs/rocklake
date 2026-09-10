@@ -704,8 +704,10 @@ impl RockLakeHandler {
         let Some(router) = &self.router else {
             return Ok(self.catalog.clone());
         };
-        let route = if let Some(id) = self.connection.catalog_id() {
-            router.resolve_id(&id)
+        let bound_id = self.connection.catalog_id();
+        let bound_generation = self.connection.route_generation();
+        let route = if let Some(id) = &bound_id {
+            router.resolve_id(id)
         } else {
             let alias = self.connection.catalog_route();
             router.resolve(alias.as_deref())
@@ -717,6 +719,12 @@ impl RockLakeHandler {
                 router_error(error)
             }
         })?;
+        if bound_id.is_some() && route.generation != bound_generation {
+            return Err(router_error(RouterError::StaleRouteGeneration {
+                expected: bound_generation,
+                actual: route.generation,
+            }));
+        }
         if let Some(multi_auth) = &self.multi_auth {
             let Some(principal_id) = self.connection.principal_id() else {
                 return Err(catalog_unavailable_error());
@@ -762,7 +770,14 @@ impl RockLakeHandler {
         self.connection.bind_catalog_id(route.id.clone());
         self.connection.set_route_generation(route.generation);
         self.connection.set_selected_mode(route.descriptor.mode);
-        router.open_id(&route.id).await.map_err(router_error)
+        if let Some(id) = bound_id {
+            router
+                .open_id_at_generation(&id, bound_generation)
+                .await
+                .map_err(router_error)
+        } else {
+            router.open_id(&route.id).await.map_err(router_error)
+        }
     }
 
     async fn acquire_catalog_request(
@@ -816,6 +831,12 @@ impl RockLakeHandler {
     fn effective_access_mode(&self) -> executor::AccessMode {
         if self.access_mode == executor::AccessMode::Reader {
             return executor::AccessMode::Reader;
+        }
+        if let Some(mode) = self.connection.selected_mode() {
+            return match mode {
+                CatalogMode::ReadWrite => executor::AccessMode::Writer,
+                CatalogMode::ReadOnly => executor::AccessMode::Reader,
+            };
         }
         self.router
             .as_ref()
@@ -1076,6 +1097,8 @@ fn router_error(error: RouterError) -> PgWireError {
         RouterError::Capacity => "53300",
         RouterError::InvalidConfig(_) => "XX000",
         RouterError::Open(_) => "08006",
+        RouterError::ReadOnly => "25006",
+        RouterError::StaleRouteGeneration { .. } => "40001",
     };
     PgWireError::UserError(Box::new(ErrorInfo::new(
         "ERROR".to_string(),

@@ -642,6 +642,24 @@ pub struct CatalogRoute {
     pub generation: u64,
 }
 
+/// Evidence that a routed catalog has acquired the writer epoch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WriterReadiness {
+    /// Stable catalog identity.
+    pub catalog_id: CatalogId,
+    /// Route generation used for this readiness check.
+    pub route_generation: u64,
+    /// Durable catalog writer epoch acquired by the node.
+    pub writer_epoch: u64,
+}
+
+impl WriterReadiness {
+    /// Whether the writer epoch proves this node is write-ready.
+    pub fn is_ready(&self) -> bool {
+        self.writer_epoch > 0
+    }
+}
+
 struct RouteTable {
     generation: u64,
     settings: RouterSettings,
@@ -740,6 +758,12 @@ pub enum RouterError {
     /// The configured handle cache cannot evict an active catalog.
     #[error("open catalog limit exhausted")]
     Capacity,
+    /// The selected route is read-only.
+    #[error("catalog is read-only")]
+    ReadOnly,
+    /// The route table changed after a connection pinned its route.
+    #[error("stale route generation: expected {expected}, found {actual}")]
+    StaleRouteGeneration { expected: u64, actual: u64 },
 }
 
 /// Runtime router with immutable snapshots and a bounded on-demand handle cache.
@@ -775,6 +799,73 @@ impl CatalogRouter {
             .read()
             .expect("router route lock poisoned")
             .resolve_id(id)
+    }
+
+    /// Return the current route-table generation.
+    pub fn generation(&self) -> u64 {
+        self.routes
+            .read()
+            .expect("router route lock poisoned")
+            .generation
+    }
+
+    /// Open a catalog only when its route generation is still current.
+    pub async fn open_id_at_generation(
+        &self,
+        id: &CatalogId,
+        generation: u64,
+    ) -> Result<Arc<Mutex<CatalogStore>>, RouterError> {
+        let route = self.resolve_id(id)?;
+        if route.generation != generation {
+            return Err(RouterError::StaleRouteGeneration {
+                expected: generation,
+                actual: route.generation,
+            });
+        }
+        let handle = self.open_route(route).await?;
+        let actual = self.generation();
+        if actual != generation {
+            return Err(RouterError::StaleRouteGeneration {
+                expected: generation,
+                actual,
+            });
+        }
+        Ok(handle)
+    }
+
+    /// Open a routed catalog as a writer and require epoch acquisition.
+    pub async fn open_writer(
+        &self,
+        id: &CatalogId,
+    ) -> Result<Arc<Mutex<CatalogStore>>, RouterError> {
+        let route = self.resolve_id(id)?;
+        if route.descriptor.mode == CatalogMode::ReadOnly || self.options.force_read_only {
+            return Err(RouterError::ReadOnly);
+        }
+        let handle = self.open_id_at_generation(id, route.generation).await?;
+        if !handle.lock().await.is_writer() {
+            return Err(RouterError::ReadOnly);
+        }
+        Ok(handle)
+    }
+
+    /// Open a writer and return the epoch-backed readiness evidence.
+    pub async fn writer_readiness(&self, id: &CatalogId) -> Result<WriterReadiness, RouterError> {
+        let route = self.resolve_id(id)?;
+        if route.descriptor.mode == CatalogMode::ReadOnly || self.options.force_read_only {
+            return Err(RouterError::ReadOnly);
+        }
+        let generation = route.generation;
+        let handle = self.open_id_at_generation(id, generation).await?;
+        let writer_epoch = handle.lock().await.writer_epoch();
+        if writer_epoch == 0 {
+            return Err(RouterError::ReadOnly);
+        }
+        Ok(WriterReadiness {
+            catalog_id: id.clone(),
+            route_generation: generation,
+            writer_epoch,
+        })
     }
 
     /// Return the configured mode for a stable catalog ID.
@@ -1105,5 +1196,57 @@ mod tests {
         assert!(left.is_ok());
         assert!(right.is_ok());
         assert_eq!(router.open_handle_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn writer_readiness_requires_an_epoch_and_generation() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        let id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9";
+        let config = StaticConfig::new(
+            RouterSettings::default(),
+            vec![entry(
+                id,
+                "main",
+                catalog_dir.path().to_str().unwrap(),
+                data_dir.path().to_str().unwrap(),
+            )],
+        )
+        .unwrap();
+        let router = CatalogRouter::new(config.clone(), RouterOpenOptions::default());
+        let id: CatalogId = id.parse().unwrap();
+        let readiness = router.writer_readiness(&id).await.unwrap();
+        assert!(readiness.is_ready());
+        assert_eq!(readiness.route_generation, 0);
+
+        router.reload(config).unwrap();
+        assert!(matches!(
+            router.open_id_at_generation(&id, 0).await,
+            Err(RouterError::StaleRouteGeneration { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn read_only_routes_never_report_writer_readiness() {
+        let config = StaticConfig::new(
+            RouterSettings::default(),
+            vec![CatalogConfig {
+                id: "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9".into(),
+                aliases: vec!["main".into()],
+                catalog: "/tmp/rocklake-readonly-router-catalog".into(),
+                data: "/tmp/rocklake-readonly-router-data".into(),
+                mode: CatalogMode::ReadOnly,
+                credential_provider: "env".into(),
+                policy_reference: None,
+                limits: CatalogLimits::default(),
+            }],
+        )
+        .unwrap();
+        let router = CatalogRouter::new(config, RouterOpenOptions::default());
+        let id: CatalogId = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9".parse().unwrap();
+        assert!(matches!(
+            router.writer_readiness(&id).await,
+            Err(RouterError::ReadOnly)
+        ));
     }
 }

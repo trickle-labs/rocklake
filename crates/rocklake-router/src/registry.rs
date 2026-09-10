@@ -1,7 +1,9 @@
 //! Durable managed catalog routing.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -117,6 +119,142 @@ impl CatalogLifecycle {
     }
 }
 
+/// Stable identity for a node participating in catalog ownership.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct NodeId(String);
+
+impl NodeId {
+    /// Validate and construct a node ID.
+    pub fn new(value: impl Into<String>) -> Result<Self, RouterError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > 128
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+        {
+            return Err(RouterError::InvalidConfig(
+                "node ID must be 1-128 ASCII letters, digits, '.', '_', ':', or '-'".into(),
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    /// Return the node ID text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for NodeId {
+    type Err = RouterError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::new(value)
+    }
+}
+
+/// Health reported by a registered node.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeHealth {
+    /// The node has not reported a more specific health state.
+    #[default]
+    Unknown,
+    /// The node can accept ownership.
+    Ready,
+    /// The node is draining and must not receive new ownership.
+    Draining,
+    /// The node is not eligible for ownership.
+    Failed,
+}
+
+/// Ephemeral node registration stored with a lease expiry.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeLease {
+    /// Stable node identity.
+    pub node_id: NodeId,
+    /// Opaque lease identity, changed when a process starts a new lease.
+    pub lease_id: String,
+    /// Address used by the front door to reach the node.
+    pub endpoint: String,
+    /// Lease expiry as Unix milliseconds.
+    pub expires_at_unix_ms: u64,
+    /// Last reported node health.
+    #[serde(default)]
+    pub health: NodeHealth,
+}
+
+impl NodeLease {
+    /// Construct a validated node lease.
+    pub fn new(
+        node_id: impl Into<String>,
+        lease_id: impl Into<String>,
+        endpoint: impl Into<String>,
+        expires_at_unix_ms: u64,
+    ) -> Result<Self, RouterError> {
+        let lease = Self {
+            node_id: NodeId::new(node_id)?,
+            lease_id: lease_id.into(),
+            endpoint: endpoint.into(),
+            expires_at_unix_ms,
+            health: NodeHealth::Ready,
+        };
+        validate_node_lease(&lease)
+            .map_err(|error| RouterError::InvalidConfig(error.to_string()))?;
+        Ok(lease)
+    }
+}
+
+/// Writer ownership state for a catalog assignment.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriterOwnershipState {
+    /// No node owns the catalog.
+    #[default]
+    Unassigned,
+    /// The assignment exists while the node acquires the catalog epoch.
+    Acquiring,
+    /// The node acquired the catalog epoch and is write-ready.
+    Active,
+    /// Planned handoff is draining existing sessions.
+    Draining,
+    /// Ownership is being released.
+    Releasing,
+    /// The node failed and must not be used for writes.
+    Failed,
+    /// The assignment was fenced by a newer catalog epoch.
+    Fenced,
+}
+
+/// Durable routing assignment for a catalog writer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WriterAssignment {
+    /// Assigned node identity.
+    pub node_id: NodeId,
+    /// Front-door endpoint for the assigned node.
+    pub endpoint: String,
+    /// Monotonic generation for this catalog assignment.
+    pub assignment_generation: u64,
+    /// Current ownership state.
+    pub state: WriterOwnershipState,
+    /// Catalog writer epoch acquired by the node, once active.
+    #[serde(default)]
+    pub writer_epoch: Option<u64>,
+    /// Node lease used when the assignment was created.
+    #[serde(default)]
+    pub lease_id: Option<String>,
+}
+
 /// One versioned catalog row in the managed registry.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RegistryCatalog {
@@ -138,6 +276,9 @@ pub struct RegistryCatalog {
     pub credential_provider: String,
     /// Per-catalog limits.
     pub limits: CatalogLimits,
+    /// Current writer assignment, if one has been promoted.
+    #[serde(default)]
+    pub writer_assignment: Option<WriterAssignment>,
     /// RFC 3339 creation timestamp.
     pub created_at: String,
     /// Registry generation that last changed this row.
@@ -185,6 +326,7 @@ impl RegistryCatalog {
             policy_reference: descriptor.policy_reference,
             credential_provider: descriptor.credential_provider,
             limits: descriptor.limits,
+            writer_assignment: None,
             created_at: Utc::now().to_rfc3339(),
             updated_generation: 0,
             tombstone: false,
@@ -233,6 +375,9 @@ struct RegistryState {
     /// Durable principal-to-catalog grants.
     #[serde(default)]
     grants: Vec<CatalogGrant>,
+    /// Ephemeral node registrations keyed by stable node ID.
+    #[serde(default)]
+    nodes: BTreeMap<NodeId, NodeLease>,
 }
 
 impl RegistryState {
@@ -248,6 +393,7 @@ impl RegistryState {
             requests: BTreeMap::new(),
             principals: Vec::new(),
             grants: Vec::new(),
+            nodes: BTreeMap::new(),
         }
     }
 }
@@ -269,6 +415,8 @@ pub struct RegistrySnapshot {
     pub principals: Vec<PrincipalRecord>,
     /// Principal-to-catalog grants.
     pub grants: Vec<CatalogGrant>,
+    /// Currently registered node leases.
+    pub nodes: Vec<NodeLease>,
 }
 
 /// Summary returned by registry status and verification.
@@ -284,6 +432,10 @@ pub struct RegistryStatus {
     pub routed_catalogs: usize,
     /// Next audit sequence number.
     pub next_audit_sequence: u64,
+    /// Registered node leases.
+    pub nodes: usize,
+    /// Catalogs with a writer assignment.
+    pub assigned_writers: usize,
 }
 
 /// A mutation result, including whether a request was replayed idempotently.
@@ -295,6 +447,8 @@ pub struct RegistryMutation {
     pub catalog_id: Option<CatalogId>,
     /// Current lifecycle state, if a catalog was affected.
     pub lifecycle: Option<CatalogLifecycle>,
+    /// Current ownership state, if a catalog was affected.
+    pub writer_state: Option<WriterOwnershipState>,
     /// True when the request ID was already committed.
     pub replayed: bool,
 }
@@ -376,6 +530,18 @@ pub enum RegistryError {
     /// A caller supplied invalid input.
     #[error("invalid registry input: {0}")]
     InvalidInput(String),
+    /// A registered node was not found.
+    #[error("node not found: {0}")]
+    NodeNotFound(String),
+    /// A node lease already exists with a different lease identity.
+    #[error("node lease conflict: {0}")]
+    NodeLeaseConflict(String),
+    /// The requested node lease is expired or not eligible for ownership.
+    #[error("node lease is not eligible: {0}")]
+    NodeNotEligible(String),
+    /// The requested writer assignment does not match the durable assignment.
+    #[error("writer assignment conflict for catalog {0}")]
+    WriterAssignmentConflict(CatalogId),
 }
 
 /// Versioned object-store-backed catalog registry.
@@ -460,6 +626,12 @@ impl CatalogRegistry {
                 .filter(|row| row.lifecycle.routes())
                 .count(),
             next_audit_sequence: state.next_audit_sequence,
+            nodes: state.nodes.len(),
+            assigned_writers: state
+                .catalogs
+                .values()
+                .filter(|row| row.writer_assignment.is_some())
+                .count(),
         })
     }
 
@@ -482,6 +654,236 @@ impl CatalogRegistry {
         let state = self.load_state().await?;
         AuthorizationPolicy::new(state.generation, state.principals, state.grants)
             .map_err(RegistryError::Router)
+    }
+
+    /// Return the current writer assignment for a catalog.
+    pub async fn writer_assignment(
+        &self,
+        id: &CatalogId,
+    ) -> Result<Option<WriterAssignment>, RegistryError> {
+        Ok(self
+            .load_state()
+            .await?
+            .catalogs
+            .get(id)
+            .ok_or_else(|| RegistryError::CatalogNotFound(id.to_string()))?
+            .writer_assignment
+            .clone())
+    }
+
+    /// Register or replace a node's ephemeral lease.
+    pub async fn register_node(
+        &self,
+        lease: NodeLease,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        validate_node_lease(&lease)?;
+        let node_id = lease.node_id.clone();
+        self.mutate(request_id, None, "register-node", move |state| {
+            let replaced = state
+                .nodes
+                .get(&node_id)
+                .is_some_and(|current| current.lease_id != lease.lease_id);
+            state.nodes.insert(node_id.clone(), lease.clone());
+            if replaced {
+                for row in state.catalogs.values_mut() {
+                    if let Some(assignment) = row.writer_assignment.as_mut() {
+                        if assignment.node_id == node_id {
+                            assignment.endpoint = lease.endpoint.clone();
+                            assignment.lease_id = Some(lease.lease_id.clone());
+                            assignment.state = WriterOwnershipState::Fenced;
+                            assignment.writer_epoch = None;
+                        }
+                    }
+                }
+            }
+            Ok(None)
+        })
+        .await
+    }
+
+    /// Renew a node lease without changing its endpoint.
+    pub async fn renew_node(
+        &self,
+        node_id: &NodeId,
+        lease_id: &str,
+        expires_at_unix_ms: u64,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        let node_id = node_id.clone();
+        let lease_id = lease_id.to_string();
+        self.mutate(request_id, None, "renew-node", move |state| {
+            let lease = state
+                .nodes
+                .get_mut(&node_id)
+                .ok_or_else(|| RegistryError::NodeNotFound(node_id.to_string()))?;
+            if lease.lease_id != lease_id {
+                return Err(RegistryError::NodeLeaseConflict(node_id.to_string()));
+            }
+            lease.expires_at_unix_ms = expires_at_unix_ms;
+            lease.health = NodeHealth::Ready;
+            Ok(None)
+        })
+        .await
+    }
+
+    /// Mark a node draining or failed.
+    pub async fn set_node_health(
+        &self,
+        node_id: &NodeId,
+        health: NodeHealth,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        let node_id = node_id.clone();
+        self.mutate(request_id, None, "set-node-health", move |state| {
+            let lease = state
+                .nodes
+                .get_mut(&node_id)
+                .ok_or_else(|| RegistryError::NodeNotFound(node_id.to_string()))?;
+            lease.health = health;
+            Ok(None)
+        })
+        .await
+    }
+
+    /// Assign a catalog to a live node after a registry-generation CAS.
+    ///
+    /// The returned assignment is `Acquiring`. The node must acquire the
+    /// catalog writer epoch and call [`Self::activate_writer`] before it is
+    /// considered write-ready.
+    pub async fn promote(
+        &self,
+        id: &CatalogId,
+        expected_generation: u64,
+        node_id: &NodeId,
+        endpoint: &str,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        validate_endpoint(endpoint)?;
+        let id = id.clone();
+        let node_id = node_id.clone();
+        let endpoint = endpoint.to_string();
+        let now = unix_now_ms()?;
+        self.mutate(
+            request_id,
+            Some(expected_generation),
+            "promote",
+            move |state| {
+                let node = state
+                    .nodes
+                    .get(&node_id)
+                    .ok_or_else(|| RegistryError::NodeNotFound(node_id.to_string()))?;
+                if node.expires_at_unix_ms <= now
+                    || !matches!(node.health, NodeHealth::Ready | NodeHealth::Unknown)
+                {
+                    return Err(RegistryError::NodeNotEligible(node_id.to_string()));
+                }
+                if node.endpoint != endpoint {
+                    return Err(RegistryError::InvalidInput(
+                        "promotion endpoint must match the registered node endpoint".into(),
+                    ));
+                }
+                let row = state
+                    .catalogs
+                    .get_mut(&id)
+                    .ok_or_else(|| RegistryError::CatalogNotFound(id.to_string()))?;
+                if row.lifecycle != CatalogLifecycle::Active || row.mode != CatalogMode::ReadWrite {
+                    return Err(RegistryError::InvalidTransition {
+                        id: id.clone(),
+                        state: row.lifecycle,
+                    });
+                }
+                let assignment_generation =
+                    row.writer_assignment.as_ref().map_or(1, |assignment| {
+                        assignment.assignment_generation.saturating_add(1)
+                    });
+                row.writer_assignment = Some(WriterAssignment {
+                    node_id: node_id.clone(),
+                    endpoint: endpoint.clone(),
+                    assignment_generation,
+                    state: WriterOwnershipState::Acquiring,
+                    writer_epoch: None,
+                    lease_id: Some(node.lease_id.clone()),
+                });
+                Ok(Some(id.clone()))
+            },
+        )
+        .await
+    }
+
+    /// Mark a promoted writer active after it acquired the catalog epoch.
+    pub async fn activate_writer(
+        &self,
+        id: &CatalogId,
+        node_id: &NodeId,
+        assignment_generation: u64,
+        writer_epoch: u64,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        if writer_epoch == 0 {
+            return Err(RegistryError::InvalidInput(
+                "writer epoch must be greater than zero".into(),
+            ));
+        }
+        let id = id.clone();
+        let node_id = node_id.clone();
+        self.mutate(request_id, None, "activate-writer", move |state| {
+            let lease = state
+                .nodes
+                .get(&node_id)
+                .ok_or_else(|| RegistryError::NodeNotFound(node_id.to_string()))?;
+            if lease.expires_at_unix_ms <= unix_now_ms()?
+                || !matches!(lease.health, NodeHealth::Ready | NodeHealth::Unknown)
+            {
+                return Err(RegistryError::NodeNotEligible(node_id.to_string()));
+            }
+            let row = state
+                .catalogs
+                .get_mut(&id)
+                .ok_or_else(|| RegistryError::CatalogNotFound(id.to_string()))?;
+            let Some(assignment) = row.writer_assignment.as_mut() else {
+                return Err(RegistryError::WriterAssignmentConflict(id.clone()));
+            };
+            if assignment.node_id != node_id
+                || assignment.assignment_generation != assignment_generation
+                || assignment.state != WriterOwnershipState::Acquiring
+            {
+                return Err(RegistryError::WriterAssignmentConflict(id.clone()));
+            }
+            assignment.state = WriterOwnershipState::Active;
+            assignment.writer_epoch = Some(writer_epoch);
+            Ok(Some(id.clone()))
+        })
+        .await
+    }
+
+    /// Record that an assignment was fenced by a newer catalog epoch.
+    pub async fn fence_writer(
+        &self,
+        id: &CatalogId,
+        node_id: &NodeId,
+        assignment_generation: u64,
+        request_id: &str,
+    ) -> Result<RegistryMutation, RegistryError> {
+        let id = id.clone();
+        let node_id = node_id.clone();
+        self.mutate(request_id, None, "fence-writer", move |state| {
+            let row = state
+                .catalogs
+                .get_mut(&id)
+                .ok_or_else(|| RegistryError::CatalogNotFound(id.to_string()))?;
+            let Some(assignment) = row.writer_assignment.as_mut() else {
+                return Err(RegistryError::WriterAssignmentConflict(id.clone()));
+            };
+            if assignment.node_id != node_id
+                || assignment.assignment_generation != assignment_generation
+            {
+                return Err(RegistryError::WriterAssignmentConflict(id.clone()));
+            }
+            assignment.state = WriterOwnershipState::Fenced;
+            Ok(Some(id.clone()))
+        })
+        .await
     }
 
     /// Add or replace a principal and its opaque SCRAM verifier.
@@ -809,7 +1211,18 @@ impl CatalogRegistry {
             .catalogs
             .values()
             .filter(|row| row.lifecycle.routes())
-            .map(RegistryCatalog::descriptor)
+            .map(|row| {
+                let mut descriptor = row.descriptor()?;
+                if row.mode == CatalogMode::ReadWrite
+                    && row
+                        .writer_assignment
+                        .as_ref()
+                        .is_some_and(|assignment| assignment.state != WriterOwnershipState::Active)
+                {
+                    descriptor.mode = CatalogMode::ReadOnly;
+                }
+                Ok::<CatalogDescriptor, RegistryError>(descriptor)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         if descriptors.is_empty() {
             return Err(RegistryError::InvalidInput(
@@ -973,6 +1386,12 @@ impl CatalogRegistry {
                 .filter(|row| row.lifecycle.routes())
                 .count(),
             next_audit_sequence: state.next_audit_sequence,
+            nodes: state.nodes.len(),
+            assigned_writers: state
+                .catalogs
+                .values()
+                .filter(|row| row.writer_assignment.is_some())
+                .count(),
         })
     }
 
@@ -1119,6 +1538,12 @@ fn mutation_from_state(
             .as_ref()
             .and_then(|id| state.catalogs.get(id))
             .map(|row| row.lifecycle),
+        writer_state: request
+            .catalog_id
+            .as_ref()
+            .and_then(|id| state.catalogs.get(id))
+            .and_then(|row| row.writer_assignment.as_ref())
+            .map(|assignment| assignment.state),
         replayed,
     }
 }
@@ -1135,6 +1560,41 @@ fn validate_request_id(request_id: &str) -> Result<(), RegistryError> {
         ));
     }
     Ok(())
+}
+
+fn validate_endpoint(endpoint: &str) -> Result<(), RegistryError> {
+    if endpoint.is_empty()
+        || endpoint.len() > 255
+        || endpoint.bytes().any(|byte| byte.is_ascii_whitespace())
+        || endpoint.contains('@')
+    {
+        return Err(RegistryError::InvalidInput(
+            "node endpoint must be 1-255 bytes without whitespace or credentials".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_node_lease(lease: &NodeLease) -> Result<(), RegistryError> {
+    if lease.lease_id.is_empty()
+        || lease.lease_id.len() > 128
+        || !lease
+            .lease_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+    {
+        return Err(RegistryError::InvalidInput(
+            "node lease ID must be 1-128 ASCII letters, digits, '.', '_', ':', or '-'".into(),
+        ));
+    }
+    validate_endpoint(&lease.endpoint)
+}
+
+fn unix_now_ms() -> Result<u64, RegistryError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .map_err(|_| RegistryError::InvalidInput("system clock before Unix epoch".into()))
 }
 
 fn ensure_aliases_free(
@@ -1305,6 +1765,41 @@ fn validate_state(
             ));
         }
     }
+    for (node_id, lease) in &state.nodes {
+        if node_id != &lease.node_id {
+            return Err(RegistryError::Corrupt(format!(
+                "node row key {node_id} does not match node ID {}",
+                lease.node_id
+            )));
+        }
+        validate_node_lease(lease)
+            .map_err(|error| RegistryError::Corrupt(format!("invalid node lease: {error}")))?;
+    }
+    for (id, row) in &state.catalogs {
+        let Some(assignment) = &row.writer_assignment else {
+            continue;
+        };
+        let Some(lease) = state.nodes.get(&assignment.node_id) else {
+            return Err(RegistryError::Corrupt(format!(
+                "catalog {id} assignment references an unknown node"
+            )));
+        };
+        if assignment.assignment_generation == 0
+            || assignment.endpoint != lease.endpoint
+            || assignment.lease_id.as_deref() != Some(lease.lease_id.as_str())
+        {
+            return Err(RegistryError::Corrupt(format!(
+                "catalog {id} has an invalid writer assignment"
+            )));
+        }
+        if assignment.state == WriterOwnershipState::Active
+            && assignment.writer_epoch.is_none_or(|epoch| epoch == 0)
+        {
+            return Err(RegistryError::Corrupt(format!(
+                "catalog {id} is active without a writer epoch"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -1335,6 +1830,7 @@ fn snapshot_from_state(state: &RegistryState) -> RegistrySnapshot {
         next_audit_sequence: state.next_audit_sequence,
         principals: state.principals.clone(),
         grants: state.grants.clone(),
+        nodes: state.nodes.values().cloned().collect(),
     }
 }
 
@@ -1539,6 +2035,84 @@ mod tests {
         let policy = registry.authorization_policy().await.unwrap();
         assert_eq!(policy.generation(), 3);
         assert!(policy.allows(&principal_id, &catalog_id, Permission::Read));
+    }
+
+    #[tokio::test]
+    async fn promotion_is_generation_checked_and_requires_activation() {
+        let (dir, registry) = registry().await;
+        let catalog_id: CatalogId = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9".parse().unwrap();
+        registry
+            .create(
+                config(&catalog_id.to_string(), "main", dir.path()),
+                "catalog-request",
+            )
+            .await
+            .unwrap();
+        let node_id: NodeId = "node-a".parse().unwrap();
+        let lease = NodeLease::new(
+            node_id.to_string(),
+            "lease-a",
+            "127.0.0.1:5432",
+            unix_now_ms().unwrap() + 60_000,
+        )
+        .unwrap();
+        registry.register_node(lease, "node-request").await.unwrap();
+
+        let generation = registry.status().await.unwrap().generation;
+        let mutation = registry
+            .promote(
+                &catalog_id,
+                generation,
+                &node_id,
+                "127.0.0.1:5432",
+                "promote-request",
+            )
+            .await
+            .unwrap();
+        assert_eq!(mutation.writer_state, Some(WriterOwnershipState::Acquiring));
+        let assignment = registry
+            .writer_assignment(&catalog_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(assignment.state, WriterOwnershipState::Acquiring);
+        assert!(assignment.writer_epoch.is_none());
+        assert_eq!(
+            registry.static_config().await.unwrap().catalogs[0].mode,
+            CatalogMode::ReadOnly
+        );
+
+        registry
+            .activate_writer(
+                &catalog_id,
+                &node_id,
+                assignment.assignment_generation,
+                7,
+                "activate-request",
+            )
+            .await
+            .unwrap();
+        let assignment = registry
+            .writer_assignment(&catalog_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(assignment.state, WriterOwnershipState::Active);
+        assert_eq!(assignment.writer_epoch, Some(7));
+        assert_eq!(
+            registry.static_config().await.unwrap().catalogs[0].mode,
+            CatalogMode::ReadWrite
+        );
+        assert!(registry
+            .promote(
+                &catalog_id,
+                generation,
+                &node_id,
+                "127.0.0.1:5432",
+                "stale-request",
+            )
+            .await
+            .is_err());
     }
 
     #[test]

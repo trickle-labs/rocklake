@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.57.0] — 2026-09-10
+
+### Added
+
+- Added leased node registration with endpoint and health records in the
+  managed registry.
+- Added generation-checked writer promotion with `Acquiring`, `Active`, and
+  `Fenced` ownership states.
+- Added explicit writer activation after durable catalog epoch acquisition,
+  writer readiness evidence, stale route-generation rejection, and writer-only
+  routed opens.
+- Added `catalogs promote`, `catalogs activate`, `registry register-node`, and
+  `registry renew-node` commands.
+
+### Changed
+
+- Kept read-only routes on the no-epoch path and pinned routed connections to
+  their selected route generation and access mode.
+- Updated workspace, binding, compatibility, and release documentation metadata
+  to v0.57.0.
+
+### Deferred
+
+- Automatic failover, remote PostgreSQL proxying, session draining, and mTLS
+  remain deferred until the explicit promotion and fencing path has measured
+  fault-schedule coverage.
+
 ## [0.56.0] — 2026-09-10
 
 ### Added

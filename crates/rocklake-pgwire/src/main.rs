@@ -413,6 +413,42 @@ async fn cmd_catalogs(
         cli::CatalogsSubcommand::Register(args) => {
             cmd_catalog_mutation(args, true, &loaded_config).await?
         }
+        cli::CatalogsSubcommand::Promote(args) => {
+            let (_, file_config) = config::load(config_path)?;
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let id = args.id.parse()?;
+            let node_id = args.node_id.parse()?;
+            print_mutation(
+                registry
+                    .promote(
+                        &id,
+                        args.expected_generation,
+                        &node_id,
+                        &args.endpoint,
+                        &args.request_id,
+                    )
+                    .await?,
+            );
+        }
+        cli::CatalogsSubcommand::Activate(args) => {
+            let (_, file_config) = config::load(config_path)?;
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let id = args.id.parse()?;
+            let node_id = args.node_id.parse()?;
+            print_mutation(
+                registry
+                    .activate_writer(
+                        &id,
+                        &node_id,
+                        args.assignment_generation,
+                        args.writer_epoch,
+                        &args.request_id,
+                    )
+                    .await?,
+            );
+        }
         cli::CatalogsSubcommand::Rename(args) => {
             let (_, file_config) = config::load(config_path)?;
             let location = configured_registry(args.registry, &file_config)?;
@@ -503,6 +539,45 @@ async fn cmd_registry(
             registry.init().await?;
             print_mutation(registry.migrate_static(router, &args.request_id).await?);
         }
+        cli::RegistrySubcommand::RegisterNode(args) => {
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let node_id: rocklake_router::NodeId = args.node_id.parse()?;
+            let lease_id = args
+                .lease_id
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let expires_at = unix_now_ms()?
+                .checked_add(
+                    args.lease_seconds
+                        .checked_mul(1_000)
+                        .ok_or("lease duration overflow")?,
+                )
+                .ok_or("lease expiry overflow")?;
+            let lease = rocklake_router::NodeLease::new(
+                node_id.to_string(),
+                lease_id,
+                args.endpoint,
+                expires_at,
+            )?;
+            print_mutation(registry.register_node(lease, &args.request_id).await?);
+        }
+        cli::RegistrySubcommand::RenewNode(args) => {
+            let location = configured_registry(args.registry, &file_config)?;
+            let registry = open_registry(&location, &file_config).await?;
+            let node_id: rocklake_router::NodeId = args.node_id.parse()?;
+            let expires_at = unix_now_ms()?
+                .checked_add(
+                    args.lease_seconds
+                        .checked_mul(1_000)
+                        .ok_or("lease duration overflow")?,
+                )
+                .ok_or("lease expiry overflow")?;
+            print_mutation(
+                registry
+                    .renew_node(&node_id, &args.lease_id, expires_at, &args.request_id)
+                    .await?,
+            );
+        }
     }
     Ok(())
 }
@@ -519,6 +594,12 @@ fn configured_registry(
                 .map(|registry| registry.location.clone())
         })
         .ok_or_else(|| "a registry location is required (use --registry or [registry])".into())
+}
+
+fn unix_now_ms() -> Result<u64, Box<dyn std::error::Error>> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as u64)
 }
 
 fn router_open_options(config: &config::ConfigFile) -> rocklake_router::RouterOpenOptions {
@@ -574,13 +655,17 @@ async fn cmd_catalog_mutation(
 
 fn print_mutation(mutation: rocklake_router::RegistryMutation) {
     println!(
-        "Catalog mutation committed at generation {}{}.",
+        "Registry mutation committed at generation {}{}{}.",
         mutation.generation,
         if mutation.replayed {
             " (idempotent replay)"
         } else {
             ""
-        }
+        },
+        mutation
+            .writer_state
+            .map(|state| format!("; writer state {state:?}"))
+            .unwrap_or_default(),
     );
 }
 
@@ -594,6 +679,8 @@ fn print_registry_status(status: &rocklake_router::RegistryStatus, output: cli::
                 "catalogs": status.catalogs,
                 "routed_catalogs": status.routed_catalogs,
                 "next_audit_sequence": status.next_audit_sequence,
+                "nodes": status.nodes,
+                "assigned_writers": status.assigned_writers,
             })
         ),
         cli::OutputFormat::Human => {
@@ -602,6 +689,8 @@ fn print_registry_status(status: &rocklake_router::RegistryStatus, output: cli::
             println!("Catalogs           {}", status.catalogs);
             println!("Routed            {}", status.routed_catalogs);
             println!("Next audit        {}", status.next_audit_sequence);
+            println!("Nodes             {}", status.nodes);
+            println!("Assigned writers  {}", status.assigned_writers);
         }
     }
 }
@@ -650,6 +739,15 @@ fn print_registry_rows(snapshot: &rocklake_router::RegistrySnapshot, output: cli
                 "lifecycle": lifecycle_name(catalog.lifecycle),
                 "credential_provider": catalog.credential_provider.clone(),
                 "policy_reference": catalog.policy_reference.clone(),
+                "writer": catalog.writer_assignment.as_ref().map(|assignment| {
+                    serde_json::json!({
+                        "node_id": assignment.node_id.to_string(),
+                        "endpoint": assignment.endpoint,
+                        "assignment_generation": assignment.assignment_generation,
+                        "state": format!("{:?}", assignment.state).to_ascii_lowercase(),
+                        "writer_epoch": assignment.writer_epoch,
+                    })
+                }),
                 "generation": catalog.updated_generation,
                 "tombstone": catalog.tombstone,
             })

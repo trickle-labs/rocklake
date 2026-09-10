@@ -249,6 +249,10 @@ pub enum CatalogsSubcommand {
     Create(CatalogMutationArgs),
     /// Register an existing catalog route.
     Register(CatalogMutationArgs),
+    /// Assign a catalog to a registered node after a generation check.
+    Promote(CatalogPromoteArgs),
+    /// Mark an acquiring assignment write-ready after epoch acquisition.
+    Activate(CatalogActivateArgs),
     /// Rename a catalog route alias.
     Rename(CatalogRenameArgs),
     /// Change a catalog route mode.
@@ -277,6 +281,10 @@ pub enum RegistrySubcommand {
     /// Import the v0.54 static route table from the selected config file.
     #[command(name = "migrate-static")]
     MigrateStatic(RegistryMigrateStaticArgs),
+    /// Register a node with an expiring lease.
+    RegisterNode(RegistryRegisterNodeArgs),
+    /// Renew a node lease.
+    RenewNode(RegistryRenewNodeArgs),
 }
 
 /// A registry location resolved from this flag, the environment, or config.
@@ -416,6 +424,95 @@ pub struct CatalogIdArgs {
     /// Stable catalog UUID.
     #[arg(long)]
     pub id: String,
+    /// Caller-supplied idempotency key.
+    #[arg(long)]
+    pub request_id: String,
+}
+
+/// Writer promotion options.
+#[derive(Debug, Args)]
+pub struct CatalogPromoteArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Stable catalog UUID.
+    #[arg(long)]
+    pub id: String,
+    /// Registered node identity.
+    #[arg(long)]
+    pub node_id: String,
+    /// Registered node endpoint.
+    #[arg(long)]
+    pub endpoint: String,
+    /// Registry generation expected by this promotion.
+    #[arg(long)]
+    pub expected_generation: u64,
+    /// Caller-supplied idempotency key.
+    #[arg(long)]
+    pub request_id: String,
+}
+
+/// Writer activation options.
+#[derive(Debug, Args)]
+pub struct CatalogActivateArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Stable catalog UUID.
+    #[arg(long)]
+    pub id: String,
+    /// Registered node identity.
+    #[arg(long)]
+    pub node_id: String,
+    /// Per-catalog assignment generation.
+    #[arg(long)]
+    pub assignment_generation: u64,
+    /// Catalog writer epoch acquired by the node.
+    #[arg(long)]
+    pub writer_epoch: u64,
+    /// Caller-supplied idempotency key.
+    #[arg(long)]
+    pub request_id: String,
+}
+
+/// Node registration options.
+#[derive(Debug, Args)]
+pub struct RegistryRegisterNodeArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Stable node identity.
+    #[arg(long)]
+    pub node_id: String,
+    /// Endpoint advertised to the front door.
+    #[arg(long)]
+    pub endpoint: String,
+    /// Lease lifetime in seconds.
+    #[arg(long, default_value_t = 60)]
+    pub lease_seconds: u64,
+    /// Optional lease identity; generated when omitted.
+    #[arg(long)]
+    pub lease_id: Option<String>,
+    /// Caller-supplied idempotency key.
+    #[arg(long)]
+    pub request_id: String,
+}
+
+/// Node lease renewal options.
+#[derive(Debug, Args)]
+pub struct RegistryRenewNodeArgs {
+    /// Registry location.
+    #[arg(long, env = "ROCKLAKE_REGISTRY")]
+    pub registry: Option<String>,
+    /// Stable node identity.
+    #[arg(long)]
+    pub node_id: String,
+    /// Current lease identity.
+    #[arg(long)]
+    pub lease_id: String,
+    /// New lease lifetime in seconds.
+    #[arg(long, default_value_t = 60)]
+    pub lease_seconds: u64,
     /// Caller-supplied idempotency key.
     #[arg(long)]
     pub request_id: String,

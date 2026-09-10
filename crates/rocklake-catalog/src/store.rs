@@ -285,6 +285,16 @@ impl CatalogStore {
         self.latest_snapshot_cache.load(Ordering::Acquire)
     }
 
+    /// Return the writer epoch acquired by this store, or zero for a reader.
+    pub fn writer_epoch(&self) -> u64 {
+        self.writer_epoch
+    }
+
+    /// Whether this store acquired a writer epoch and can be used for writes.
+    pub fn is_writer(&self) -> bool {
+        self.writer_epoch != 0
+    }
+
     /// Close the catalog store.
     pub async fn close(self) -> CatalogResult<()> {
         crate::fault_injection::trigger(

@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.56.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.57.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -10,8 +10,8 @@ binary or a command for the complete generated reference.
 serve
 doctor
 status
-catalogs validate|list|status|create|register|rename|set-mode|disable|enable|remove
-registry init|status|backup|restore|verify|migrate-static
+catalogs validate|list|status|create|register|promote|activate|rename|set-mode|disable|enable|remove
+registry init|status|backup|restore|verify|migrate-static|register-node|renew-node
 catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair|jobs
 debug diagnose|inspect|corpus|rebuild|sweep-orphans|pg-migrate|tune|warmup
 config check|example
@@ -83,6 +83,10 @@ rocklake registry backup --registry <location> --output <directory>
 rocklake registry restore --registry <location> --input <directory>
 rocklake registry verify --registry <location>
 rocklake registry migrate-static --registry <location> --request-id <id>
+rocklake registry register-node --registry <location> --node-id <node> \
+  --endpoint <host:port> --request-id <id>
+rocklake registry renew-node --registry <location> --node-id <node> \
+  --lease-id <id> --request-id <id>
 rocklake catalogs create --registry <location> --id <uuid> --alias <name> \
   --catalog <location> --data <location> --credential-provider <name> \
   --request-id <id>
@@ -94,6 +98,10 @@ rocklake catalogs set-mode --registry <location> --id <uuid> --mode read-only --
 rocklake catalogs disable --registry <location> --id <uuid> --request-id <id>
 rocklake catalogs enable --registry <location> --id <uuid> --request-id <id>
 rocklake catalogs remove --registry <location> --id <uuid> --request-id <id>
+rocklake catalogs promote --registry <location> --id <uuid> --node-id <node> \
+  --endpoint <host:port> --expected-generation <generation> --request-id <id>
+rocklake catalogs activate --registry <location> --id <uuid> --node-id <node> \
+  --assignment-generation <generation> --writer-epoch <epoch> --request-id <id>
 ~~~
 
 ```bash

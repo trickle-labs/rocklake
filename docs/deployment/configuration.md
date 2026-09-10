@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.56.0 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.57.0 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 
@@ -21,7 +21,7 @@ rocklake serve --catalog <file://...,s3://...,gs://...,az://...>
 
 ## Managed catalog registry
 
-The v0.56.0 registry stores routing state separately from tenant catalogs. It
+The v0.57.0 registry stores routing state separately from tenant catalogs. It
 keeps aliases, lifecycle state, policy references, and credential-provider
 names; it never stores raw credentials. `remove` detaches a route and retains a
 tombstone. It does not delete catalog or data bytes.
@@ -45,6 +45,26 @@ rocklake catalogs create --registry file:///var/lib/rocklake/registry \
 rocklake registry backup --registry file:///var/lib/rocklake/registry --output ./registry-backup
 rocklake registry verify --registry file:///var/lib/rocklake/registry
 ```
+
+Writer ownership is explicit and generation-checked. Register the node, promote
+the catalog, acquire its catalog writer epoch on that node, then activate the
+assignment with the acquired epoch:
+
+```bash
+rocklake registry register-node --registry file:///var/lib/rocklake/registry \
+  --node-id node-a --endpoint 127.0.0.1:5432 --request-id node-a-start
+rocklake catalogs promote --registry file:///var/lib/rocklake/registry \
+  --id 018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9 --node-id node-a \
+  --endpoint 127.0.0.1:5432 --expected-generation 2 --request-id promote-main
+rocklake catalogs activate --registry file:///var/lib/rocklake/registry \
+  --id 018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9 --node-id node-a \
+  --assignment-generation 1 --writer-epoch <acquired-epoch> \
+  --request-id activate-main
+```
+
+Until activation, registry routing exposes the catalog as read-only. A newer
+catalog writer epoch fences the previous owner; promotion never enables
+automatic failover.
 
 Use `rocklake registry migrate-static` to import the v0.54 static route table.
 Registry and tenant prefixes must be disjoint. Registry management is local;
