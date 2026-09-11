@@ -79,7 +79,7 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.60.0 is distributed and tested as a standalone binary. There is no published
+RockLake v0.61.0 is distributed and tested as a standalone binary. There is no published
 Docker image; release binaries are the primary supported installation path.
 
 ### Install Release Binary
@@ -90,8 +90,8 @@ single `SHA256SUMS`, and `release-manifest.json`.
 
 ```bash
 # Download binary and checksum
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.60.0/rocklake-linux-x86_64
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.60.0/rocklake-linux-x86_64.sha256
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.61.0/rocklake-linux-x86_64
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.61.0/rocklake-linux-x86_64.sha256
 
 # Verify checksum
 sha256sum -c rocklake-linux-x86_64.sha256
@@ -208,7 +208,8 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | **v0.54.0** | Static multi-catalog router | Done |
 | **v0.57.0** | Writer ownership, failover, and multi-node routing | Done |
 | **v0.58.0** | Disaster recovery, backup sets, and maintenance automation | Done |
-| **v0.60.0** | Compatibility, migration, upgrade, and downgrade safety | **Current** |
+| **v0.60.0** | Compatibility, migration, upgrade, and downgrade safety | Done |
+| **v0.61.0** | Performance, cost, and capacity contract | **Current** |
 | Next | See [ROADMAP.md](ROADMAP.md) for the live Now/Next/Later plan | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.
@@ -226,6 +227,10 @@ cargo test -p rocklake-catalog
 
 # Run benchmarks
 cargo bench -p rocklake-catalog
+
+# Report a catalog's measured envelope and projected request cost
+rocklake capacity report --catalog ./lake \
+  --pricing-file benchmarks/pricing/us-east-1-2026-09-11.json
 ```
 
 The test suite includes unit tests, property-based tests (via `proptest`), integration tests against real SlateDB instances, and golden-file conformance tests derived from actual DuckDB wire captures.

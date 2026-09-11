@@ -49,6 +49,10 @@ pub enum Commands {
     /// Check catalog and server readiness.
     Status(StatusArgs),
 
+    /// Report measured catalog capacity and projected cost.
+    #[command(subcommand)]
+    Capacity(CapacitySubcommand),
+
     /// Catalog lifecycle and maintenance operations.
     #[command(subcommand)]
     Catalog(CatalogSubcommand),
@@ -1291,6 +1295,71 @@ pub enum InspectSubcommand {
     /// Show block-cache utilisation statistics.
     #[command(name = "cache-utilization")]
     CacheUtilization(InspectArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CapacitySubcommand {
+    /// Report catalog facts against a selected evidence envelope.
+    Report(CapacityReportArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct CapacityReportArgs {
+    /// Catalog URL.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: String,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub output: OutputFormat,
+
+    /// JSON pricing file with provider, region, effective date, and rates.
+    #[arg(long)]
+    pub pricing_file: Option<std::path::PathBuf>,
+
+    /// Observed GET-equivalent reads per second.
+    #[arg(long, default_value = "0")]
+    pub read_ops_per_second: f64,
+
+    /// Observed PUT-equivalent writes per second.
+    #[arg(long, default_value = "0")]
+    pub write_ops_per_second: f64,
+
+    /// Observed LIST requests per second.
+    #[arg(long, default_value = "0")]
+    pub list_ops_per_second: f64,
+
+    /// Observed DELETE requests per second.
+    #[arg(long, default_value = "0")]
+    pub delete_ops_per_second: f64,
+
+    /// Observed bytes read per second.
+    #[arg(long, default_value = "0")]
+    pub read_bytes_per_second: u64,
+
+    /// Observed bytes written per second.
+    #[arg(long, default_value = "0")]
+    pub write_bytes_per_second: u64,
+
+    /// Current catalog metadata size in bytes, when measured.
+    #[arg(long)]
+    pub catalog_bytes: Option<u64>,
+
+    /// Global and per-catalog cache budget in MiB.
+    #[arg(long, default_value = "256")]
+    pub cache_size_mb: u64,
+
+    /// Configured maximum concurrent sessions.
+    #[arg(long, default_value = "50")]
+    pub max_sessions: u64,
+
+    /// Configured maximum concurrent catalog scans.
+    #[arg(long, default_value = "25")]
+    pub max_active_scans: u64,
+
+    /// Evidence profile: small, medium, or large.
+    #[arg(long, value_parser = ["small", "medium", "large"], default_value = "medium")]
+    pub evidence_profile: String,
 }
 
 #[derive(Debug, Parser)]

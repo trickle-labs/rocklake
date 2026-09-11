@@ -41,6 +41,11 @@ jobs:
           cargo test -p rocklake-core version
           cargo test -p rocklake-catalog migrate
           cargo test -p rocklake-pgwire --test v046_cli_tests version_json_reports_release_contract
+      - name: v0.61 capacity and performance gate
+        run: |
+          cargo test -p rocklake-catalog capacity
+          python scripts/validate_capacity_contract.py
+          python scripts/check_benchmark_regression.py benchmarks/baseline.json
 
   failure-certification:
     name: v0.47.17 Failure Certification

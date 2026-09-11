@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest v0.60.x release receives security fixes. Older releases are
+Only the latest v0.61.x release receives security fixes. Older releases are
 unsupported. Upgrade before reporting a problem when the issue is fixed in a
 newer release.
 

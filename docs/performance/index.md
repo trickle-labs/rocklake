@@ -36,6 +36,10 @@ Before diving into specific pages, some context about what "performance" means f
 
     Fresh-process LocalFS and MinIO evidence with deterministic correctness digests and bounded-read measurements.
 
+-   **[Capacity report](capacity.md)**
+
+    Measured catalog facts, request and byte projections, cache budgets, and bounded evidence envelopes.
+
 -   **[Tuning](tuning.md)**
 
     ---

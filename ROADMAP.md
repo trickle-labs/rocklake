@@ -237,7 +237,7 @@ v0.54.0 static router -> v0.55.0 registry        |
                      v0.60.0 migration freeze (done)
                                 |
                                 v
-                     v0.61.0 performance freeze
+                     v0.61.0 performance freeze (done)
                                 |
                                 v
                      v0.62.0 public surface freeze
@@ -1554,7 +1554,8 @@ clear failure before any unsafe downgrade writes occur.
 
 Optimize only the bottlenecks demonstrated by v0.52.0–v0.64.2 evidence. Freeze the
 performance regression process and publish the supported capacity model for
-v1.0.
+v1.0. v0.61.0 ships the bounded capacity-report and pricing-input contract;
+unmeasured hot-path optimizations remain deferred.
 
 #### User outcome
 
@@ -1590,13 +1591,13 @@ snapshot, isolation, or recovery guarantees.
 
 ##### Cost and capacity
 
-- [ ] Add `rocklake capacity report` using observed catalog counts, file counts,
+- [x] Add `rocklake capacity report` using observed catalog counts, file counts,
       snapshot history, request rates, configured limits, cache budget, and
       evidence profiles.
-- [ ] Keep cost calculations parameterized by a separate, dated pricing file.
-- [ ] Publish request and byte counts independently from currency estimates.
-- [ ] Define supported small/medium/large envelopes from measured evidence.
-- [ ] Document when to split catalogs or service instances.
+- [x] Keep cost calculations parameterized by a separate, dated pricing file.
+- [x] Publish request and byte counts independently from currency estimates.
+- [x] Define supported small/medium/large envelopes from measured evidence.
+- [x] Document when to split catalogs or service instances.
 - [ ] Add multi-catalog noisy-neighbor and cache-fairness benchmarks.
 
 ##### Regression gates
@@ -2138,7 +2139,7 @@ replacement release table is:
 | v0.58.0 | Disaster recovery and maintenance | Done |
 | v0.59.0 | Security, secrets, audit, and governance | Done |
 | v0.60.0 | Compatibility and migration freeze | Done |
-| v0.61.0 | Performance, cost, and capacity contract | Planned |
+| v0.61.0 | Performance, cost, and capacity contract | Done |
 | v0.62.0 | Public surface freeze | Planned |
 | v0.63.0–v0.63.1 | Production beta and readiness audit | Planned |
 | v0.64.0–v0.64.2 | Deferred multi-node and cloud evidence | Planned |

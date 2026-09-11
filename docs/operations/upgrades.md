@@ -1,8 +1,8 @@
 # Upgrades
 
-The v0.60.0 binary can be upgraded directly from v0.59.0. Stop the current
+The v0.61.0 binary can be upgraded directly from v0.60.0. Stop the current
 process and restart it with the same catalog URL and flags. Catalog state
-remains in the configured object store; v0.60.0 does not change the catalog
+remains in the configured object store; v0.61.0 does not change the catalog
 storage format.
 
 ```bash
@@ -30,13 +30,14 @@ Before upgrading production workloads:
 5. Verify client connectivity via DuckDB or `rocklake status`.
 
 `rocklake catalog migrate --apply` records an administrative migration job and
-verifies the catalog before activation. In v0.60.0 the registered migration is
+verifies the catalog before activation. In v0.61.0 the registered migration is
 a verified no-op. Unknown targets and downgrades fail before a write. After a
 future format-changing migration, rollback is restore-only from a compatible
 backup; an older binary must not write the activated format.
 
-The supported mixed-version window is v0.59.0 readers during a v0.60.0 binary
+The supported mixed-version window is v0.60.0 readers during a v0.61.0 binary
 rollout. Keep one writer active and do not let an older writer publish state
-after the rollout has crossed a documented format point of no return.
+after the rollout has crossed a documented format point of no return. Use
+`rocklake capacity report` to record the measured envelope before rollout.
 
 There is no published Docker image or RockLake-specific container upgrade path; use the release binary.

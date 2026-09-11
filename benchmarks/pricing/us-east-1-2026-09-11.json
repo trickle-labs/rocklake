@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "provider": "aws-s3-standard",
+  "region": "us-east-1",
+  "effective_date": "2026-09-11",
+  "currency": "USD",
+  "storage_usd_per_gb_month": 0.023,
+  "request_cost_per_1000": {
+    "get": 0.0004,
+    "put": 0.005,
+    "list": 0.005,
+    "delete": 0.0
+  }
+}

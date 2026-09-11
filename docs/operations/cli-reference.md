@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.60.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.61.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -10,6 +10,7 @@ binary or a command for the complete generated reference.
 serve
 doctor
 status
+capacity report
 catalogs validate|list|status|create|register|promote|activate|rename|set-mode|disable|enable|remove
 registry init|status|backup|restore|verify|migrate-static|register-node|renew-node
 catalog backup|restore|gc|excise|checkpoint|export|import|export-catalog|migrate|verify|repair|jobs|maintenance|recovery|backup-set
@@ -98,6 +99,8 @@ rocklake registry backup --registry <location> --output <directory>
 rocklake registry restore --registry <location> --input <directory>
 rocklake registry verify --registry <location>
 rocklake registry migrate-static --registry <location> --request-id <id>
+rocklake capacity report --catalog ./lake --output json \
+  --pricing-file benchmarks/pricing/us-east-1-2026-09-11.json
 rocklake registry register-node --registry <location> --node-id <node> \
   --endpoint <host:port> --request-id <id>
 rocklake registry renew-node --registry <location> --node-id <node> \
@@ -151,7 +154,7 @@ GC and excision expose separate `plan` and `apply` subcommands. `repair` and
 `migrate` expose explicit `--dry-run` and `--apply` options. All destructive
 operations remain explicit in the command syntax.
 
-The v0.60.0 migration registry contains a verified same-format no-op. Unknown
+The v0.61.0 migration registry contains a verified same-format no-op. Unknown
 targets and downgrades fail before a write; an apply attempt is recorded in the
 administrative job ledger.
 
