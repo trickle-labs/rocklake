@@ -14,6 +14,7 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectStore;
 use sha2::{Digest, Sha256};
+use testcontainers::core::ImageExt;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
 use testcontainers_modules::minio::MinIO;
@@ -34,11 +35,13 @@ pub struct MinioHarness {
 /// Default MinIO credentials used in the test container.
 const MINIO_ACCESS_KEY: &str = "minioadmin";
 const MINIO_SECRET_KEY: &str = "minioadmin";
+const MINIO_IMAGE_TAG: &str = "RELEASE.2025-07-18T21-56-31Z";
 
 impl MinioHarness {
     /// Start a MinIO container and create the test bucket.
     pub async fn start(bucket: &str) -> Result<Self, MinioHarnessError> {
         let container = MinIO::default()
+            .with_tag(MINIO_IMAGE_TAG)
             .start()
             .await
             .map_err(|e| MinioHarnessError::Docker(format!("failed to start container: {e}")))?;
