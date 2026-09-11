@@ -31,5 +31,5 @@ sha2         = "0.10"
 base64       = "0.22"
 futures      = { workspace = true }
 tokio-postgres = { workspace = true }
-testcontainers = { version = "0.23", features = ["blocking"] , optional = true }
-testcontainers-modules = { version = "0.11", features = ["minio"], optional = true }
+testcontainers = { version = "0.27", features = ["blocking"] , optional = true }
+testcontainers-modules = { version = "0.15", features = ["minio"], optional = true }

@@ -8,13 +8,13 @@ use std::time::Duration;
 use futures::{Stream, StreamExt, TryStreamExt};
 use tempfile::TempDir;
 use testcontainers::bollard::{
-    container::{
-        AttachContainerOptions, Config, CreateContainerOptions, LogOutput, RemoveContainerOptions,
+    container::LogOutput,
+    errors::Error as DockerError,
+    models::{ContainerCreateBody, HostConfig},
+    query_parameters::{
+        AttachContainerOptions, CreateContainerOptions, CreateImageOptions, RemoveContainerOptions,
         StartContainerOptions,
     },
-    errors::Error as DockerError,
-    image::CreateImageOptions,
-    models::HostConfig,
     Docker,
 };
 use tokio::io::AsyncWriteExt;
@@ -85,12 +85,13 @@ impl DuckDbContainerHarness {
         docker
             .create_image(
                 Some(CreateImageOptions {
-                    from_image: DUCKDB_IMAGE,
-                    from_src: "",
-                    repo: "",
-                    tag: duckdb_version,
-                    platform: "",
+                    from_image: Some(DUCKDB_IMAGE.to_string()),
+                    from_src: Some(String::new()),
+                    repo: Some(String::new()),
+                    tag: Some(duckdb_version.to_string()),
+                    platform: String::new(),
                     changes: vec![],
+                    message: None,
                 }),
                 None,
                 None,
@@ -107,7 +108,7 @@ impl DuckDbContainerHarness {
             CONTAINER_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
 
-        let container = Config::<String> {
+        let container = ContainerCreateBody {
             image: Some(format!("{DUCKDB_IMAGE}:{duckdb_version}")),
             entrypoint: Some(vec!["duckdb".to_string()]),
             cmd: Some(vec!["-batch".to_string()]),
@@ -130,8 +131,8 @@ impl DuckDbContainerHarness {
         };
 
         let create_options = CreateContainerOptions {
-            name: container_name.clone(),
-            platform: None,
+            name: Some(container_name.clone()),
+            platform: String::new(),
         };
         let created = docker
             .create_container(Some(create_options), container)
@@ -139,18 +140,19 @@ impl DuckDbContainerHarness {
             .map_err(|e| DuckDbContainerError::Docker(e.to_string()))?;
 
         docker
-            .start_container(&created.id, None::<StartContainerOptions<String>>)
+            .start_container(&created.id, None::<StartContainerOptions>)
             .await
             .map_err(|e| DuckDbContainerError::Docker(e.to_string()))?;
 
         let attach = docker
             .attach_container(
                 &created.id,
-                Some(AttachContainerOptions::<String> {
-                    stdin: Some(true),
-                    stdout: Some(true),
-                    stderr: Some(true),
-                    stream: Some(true),
+                Some(AttachContainerOptions {
+                    stdin: true,
+                    stdout: true,
+                    stderr: true,
+                    stream: true,
+                    logs: true,
                     ..Default::default()
                 }),
             )
