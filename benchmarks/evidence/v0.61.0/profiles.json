@@ -1,0 +1,10 @@
+{
+  "release": "v0.61.0",
+  "schema_version": 1,
+  "source_evidence": "v0.52.0 LocalFS and MinIO scale classes",
+  "profiles": [
+    {"name": "small", "max_data_files": 10000, "max_read_ops_per_second": 50, "max_write_ops_per_second": 5},
+    {"name": "medium", "max_data_files": 100000, "max_read_ops_per_second": 250, "max_write_ops_per_second": 25},
+    {"name": "large", "max_data_files": 1000000, "max_read_ops_per_second": 1000, "max_write_ops_per_second": 100}
+  ]
+}

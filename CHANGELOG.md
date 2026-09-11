@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.61.0] — 2026-09-11
+
+### Added
+
+- Added `rocklake capacity report` for catalog facts, request and byte-rate
+  projections, cache budgets, evidence envelopes, and configuration guidance.
+- Added dated, provider-owned JSON pricing inputs for optional request and
+  storage cost estimates; measured requests and bytes remain separate fields.
+- Added v0.61.0 capacity evidence and release certification checks.
+
+### Changed
+
+- Updated workspace, binding, compatibility, binary, and release documentation
+  metadata to v0.61.0.
+- Kept the v0.61.0 capacity model bounded to the committed small, medium, and
+  large LocalFS/MinIO evidence envelopes; it makes no universal cloud claim.
+
+### Deferred
+
+- Snapshot-bound prefetch/coalescing, a SlateDB-owned fair cache, noisy-neighbor
+  benchmarks, and real-cloud scale certification remain deferred until measured
+  bottleneck evidence exists.
+
 ## [0.60.0] — 2026-09-11
 
 ### Added

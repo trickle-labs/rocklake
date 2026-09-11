@@ -5,6 +5,7 @@
 pub mod audit;
 pub mod backup;
 pub mod cache;
+pub mod capacity;
 pub mod cdc;
 pub mod checkpoint;
 pub mod cleanup;
@@ -49,6 +50,9 @@ pub use backup::{
     BACKUP_FORMAT_VERSION,
 };
 pub use cache::{cache_utilization, CacheStats};
+pub use capacity::{
+    build_report as build_capacity_report, CapacityInput, CapacityReport, PricingFile,
+};
 pub use cdc::{CdcChangeKind, CdcEvent, CdcSnapshot, CdcTailer, WebhookPayload};
 pub use corpus::{corpus_diff, corpus_validate, parse_corpus, CorpusRecord, ValidateResult};
 pub use cost::{tune_for_cost_target, ApiCostReport, CostMode};

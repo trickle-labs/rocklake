@@ -5,7 +5,7 @@
 //!   rebuild, inspect, verify, repair,
 //!   warmup, migrate, corpus, tune,
 //!   migrate-from-ducklake, export-catalog,
-//!   diagnose, sweep-orphans
+//!   diagnose, sweep-orphans, capacity
 //!
 //! Run `rocklake --help` or `rocklake <command> --help` for full usage.
 
@@ -115,6 +115,7 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
         Commands::Serve(args) => cmd_serve(*args, config_path.as_deref()).await?,
         Commands::Doctor(args) => cmd_doctor(args, config_path.as_deref()).await?,
         Commands::Status(args) => cmd_status(args, config_path.as_deref()).await?,
+        Commands::Capacity(command) => cmd_capacity(command).await?,
         Commands::Catalog(command) => match command {
             cli::CatalogSubcommand::Backup(sub) => cmd_backup(sub).await?,
             cli::CatalogSubcommand::Restore(sub) => cmd_restore(sub).await?,
@@ -2567,6 +2568,46 @@ async fn cmd_inspect(command: cli::InspectSubcommand) -> Result<(), Box<dyn std:
         }
     }
 
+    Ok(())
+}
+
+async fn cmd_capacity(command: cli::CapacitySubcommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        cli::CapacitySubcommand::Report(args) => {
+            let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
+            let db = slatedb::Db::open(catalog_path, object_store).await?;
+            let state = rocklake_catalog::inspect::inspect_snapshot(&db).await?;
+            db.close().await?;
+
+            let pricing = args
+                .pricing_file
+                .as_deref()
+                .map(rocklake_catalog::PricingFile::read)
+                .transpose()?;
+            let report = rocklake_catalog::build_capacity_report(
+                &state,
+                &rocklake_catalog::CapacityInput {
+                    read_ops_per_second: args.read_ops_per_second,
+                    write_ops_per_second: args.write_ops_per_second,
+                    list_ops_per_second: args.list_ops_per_second,
+                    delete_ops_per_second: args.delete_ops_per_second,
+                    read_bytes_per_second: args.read_bytes_per_second,
+                    write_bytes_per_second: args.write_bytes_per_second,
+                    catalog_bytes: args.catalog_bytes,
+                    cache_size_mb: args.cache_size_mb,
+                    max_sessions: args.max_sessions,
+                    max_active_scans: args.max_active_scans,
+                    evidence_profile: args.evidence_profile,
+                },
+                pricing.as_ref(),
+            )?;
+
+            match args.output {
+                cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+                cli::OutputFormat::Human => report.print(),
+            }
+        }
+    }
     Ok(())
 }
 

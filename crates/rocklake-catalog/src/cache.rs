@@ -21,6 +21,12 @@ pub struct CacheCounters {
     pub capacity_bytes: AtomicU64,
 }
 
+pub fn estimated_working_set_bytes(data_file_count: u64, column_count: u64) -> u64 {
+    column_count
+        .saturating_mul(1024)
+        .saturating_add(data_file_count.saturating_mul(2048))
+}
+
 impl CacheCounters {
     pub fn new(capacity_mb: u64) -> Arc<Self> {
         let c = Arc::new(Self::default());
@@ -140,7 +146,7 @@ pub async fn cache_utilization(
     column_count: u64,
 ) -> CacheStats {
     // Estimate working-set size: ~1KB per column stats entry + ~2KB per data file header
-    let estimated_working_set_bytes = column_count * 1024 + data_file_count * 2048;
+    let estimated_working_set_bytes = estimated_working_set_bytes(data_file_count, column_count);
     let capacity_bytes = cache_size_mb * 1024 * 1024;
 
     // Estimate hit ratio: if working set fits in cache, ratio is high

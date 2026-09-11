@@ -373,6 +373,9 @@ jobs:
       - name: Check benchmark thresholds (v0.42 baseline)
         run: python scripts/check_benchmark_regression.py benchmarks/baseline.json
 
+      - name: Validate v0.61 capacity contract
+        run: python scripts/validate_capacity_contract.py
+
       - name: Verify v0.42 catalog bench JSON present
         run: |
           test -f benchmarks/v0.42-catalog-bench.json || \

@@ -216,6 +216,7 @@ nav:
     - performance/index.md
     - Latency Model: performance/latency-model.md
     - Benchmarks: performance/benchmarks.md
+    - Capacity report: performance/capacity.md
     - Tuning: performance/tuning.md
     - When to Use RockLake: performance/when-to-use.md
     - vs. Alternatives: performance/vs-alternatives.md
