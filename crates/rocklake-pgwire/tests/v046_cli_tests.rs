@@ -69,6 +69,7 @@ fn help_serve() {
 fn help_v050_operator_commands() {
     for args in [
         ["doctor", "--help"].as_slice(),
+        ["support", "bundle", "--help"].as_slice(),
         ["config", "check", "--help"].as_slice(),
         ["backup", "create", "--help"].as_slice(),
         ["backup", "inspect", "--help"].as_slice(),
@@ -190,6 +191,45 @@ fn completions_bash() {
         stdout.contains("rocklake"),
         "bash completion output should mention 'rocklake'"
     );
+}
+
+#[test]
+fn support_bundle_is_redacted_and_non_overwriting() {
+    let temp = tempfile::tempdir().expect("create support bundle tempdir");
+    let config = temp.path().join("rocklake.toml");
+    std::fs::write(&config, "auth_password = \"secret\"\n").expect("write support bundle config");
+    let bundle = temp.path().join("bundle");
+    let output = Command::new(rocklake_bin())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "support",
+            "bundle",
+            "--output",
+            bundle.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run support bundle");
+    assert!(
+        output.status.success(),
+        "support bundle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let redacted = std::fs::read_to_string(bundle.join("config.json")).expect("read config");
+    assert!(!redacted.contains("secret"));
+
+    let second = Command::new(rocklake_bin())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "support",
+            "bundle",
+            "--output",
+            bundle.to_str().unwrap(),
+        ])
+        .output()
+        .expect("rerun support bundle");
+    assert!(!second.status.success(), "support bundle overwrote output");
 }
 
 #[test]

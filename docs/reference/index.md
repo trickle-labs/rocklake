@@ -3,7 +3,7 @@
 This section provides lookup-oriented reference material for RockLake. Unlike
 the conceptual documentation (which explains why things work the way they do)
 or the architecture documentation (which explains how components fit
-together), reference pages answer questions about the supported v0.51.3
+together), reference pages answer questions about the supported v0.62.0
 surface: error codes, catalog fields, environment variables, metrics, and SQL
 patterns.
 
@@ -52,6 +52,10 @@ Each page covers a single reference domain:
     ---
 
     All Prometheus metrics exposed by RockLake's `/metrics` endpoint. For each metric: type (counter, gauge, histogram), labels, description, and what it tells you about system health and performance.
+
+-   **[Support Levels](support-levels.md)**
+
+    Stable, Preview, Experimental, and Unsupported boundaries for each public integration.
 
 -   **[Glossary](glossary.md)**
 

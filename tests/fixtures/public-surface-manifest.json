@@ -1,11 +1,45 @@
 {
-    "release": "v0.49.0",
+    "release": "v0.62.0",
+    "public_surface_schema_version": 2,
     "duckdb_version": "1.5.3",
     "ducklake_version": "1.0",
     "catalog_version": 7,
+    "support_levels": {
+        "binary": "supported",
+        "pgwire": "supported",
+        "rust_client": "preview",
+        "readonly_api": "preview",
+        "datafusion": "preview",
+        "python_binding": "experimental",
+        "nodejs_binding": "experimental",
+        "java_binding": "experimental",
+        "native_extension": "unsupported"
+    },
+    "deprecation_policy": {
+        "stable_support_window": "v1.x",
+        "notice": "Deprecations remain documented for at least one minor release.",
+        "format_changes": "Require an explicit migration and release note."
+    },
+    "distribution": {
+        "artifacts": [
+            "rocklake-linux-x86_64",
+            "rocklake-linux-aarch64",
+            "rocklake-macos-arm64",
+            "rocklake-windows-x86_64.exe"
+        ],
+        "per_artifact_files": [".sha256", ".build-metadata.json"],
+        "aggregate_files": ["SHA256SUMS", "release-manifest.json"],
+        "provenance": "required",
+        "oci_image": "preview"
+    },
+    "support_bundle": {
+        "command": "rocklake support bundle",
+        "schema_version": 1,
+        "redacts": ["credentials", "encryption keys", "catalog URL userinfo"]
+    },
     "compatibility_snapshots": [
         {
-            "release": "v0.49.0",
+            "release": "v0.62.0",
             "duckdb_version": "1.5.3",
             "ducklake_version": "1.0",
             "catalog_version": 7,
@@ -574,6 +608,10 @@
                 {
                     "command": "rocklake completions bash",
                     "test_name": "completions_bash"
+                },
+                {
+                    "command": "rocklake support bundle",
+                    "test_name": "support_bundle_is_redacted_and_non_overwriting"
                 }
             ],
             "test_file": "crates/rocklake-pgwire/tests/v046_cli_tests.rs",

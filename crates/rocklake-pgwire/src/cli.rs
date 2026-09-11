@@ -49,6 +49,10 @@ pub enum Commands {
     /// Check catalog and server readiness.
     Status(StatusArgs),
 
+    /// Create a redacted operator support bundle.
+    #[command(subcommand)]
+    Support(SupportSubcommand),
+
     /// Report measured catalog capacity and projected cost.
     #[command(subcommand)]
     Capacity(CapacitySubcommand),
@@ -172,6 +176,28 @@ pub struct StatusArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub output: OutputFormat,
+}
+
+/// Operator support bundle operations.
+#[derive(Debug, Subcommand)]
+pub enum SupportSubcommand {
+    /// Write a redacted diagnostic bundle to a new directory.
+    Bundle(SupportBundleArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct SupportBundleArgs {
+    /// Output directory. It must not already exist.
+    #[arg(long)]
+    pub output: std::path::PathBuf,
+
+    /// Catalog URL or local path to include in the bundle.
+    #[arg(short = 'c', long, env = "ROCKLAKE_CATALOG")]
+    pub catalog: Option<String>,
+
+    /// Running Prometheus endpoint to snapshot.
+    #[arg(long)]
+    pub metrics_url: Option<String>,
 }
 
 /// Catalog lifecycle and maintenance operations.

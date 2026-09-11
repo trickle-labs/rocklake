@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.62.0] — 2026-09-11
+
+### Added
+
+- Added the redacted `rocklake support bundle` command for version, effective
+  configuration shape, catalog status, verification, and optional metrics.
+- Added the v0.62.0 public-surface manifest with support levels, deprecation
+  policy, distribution metadata, and support-bundle schema.
+- Added checked-in Bash, Zsh, and Fish completions for the frozen CLI surface.
+
+### Changed
+
+- Updated workspace, binding, compatibility, binary, and release documentation
+  metadata to v0.62.0.
+- Kept v0.62.0 format-compatible with v0.61.0; no new backend, binding,
+  management API, query shape, or storage format was added.
+
+### Deferred
+
+- OCI publication, detached signatures, and support for Preview or Experimental
+  interfaces remain deferred until their independent trust and certification
+  paths exist.
+
 ## [0.61.0] — 2026-09-11
 
 ### Added

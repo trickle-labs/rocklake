@@ -10,7 +10,7 @@ RockLake and how to prepare for future version upgrades.
 | 1.0              | 7               | Full support (default) |
 | 1.1 (dev)        | 8 (`V1_1_DEV_1`)| Experimental — requires `--accept-version V1_1_DEV_1` |
 
-RockLake v0.61.0 always reports `ducklake_version = "1.0"` and `catalog_version = 7`
+RockLake v0.62.0 always reports `ducklake_version = "1.0"` and `catalog_version = 7`
 to clients. It will not self-report as v1.1 until those features are fully
 validated and promoted to stable.
 

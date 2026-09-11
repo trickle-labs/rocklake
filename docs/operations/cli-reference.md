@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.61.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.62.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -10,6 +10,7 @@ binary or a command for the complete generated reference.
 serve
 doctor
 status
+support bundle
 capacity report
 catalogs validate|list|status|create|register|promote|activate|rename|set-mode|disable|enable|remove
 registry init|status|backup|restore|verify|migrate-static|register-node|renew-node
@@ -69,6 +70,7 @@ defaults, TOML, environment, then command-line flags.
 rocklake doctor --catalog ./lake [--output human|json]
 rocklake config check [--file rocklake.toml] [--output human|json]
 rocklake config example
+rocklake support bundle --catalog ./lake --output ./rocklake-support
 rocklake backup create --catalog ./lake --out ./lake-backup
 rocklake backup inspect ./lake-backup --output json
 rocklake catalog migrate --catalog ./lake --dry-run
@@ -154,7 +156,7 @@ GC and excision expose separate `plan` and `apply` subcommands. `repair` and
 `migrate` expose explicit `--dry-run` and `--apply` options. All destructive
 operations remain explicit in the command syntax.
 
-The v0.61.0 migration registry contains a verified same-format no-op. Unknown
+The v0.62.0 migration registry contains a verified same-format no-op. Unknown
 targets and downgrades fail before a write; an apply attempt is recorded in the
 administrative job ledger.
 
