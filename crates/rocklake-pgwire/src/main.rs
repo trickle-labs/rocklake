@@ -66,15 +66,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_version(json: bool) -> Result<(), Box<dyn std::error::Error>> {
     if json {
+        let versions = rocklake_core::version::CURRENT_VERSIONS;
         println!(
             "{}",
             serde_json::json!({
+                "output_schema_version": rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION,
                 "version": env!("CARGO_PKG_VERSION"),
                 "certified_sha": option_env!("ROCKLAKE_RELEASE_SHA").unwrap_or("unknown"),
                 "target_triple": option_env!("ROCKLAKE_RELEASE_TARGET").unwrap_or("unknown"),
                 "rust_version": option_env!("ROCKLAKE_RUST_VERSION").unwrap_or("unknown"),
                 "catalog_read_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
                 "catalog_write_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
+                "versions": versions,
                 "build_provenance_available": option_env!("ROCKLAKE_PROVENANCE_AVAILABLE") == Some("true"),
             })
         );
@@ -2790,36 +2793,61 @@ async fn cmd_warmup(args: cli::WarmupArgs) -> Result<(), Box<dyn std::error::Err
 
 async fn cmd_migrate(args: cli::MigrateArgs) -> Result<(), Box<dyn std::error::Error>> {
     let (catalog_path, object_store) = resolve_catalog(&args.catalog)?;
-    let db = slatedb::Db::open(catalog_path, object_store).await?;
-
-    let target_version = 2;
+    let target_version = rocklake_core::tags::CATALOG_FORMAT_VERSION;
     let apply = args.apply;
     let dry_run = args.dry_run || !apply;
 
     if dry_run {
+        let db = slatedb::Db::open(catalog_path, object_store).await?;
         let result = rocklake_catalog::migrate::migrate_dry_run(&db, target_version).await?;
         println!("Migration Dry Run:");
         println!("  Current version:    {}", result.current_version);
         println!("  Target version:     {}", result.target_version);
         println!("  Rows to migrate:    {}", result.rows_to_migrate);
         println!("  Estimated duration: ~{}s", result.estimated_seconds);
+        println!("  Backup required:    {}", result.backup_required);
+        println!("  Mode:               {:?}", result.mode);
+        println!("  Rollback boundary:  {}", result.rollback_boundary);
         println!();
         println!("{}", result.description);
         if result.rows_to_migrate > 0 {
             println!();
             println!("Run with --apply to execute the migration.");
         }
+        db.close().await?;
     } else {
-        let backup_dir = ".";
-        let result =
-            rocklake_catalog::migrate::migrate_apply(&db, target_version, backup_dir).await?;
+        let catalog = CatalogStore::open(OpenOptions {
+            object_store,
+            path: catalog_path,
+            encryption: None,
+        })
+        .await?;
+        let (result, job_id) = run_job(
+            catalog.db(),
+            rocklake_catalog::JobKind::Migration,
+            serde_json::json!({
+                "source_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
+                "target_format": target_version,
+            }),
+            None,
+            |job_db| async move {
+                rocklake_catalog::migrate::migrate_apply(&job_db, target_version, ".")
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+            },
+        )
+        .await?;
         println!("Migration Complete:");
         println!("  Rows migrated:  {}", result.rows_migrated);
         println!("  New version:    {}", result.new_version);
-        println!("  Backup written: {}", result.backup_path);
+        println!("  Verified:        {}", result.verification_passed);
+        println!("  Activated:       {}", result.activated);
+        println!("  Job:             {}", job_id);
+        if !result.backup_path.is_empty() {
+            println!("  Backup written:  {}", result.backup_path);
+        }
+        catalog.close().await?;
     }
-
-    db.close().await?;
     Ok(())
 }
 
@@ -3761,6 +3789,7 @@ async fn cmd_status(
     let latest_snapshot_id = store.latest_committed_snapshot_id();
     let retain_from = rocklake_catalog::gc::read_retain_from(store.db()).await?;
     let schema_version = store.schema_version();
+    let versions = rocklake_core::version::CURRENT_VERSIONS;
 
     match args.output {
         cli::OutputFormat::Human => {
@@ -3770,15 +3799,32 @@ async fn cmd_status(
             println!("Retain from:   {}", retain_from);
             println!("Format:        DuckLake 1.0 (V1_0)");
             println!("Schema ver:    {}", schema_version);
+            println!("Storage ver:   {}", versions.catalog_storage.get());
+            println!("Registry ver:  {}", versions.registry.get());
+            println!("Backup ver:    {}", versions.backup_manifest.get());
+            println!("Job ledger:    {}", versions.job_ledger.get());
+            println!("Audit schema:  {}", versions.audit_schema.get());
+            println!("JSON schema:   {}", versions.public_json.get());
+            println!("Evidence:      {}", versions.evidence_schema.get());
         }
         cli::OutputFormat::Json => {
             let json = serde_json::json!({
+                "output_schema_version": rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION,
                 "catalog": redact_catalog_url(&catalog_url),
                 "status": "ready",
                 "snapshot_id": latest_snapshot_id,
                 "retain_from": retain_from,
                 "format_version": "DuckLake 1.0 (V1_0)",
                 "schema_version": schema_version,
+                "versions": versions,
+                "compatibility": {
+                    "ducklake_catalog_read": [rocklake_core::version::DUCKLAKE_CATALOG_VERSION],
+                    "ducklake_catalog_write": [rocklake_core::version::DUCKLAKE_CATALOG_VERSION],
+                    "catalog_storage_read": [rocklake_core::version::CATALOG_STORAGE_VERSION],
+                    "catalog_storage_write": [rocklake_core::version::CATALOG_STORAGE_VERSION],
+                    "minimum_direct_upgrade": "v0.59.0",
+                    "downgrade_after_migration": "rejected_before_write"
+                }
             });
             println!("{}", serde_json::to_string_pretty(&json)?);
         }

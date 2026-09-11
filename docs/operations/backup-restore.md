@@ -1,6 +1,6 @@
 # Backup and Restore
 
-The v0.51.4 supported backup boundary is a versioned, snapshot-consistent
+The v0.60.0 supported backup boundary is a versioned, snapshot-consistent
 catalog artifact. `catalog backup create` writes the artifact; `catalog backup inspect`
 validates its checksum and row count; `catalog restore plan` previews the target; and
 `catalog restore apply` imports it into an empty catalog. Legacy flat invocations
@@ -9,6 +9,11 @@ validates its checksum and row count; `catalog restore plan` previews the target
 RockLake keeps catalog history in object storage. A logical backup is a
 complete NDJSON export at an explicit snapshot; object-store versioning or a
 separate bucket can provide an additional recovery boundary.
+
+Catalog backup manifests are format `2` in v0.60.0. `rocklake status
+--output json` reports this separately from the catalog storage format, so a
+restore can be checked before any target is opened for writes. A backup from
+v0.59.0 is in the supported direct-upgrade window.
 
 ## Create and inspect a backup
 

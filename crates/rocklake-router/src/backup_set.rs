@@ -18,7 +18,7 @@ const REGISTRY_DIR: &str = "registry";
 const CATALOGS_DIR: &str = "catalogs";
 
 /// Current backup-set manifest version.
-pub const BACKUP_SET_FORMAT_VERSION: u32 = 1;
+pub const BACKUP_SET_FORMAT_VERSION: u32 = rocklake_core::version::BACKUP_SET_MANIFEST_VERSION;
 
 /// One catalog included in a backup set.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

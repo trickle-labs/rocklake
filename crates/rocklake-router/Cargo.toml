@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+rocklake-core = { path = "../rocklake-core" }
 rocklake-catalog = { path = "../rocklake-catalog" }
 object_store = { workspace = true, features = ["aws", "gcp", "azure"] }
 slatedb = { workspace = true }

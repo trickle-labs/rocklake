@@ -84,6 +84,13 @@ impl CatalogStore {
             Db::open(opts.path, opts.object_store).await?
         };
 
+        // Reject unknown required formats before any writer-only migration can
+        // mutate an existing catalog or before the writer epoch is acquired.
+        let format_key = keys::key_system(SYSTEM_CATALOG_FORMAT_VERSION);
+        if db.get(&format_key).await?.is_some() {
+            init::verify_format_version(&db).await?;
+        }
+
         // Run key-encoding migration (no-op on already-migrated catalogs).
         crate::key_migration::migrate_key_encoding_if_needed(&db).await?;
 

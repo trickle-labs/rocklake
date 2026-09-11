@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::error::{CatalogError, CatalogResult};
 
 /// Current durable job-ledger schema version.
-pub const JOB_LEDGER_FORMAT_VERSION: u32 = 1;
+pub const JOB_LEDGER_FORMAT_VERSION: u32 = rocklake_core::version::JOB_LEDGER_VERSION;
 const JOBS_PREFIX: &[u8] = b"jobs:";
 const MAX_JOB_PARAMETERS_BYTES: usize = 1024 * 1024;
 
@@ -82,6 +82,8 @@ pub enum JobKind {
     OrphanSweep,
     /// Create a full logical catalog checkpoint.
     Checkpoint,
+    /// Migrate a catalog storage format with a durable checkpoint.
+    Migration,
     /// Rebuild catalog metadata from data files.
     Rebuild,
 }
@@ -100,7 +102,8 @@ impl JobKind {
             | Self::Excision
             | Self::OrphanSweep
             | Self::Rebuild
-            | Self::Checkpoint => JobResourceClass::OfflineExclusive,
+            | Self::Checkpoint
+            | Self::Migration => JobResourceClass::OfflineExclusive,
         }
     }
 
@@ -608,6 +611,7 @@ impl JobKind {
             Self::OrphanSweep => "orphan_sweep",
             Self::Rebuild => "rebuild",
             Self::Checkpoint => "checkpoint",
+            Self::Migration => "migration",
         }
     }
 }

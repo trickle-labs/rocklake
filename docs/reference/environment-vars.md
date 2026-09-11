@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-RockLake v0.59.0 reads the variables below through its typed CLI. Command-line
+RockLake v0.60.0 reads the variables below through its typed CLI. Command-line
 flags take precedence over environment variables, which take precedence over
 `rocklake.toml`. Run `rocklake serve --help` for the authoritative option list.
 

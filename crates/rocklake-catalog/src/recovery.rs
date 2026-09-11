@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Current recovery report schema.
-pub const RECOVERY_REPORT_SCHEMA_VERSION: u32 = 1;
+pub const RECOVERY_REPORT_SCHEMA_VERSION: u32 = rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION;
 
 /// Failure scenario covered by a recovery drill.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

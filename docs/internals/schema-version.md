@@ -19,6 +19,18 @@ Without version tracking, an old binary could read new-format data and misinterp
 
 The current catalog format version is **1**. This version has been stable since RockLake's initial release and encompasses the following contracts:
 
+v0.60.0 keeps this storage format unchanged and separates it from the other
+persisted contracts. The supported version set is DuckLake catalog `7`,
+RockLake storage `1`, registry `1`, catalog backup `2`, job ledger `1`, audit
+`1`, public JSON `1`, and evidence `1`. The CLI reports these domains together
+with their read/write compatibility policy in `rocklake status --output json`.
+
+Catalog migrations are selected from a typed source/target registry. The
+v0.60.0 registry contains only a verified same-format no-op. Applying a future
+format-changing migration requires the catalog writer epoch, a durable job,
+verification before activation, and restore-only rollback after its point of no
+return. Unknown targets and all downgrades fail before mutation.
+
 | Component | Format Version 1 Specification |
 |-----------|-------------------------------|
 | Tag allocation | Tags 0x01–0x0D for DuckLake tables, 0x80–0x81 + 0xFD for internal, 0xFE–0xFF for system |

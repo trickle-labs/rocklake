@@ -163,6 +163,9 @@ fn version_json_reports_release_contract() {
     assert!(json["rust_version"].is_string());
     assert_eq!(json["catalog_read_format"], 1);
     assert_eq!(json["catalog_write_format"], 1);
+    assert_eq!(json["output_schema_version"], 1);
+    assert_eq!(json["versions"]["ducklake_catalog"], 7);
+    assert_eq!(json["versions"]["backup_manifest"], 2);
     assert!(json["build_provenance_available"].is_boolean());
 }
 

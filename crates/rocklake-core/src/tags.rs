@@ -173,6 +173,8 @@ pub const SYSTEM_EXCISED_PREFIX: &[u8] = b"excised";
 pub const SYSTEM_HOT_KEY: &[u8] = b"hot-key";
 /// v0.20: Marker written after lease/extension-key migration to length-prefixed encoding.
 pub const SYSTEM_KEY_ENCODING_V020_MIGRATED: &[u8] = b"key-encoding-v020-migrated";
+/// v0.60.0: Marker written only after a typed migration verifies its target.
+pub const SYSTEM_MIGRATION_MARKER: &[u8] = b"migration-marker";
 
 // ─── Secondary Index Tag ───────────────────────────────────────────────────
 
@@ -181,7 +183,7 @@ pub const SYSTEM_KEY_ENCODING_V020_MIGRATED: &[u8] = b"key-encoding-v020-migrate
 pub const TAG_SECONDARY_INDEX: u8 = 0xFC;
 
 /// Current catalog format version. Mismatch on open → refuse.
-pub const CATALOG_FORMAT_VERSION: u32 = 1;
+pub const CATALOG_FORMAT_VERSION: u32 = crate::version::CATALOG_STORAGE_VERSION;
 
 /// Complete registry of all tag descriptors.
 pub static ALL_TAGS: &[TagDescriptor] = &[
