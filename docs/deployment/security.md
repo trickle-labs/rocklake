@@ -5,13 +5,18 @@ server, the risks of each configuration, and the recommended mitigations.
 
 ## Authentication
 
-RockLake supports SCRAM-SHA-256 password authentication for PG-Wire
-connections.
-Authentication is configured with `--auth-user` and
-`ROCKLAKE_AUTH_PASSWORD`, or with the permission-restricted
-`ROCKLAKE_AUTH_PASSWORD_FILE` / `--auth-password-file` input. The
-`--auth-password` flag remains a development convenience; do not use it for
-production secrets.
+RockLake supports SCRAM-SHA-256 authentication for PG-Wire connections.
+Production binary deployments can load a SCRAM verifier, without storing the
+plaintext password, from a permission-restricted JSON file:
+
+```json
+{"username":"admin","scram_verifier":"v=1,i=4096,s=...,sk=...,sv=..."}
+```
+
+Pass it with `--auth-verifier-file` or
+`ROCKLAKE_AUTH_VERIFIER_FILE`. The legacy password options remain available for
+library compatibility and local development; do not use plaintext passwords in
+production configuration.
 
 When no `--auth-user` is set, the server accepts all connections without
 authentication. This is appropriate for local development and single-host
@@ -60,7 +65,7 @@ rocklake serve \
   --tls-key  /path/to/key.pem  \
   --tls-required               \
   --auth-user admin             \
-  --auth-password-file /run/secrets/rocklake-auth-password
+  --auth-verifier-file /run/secrets/rocklake-auth-verifier.json
 ```
 
 Self-signed certificates work for development. For production, use a

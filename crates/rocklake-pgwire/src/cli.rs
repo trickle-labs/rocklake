@@ -804,6 +804,14 @@ pub struct ServeArgs {
     #[arg(long, conflicts_with = "auth_password")]
     pub auth_password_file: Option<String>,
 
+    /// JSON file containing `{"username":"…","scram_verifier":"…"}`.
+    #[arg(
+        long,
+        env = "ROCKLAKE_AUTH_VERIFIER_FILE",
+        conflicts_with_all = ["auth_password", "auth_password_file"]
+    )]
+    pub auth_verifier_file: Option<String>,
+
     /// Serving mode: `writer` (accepts writes) or `reader` (read-only).
     #[arg(long, value_parser = ["writer", "reader"])]
     pub mode: Option<String>,
@@ -898,6 +906,10 @@ pub struct DoctorArgs {
     /// Authentication username used by the intended server.
     #[arg(long, env = "ROCKLAKE_AUTH_USER")]
     pub auth_user: Option<String>,
+
+    /// JSON SCRAM verifier file used by the intended server.
+    #[arg(long, env = "ROCKLAKE_AUTH_VERIFIER_FILE")]
+    pub auth_verifier_file: Option<String>,
 
     /// Encryption key or file to validate without printing its contents.
     #[arg(long, hide_env_values = true, conflicts_with = "encryption_key_file")]

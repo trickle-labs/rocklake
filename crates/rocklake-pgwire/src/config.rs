@@ -28,6 +28,8 @@ pub struct ConfigFile {
     pub auth_user: Option<String>,
     pub auth_password: Option<String>,
     pub auth_password_file: Option<String>,
+    /// JSON file containing a username and SCRAM verifier.
+    pub auth_verifier_file: Option<String>,
     pub mode: Option<String>,
     pub cost_mode: Option<String>,
     pub s3_endpoint: Option<String>,
@@ -62,7 +64,7 @@ pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), St
 }
 
 pub fn example() -> &'static str {
-    r#"# RockLake v0.58.0 configuration
+    r#"# RockLake v0.59.0 configuration
 catalog = "./lake"
 bind = "127.0.0.1:5432"
 mode = "writer"
@@ -78,7 +80,7 @@ slow_operation_threshold_ms = 1000
 
 # For cloud catalogs, use environment/provider credentials. Secrets may use files:
 # auth_user = "ducklake"
-# auth_password_file = "/run/secrets/rocklake-auth-password"
+# auth_verifier_file = "/run/secrets/rocklake-auth-verifier.json"
 # encryption_key_file = "/run/secrets/rocklake-encryption-key"
 
 # Static multi-catalog routing (omit `catalog` when this is configured):

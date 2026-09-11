@@ -1657,8 +1657,15 @@ impl pgwire::api::auth::StartupHandler for RockLakeStartupHandler {
                                 }
                             }
                         } else {
-                            let password = self.auth.password.as_deref().unwrap_or("");
-                            (crate::scram::ScramVerifier::from_password(password), true)
+                            let password_or_verifier = self.auth.password.as_deref().unwrap_or("");
+                            let verifier =
+                                crate::scram::ScramVerifier::decode(password_or_verifier)
+                                    .unwrap_or_else(|| {
+                                        crate::scram::ScramVerifier::from_password(
+                                            password_or_verifier,
+                                        )
+                                    });
+                            (verifier, true)
                         };
                         match crate::scram::ScramState::from_client_first_with_verifier(
                             client_first,
