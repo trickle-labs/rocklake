@@ -6,7 +6,7 @@ license.workspace = true
 
 [features]
 ## Enable MinIO integration tests (requires Docker and Testcontainers).
-minio-tests = ["testcontainers", "testcontainers-modules"]
+minio-tests = ["testcontainers"]
 ## Enable GCS emulator integration tests (requires Docker with fake-gcs-server).
 gcs-emulator = ["object_store/gcp"]
 ## Enable Azure Blob Storage emulator integration tests (requires Docker with Azurite).
@@ -32,4 +32,3 @@ base64       = "0.22"
 futures      = { workspace = true }
 tokio-postgres = { workspace = true }
 testcontainers = { version = "0.27", features = ["blocking"] , optional = true }
-testcontainers-modules = { version = "0.15", features = ["minio"], optional = true }

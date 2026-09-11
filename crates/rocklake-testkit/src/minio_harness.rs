@@ -14,14 +14,13 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectStore;
 use sha2::{Digest, Sha256};
-use testcontainers::core::ImageExt;
+use testcontainers::core::{ImageExt, IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::ContainerAsync;
-use testcontainers_modules::minio::MinIO;
+use testcontainers::{ContainerAsync, GenericImage};
 
 /// MinIO container harness for S3-compatible object store tests.
 pub struct MinioHarness {
-    container: ContainerAsync<MinIO>,
+    container: ContainerAsync<GenericImage>,
     /// HTTP endpoint for the MinIO S3 API, e.g. `http://127.0.0.1:49382`.
     pub endpoint: String,
     /// Root access key used by the test container.
@@ -35,13 +34,18 @@ pub struct MinioHarness {
 /// Default MinIO credentials used in the test container.
 const MINIO_ACCESS_KEY: &str = "minioadmin";
 const MINIO_SECRET_KEY: &str = "minioadmin";
-const MINIO_IMAGE_TAG: &str = "RELEASE.2025-07-18T21-56-31Z";
+const MINIO_IMAGE_NAME: &str = "quay.io/minio/minio";
+const MINIO_IMAGE_TAG: &str = "RELEASE.2025-09-06T17-38-46Z";
 
 impl MinioHarness {
     /// Start a MinIO container and create the test bucket.
     pub async fn start(bucket: &str) -> Result<Self, MinioHarnessError> {
-        let container = MinIO::default()
-            .with_tag(MINIO_IMAGE_TAG)
+        let container = GenericImage::new(MINIO_IMAGE_NAME, MINIO_IMAGE_TAG)
+            .with_exposed_port(9000.tcp())
+            .with_exposed_port(9001.tcp())
+            .with_wait_for(WaitFor::message_on_stderr("API:"))
+            .with_env_var("MINIO_CONSOLE_ADDRESS", ":9001")
+            .with_cmd(["server", "/data"])
             .start()
             .await
             .map_err(|e| MinioHarnessError::Docker(format!("failed to start container: {e}")))?;
