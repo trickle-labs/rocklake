@@ -20,7 +20,7 @@ use super::{
 };
 
 /// Current managed-registry format.
-pub const REGISTRY_FORMAT_VERSION: u32 = 1;
+pub const REGISTRY_FORMAT_VERSION: u32 = rocklake_core::version::REGISTRY_VERSION;
 
 const FORMAT_KEY: &[u8] = b"rocklake.registry/format";
 const STATE_KEY: &[u8] = b"rocklake.registry/state";

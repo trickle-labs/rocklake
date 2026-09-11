@@ -1,6 +1,6 @@
 # Configuration
 
-RockLake v0.59.0 accepts typed `rocklake.toml` configuration alongside the
+RockLake v0.60.0 accepts typed `rocklake.toml` configuration alongside the
 environment variables and command-line flags exposed by `rocklake serve`.
 Precedence is built-in defaults, TOML, environment, then command-line flags.
 
@@ -21,7 +21,7 @@ rocklake serve --catalog <file://...,s3://...,gs://...,az://...>
 
 ## Managed catalog registry
 
-The v0.59.0 registry stores routing state separately from tenant catalogs. It
+The v0.60.0 registry stores routing state separately from tenant catalogs. It
 keeps aliases, lifecycle state, policy references, and credential-provider
 names; it never stores raw credentials. `remove` detaches a route and retains a
 tombstone. It does not delete catalog or data bytes.

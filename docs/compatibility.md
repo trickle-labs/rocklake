@@ -37,6 +37,26 @@ This claim is backed by the durable compatibility corpus and automated CI eviden
 runs on every push/PR and verifies the full DuckLake compatibility corpus. A nightly job
 additionally runs the fresh, restart, and concurrent-writers scenarios.
 
+## RockLake v0.60.0 Version Domains
+
+`rocklake status --output json` reports independent version domains instead of
+using the DuckLake schema version as a proxy for every persisted contract:
+
+| Domain | Current version | Read | Write |
+|---|---:|---|---|
+| DuckLake catalog | 7 | 7 | 7 |
+| RockLake catalog storage | 1 | 1 | 1 |
+| Catalog backup manifest | 2 | 2 | 2 |
+| Managed registry | 1 | 1 | 1 |
+| Administrative job ledger | 1 | 1 | 1 |
+| Audit schema | 1 | 1 | 1 |
+| Public JSON | 1 | 1 | 1 |
+| Evidence result | 1 | 1 | 1 |
+
+The direct-upgrade source is v0.59.0. The migration registry is fail-closed:
+v0.60.0 ships a verified same-format no-op, while unknown targets and all
+downgrades are rejected before mutation.
+
 **Out of scope**: DuckLake v1.1 (Catalog Version 8 / `V1_1_DEV_1`). RockLake strictly
 targets DuckLake 1.0. Any v1.1 migration statements are classified to a known handler
 and not applied.

@@ -73,7 +73,10 @@ pub use maintenance::{
     MaintenanceScheduler, MaintenanceTask,
 };
 pub use metrics::CatalogMetrics;
-pub use migrate::{migrate_apply, migrate_dry_run, MigrateDryRunResult, MigrateResult};
+pub use migrate::{
+    migrate_apply, migrate_dry_run, migration_registry, DowngradePolicy, MigrateDryRunResult,
+    MigrateResult, MigrationDefinition, MigrationMode, MigrationPlan, MIGRATION_REGISTRY,
+};
 pub use partition::{CatalogRegistry, DatasetEntry, PartitionedWriter};
 pub use performance::{BenchmarkReport, HotKeyState, SlateDbTuning};
 pub use reader::{

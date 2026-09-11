@@ -28,7 +28,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const RELEASE: &str = "v0.52.0";
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = rocklake_core::version::EVIDENCE_SCHEMA_VERSION;
 const DEFAULT_SEED: u64 = 520;
 const DEFAULT_BATCH_SIZE: usize = 1_000;
 const DEFAULT_PAGE_SIZE: usize = 1_024;

@@ -234,7 +234,7 @@ v0.54.0 static router -> v0.55.0 registry        |
                      v0.59.0 security closure
                                 |
                                 v
-                     v0.60.0 migration freeze
+                     v0.60.0 migration freeze (done)
                                 |
                                 v
                      v0.61.0 performance freeze
@@ -2137,7 +2137,7 @@ replacement release table is:
 | v0.57.0 | Writer availability and multi-node routing | Done |
 | v0.58.0 | Disaster recovery and maintenance | Done |
 | v0.59.0 | Security, secrets, audit, and governance | Done |
-| v0.60.0 | Compatibility and migration freeze | Planned |
+| v0.60.0 | Compatibility and migration freeze | Done |
 | v0.61.0 | Performance, cost, and capacity contract | Planned |
 | v0.62.0 | Public surface freeze | Planned |
 | v0.63.0–v0.63.1 | Production beta and readiness audit | Planned |

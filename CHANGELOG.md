@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.60.0] — 2026-09-11
+
+### Added
+
+- Added typed version domains for DuckLake, RockLake storage, registry, backup,
+  job ledger, audit, public JSON, and evidence contracts.
+- Added version-domain reporting and read/write compatibility details to
+  `rocklake status --output json` and `rocklake --version --output json`.
+- Added a typed migration registry with durable migration jobs, verification
+  before activation, and explicit fail-closed downgrade/unknown-target errors.
+
+### Changed
+
+- Kept v0.60.0 format-compatible with v0.59.0 and documented the direct-upgrade
+  window and restore-only rollback boundary.
+- Updated workspace, binding, compatibility, binary, and release documentation
+  metadata to v0.60.0.
+
+### Deferred
+
+- Format-changing migrations, mixed-version rolling deployment beyond the
+  documented window, and DuckLake v1.1 remain deferred until certified fixtures
+  and upstream corpus evidence exist.
+
 ## [0.59.0] — 2026-09-10
 
 ### Added

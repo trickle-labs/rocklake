@@ -22,7 +22,7 @@ const MANIFEST_FILE: &str = "manifest.json";
 const DATA_FILE: &str = "catalog.ndjson";
 const MAX_OBJECT_REFERENCE_INVENTORY: usize = 100_000;
 /// Current backup artifact format.
-pub const BACKUP_FORMAT_VERSION: u32 = 2;
+pub const BACKUP_FORMAT_VERSION: u32 = rocklake_core::version::BACKUP_MANIFEST_VERSION;
 
 /// Metadata stored beside a catalog backup.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

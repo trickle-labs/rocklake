@@ -12,3 +12,4 @@ pub mod tags;
 pub mod types;
 pub mod validation;
 pub mod values;
+pub mod version;

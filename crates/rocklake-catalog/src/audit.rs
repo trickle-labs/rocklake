@@ -61,7 +61,7 @@ pub async fn write_audit_entry(db: &Db, entry: &AuditEntry) -> CatalogResult<()>
     db.put(&key, &encoded).await?;
 
     let link = AuditChainLink {
-        schema_version: 1,
+        schema_version: rocklake_core::version::AUDIT_SCHEMA_VERSION,
         snapshot_id: entry.snapshot_id,
         previous_hash: previous_hash.clone(),
         hash: audit_hash(&previous_hash, &value),
@@ -75,7 +75,7 @@ pub async fn write_audit_entry(db: &Db, entry: &AuditEntry) -> CatalogResult<()>
     Ok(())
 }
 
-/// Verify the hash chain for v0.59.0 audit entries.
+/// Verify the hash chain for v0.60.0 audit entries.
 pub async fn verify_audit_chain(db: &Db) -> CatalogResult<()> {
     let prefix = chain_prefix();
     let mut links = Vec::new();
@@ -93,7 +93,9 @@ pub async fn verify_audit_chain(db: &Db) -> CatalogResult<()> {
     links.sort_by_key(|link| link.snapshot_id);
     let mut previous_hash = String::new();
     for link in links {
-        if link.schema_version != 1 || link.previous_hash != previous_hash {
+        if link.schema_version != rocklake_core::version::AUDIT_SCHEMA_VERSION
+            || link.previous_hash != previous_hash
+        {
             return Err(CatalogError::Corruption(
                 "audit hash chain is broken".to_string(),
             ));

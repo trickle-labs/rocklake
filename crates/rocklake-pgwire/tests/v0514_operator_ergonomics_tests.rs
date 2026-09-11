@@ -132,6 +132,12 @@ fn test_status_and_backup_restore_workflow() {
         serde_json::from_slice(&status_out.stdout).expect("parse status json");
     assert_eq!(status_json["status"], "ready");
     assert_eq!(status_json["snapshot_id"], 0);
+    assert_eq!(status_json["output_schema_version"], 1);
+    assert_eq!(status_json["versions"]["catalog_storage"], 1);
+    assert_eq!(
+        status_json["compatibility"]["minimum_direct_upgrade"],
+        "v0.59.0"
+    );
 
     // 3. Create backup via `catalog backup create`
     let backup_out = Command::new(&bin)

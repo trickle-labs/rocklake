@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.59.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.60.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -21,8 +21,10 @@ completions
 Legacy flat commands (e.g. `rocklake backup`, `rocklake export-catalog`, `rocklake diagnose`) remain supported as hidden aliases for backward compatibility.
 
 `rocklake --version --output json` reports the semantic version, certified Git
-SHA, target triple, Rust version, catalog read/write formats, and provenance
-availability. Source builds report unavailable release metadata as `unknown`.
+SHA, target triple, Rust version, all persisted version domains, catalog
+read/write formats, and provenance availability. Source builds report
+unavailable release metadata as `unknown`. `rocklake status --output json`
+reports the same domains plus the catalog's snapshot and compatibility policy.
 
 ### `export`
 
@@ -68,6 +70,8 @@ rocklake config check [--file rocklake.toml] [--output human|json]
 rocklake config example
 rocklake backup create --catalog ./lake --out ./lake-backup
 rocklake backup inspect ./lake-backup --output json
+rocklake catalog migrate --catalog ./lake --dry-run
+rocklake catalog migrate --catalog ./lake --apply
 rocklake restore plan --backup ./lake-backup --catalog ./restored
 rocklake restore apply --backup ./lake-backup --catalog ./restored
 rocklake catalog jobs list --catalog ./lake --output json
@@ -146,6 +150,10 @@ default. `export` accepts `--snapshot-id`; `export-catalog` accepts
 GC and excision expose separate `plan` and `apply` subcommands. `repair` and
 `migrate` expose explicit `--dry-run` and `--apply` options. All destructive
 operations remain explicit in the command syntax.
+
+The v0.60.0 migration registry contains a verified same-format no-op. Unknown
+targets and downgrades fail before a write; an apply attempt is recorded in the
+administrative job ledger.
 
 Restore plans for existing catalog destinations print an overwrite token.
 Applying such a plan requires both `--overwrite` and the exact

@@ -10,7 +10,7 @@ RockLake and how to prepare for future version upgrades.
 | 1.0              | 7               | Full support (default) |
 | 1.1 (dev)        | 8 (`V1_1_DEV_1`)| Experimental — requires `--accept-version V1_1_DEV_1` |
 
-RockLake always reports `ducklake_version = "1.0"` and `catalog_version = 7`
+RockLake v0.60.0 always reports `ducklake_version = "1.0"` and `catalog_version = 7`
 to clients. It will not self-report as v1.1 until those features are fully
 validated and promoted to stable.
 
@@ -54,7 +54,10 @@ correctly in clients that understand the PG wire protocol.
 
 RockLake tracks the DuckLake specification. When DuckLake v1.1 is finalized and
 promoted to stable, RockLake will add full support in a subsequent minor release.
-At that point, `--accept-version V1_1_DEV_1` will no longer be required.
+At that point, the exact upstream version will be added to the v0.60 compatibility
+contract only after fresh create/read/update/delete/schema-evolution/restart/
+time-travel tests and corpus comparison pass. `--accept-version V1_1_DEV_1`
+does not bypass the supported v1.0 contract.
 
 ## See Also
 

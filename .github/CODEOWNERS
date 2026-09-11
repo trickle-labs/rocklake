@@ -1,4 +1,4 @@
-# v0.59.0 security and release review owners.
+# v0.60.0 compatibility, migration, and release review owners.
 * @grove
 
 /crates/rocklake-catalog/ @grove

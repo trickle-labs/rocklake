@@ -36,6 +36,11 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features
       - run: cargo test --workspace --lib --tests -- --test-threads=1
+      - name: v0.60 compatibility and migration gate
+        run: |
+          cargo test -p rocklake-core version
+          cargo test -p rocklake-catalog migrate
+          cargo test -p rocklake-pgwire --test v046_cli_tests version_json_reports_release_contract
 
   failure-certification:
     name: v0.47.17 Failure Certification

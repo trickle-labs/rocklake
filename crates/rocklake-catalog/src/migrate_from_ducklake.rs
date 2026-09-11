@@ -41,7 +41,7 @@ use crate::export::ExportedRow;
 // ── Version constants ────────────────────────────────────────────────────────
 
 /// DuckLake catalog schema version 7 = V1_0 (the only supported version).
-pub const DUCKLAKE_V1_0_CATALOG_VERSION: u64 = 7;
+pub const DUCKLAKE_V1_0_CATALOG_VERSION: u64 = rocklake_core::version::DUCKLAKE_CATALOG_VERSION;
 /// DuckLake catalog schema version 8 = V1_1_DEV_1 (forward-compat pre-release).
 pub const DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION: u64 = 8;
 /// The `--accept-version` token for DuckLake v1.1 pre-release.

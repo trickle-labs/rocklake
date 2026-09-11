@@ -302,36 +302,32 @@ async fn migrate_dry_run_same_version_is_no_op() {
 }
 
 #[tokio::test]
-async fn migrate_dry_run_to_v2_reports_rows() {
+async fn migrate_dry_run_rejects_unregistered_v2() {
     let dir = TempDir::new().unwrap();
     let catalog = CatalogStore::open(test_opts(&dir)).await.unwrap();
-    let result = migrate_dry_run(catalog.db(), 2).await.unwrap();
-    assert_eq!(result.current_version, 1);
-    assert_eq!(result.target_version, 2);
-    assert!(result.estimated_seconds >= 1);
-    assert!(result.description.contains("migrate"));
+    let result = migrate_dry_run(catalog.db(), 2).await.unwrap_err();
+    assert!(result.to_string().contains("no registered migration"));
     catalog.close().await.unwrap();
 }
 
 #[tokio::test]
-async fn migrate_apply_creates_backup_and_updates_version() {
+async fn migrate_apply_verifies_current_format_without_activation() {
     let dir = TempDir::new().unwrap();
     let catalog = CatalogStore::open(test_opts(&dir)).await.unwrap();
 
-    // Apply migration to v2
+    // Applying the registered same-format migration is a verified no-op.
     let backup_dir = dir.path().to_str().unwrap().to_string();
-    let result = migrate_apply(catalog.db(), 2, &backup_dir).await.unwrap();
-    assert_eq!(result.new_version, 2);
-    assert!(
-        std::path::Path::new(&result.backup_path).exists(),
-        "backup file should be created"
-    );
+    let result = migrate_apply(catalog.db(), 1, &backup_dir).await.unwrap();
+    assert_eq!(result.new_version, 1);
+    assert!(result.verification_passed);
+    assert!(!result.activated);
+    assert!(result.backup_path.is_empty());
 
     // Verify format version was updated
     let state = rocklake_catalog::inspect::inspect_snapshot(catalog.db())
         .await
         .unwrap();
-    assert_eq!(state.format_version, 2);
+    assert_eq!(state.format_version, 1);
 
     catalog.close().await.unwrap();
 }
