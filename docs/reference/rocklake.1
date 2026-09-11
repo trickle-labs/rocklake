@@ -1,0 +1,51 @@
+.TH ROCKLAKE 1 "September 2026" "RockLake 0.62.0" "RockLake Manual"
+.SH NAME
+rocklake \- DuckLake catalog service and operator CLI
+.SH SYNOPSIS
+.B rocklake
+.I COMMAND
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+RockLake provides a bounded PostgreSQL wire surface for a DuckLake 1.0
+catalog backed by SlateDB and object storage.
+.SH COMMANDS
+.TP
+.B serve
+Start the PostgreSQL wire server.
+.TP
+.B doctor
+Run a read-only startup preflight.
+.TP
+.B status
+Check catalog readiness and version domains.
+.TP
+.B support bundle
+Write a redacted support bundle to a new directory.
+.TP
+.B capacity report
+Report measured capacity and projected cost.
+.TP
+.B catalog, catalogs, registry
+Manage catalog data, routes, and the managed registry.
+.TP
+.B config
+Validate or print configuration.
+.TP
+.B completions
+Generate Bash, Zsh, or Fish completion scripts.
+.SH SUPPORT BUNDLES
+.EX
+rocklake support bundle --catalog ./lake --output ./rocklake-support
+.EE
+The bundle includes version, redacted configuration, status, verification, and
+optional Prometheus metrics. The output directory must not already exist.
+.SH FILES
+.TP
+.I ./rocklake.toml
+Default configuration file when present.
+.SH SEE ALSO
+.BR rocklake (1)
+.SH SECURITY
+Do not attach a support bundle without reviewing deployment-specific paths and
+identifiers. Credentials, encryption keys, and catalog URL userinfo are
+redacted by the command.

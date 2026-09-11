@@ -21,6 +21,7 @@ use clap::{CommandFactory as _, Parser as _};
 use clap_complete::generate;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
@@ -66,21 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_version(json: bool) -> Result<(), Box<dyn std::error::Error>> {
     if json {
-        let versions = rocklake_core::version::CURRENT_VERSIONS;
-        println!(
-            "{}",
-            serde_json::json!({
-                "output_schema_version": rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION,
-                "version": env!("CARGO_PKG_VERSION"),
-                "certified_sha": option_env!("ROCKLAKE_RELEASE_SHA").unwrap_or("unknown"),
-                "target_triple": option_env!("ROCKLAKE_RELEASE_TARGET").unwrap_or("unknown"),
-                "rust_version": option_env!("ROCKLAKE_RUST_VERSION").unwrap_or("unknown"),
-                "catalog_read_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
-                "catalog_write_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
-                "versions": versions,
-                "build_provenance_available": option_env!("ROCKLAKE_PROVENANCE_AVAILABLE") == Some("true"),
-            })
-        );
+        println!("{}", version_json());
     } else {
         println!("RockLake {}", env!("CARGO_PKG_VERSION"));
     }
@@ -115,6 +102,7 @@ async fn dispatch_clap(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> 
         Commands::Serve(args) => cmd_serve(*args, config_path.as_deref()).await?,
         Commands::Doctor(args) => cmd_doctor(args, config_path.as_deref()).await?,
         Commands::Status(args) => cmd_status(args, config_path.as_deref()).await?,
+        Commands::Support(command) => cmd_support(command, config_path.as_deref()).await?,
         Commands::Capacity(command) => cmd_capacity(command).await?,
         Commands::Catalog(command) => match command {
             cli::CatalogSubcommand::Backup(sub) => cmd_backup(sub).await?,
@@ -1923,10 +1911,13 @@ mod tests {
         let config = ConfigFile {
             auth_password: Some("secret".to_string()),
             encryption_key: Some("not-a-key".to_string()),
+            catalog: Some("s3://user:secret@bucket/lake".to_string()),
             ..ConfigFile::default()
         };
         assert!(validate_config(&config).is_err());
-        assert!(!redacted_config(&config).to_string().contains("secret"));
+        let redacted = redacted_config(&config).to_string();
+        assert!(!redacted.contains("secret"));
+        assert!(redacted.contains("s3://[redacted]@bucket/lake"));
     }
 
     #[test]
@@ -3813,64 +3804,293 @@ async fn cmd_status(
     )?
     .ok_or("a catalog path is required (use `status ./lake` or --catalog)")?;
 
+    let json = collect_status(&catalog_url, &file_config).await?;
+    match args.output {
+        cli::OutputFormat::Human => {
+            println!(
+                "Catalog:       {}",
+                json["catalog"].as_str().unwrap_or_default()
+            );
+            println!(
+                "Status:        {}",
+                json["status"].as_str().unwrap_or_default()
+            );
+            println!("Snapshot:      {}", json["snapshot_id"]);
+            println!("Retain from:   {}", json["retain_from"]);
+            println!(
+                "Format:        {}",
+                json["format_version"].as_str().unwrap_or_default()
+            );
+            println!("Schema ver:    {}", json["schema_version"]);
+            for (label, key) in [
+                ("Storage ver:", "catalog_storage"),
+                ("Registry ver:", "registry"),
+                ("Backup ver:", "backup_manifest"),
+                ("Job ledger:", "job_ledger"),
+                ("Audit schema:", "audit_schema"),
+                ("JSON schema:", "public_json"),
+                ("Evidence:", "evidence_schema"),
+            ] {
+                println!("{label:<15}{}", json["versions"][key]);
+            }
+        }
+        cli::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&json)?),
+    }
+    Ok(())
+}
+
+fn version_json() -> serde_json::Value {
+    serde_json::json!({
+        "output_schema_version": rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION,
+        "version": env!("CARGO_PKG_VERSION"),
+        "certified_sha": option_env!("ROCKLAKE_RELEASE_SHA").unwrap_or("unknown"),
+        "target_triple": option_env!("ROCKLAKE_RELEASE_TARGET").unwrap_or("unknown"),
+        "rust_version": option_env!("ROCKLAKE_RUST_VERSION").unwrap_or("unknown"),
+        "catalog_read_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
+        "catalog_write_format": rocklake_core::tags::CATALOG_FORMAT_VERSION,
+        "versions": rocklake_core::version::CURRENT_VERSIONS,
+        "build_provenance_available": option_env!("ROCKLAKE_PROVENANCE_AVAILABLE") == Some("true"),
+    })
+}
+
+async fn collect_status(
+    catalog_url: &str,
+    file_config: &config::ConfigFile,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let s3_opts = S3Options {
         endpoint: file_config.s3_endpoint.clone(),
         path_style: file_config.s3_path_style.unwrap_or(false),
     };
     let (catalog_path, object_store) =
-        resolve_catalog_with_opts_mode(&catalog_url, &s3_opts, false)?;
-
-    let opts = OpenOptions {
+        resolve_catalog_with_opts_mode(catalog_url, &s3_opts, false)?;
+    let store = CatalogStore::open_without_epoch(OpenOptions {
         object_store,
         path: catalog_path,
         encryption: None,
-    };
-
-    let store = CatalogStore::open_without_epoch(opts).await?;
-    let latest_snapshot_id = store.latest_committed_snapshot_id();
-    let retain_from = rocklake_catalog::gc::read_retain_from(store.db()).await?;
-    let schema_version = store.schema_version();
-    let versions = rocklake_core::version::CURRENT_VERSIONS;
-
-    match args.output {
-        cli::OutputFormat::Human => {
-            println!("Catalog:       {}", redact_catalog_url(&catalog_url));
-            println!("Status:        ready");
-            println!("Snapshot:      {}", latest_snapshot_id);
-            println!("Retain from:   {}", retain_from);
-            println!("Format:        DuckLake 1.0 (V1_0)");
-            println!("Schema ver:    {}", schema_version);
-            println!("Storage ver:   {}", versions.catalog_storage.get());
-            println!("Registry ver:  {}", versions.registry.get());
-            println!("Backup ver:    {}", versions.backup_manifest.get());
-            println!("Job ledger:    {}", versions.job_ledger.get());
-            println!("Audit schema:  {}", versions.audit_schema.get());
-            println!("JSON schema:   {}", versions.public_json.get());
-            println!("Evidence:      {}", versions.evidence_schema.get());
+    })
+    .await?;
+    let json = serde_json::json!({
+        "output_schema_version": rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION,
+        "catalog": redact_catalog_url(catalog_url),
+        "status": "ready",
+        "snapshot_id": store.latest_committed_snapshot_id(),
+        "retain_from": rocklake_catalog::gc::read_retain_from(store.db()).await?,
+        "format_version": "DuckLake 1.0 (V1_0)",
+        "schema_version": store.schema_version(),
+        "versions": rocklake_core::version::CURRENT_VERSIONS,
+        "compatibility": {
+            "ducklake_catalog_read": [rocklake_core::version::DUCKLAKE_CATALOG_VERSION],
+            "ducklake_catalog_write": [rocklake_core::version::DUCKLAKE_CATALOG_VERSION],
+            "catalog_storage_read": [rocklake_core::version::CATALOG_STORAGE_VERSION],
+            "catalog_storage_write": [rocklake_core::version::CATALOG_STORAGE_VERSION],
+            "minimum_direct_upgrade": "v0.59.0",
+            "downgrade_after_migration": "rejected_before_write"
         }
-        cli::OutputFormat::Json => {
-            let json = serde_json::json!({
-                "output_schema_version": rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION,
-                "catalog": redact_catalog_url(&catalog_url),
-                "status": "ready",
-                "snapshot_id": latest_snapshot_id,
-                "retain_from": retain_from,
-                "format_version": "DuckLake 1.0 (V1_0)",
-                "schema_version": schema_version,
-                "versions": versions,
-                "compatibility": {
-                    "ducklake_catalog_read": [rocklake_core::version::DUCKLAKE_CATALOG_VERSION],
-                    "ducklake_catalog_write": [rocklake_core::version::DUCKLAKE_CATALOG_VERSION],
-                    "catalog_storage_read": [rocklake_core::version::CATALOG_STORAGE_VERSION],
-                    "catalog_storage_write": [rocklake_core::version::CATALOG_STORAGE_VERSION],
-                    "minimum_direct_upgrade": "v0.59.0",
-                    "downgrade_after_migration": "rejected_before_write"
+    });
+    store.close().await?;
+    Ok(json)
+}
+
+async fn cmd_support(
+    command: cli::SupportSubcommand,
+    config_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        cli::SupportSubcommand::Bundle(args) => {
+            let (_, file_config) = config::load(config_path)?;
+            std::fs::create_dir(&args.output).map_err(|error| {
+                format!(
+                    "cannot create support bundle directory {}: {error}",
+                    args.output.display()
+                )
+            })?;
+
+            let catalog_url = setting(
+                args.catalog,
+                "ROCKLAKE_CATALOG",
+                file_config.catalog.clone(),
+                None,
+                "catalog",
+            )?;
+            write_bundle_json(&args.output, "version.json", &version_json())?;
+            write_bundle_json(
+                &args.output,
+                "config.json",
+                &serde_json::json!({
+                    "schema_version": 1,
+                    "config": redacted_config(&file_config),
+                }),
+            )?;
+
+            let status = match catalog_url.as_deref() {
+                Some(url) => match collect_status(url, &file_config).await {
+                    Ok(status) => serde_json::json!({"available": true, "status": status}),
+                    Err(error) => serde_json::json!({
+                        "available": false,
+                        "error": redact_catalog_url(&error.to_string()),
+                    }),
+                },
+                None => serde_json::json!({
+                    "available": false,
+                    "error": "no catalog configured",
+                }),
+            };
+            write_bundle_json(&args.output, "status.json", &status)?;
+
+            let verification = match catalog_url.as_deref() {
+                Some(url) => collect_verification(url, &file_config).await,
+                None => serde_json::json!({
+                    "available": false,
+                    "error": "no catalog configured",
+                }),
+            };
+            write_bundle_json(&args.output, "verification.json", &verification)?;
+
+            let metrics_url = args.metrics_url.or_else(|| {
+                file_config.metrics_port.map(|port| {
+                    format!(
+                        "http://127.0.0.1:{port}{}",
+                        file_config.metrics_path.as_deref().unwrap_or("/metrics")
+                    )
+                })
+            });
+            let metrics = match metrics_url.as_deref() {
+                Some(url) => fetch_metrics(url).await.unwrap_or_else(|error| {
+                    format!(
+                        "# metrics unavailable: {}\n",
+                        redact_catalog_url(&error.to_string())
+                    )
+                }),
+                None => "# metrics unavailable: no endpoint configured\n".to_string(),
+            };
+            std::fs::write(args.output.join("metrics.prom"), metrics)?;
+            std::fs::write(
+                args.output.join("logs.txt"),
+                "RockLake writes text logs to stderr; no log files are managed by the binary.\n",
+            )?;
+
+            let manifest = serde_json::json!({
+                "schema_version": 1,
+                "release": env!("CARGO_PKG_VERSION"),
+                "files": [
+                    "version.json",
+                    "config.json",
+                    "status.json",
+                    "verification.json",
+                    "metrics.prom",
+                    "logs.txt"
+                ],
+                "redaction": {
+                    "secrets": "redacted",
+                    "catalog_credentials": "redacted",
+                    "logs": "not captured; RockLake logs to stderr"
                 }
             });
-            println!("{}", serde_json::to_string_pretty(&json)?);
+            write_bundle_json(&args.output, "support-bundle.json", &manifest)?;
+            println!("Support bundle written: {}", args.output.display());
         }
     }
     Ok(())
+}
+
+fn write_bundle_json(
+    directory: &std::path::Path,
+    name: &str,
+    value: &serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::write(
+        directory.join(name),
+        serde_json::to_string_pretty(value)? + "\n",
+    )?;
+    Ok(())
+}
+
+async fn collect_verification(
+    catalog_url: &str,
+    file_config: &config::ConfigFile,
+) -> serde_json::Value {
+    let result = async {
+        let s3_opts = S3Options {
+            endpoint: file_config.s3_endpoint.clone(),
+            path_style: file_config.s3_path_style.unwrap_or(false),
+        };
+        let (catalog_path, object_store) =
+            resolve_catalog_with_opts_mode(catalog_url, &s3_opts, false)?;
+        let store = CatalogStore::open_without_epoch(OpenOptions {
+            object_store,
+            path: catalog_path,
+            encryption: None,
+        })
+        .await?;
+        let verified = rocklake_catalog::verify::verify_catalog(store.db()).await?;
+        let value = serde_json::json!({
+            "available": true,
+            "ok": verified.is_ok(),
+            "tables_checked": verified.tables_checked,
+            "rows_checked": verified.rows_checked,
+            "errors": verified.errors,
+            "warnings": verified.warnings,
+        });
+        store.close().await?;
+        Ok::<_, Box<dyn std::error::Error>>(value)
+    }
+    .await;
+    match result {
+        Ok(value) => value,
+        Err(error) => serde_json::json!({
+            "available": false,
+            "error": redact_catalog_url(&error.to_string()),
+        }),
+    }
+}
+
+async fn fetch_metrics(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or("support bundle metrics URL must use http://")?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, "metrics"));
+    if authority.is_empty() {
+        return Err("support bundle metrics URL has no host".into());
+    }
+    let path = format!("/{path}");
+    let mut stream = tokio::net::TcpStream::connect(authority).await?;
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await?;
+    let mut response = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let count =
+            tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut chunk))
+                .await??;
+        if count == 0 {
+            break;
+        }
+        response.extend_from_slice(&chunk[..count]);
+        if response.len() > 1024 * 1024 {
+            return Err("metrics response exceeds 1 MiB".into());
+        }
+    }
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or("invalid metrics HTTP response")?;
+    let headers = std::str::from_utf8(&response[..header_end])?;
+    if !headers
+        .lines()
+        .next()
+        .is_some_and(|line| line.contains(" 200 "))
+    {
+        return Err(format!(
+            "metrics endpoint returned {}",
+            headers.lines().next().unwrap_or("unknown status")
+        )
+        .into());
+    }
+    Ok(String::from_utf8_lossy(&response[header_end + 4..]).into_owned())
 }
 
 async fn cmd_config(
@@ -3978,7 +4198,7 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
 
 fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
     serde_json::json!({
-        "catalog": config.catalog,
+        "catalog": config.catalog.as_deref().map(redact_catalog_url),
         "router": config.router.as_ref().map(|_| "static"),
         "registry": config.registry.as_ref().map(|_| "managed"),
         "catalogs": config.catalogs.len(),
@@ -3997,12 +4217,12 @@ fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
         "auth_verifier_file": config.auth_verifier_file,
         "mode": config.mode,
         "cost_mode": config.cost_mode,
-        "s3_endpoint": config.s3_endpoint,
+        "s3_endpoint": config.s3_endpoint.as_deref().map(redact_catalog_url),
         "s3_path_style": config.s3_path_style,
         "encryption_key": config.encryption_key.as_ref().map(|_| "[redacted]"),
         "encryption_key_file": config.encryption_key_file,
         "extension_schemas": config.extension_schemas,
-        "otlp_endpoint": config.otlp_endpoint,
+        "otlp_endpoint": config.otlp_endpoint.as_deref().map(redact_catalog_url),
         "idle_connection_timeout": config.idle_connection_timeout,
         "drain_timeout": config.drain_timeout,
         "datafusion_bridge_queue_depth": config.datafusion_bridge_queue_depth,
