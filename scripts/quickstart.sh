@@ -61,9 +61,12 @@ grep -q '"table":"ducklake_data_file".*"record_count":2' "$catalog_dir/historica
 "$binary" backup inspect "$catalog_dir/backup" --output json | grep '"version": 2' >/dev/null
 "$binary" restore plan --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --output json | grep '"target_empty": true' >/dev/null
 "$binary" restore apply --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --output json | grep '"verified":true\|"verified": true' >/dev/null
-restore_token=$("$binary" restore plan --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --output json | sed -n 's/.*"overwrite_token": "\([^"]*\)".*/\1/p')
-[[ -n "$restore_token" ]]
-"$binary" restore apply --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --overwrite --overwrite-token "$restore_token" --output json | grep '"verified":true\|"verified": true' >/dev/null
+overwrite_token=$(
+  "$binary" restore plan --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --output json |
+    sed -n 's/^[[:space:]]*"overwrite_token": "\([^"]*\)",/\1/p'
+)
+[[ -n "$overwrite_token" ]]
+"$binary" restore apply --backup "$catalog_dir/backup" --catalog "$catalog_dir/restored" --overwrite --overwrite-token "$overwrite_token" --output json | grep '"verified":true\|"verified": true' >/dev/null
 "$binary" inspect snapshot --catalog "$catalog_dir/restored" --output json | grep '"latest_snapshot_id"' >/dev/null
 "$binary" diagnose --catalog "$catalog_dir/catalog" --json | grep -q 'overall_status.*ok'
 echo "$($binary --version) quickstart passed (latest snapshot: $snapshot)"
