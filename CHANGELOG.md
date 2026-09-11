@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.63.0] — 2026-09-11
+
+### Added
+
+- Added the production-beta support boundary, escalation route, and P0/P1/P2
+  severity policy.
+- Added the v0.63.0 beta evidence ledger for design-partner workloads,
+  recovery exercises, monitoring, incidents, and unresolved limits.
+
+### Changed
+
+- Declared the feature-complete public surface ready for named design-partner
+  production observation without changing persisted catalog formats.
+- Started the required 30-day beta observation window; correctness, security,
+  format, and isolation fixes reset the affected gate.
+
+### Deferred
+
+- AWS S3, GCS, and Azure scale evidence remains deferred to v0.64.0–v0.64.2.
+- New features, public-surface changes, and feature requests remain out of the
+  beta branch until the v1.0 release-candidate process.
+
 ## [0.62.0] — 2026-09-11
 
 ### Added

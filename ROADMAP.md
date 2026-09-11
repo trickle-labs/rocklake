@@ -198,7 +198,7 @@ and real-cloud baselines before release.
 | **v0.60.0** | Compatibility and migration | Catalog, registry, backup, and upstream protocol migrations are restartable, tested, and frozen for v1.0. |
 | **v0.61.0** | Performance and cost | Evidence-driven optimizations meet committed regression budgets and produce a supported capacity model. |
 | **v0.62.0** | Public surface freeze | CLI, configuration, metrics, errors, artifacts, logs, and operator workflows are frozen and documented. **Done** |
-| **v0.63.0** | Production beta | The feature-complete system enters design-partner production with no new feature work. |
+| **v0.63.0** | Production beta | The feature-complete system enters design-partner production with no new feature work. **Done** |
 | **v0.63.1** | Beta fixes and readiness audit | All release-blocking beta findings are closed and the complete v1.0 audit is published. |
 | **v0.64.0** | AWS S3 evidence (deferred from v0.52.1) | Real-S3 results cover performance, recovery, reader scale, failures, request volume, bytes, and cost. |
 | **v0.64.1** | Multi-node soak (deferred from v0.52.2) | A 24-hour workload preserves catalog invariants and avoids progressive resource or latency degradation. |
@@ -243,7 +243,7 @@ v0.54.0 static router -> v0.55.0 registry        |
                      v0.62.0 public surface freeze (done)
                                 |
                                 v
-                     v0.63.x production beta
+                     v0.63.x production beta (started)
                                 |
                                 v
               v0.64.0 AWS S3 -> v0.64.1 soak

@@ -1,6 +1,6 @@
 # Support levels
 
-The v0.62.0 public-surface manifest is the authoritative list of supported
+The v0.63.0 public-surface manifest is the authoritative list of supported
 interfaces. A compatibility promise requires tests, documentation, a named
 owner, and a migration policy.
 
