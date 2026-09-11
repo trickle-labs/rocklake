@@ -35,7 +35,7 @@ pub struct MinioHarness {
 const MINIO_ACCESS_KEY: &str = "minioadmin";
 const MINIO_SECRET_KEY: &str = "minioadmin";
 const MINIO_IMAGE_NAME: &str = "quay.io/minio/minio";
-const MINIO_IMAGE_TAG: &str = "RELEASE.2025-09-06T17-38-46Z";
+const MINIO_IMAGE_TAG: &str = "RELEASE.2025-06-13T11-33-47Z";
 
 impl MinioHarness {
     /// Start a MinIO container and create the test bucket.
