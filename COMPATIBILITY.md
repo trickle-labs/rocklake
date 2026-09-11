@@ -25,14 +25,14 @@ backend versions that CI covers.
 
 | Catalog format | Current read support | Current write support |
 |---|---|---|
-| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.62.0 | v0.62.0 |
+| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.63.0 | v0.63.0 |
 
-RockLake v0.62.0 reports independent version domains in `status --output json`:
+RockLake v0.63.0 reports independent version domains in `status --output json`:
 DuckLake catalog `7`, catalog storage `1`, registry `1`, catalog backup `2`,
 job ledger `1`, audit `1`, public JSON `1`, and evidence `1`. v0.60.0 is the
 minimum direct-upgrade source. Unknown required formats and unsafe downgrades
 are rejected before a write; a format-changing migration is not shipped in
-v0.62.0.
+v0.63.0.
 
 ## Metrics
 
@@ -60,8 +60,8 @@ The v0.60.0 migration command is read-only by default. It uses the typed
 migration registry, records an administrative job when applied, verifies the
 catalog before activation, and rejects unregistered targets. Since v0.60.0
 does not change the catalog storage format, the supported apply path is a
-verified no-op. v0.62.0 freezes the documented public surface and adds the
-redacted support-bundle workflow without changing persisted catalog formats.
+verified no-op. v0.63.0 enters production beta with the documented public
+surface frozen and adds no persisted catalog format changes.
 
 Backups and exports state whether they restore into a current release and which
 catalog formats they contain. A catalog export contains metadata and file

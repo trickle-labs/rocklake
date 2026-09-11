@@ -188,6 +188,8 @@ nav:
     - Failover: operations/failover.md
     - Security: operations/security.md
     - Support Bundles: operations/support-bundles.md
+    - Production Beta Support: operations/beta-support.md
+    - v0.63.0 Beta Evidence: operations/beta-evidence-v0.63.0.md
     - Troubleshooting: operations/troubleshooting.md
     - Upgrades: operations/upgrades.md
     - Verify & Repair: operations/verify-repair.md

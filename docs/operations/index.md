@@ -15,6 +15,7 @@ Each guide provides step-by-step instructions, explains what happens internally 
 | Verify integrity | Weekly or after incidents | Read-only scan | [Verify & Repair](verify-repair.md) |
 | Upgrade version | Per release cycle | Brief restart | [Upgrades](upgrades.md) |
 | Backup catalog | Before major changes | None (read-only export) | [Backup & Restore](backup-restore.md) |
+| Review beta evidence | Continuous during v0.63.0 | None | [Production Beta Support](beta-support.md) |
 
 ## Routine Operations
 
@@ -29,6 +30,8 @@ Each guide provides step-by-step instructions, explains what happens internally 
 ## Data Management
 
 - **[Backup & Restore](backup-restore.md)** — NDJSON export, point-in-time snapshots, and disaster recovery. How to create portable backups and restore to a new storage location.
+
+- **[Production Beta Support](beta-support.md)** — v0.63.0 support boundaries, escalation route, severity definitions, and the linked evidence ledger.
 
 - **[Export](export.md)** — Extracting catalog metadata for migration to other systems, compliance audits, or offline analysis.
 

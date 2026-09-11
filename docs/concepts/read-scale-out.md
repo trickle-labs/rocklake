@@ -131,7 +131,7 @@ cat.refresh()
 
 ## Kubernetes Deployment
 
-See [Kubernetes Deployment](../deployment/kubernetes.md#reader-fleet) for a production-
+See [Kubernetes Deployment](../deployment/kubernetes.md) for a production-
 ready Deployment manifest with HPA and PodDisruptionBudget.
 
 ## Guarantees and Limitations
