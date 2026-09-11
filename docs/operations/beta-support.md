@@ -24,7 +24,8 @@ observation status and required exercises.
    preserve logs and the support bundle, then contact `support@trickle-labs.com`
    with the affected release, deployment type, workload, and severity.
 2. Report suspected vulnerabilities only through the private process in
-   [`SECURITY.md`](../../SECURITY.md); do not open a public issue.
+   [`SECURITY.md`](https://github.com/trickle-labs/rocklake/blob/main/SECURITY.md);
+   do not open a public issue.
 3. Use a public [GitHub issue](https://github.com/trickle-labs/rocklake/issues)
    for non-sensitive documentation, installation, and reproducible defects.
 
