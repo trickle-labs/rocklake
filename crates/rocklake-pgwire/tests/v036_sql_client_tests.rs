@@ -59,6 +59,22 @@ async fn open_catalog(dir: &TempDir) -> Arc<Mutex<CatalogStore>> {
     Arc::new(Mutex::new(catalog))
 }
 
+async fn wait_for_server(addr: std::net::SocketAddr, handle: &mut tokio::task::JoinHandle<()>) {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    loop {
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(_) => return,
+            Err(error) if handle.is_finished() => {
+                panic!("test server exited before accepting connections at {addr}: {error}");
+            }
+            Err(error) if tokio::time::Instant::now() >= deadline => {
+                panic!("test server did not become ready at {addr}: {error}");
+            }
+            Err(_) => tokio::time::sleep(tokio::time::Duration::from_millis(10)).await,
+        }
+    }
+}
+
 /// Start a plain-text RockLake server on an ephemeral port.
 /// Returns `(addr, shutdown_tx)`.
 async fn start_plain_server(
@@ -79,13 +95,13 @@ async fn start_plain_server(
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         rocklake_pgwire::server::run_server_with_shutdown(config, catalog, rx)
             .await
             .ok();
     });
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    wait_for_server(addr, &mut handle).await;
     (addr, tx, handle)
 }
 
@@ -116,13 +132,13 @@ async fn start_auth_server(
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         rocklake_pgwire::server::run_server_with_shutdown(config, catalog, rx)
             .await
             .ok();
     });
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    wait_for_server(addr, &mut handle).await;
     (addr, tx, handle)
 }
 
@@ -172,13 +188,13 @@ async fn start_tls_server(
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let handle = tokio::spawn(async move {
+    let mut handle = tokio::spawn(async move {
         rocklake_pgwire::server::run_server_with_shutdown(config, catalog, rx)
             .await
             .ok();
     });
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    wait_for_server(addr, &mut handle).await;
     (addr, tx, handle, cert_path)
 }
 
