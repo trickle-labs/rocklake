@@ -2,15 +2,12 @@
 """
 Compatibility manifest validator.
 
-Verifies that docs/compatibility.md is consistent with
-tests/fixtures/compatibility-matrix.toml:
+Verifies manifest evidence against docs and GitHub Actions:
 
-  - Every 'supported' entry in the manifest must have a corresponding row
-    in docs/compatibility.md that is marked as supported (✅).
-  - Every 'unsupported' entry in the manifest must NOT appear as supported
-    in docs/compatibility.md.
-  - The manifest itself must not reference non-existent fixture files.
-  - 'expected' and 'untested' entries are advisory only (no enforcement).
+  - fixture paths exist;
+  - supported claims appear in the compatibility matrix;
+  - referenced workflow jobs and test targets exist; and
+  - supported claims have validation commands.
 
 Exit codes:
   0 — all checks passed
@@ -20,6 +17,7 @@ Exit codes:
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -94,8 +92,8 @@ def _name_keywords(entry: dict) -> list[str]:
 def check_supported_rows_in_docs(entries: list[dict], doc: str) -> list[str]:
     """
     Every 'supported' entry must have at least one keyword that appears
-    anywhere in docs/compatibility.md.  We use lenient keyword matching to
-    handle cases where the doc uses slightly different phrasing.
+    in docs/compatibility.md. We use lenient keyword matching for wording
+    differences between the manifest and the documentation.
     """
     errors: list[str] = []
     doc_lower = doc.lower()
@@ -113,44 +111,164 @@ def check_supported_rows_in_docs(entries: list[dict], doc: str) -> list[str]:
     return errors
 
 
-def check_ci_jobs_for_supported(entries: list[dict]) -> list[str]:
-    """Every 'supported' entry must reference a non-empty ci_job."""
+def load_ci_jobs() -> dict[str, str]:
+    """Return GitHub Actions job IDs and their workflow text."""
+    jobs: dict[str, str] = {}
+    for workflow in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+        lines = workflow.read_text(encoding="utf-8").splitlines()
+        try:
+            start = next(i for i, line in enumerate(lines) if line.strip() == "jobs:")
+        except StopIteration:
+            continue
+
+        job_id: str | None = None
+        job_lines: list[str] = []
+        for line in lines[start + 1 :]:
+            if line and not line[0].isspace():
+                break
+            match = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+            if match:
+                if job_id:
+                    jobs[job_id] = "\n".join(job_lines)
+                job_id = match.group(1)
+                job_lines = []
+            elif job_id:
+                job_lines.append(line)
+        if job_id:
+            jobs[job_id] = "\n".join(job_lines)
+    return jobs
+
+
+def check_ci_jobs_for_supported(entries: list[dict], jobs: dict[str, str]) -> list[str]:
+    """Ensure claimed CI jobs exist; supported entries must name one."""
     errors: list[str] = []
     for entry in entries:
-        if entry.get("status") != "supported":
-            continue
-        if not entry.get("ci_job", "").strip():
+        ci_job = entry.get("ci_job", "").strip()
+        if entry.get("status") == "supported" and not ci_job:
             errors.append(
                 f"[ci-job-missing] Supported entry {entry['name']!r} "
                 f"has no ci_job. Add a CI job or downgrade status to 'expected'."
             )
+        elif ci_job and ci_job not in jobs:
+            errors.append(
+                f"[ci-job-unknown] {entry['name']!r} references missing "
+                f"GitHub Actions job {ci_job!r}."
+            )
+    return errors
+
+
+def check_ci_commands(entries: list[dict], jobs: dict[str, str]) -> list[str]:
+    """Check manifest commands name real packages/tests present in their job."""
+    errors: list[str] = []
+    for entry in entries:
+        command = entry.get("test_command", "").strip()
+        if not command:
+            if entry.get("status") == "supported":
+                errors.append(
+                    f"[test-command-missing] Supported entry {entry['name']!r} "
+                    "has no test command."
+                )
+            continue
+        try:
+            tokens = shlex.split(command)
+        except ValueError as error:
+            errors.append(f"[test-command-invalid] {entry['name']!r}: {error}.")
+            continue
+        if len(tokens) < 2 or tokens[0] not in {"cargo", "cross"}:
+            errors.append(
+                f"[test-command-invalid] {entry['name']!r}: "
+                "expected a cargo/cross command."
+            )
+            continue
+
+        job_text = jobs.get(entry.get("ci_job", ""), "")
+        package = next(
+            (
+                tokens[i + 1]
+                for i, token in enumerate(tokens[:-1])
+                if token in {"-p", "--package"}
+            ),
+            None,
+        )
+        target = next(
+            (tokens[i + 1] for i, token in enumerate(tokens[:-1]) if token == "--test"),
+            None,
+        )
+        if package and not (REPO_ROOT / "crates" / package / "Cargo.toml").is_file():
+            errors.append(
+                f"[test-package-missing] {entry['name']!r} "
+                f"names unknown package {package!r}."
+            )
+        if target and (
+            not package
+            or not (REPO_ROOT / "crates" / package / "tests" / f"{target}.rs").is_file()
+        ):
+            errors.append(
+                f"[test-target-missing] {entry['name']!r} "
+                f"names missing test target {target!r}."
+            )
+
+        for option in ("--workspace", "--all-targets", "--all-features"):
+            if option in tokens and option not in job_text:
+                errors.append(
+                    f"[test-command-drift] {entry['name']!r}: {option} "
+                    f"is absent from job {entry.get('ci_job')!r}."
+                )
+        for value in (package, target):
+            if value and value not in job_text:
+                errors.append(
+                    f"[test-command-drift] {entry['name']!r}: {value!r} "
+                    f"is absent from job {entry.get('ci_job')!r}."
+                )
+        for i, token in enumerate(tokens[:-1]):
+            if token in {"--features", "--target"} and tokens[i + 1] not in job_text:
+                errors.append(
+                    f"[test-command-drift] {entry['name']!r}: {token} value "
+                    f"{tokens[i + 1]!r} is absent from job {entry.get('ci_job')!r}."
+                )
     return errors
 
 
 def check_docs_claims_have_manifest_entries(entries: list[dict], doc: str) -> list[str]:
     """
-    Scan docs/compatibility.md for ✅ rows and warn if the component/version
-    does not appear in the manifest at all. This catches docs drift.
-
-    We only warn (prefixed with [drift-warn]) rather than fail, because the
-    docs contain narrative prose that does not map 1:1 to manifest entries.
+    Warn when a compatibility matrix row has no manifest entry. Detailed
+    DuckLake corpus and feature checklists share the catalog-format entry.
     """
     warnings: list[str] = []
-    manifest_names_lower = {e["name"].lower() for e in entries}
-    # Find lines with ✅
+    sections = {
+        "DuckDB Client Versions",
+        "SQL Clients",
+        "Apache Spark",
+        "Trino / Presto",
+        "Apache DataFusion",
+        "Object Storage Backends",
+        "SlateDB",
+        "TLS",
+        "Rust",
+        "Platform",
+    }
+    section = ""
     for i, line in enumerate(doc.splitlines(), 1):
-        if "✅" in line:
-            # Extract the first cell of a Markdown table row (pipe-delimited)
-            parts = [p.strip() for p in line.split("|") if p.strip()]
-            if parts:
-                cell = parts[0]
-                if not any(cell.lower() in mn or mn in cell.lower()
-                           for mn in manifest_names_lower):
-                    warnings.append(
-                        f"[drift-warn] Line {i} in docs/compatibility.md contains ✅ "
-                        f"for {cell!r} but no manifest entry matches. "
-                        f"Consider adding an entry to compatibility-matrix.toml."
+        if line.startswith("## "):
+            section = line[3:].strip()
+        elif section in sections and "✅" in line and line.lstrip().startswith("|"):
+            row = " ".join(part.strip() for part in line.split("|")).lower()
+            matched = any(
+                entry.get("status") == "supported"
+                and (
+                    entry["name"].lower() in row
+                    or (
+                        entry.get("version", "").lower() not in {"", "any", "all"}
+                        and entry["version"].lower() in row
                     )
+                )
+                for entry in entries
+            )
+            if not matched:
+                warnings.append(
+                    f"[drift-warn] Line {i} in docs/compatibility.md has no "
+                    "matching supported manifest entry."
+                )
     return warnings
 
 
@@ -164,13 +282,15 @@ def main() -> int:
 
     entries = load_manifest()
     doc = load_compat_doc()
+    ci_jobs = load_ci_jobs()
 
     all_errors: list[str] = []
     all_warnings: list[str] = []
 
     all_errors.extend(check_fixture_files(entries))
     all_errors.extend(check_supported_rows_in_docs(entries, doc))
-    all_errors.extend(check_ci_jobs_for_supported(entries))
+    all_errors.extend(check_ci_jobs_for_supported(entries, ci_jobs))
+    all_errors.extend(check_ci_commands(entries, ci_jobs))
     all_warnings.extend(check_docs_claims_have_manifest_entries(entries, doc))
 
     for w in all_warnings:

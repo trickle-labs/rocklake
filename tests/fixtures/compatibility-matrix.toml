@@ -1,8 +1,7 @@
 # RockLake Compatibility Evidence Manifest
 #
-# This file is the single source of truth for all compatibility claims in
-# docs/compatibility.md. Every row in that document must have a corresponding
-# entry here with machine-readable evidence.
+# Machine-readable evidence for compatibility and platform claims in
+# docs/compatibility.md. Detailed DuckLake behavior shares the corpus entry.
 #
 # Statuses:
 #   supported   — automated release-blocking CI job; claim is enforceable
@@ -17,7 +16,7 @@
 #   platform       — "all" or specific platform
 #   status         — one of supported | expected | untested | unsupported
 #   ci_job         — GitHub Actions job ID that provides evidence (empty if N/A)
-#   test_command   — cargo test command or equivalent (empty if N/A)
+#   test_command   — validation command run by CI (empty if N/A)
 #   fixture_path   — path to fixture file if applicable (empty if N/A)
 #   last_reviewed  — ISO-8601 date of last manual review
 #   notes          — short human note
@@ -33,7 +32,7 @@ version = "1.0"
 platform = "all"
 status = "supported"
 ci_job = "ducklake-corpus"
-test_command = "cargo test -p rocklake-pgwire --test v027_10_ducklake_compat_tests"
+test_command = "cargo test -p rocklake-pgwire --test v02710_corpus_tests"
 fixture_path = "tests/fixtures/ducklake-corpus"
 last_reviewed = "2026-05-29"
 notes = "Catalog Version 7 / V1_0. CI runs on every push/PR."
@@ -45,7 +44,7 @@ version = "1.1"
 platform = "all"
 status = "unsupported"
 ci_job = "ducklake-corpus"
-test_command = "cargo test -p rocklake-pgwire --test v027_10_ducklake_compat_tests"
+test_command = "cargo test -p rocklake-pgwire --test v02710_corpus_tests"
 fixture_path = ""
 last_reviewed = "2026-05-29"
 notes = "V1_1_DEV_1 migrations are classified and never applied."
@@ -61,7 +60,7 @@ version = "1.5.x"
 platform = "all"
 status = "supported"
 ci_job = "ducklake-corpus"
-test_command = "cargo test -p rocklake-pgwire --test v027_10_ducklake_compat_tests"
+test_command = "cargo test -p rocklake-pgwire --test v02710_corpus_tests"
 fixture_path = "tests/fixtures/wire-corpus"
 last_reviewed = "2026-05-29"
 notes = "Primary supported version. All postgres-scanner init queries handled."
@@ -260,8 +259,8 @@ name = "Google Cloud Storage"
 version = "any"
 platform = "all"
 status = "supported"
-ci_job = "gcs-emulator"
-test_command = "cargo test -p rocklake-catalog --test backend_compat -- gcs"
+ci_job = "gcs-emulator-tests"
+test_command = "cargo test -p rocklake-catalog --test backend_compat --features gcs-emulator"
 fixture_path = ""
 last_reviewed = "2026-05-29"
 notes = "Via object_store 0.12; GcsEmulatorHarness + backend_compat suite."
@@ -272,8 +271,8 @@ name = "Azure Blob Storage"
 version = "any"
 platform = "all"
 status = "supported"
-ci_job = "azure-emulator"
-test_command = "cargo test -p rocklake-catalog --test backend_compat -- azure"
+ci_job = "azure-emulator-tests"
+test_command = "cargo test -p rocklake-catalog --test backend_compat --features azure-emulator"
 fixture_path = ""
 last_reviewed = "2026-05-29"
 notes = "Via object_store 0.12; AzureEmulatorHarness + backend_compat suite."
@@ -433,7 +432,7 @@ version = "any"
 platform = "linux-aarch64"
 status = "supported"
 ci_job = "build"
-test_command = ""
+test_command = "cross build -p rocklake-pgwire --bin rocklake --release --target aarch64-unknown-linux-gnu"
 fixture_path = ""
 last_reviewed = "2026-05-29"
 notes = "Release binary provided via cross-compilation."

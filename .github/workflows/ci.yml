@@ -257,24 +257,13 @@ jobs:
       - name: Run coverage (all production crates)
         run: |
           cargo llvm-cov \
-            -p rocklake-catalog \
-            -p rocklake-core \
-            -p rocklake-sql \
-            -p rocklake-pgwire \
-            -p rocklake-ffi \
-            -p rocklake-client \
-            -p rocklake-datafusion \
-            --summary-only 2>&1 | tee coverage-summary.txt
-          COVERAGE=$(grep 'TOTAL' coverage-summary.txt | awk '{print $10}' | tr -d '%' || echo "0")
-          echo "Coverage: ${COVERAGE}%"
-          if [ "${COVERAGE%.*}" -lt 60 ]; then
-            echo "::error::Coverage ${COVERAGE}% is below the 60% gate"
-            exit 1
-          fi
-          # Note: gate is 60% (actual ~61%) because binary COPY handler code
-          # (executor/catalog.rs, executor/mod.rs, handler.rs) requires a real
-          # DuckDB binary for full coverage — tested via duckdb_binary_tests.rs
-          # which are gated on duckdb_available() in CI.
+            --workspace \
+            --exclude rocklake-testkit \
+            --exclude rocklake-evidence \
+            --fail-under-lines 60
+          # The 60% floor accounts for binary COPY handlers that require a real
+          # DuckDB binary for full coverage (executor/catalog.rs, executor/mod.rs,
+          # handler.rs); duckdb_binary_tests.rs is gated on duckdb_available().
 
   # Tier 7: Fault injection tests (catalog).
   fault-injection:
@@ -575,9 +564,7 @@ jobs:
             maturin develop 2>&1 | tail -20
 
       - name: Run Python integration tests
-        run: |
-          cd bindings/python
-          pytest tests/ -v 2>&1 | tail -30 || true
+        run: cd bindings/python && pytest tests/ -v
 
       - name: Polars validation (no data files — lifecycle check only)
         run: |
@@ -627,9 +614,7 @@ jobs:
           napi build --platform 2>&1 | tail -20
 
       - name: Run Node.js tests
-        run: |
-          cd bindings/nodejs
-          node --test test/ 2>&1 | tail -30 || true
+        run: cd bindings/nodejs && node --test test/
 
   # ── v0.36.0: SQL Clients & Object Storage Backend Testing ─────────────────
 

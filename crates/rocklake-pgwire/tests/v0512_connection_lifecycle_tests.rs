@@ -11,6 +11,8 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex};
 
+static SERVER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn catalog(dir: &TempDir) -> Arc<Mutex<CatalogStore>> {
     let path = dir.path().to_str().unwrap().to_string();
     let store = Arc::new(LocalFileSystem::new_with_prefix(&path).unwrap());
@@ -32,7 +34,9 @@ async fn start_server(
     u16,
     oneshot::Sender<()>,
     tokio::task::JoinHandle<std::io::Result<()>>,
+    tokio::sync::MutexGuard<'static, ()>,
 ) {
+    let server_lock = SERVER_LOCK.lock().await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     config.bind_addr = listener.local_addr().unwrap();
@@ -41,7 +45,7 @@ async fn start_server(
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = tokio::spawn(run_server_with_shutdown(config, catalog, shutdown_rx));
     tokio::time::sleep(Duration::from_millis(50)).await;
-    (port, shutdown_tx, server)
+    (port, shutdown_tx, server, server_lock)
 }
 
 async fn connect(
@@ -66,7 +70,7 @@ async fn connect(
 async fn capacity_rejection_is_prompt_and_uses_53300() {
     let dir = TempDir::new().unwrap();
     let catalog = catalog(&dir).await;
-    let (port, shutdown_tx, server) = start_server(
+    let (port, shutdown_tx, server, _server_lock) = start_server(
         ServerConfig {
             max_sessions: 1,
             ..ServerConfig::default()
@@ -104,7 +108,7 @@ async fn capacity_rejection_is_prompt_and_uses_53300() {
 async fn idle_connection_timeout_closes_an_inactive_socket() {
     let dir = TempDir::new().unwrap();
     let catalog = catalog(&dir).await;
-    let (port, shutdown_tx, server) = start_server(
+    let (port, shutdown_tx, server, _server_lock) = start_server(
         ServerConfig {
             idle_connection_timeout: Duration::from_millis(50),
             ..ServerConfig::default()
@@ -130,7 +134,7 @@ async fn active_query_is_not_closed_as_idle() {
     let catalog = catalog(&dir).await;
     let catalog_guard = catalog.lock().await;
     let metrics = Arc::new(CatalogMetrics::new(10));
-    let (port, shutdown_tx, server) = start_server(
+    let (port, shutdown_tx, server, _server_lock) = start_server(
         ServerConfig {
             idle_connection_timeout: Duration::from_millis(100),
             metrics: Some(metrics.clone()),
@@ -176,7 +180,7 @@ async fn shutdown_closes_idle_and_drains_active_query() {
     let catalog = catalog(&dir).await;
     let catalog_guard = catalog.lock().await;
     let metrics = Arc::new(CatalogMetrics::new(10));
-    let (port, shutdown_tx, server) = start_server(
+    let (port, shutdown_tx, server, _server_lock) = start_server(
         ServerConfig {
             drain_timeout: Duration::from_millis(500),
             metrics: Some(metrics.clone()),

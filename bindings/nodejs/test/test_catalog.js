@@ -8,14 +8,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 
-let Catalog;
-try {
-  ({ Catalog } = require('../index'));
-} catch (e) {
-  // Module not built yet — skip all tests
-  console.warn('Skipping Node.js tests: native module not built yet.');
-  process.exit(0);
-}
+const { Catalog } = require('../index');
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rocklake-node-test-'));
