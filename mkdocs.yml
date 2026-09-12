@@ -190,6 +190,7 @@ nav:
     - Support Bundles: operations/support-bundles.md
     - Production Beta Support: operations/beta-support.md
     - v0.63.0 Beta Evidence: operations/beta-evidence-v0.63.0.md
+    - v1.0 Readiness Assessment: assessments/v1-readiness.md
     - Troubleshooting: operations/troubleshooting.md
     - Upgrades: operations/upgrades.md
     - Verify & Repair: operations/verify-repair.md

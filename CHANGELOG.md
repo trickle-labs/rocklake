@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.63.1] — 2026-09-12
+
+### Added
+
+- Added the v1.0 readiness assessment with current evidence and the RC1 decision.
+
+### Changed
+
+- Updated release metadata, the public-surface manifest, and operator docs to
+  v0.63.1 without changing runtime behavior, persisted formats, or the stable
+  public surface.
+- Kept the beta observation ledger anchored to its v0.63.0 start date.
+
 ## [0.63.0] — 2026-09-11
 
 ### Added

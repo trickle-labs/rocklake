@@ -1,6 +1,6 @@
 # Production beta support
 
-RockLake v0.63.0 is a feature-complete production beta. It is intended for
+RockLake v0.63.1 is a feature-complete production beta. It is intended for
 named design-partner workloads while the observation and evidence gates run.
 The binary, PostgreSQL wire protocol, and DuckLake 1.0 path remain the
 supported interfaces. Rust, read-only, DataFusion, and language-binding
