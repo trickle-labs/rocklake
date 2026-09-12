@@ -178,26 +178,3 @@ pub async fn minimum_leased_snapshot_in_tx(tx: &DbTransaction) -> CatalogResult<
 
     Ok(min_snapshot)
 }
-
-/// Compute the end key for a prefix scan (increment last byte).
-#[cfg(test)]
-fn scan_end_for_prefix(prefix: &[u8]) -> Vec<u8> {
-    let mut end = prefix.to_vec();
-    if let Some(last) = end.last_mut() {
-        *last = last.wrapping_add(1);
-    }
-    end
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rocklake_core::tags::TAG_SNAPSHOT_LEASE;
-
-    #[test]
-    fn test_scan_end_for_prefix() {
-        let prefix = vec![TAG_SNAPSHOT_LEASE];
-        let end = scan_end_for_prefix(&prefix);
-        assert_eq!(end, vec![TAG_SNAPSHOT_LEASE + 1]);
-    }
-}

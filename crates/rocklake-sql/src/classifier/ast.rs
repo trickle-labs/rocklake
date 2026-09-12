@@ -705,15 +705,3 @@ pub(super) fn classify_release_snapshot_call(func: &sqlparser::ast::Function) ->
 
     StatementKind::ReleaseSnapshot { consumer_id }
 }
-
-/// Check if a table name is a DuckLake catalog table (with or without schema prefix).
-/// Handles both normalized names (ducklake_*) and schema-qualified names.
-#[allow(dead_code)]
-fn is_ducklake_catalog_table(table: &str) -> bool {
-    table.starts_with("ducklake_data_file")
-        || table.starts_with("ducklake_file_column_stats")
-        || table.starts_with("ducklake_delete_file")
-        || table.starts_with("ducklake_file_partition_value")
-        || table.starts_with("ducklake_file_variant_stats")
-        || table.starts_with("ducklake_files_scheduled_for_deletion")
-}

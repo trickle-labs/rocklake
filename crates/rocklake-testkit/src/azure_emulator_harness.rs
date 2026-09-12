@@ -155,45 +155,12 @@ impl AzureEmulatorHarness {
     /// Create a container (bucket) in Azurite.
     pub async fn create_container(&self, container: &str) -> Result<(), AzureHarnessError> {
         use base64::prelude::*;
-        use chrono::{Datelike, Timelike};
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
 
-        let now = chrono::Utc::now();
-        let day = match now.weekday() {
-            chrono::Weekday::Mon => "Mon",
-            chrono::Weekday::Tue => "Tue",
-            chrono::Weekday::Wed => "Wed",
-            chrono::Weekday::Thu => "Thu",
-            chrono::Weekday::Fri => "Fri",
-            chrono::Weekday::Sat => "Sat",
-            chrono::Weekday::Sun => "Sun",
-        };
-        let month = match now.month() {
-            1 => "Jan",
-            2 => "Feb",
-            3 => "Mar",
-            4 => "Apr",
-            5 => "May",
-            6 => "Jun",
-            7 => "Jul",
-            8 => "Aug",
-            9 => "Sep",
-            10 => "Oct",
-            11 => "Nov",
-            12 => "Dec",
-            _ => unreachable!(),
-        };
-        let date_str = format!(
-            "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
-            day,
-            now.day(),
-            month,
-            now.year(),
-            now.hour(),
-            now.minute(),
-            now.second()
-        );
+        let date_str = chrono::Utc::now()
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
 
         let string_to_sign = format!(
             "PUT\n\n\n\n\n\n\n\n\n\n\n\nx-ms-date:{}\nx-ms-version:2020-04-08\n/{}/{}/{}\nrestype:container",

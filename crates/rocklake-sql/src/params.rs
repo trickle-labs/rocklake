@@ -77,14 +77,7 @@ impl ParamValues {
     /// Values are properly escaped via `serde_json`; this is safe for all Unicode and
     /// control characters including embedded quotes, backslashes, and newlines.
     pub fn to_json_string(&self) -> String {
-        let mut map = serde_json::Map::new();
-        for (i, v) in self.values.iter().enumerate() {
-            if let Some(val) = v {
-                let key = format!("p{i}");
-                map.insert(key, serde_json::Value::String(val.clone()));
-            }
-        }
-        serde_json::Value::Object(map).to_string()
+        self.to_json_string_with_columns(&[])
     }
 
     /// Serialize parameter values as a JSON object using the provided column names.

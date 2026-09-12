@@ -12,9 +12,6 @@ tracing = { workspace = true }
 object_store = { workspace = true }
 parquet = { version = "54", features = ["arrow"] }
 arrow = { version = "54" }
-tokio = { workspace = true }
-futures = { workspace = true }
-bytes = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

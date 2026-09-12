@@ -193,9 +193,7 @@ impl CatalogClientBuilder {
         };
 
         let store = CatalogStore::open(opts).await?;
-        Ok(CatalogClient {
-            store: Arc::new(tokio::sync::RwLock::new(Some(store))),
-        })
+        Ok(CatalogClient { store })
     }
 
     /// Build and open a **read-only** [`ReadOnlyClient`].
@@ -338,13 +336,10 @@ fn catalog_path(uri: &str) -> ClientResult<ObjectPath> {
 ///
 /// # Thread safety
 ///
-/// `CatalogClient` is `Send + Sync` and may be shared across tasks via
-/// `Arc<CatalogClient>`.  Internally the `CatalogStore` is protected by a
-/// `tokio::sync::RwLock` — concurrent read operations (e.g., `list_schemas`,
-/// `list_tables`, `list_data_files`) acquire a read lock and do **not**
-/// serialise against each other.  Only `close()` acquires a write lock.
+/// Catalog client that can be shared across tasks via Arc. Concurrent reads
+/// use independent catalog readers.
 pub struct CatalogClient {
-    store: Arc<tokio::sync::RwLock<Option<CatalogStore>>>,
+    store: CatalogStore,
 }
 
 impl std::fmt::Debug for CatalogClient {
@@ -354,15 +349,6 @@ impl std::fmt::Debug for CatalogClient {
 }
 
 impl CatalogClient {
-    /// Acquire a read guard, returning an error if the catalog has been closed.
-    async fn read(&self) -> ClientResult<tokio::sync::RwLockReadGuard<'_, Option<CatalogStore>>> {
-        let guard = self.store.read().await;
-        if guard.is_none() {
-            return Err(ClientError::Config("catalog has been closed".to_owned()));
-        }
-        Ok(guard)
-    }
-
     fn reader(
         store: &CatalogStore,
         snapshot: SnapshotRef,
@@ -389,11 +375,7 @@ impl CatalogClient {
     /// # });
     /// ```
     pub async fn snapshot_id(&self) -> ClientResult<u64> {
-        let reader = {
-            let guard = self.read().await?;
-            let store = guard.as_ref().expect("checked by read()");
-            store.read_latest()
-        };
+        let reader = self.store.read_latest();
         let snap = reader.get_snapshot().await?;
         Ok(snap.map(|s| s.snapshot_id).unwrap_or(0))
     }
@@ -415,11 +397,7 @@ impl CatalogClient {
         &self,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<Schema>> {
-        let reader = {
-            let guard = self.read().await?;
-            let store = guard.as_ref().expect("checked by read()");
-            Self::reader(store, snapshot.into())?
-        };
+        let reader = Self::reader(&self.store, snapshot.into())?;
         let rows = reader.list_schemas().await?;
         Ok(rows
             .into_iter()
@@ -448,11 +426,7 @@ impl CatalogClient {
         schema_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<Table>> {
-        let reader = {
-            let guard = self.read().await?;
-            let store = guard.as_ref().expect("checked by read()");
-            Self::reader(store, snapshot.into())?
-        };
+        let reader = Self::reader(&self.store, snapshot.into())?;
         let rows = reader.list_tables(schema_id).await?;
         Ok(rows
             .into_iter()
@@ -484,11 +458,7 @@ impl CatalogClient {
         table_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Option<Vec<Column>>> {
-        let reader = {
-            let guard = self.read().await?;
-            let store = guard.as_ref().expect("checked by read()");
-            Self::reader(store, snapshot.into())?
-        };
+        let reader = Self::reader(&self.store, snapshot.into())?;
         let result = reader.describe_table(table_id).await?;
         Ok(result.map(|(_table, cols)| {
             cols.into_iter()
@@ -525,11 +495,7 @@ impl CatalogClient {
         table_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<DataFile>> {
-        let reader = {
-            let guard = self.read().await?;
-            let store = guard.as_ref().expect("checked by read()");
-            Self::reader(store, snapshot.into())?
-        };
+        let reader = Self::reader(&self.store, snapshot.into())?;
         let rows = reader.list_data_files(table_id).await?;
         Ok(rows.into_iter().map(DataFile::from_row).collect())
     }
@@ -542,11 +508,7 @@ impl CatalogClient {
         page_size: usize,
         continuation_token: Option<&str>,
     ) -> ClientResult<DataFilePage> {
-        let reader = {
-            let guard = self.read().await?;
-            let store = guard.as_ref().expect("checked by read()");
-            Self::reader(store, snapshot.into())?
-        };
+        let reader = Self::reader(&self.store, snapshot.into())?;
         let page = reader
             .list_data_files_paged(table_id, page_size, continuation_token)
             .await?;
@@ -562,11 +524,7 @@ impl CatalogClient {
         table_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<BoxStream<'static, ClientResult<DataFile>>> {
-        let reader = {
-            let guard = self.read().await?;
-            let store = guard.as_ref().expect("checked by read()");
-            Self::reader(store, snapshot.into())?
-        };
+        let reader = Self::reader(&self.store, snapshot.into())?;
         let stream = reader.stream_data_files(table_id).await?;
         Ok(Box::pin(futures::StreamExt::map(stream, |row| {
             row.map(DataFile::from_row).map_err(ClientError::from)
@@ -574,14 +532,8 @@ impl CatalogClient {
     }
 
     /// Close the catalog and release all resources.
-    ///
-    /// After this call all methods return an error.  It is not an error to
-    /// call `close()` more than once.
     pub async fn close(self) -> ClientResult<()> {
-        let mut guard = self.store.write().await;
-        if let Some(store) = guard.take() {
-            store.close().await?;
-        }
+        self.store.close().await?;
         Ok(())
     }
 }
@@ -990,7 +942,7 @@ impl CatalogClientSync {
         let object_store =
             runtime.block_on(rocklake_catalog::CatalogStore::open_without_epoch(opts))?;
         let inner = CatalogClient {
-            store: std::sync::Arc::new(tokio::sync::RwLock::new(Some(object_store))),
+            store: object_store,
         };
         Ok(Self { runtime, inner })
     }

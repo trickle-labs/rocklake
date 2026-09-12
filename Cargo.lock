@@ -4575,8 +4575,6 @@ name = "rocklake-core"
 version = "0.63.1"
 dependencies = [
  "bytes",
- "chrono",
- "futures",
  "object_store 0.12.5",
  "proptest",
  "prost 0.13.5",
@@ -4586,9 +4584,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -4704,8 +4699,6 @@ name = "rocklake-sql"
 version = "0.63.1"
 dependencies = [
  "arrow",
- "bytes",
- "futures",
  "object_store 0.12.5",
  "parquet",
  "serde_json",
@@ -4725,7 +4718,6 @@ dependencies = [
  "futures",
  "hmac 0.12.1",
  "object_store 0.12.5",
- "proptest",
  "reqwest",
  "rocklake-catalog",
  "rocklake-core",

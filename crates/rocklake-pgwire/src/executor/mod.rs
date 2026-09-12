@@ -50,10 +50,9 @@ use extension::{
 };
 use helpers::{
     apply_set, get_show_value, get_snapshot_param, make_empty_response, make_false_bool_response,
-    make_null_int_response, make_null_text_response, make_pg_catalog_inlined_table_response,
-    make_pg_catalog_scan_responses, make_pg_type_response, make_single_int_response,
-    make_single_text_response, make_version_with_rds_check_response, require_param_u64,
-    resolve_reader,
+    make_pg_catalog_inlined_table_response, make_pg_catalog_scan_responses, make_pg_type_response,
+    make_single_int_response, make_single_text_response, make_version_with_rds_check_response,
+    require_param_u64, resolve_reader,
 };
 use meta::execute_virtual_catalog_scan;
 use session::{execute_hold_snapshot, execute_release_snapshot};
@@ -1047,23 +1046,24 @@ async fn execute_classified<'a>(
         // ─── Session / Introspection ───────────────────────────────────
         StatementKind::SelectVersion => Ok(vec![make_single_text_response(
             "version",
-            "PostgreSQL 15.0 on x86_64-pc-linux-gnu",
+            Some("PostgreSQL 15.0 on x86_64-pc-linux-gnu"),
         )]),
         StatementKind::SelectVersionWithRdsCheck => {
             Ok(vec![make_version_with_rds_check_response()])
         }
-        StatementKind::SelectOne => Ok(vec![make_single_int_response("?column?", 1)]),
-        StatementKind::SelectCurrentSchema => {
-            Ok(vec![make_single_text_response("current_schema", "public")])
-        }
+        StatementKind::SelectOne => Ok(vec![make_single_int_response("?column?", Some(1))]),
+        StatementKind::SelectCurrentSchema => Ok(vec![make_single_text_response(
+            "current_schema",
+            Some("public"),
+        )]),
         StatementKind::SelectCurrentDatabase => Ok(vec![make_single_text_response(
             "current_database",
-            "ducklake",
+            Some("ducklake"),
         )]),
         StatementKind::SelectPgType => Ok(vec![make_pg_type_response()]),
         StatementKind::ShowVariable(ref var) => {
             let val = get_show_value(var, session);
-            Ok(vec![make_single_text_response(var, &val)])
+            Ok(vec![make_single_text_response(var, Some(&val))])
         }
         StatementKind::SetVariable(ref var, ref val) => {
             apply_set(var, val, session);
@@ -1079,7 +1079,7 @@ async fn execute_classified<'a>(
         StatementKind::SelectToRegclass => {
             // to_regclass('name') — return NULL to tell DuckDB the relation
             // does not exist (RockLake has no duckdb_secrets table).
-            Ok(vec![make_null_text_response("to_regclass")])
+            Ok(vec![make_single_text_response("to_regclass", None)])
         }
         StatementKind::SelectExistsInfoSchema => {
             // EXISTS(SELECT 1 FROM information_schema.tables WHERE ...) — return
@@ -1088,7 +1088,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::SelectPgDatabaseSize => {
             // pg_database_size(current_database()) — informational only; return 0.
-            Ok(vec![make_single_int_response("pg_database_size", 0)])
+            Ok(vec![make_single_int_response("pg_database_size", Some(0))])
         }
         StatementKind::PgCatalogScan => {
             if let Some(table_name) = inlined_table_name_from_sql(_sql) {
@@ -1169,7 +1169,7 @@ async fn execute_classified<'a>(
             let reader = { store.lock().await.read_latest() };
             let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             let id = snap.map(|s| s.snapshot_id).unwrap_or(0);
-            Ok(vec![make_single_int_response("max", id as i64)])
+            Ok(vec![make_single_int_response("max", Some(id as i64))])
         }
         // pg-trickle CDC startup: SELECT ducklake_latest_snapshot_id($1::regclass).
         // Returns the snapshot_id of the latest visible snapshot (or NULL if none).
@@ -1181,9 +1181,12 @@ async fn execute_classified<'a>(
             match snap {
                 Some(s) => Ok(vec![make_single_int_response(
                     "ducklake_latest_snapshot_id",
-                    s.snapshot_id as i64,
+                    Some(s.snapshot_id as i64),
                 )]),
-                None => Ok(vec![make_null_int_response("ducklake_latest_snapshot_id")]),
+                None => Ok(vec![make_single_int_response(
+                    "ducklake_latest_snapshot_id",
+                    None,
+                )]),
             }
         }
         StatementKind::SelectLatestSnapshotInfo => {
@@ -1739,9 +1742,9 @@ async fn execute_classified<'a>(
             let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             let id = snap.map(|s| s.snapshot_id).unwrap_or(0);
             if id > after_id {
-                Ok(vec![make_single_int_response("max", id as i64)])
+                Ok(vec![make_single_int_response("max", Some(id as i64))])
             } else {
-                Ok(vec![make_null_int_response("max")])
+                Ok(vec![make_single_int_response("max", None)])
             }
         }
         StatementKind::SelectFirstSnapshot => {
@@ -1769,7 +1772,7 @@ async fn execute_classified<'a>(
             let uuid_val = uuid::Uuid::new_v4().to_string();
             Ok(vec![make_single_text_response(
                 "gen_random_uuid",
-                &uuid_val,
+                Some(&uuid_val),
             )])
         }
 

@@ -95,7 +95,7 @@ pub(super) fn apply_set(var: &str, val: &str, session: &mut SessionState) {
     }
 }
 
-pub(super) fn make_single_text_response<'a>(col_name: &str, value: &str) -> Response<'a> {
+pub(super) fn make_single_text_response<'a>(col_name: &str, value: Option<&str>) -> Response<'a> {
     let schema = Arc::new(vec![FieldInfo::new(
         col_name.to_string(),
         None,
@@ -105,7 +105,11 @@ pub(super) fn make_single_text_response<'a>(col_name: &str, value: &str) -> Resp
     )]);
     let mut encoder = DataRowEncoder::new(schema.clone());
     encoder
-        .encode_field_with_type_and_format(&Some(value.to_string()), &Type::TEXT, FieldFormat::Text)
+        .encode_field_with_type_and_format(
+            &value.map(|value| value.to_string()),
+            &Type::TEXT,
+            FieldFormat::Text,
+        )
         .unwrap();
     let row = encoder.finish();
     let data_rows = vec![row];
@@ -114,7 +118,7 @@ pub(super) fn make_single_text_response<'a>(col_name: &str, value: &str) -> Resp
     Response::Query(resp)
 }
 
-pub(super) fn make_single_int_response<'a>(col_name: &str, value: i64) -> Response<'a> {
+pub(super) fn make_single_int_response<'a>(col_name: &str, value: Option<i64>) -> Response<'a> {
     let schema = Arc::new(vec![FieldInfo::new(
         col_name.to_string(),
         None,
@@ -124,26 +128,7 @@ pub(super) fn make_single_int_response<'a>(col_name: &str, value: i64) -> Respon
     )]);
     let mut encoder = DataRowEncoder::new(schema.clone());
     encoder
-        .encode_field_with_type_and_format(&Some(value), &Type::INT8, FieldFormat::Binary)
-        .unwrap();
-    let row = encoder.finish();
-    let data_rows = vec![row];
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag("SELECT 1");
-    Response::Query(resp)
-}
-
-pub(super) fn make_null_int_response<'a>(col_name: &str) -> Response<'a> {
-    let schema = Arc::new(vec![FieldInfo::new(
-        col_name.to_string(),
-        None,
-        None,
-        Type::INT8,
-        FieldFormat::Binary,
-    )]);
-    let mut encoder = DataRowEncoder::new(schema.clone());
-    encoder
-        .encode_field_with_type_and_format(&None::<i64>, &Type::INT8, FieldFormat::Binary)
+        .encode_field_with_type_and_format(&value, &Type::INT8, FieldFormat::Binary)
         .unwrap();
     let row = encoder.finish();
     let data_rows = vec![row];
@@ -222,27 +207,6 @@ pub(super) fn make_version_with_rds_check_response<'a>() -> Response<'a> {
     // RDS check: 0 means not on RDS
     encoder
         .encode_field_with_type_and_format(&Some("0".to_string()), &Type::INT8, FieldFormat::Text)
-        .expect("pgwire field encoding is infallible");
-    let row = encoder.finish();
-    let data_rows = vec![row];
-    let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
-    resp.set_command_tag("SELECT 1");
-    Response::Query(resp)
-}
-
-/// `SELECT to_regclass('...')` — returns a single NULL TEXT row.
-/// NULL tells DuckDB the named relation does not exist.
-pub(super) fn make_null_text_response<'a>(col_name: &str) -> Response<'a> {
-    let schema = Arc::new(vec![FieldInfo::new(
-        col_name.to_string(),
-        None,
-        None,
-        Type::TEXT,
-        FieldFormat::Text,
-    )]);
-    let mut encoder = DataRowEncoder::new(schema.clone());
-    encoder
-        .encode_field_with_type_and_format(&None::<String>, &Type::TEXT, FieldFormat::Text)
         .expect("pgwire field encoding is infallible");
     let row = encoder.finish();
     let data_rows = vec![row];

@@ -10,7 +10,7 @@ find_library(ROCKLAKE_LIB rocklake_ffi
           ${CMAKE_CURRENT_SOURCE_DIR}/../target/debug)
 
 # Include the generated C header
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../crates/rocklake-ffi/include)
 
 # Extension source
 add_library(rocklake_extension SHARED

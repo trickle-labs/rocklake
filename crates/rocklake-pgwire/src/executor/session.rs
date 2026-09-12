@@ -22,7 +22,7 @@ pub(super) async fn execute_hold_snapshot<'a>(
         .await
         .map_err(RockLakeError::from)?;
 
-    Ok(vec![make_single_text_response("hold_snapshot", "OK")])
+    Ok(vec![make_single_text_response("hold_snapshot", Some("OK"))])
 }
 
 pub(super) async fn execute_release_snapshot<'a>(
@@ -37,6 +37,6 @@ pub(super) async fn execute_release_snapshot<'a>(
 
     Ok(vec![make_single_text_response(
         "release_snapshot",
-        if released { "OK" } else { "NOT_FOUND" },
+        Some(if released { "OK" } else { "NOT_FOUND" }),
     )])
 }
