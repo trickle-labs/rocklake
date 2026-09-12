@@ -20,7 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <string>
 
 // ─── Extension Metadata ────────────────────────────────────────────────────
 
@@ -41,101 +40,6 @@ static bool verify_abi() {
     }
     return true;
 }
-
-// ─── Catalog Wrapper ────────────────────────────────────────────────────────
-
-/**
- * RockLakeCatalogWrapper wraps the opaque C handle and provides a C++ interface
- * suitable for integration with DuckDB's Catalog system.
- *
- * In a full DuckDB extension, this class would inherit from duckdb::Catalog
- * and implement all required virtual methods. For the beta release, we provide
- * the foundation that can be plugged into DuckDB's extension loading mechanism.
- */
-class RockLakeCatalogWrapper {
-public:
-    RockLakeCatalogWrapper() : catalog_(nullptr) {}
-
-    ~RockLakeCatalogWrapper() {
-        if (catalog_) {
-            rocklake_close(catalog_);
-            catalog_ = nullptr;
-        }
-    }
-
-    bool Open(const std::string &uri) {
-        rocklake_error_t err = {};
-        catalog_ = rocklake_open(uri.c_str(), &err);
-        if (!catalog_) {
-            if (err.message) {
-                last_error_ = std::string(err.message);
-                rocklake_error_free(&err);
-            } else {
-                last_error_ = "unknown error opening catalog";
-            }
-            return false;
-        }
-        return true;
-    }
-
-    rocklake_snapshot_t GetCurrentSnapshot() {
-        rocklake_error_t err = {};
-        auto snap = rocklake_get_current_snapshot(catalog_, &err);
-        if (err.code != ROCKLAKE_OK) {
-            if (err.message) {
-                last_error_ = std::string(err.message);
-                rocklake_error_free(&err);
-            }
-        }
-        return snap;
-    }
-
-    rocklake_schema_list_t ListSchemas(uint64_t snapshot_id) {
-        rocklake_error_t err = {};
-        auto result = rocklake_list_schemas(catalog_, snapshot_id, &err);
-        if (err.code != ROCKLAKE_OK && err.message) {
-            last_error_ = std::string(err.message);
-            rocklake_error_free(&err);
-        }
-        return result;
-    }
-
-    rocklake_table_list_t ListTables(uint64_t schema_id, uint64_t snapshot_id) {
-        rocklake_error_t err = {};
-        auto result = rocklake_list_tables(catalog_, schema_id, snapshot_id, &err);
-        if (err.code != ROCKLAKE_OK && err.message) {
-            last_error_ = std::string(err.message);
-            rocklake_error_free(&err);
-        }
-        return result;
-    }
-
-    rocklake_column_list_t DescribeTable(uint64_t table_id, uint64_t snapshot_id) {
-        rocklake_error_t err = {};
-        auto result = rocklake_describe_table(catalog_, table_id, snapshot_id, &err);
-        if (err.code != ROCKLAKE_OK && err.message) {
-            last_error_ = std::string(err.message);
-            rocklake_error_free(&err);
-        }
-        return result;
-    }
-
-    rocklake_file_list_t ListDataFiles(uint64_t table_id, uint64_t snapshot_id) {
-        rocklake_error_t err = {};
-        auto result = rocklake_list_data_files(catalog_, table_id, snapshot_id, &err);
-        if (err.code != ROCKLAKE_OK && err.message) {
-            last_error_ = std::string(err.message);
-            rocklake_error_free(&err);
-        }
-        return result;
-    }
-
-    const std::string &LastError() const { return last_error_; }
-
-private:
-    rocklake_catalog_t *catalog_;
-    std::string last_error_;
-};
 
 // ─── Extension Entry Point ──────────────────────────────────────────────────
 

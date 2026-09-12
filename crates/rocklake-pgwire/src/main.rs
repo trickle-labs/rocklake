@@ -1474,14 +1474,6 @@ async fn cmd_serve(
             "drain timeout",
         )?
         .expect("drain timeout default"),
-        datafusion_bridge_queue_depth: setting(
-            args.datafusion_bridge_queue_depth,
-            "ROCKLAKE_DATAFUSION_BRIDGE_QUEUE_DEPTH",
-            file_config.datafusion_bridge_queue_depth,
-            Some(256),
-            "datafusion bridge queue depth",
-        )?
-        .expect("queue depth default"),
         max_active_scans: setting(
             args.max_active_scans,
             "ROCKLAKE_MAX_ACTIVE_SCANS",
@@ -1526,8 +1518,7 @@ async fn cmd_serve(
     if config.max_sessions == 0 {
         return Err("max sessions must be greater than zero".into());
     }
-    if config.datafusion_bridge_queue_depth == 0
-        || config.max_active_scans == 0
+    if config.max_active_scans == 0
         || config.stream_queue_depth == 0
         || config.max_buffered_rows == 0
         || config.max_response_bytes == 0
@@ -1619,10 +1610,9 @@ async fn cmd_serve(
     print_startup_summary(&config, &store);
     tracing::info!("Catalog opened successfully");
     tracing::info!(
-        "Serving mode: {}, cost mode: {:?}, datafusion bridge queue depth: {}",
+        "Serving mode: {}, cost mode: {:?}",
         config.mode,
-        config.cost_mode,
-        config.datafusion_bridge_queue_depth,
+        config.cost_mode
     );
 
     let catalog = Arc::new(Mutex::new(store));
@@ -1990,7 +1980,6 @@ mod tests {
             otlp_endpoint: None,
             idle_connection_timeout_secs: 60,
             drain_timeout_secs: 30,
-            datafusion_bridge_queue_depth: 256,
             max_active_scans: 16,
             stream_queue_depth: 0,
             max_buffered_rows: 0,
@@ -2045,8 +2034,6 @@ struct ServeConfig {
     idle_connection_timeout_secs: u64,
     /// Grace period in seconds for in-flight queries on SIGTERM drain (default: 30).
     drain_timeout_secs: u64,
-    /// Capacity of the DataFusion AsyncBridge channel (default: 256).
-    datafusion_bridge_queue_depth: usize,
     max_active_scans: usize,
     stream_queue_depth: usize,
     max_buffered_rows: usize,
@@ -4160,7 +4147,6 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
             .map_err(|e| format!("invalid bind: {e}"))?;
     }
     if config.max_sessions == Some(0)
-        || config.datafusion_bridge_queue_depth == Some(0)
         || config.max_active_scans == Some(0)
         || config.stream_queue_depth == Some(0)
         || config.max_buffered_rows == Some(0)
@@ -4225,7 +4211,6 @@ fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
         "otlp_endpoint": config.otlp_endpoint.as_deref().map(redact_catalog_url),
         "idle_connection_timeout": config.idle_connection_timeout,
         "drain_timeout": config.drain_timeout,
-        "datafusion_bridge_queue_depth": config.datafusion_bridge_queue_depth,
         "max_active_scans": config.max_active_scans,
         "stream_queue_depth": config.stream_queue_depth,
         "max_buffered_rows": config.max_buffered_rows,

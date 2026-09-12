@@ -9,8 +9,6 @@
 //!   helper for testing catalog round-trips without a full server.
 //! - `pgwire_harness` — `PgWireHarness`: spins up a PG-Wire server on a
 //!   random port for client compatibility tests (Tier 5+).
-//! - `ivm` — `IvmWorkerHarness`: launches and supervises worker processes for
-//!   incremental-view-maintenance integration tests.
 //! - `gcs_emulator_harness` — `GcsEmulatorHarness`: manages a fake-gcs-server
 //!   container for GCS-backed integration tests (requires `gcs-emulator` feature).
 //! - `azure_emulator_harness` — `AzureEmulatorHarness`: manages an Azurite
@@ -31,8 +29,6 @@ pub mod azure_emulator_harness;
 #[cfg(feature = "gcs-emulator")]
 pub mod gcs_emulator_harness;
 #[cfg(feature = "minio-tests")]
-pub mod ivm;
-#[cfg(feature = "minio-tests")]
 pub mod minio_harness;
 
 pub use catalog_harness::CatalogHarness;
@@ -47,7 +43,5 @@ pub use soak_harness::{SoakConfig, SoakHarness, SoakRunSummary};
 pub use azure_emulator_harness::AzureEmulatorHarness;
 #[cfg(feature = "gcs-emulator")]
 pub use gcs_emulator_harness::GcsEmulatorHarness;
-#[cfg(feature = "minio-tests")]
-pub use ivm::IvmWorkerHarness;
 #[cfg(feature = "minio-tests")]
 pub use minio_harness::MinioHarness;

@@ -906,14 +906,7 @@ struct RssSample {
 }
 
 fn update_max(value: &AtomicU64, candidate: u64) {
-    let mut current = value.load(Ordering::Relaxed);
-    while candidate > current {
-        match value.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
-        {
-            Ok(_) => break,
-            Err(observed) => current = observed,
-        }
-    }
+    value.fetch_max(candidate, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "linux")]

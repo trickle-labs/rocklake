@@ -9648,7 +9648,7 @@ _rocklake() {
             return 0
             ;;
         rocklake__subcmd__serve)
-            opts="-c -b -h --catalog --bind --max-sessions --metrics-port --metrics-path --tls-cert --tls-key --tls-required --auth-user --auth-password --auth-password-file --auth-verifier-file --mode --read-only --cost-mode --s3-endpoint --s3-path-style --encryption-key --encryption-key-file --extension-schemas --otlp-endpoint --idle-connection-timeout --drain-timeout --datafusion-bridge-queue-depth --max-active-scans --stream-queue-depth --max-buffered-rows --max-response-bytes --slow-operation-threshold-ms --config --help"
+            opts="-c -b -h --catalog --bind --max-sessions --metrics-port --metrics-path --tls-cert --tls-key --tls-required --auth-user --auth-password --auth-password-file --auth-verifier-file --mode --read-only --cost-mode --s3-endpoint --s3-path-style --encryption-key --encryption-key-file --extension-schemas --otlp-endpoint --idle-connection-timeout --drain-timeout --max-active-scans --stream-queue-depth --max-buffered-rows --max-response-bytes --slow-operation-threshold-ms --config --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -9739,10 +9739,6 @@ _rocklake() {
                     return 0
                     ;;
                 --drain-timeout)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --datafusion-bridge-queue-depth)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

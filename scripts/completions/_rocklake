@@ -53,7 +53,6 @@ _arguments "${_arguments_options[@]}" : \
 '--otlp-endpoint=[OTLP HTTP endpoint for OpenTelemetry tracing]:OTLP_ENDPOINT:_default' \
 '--idle-connection-timeout=[Close idle connections after this many seconds (default\: 60)]:IDLE_CONNECTION_TIMEOUT:_default' \
 '--drain-timeout=[Maximum seconds to wait for in-flight queries during SIGTERM drain (default\: 30)]:DRAIN_TIMEOUT:_default' \
-'--datafusion-bridge-queue-depth=[Capacity of the DataFusion AsyncBridge channel (default\: 256)]:DATAFUSION_BRIDGE_QUEUE_DEPTH:_default' \
 '--max-active-scans=[Maximum concurrent catalog scans (default\: 25)]:MAX_ACTIVE_SCANS:_default' \
 '--stream-queue-depth=[Maximum queued stream items (default\: 64)]:STREAM_QUEUE_DEPTH:_default' \
 '--max-buffered-rows=[Maximum rows buffered for a response (default\: 1024)]:MAX_BUFFERED_ROWS:_default' \

@@ -890,10 +890,6 @@ pub struct ServeArgs {
     #[arg(long)]
     pub drain_timeout: Option<u64>,
 
-    /// Capacity of the DataFusion AsyncBridge channel (default: 256).
-    #[arg(long)]
-    pub datafusion_bridge_queue_depth: Option<usize>,
-
     /// Maximum concurrent catalog scans (default: 25).
     #[arg(long)]
     pub max_active_scans: Option<usize>,

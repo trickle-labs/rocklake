@@ -3,6 +3,7 @@
 use base64::Engine as _;
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
+use prost::Message;
 use rocklake_core::keys;
 use rocklake_core::mvcc::{self, SnapshotId};
 use rocklake_core::rows::*;
@@ -269,6 +270,19 @@ fn page_legacy_metadata<T: Clone>(
 impl CatalogReader {
     pub(crate) fn new(db: Db, dl_snapshot_id: SnapshotId) -> Self {
         Self { db, dl_snapshot_id }
+    }
+
+    async fn scan_decoded<T: Message + Default>(&self, prefix: &[u8]) -> CatalogResult<Vec<T>> {
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            rows.push(values::decode_value(&kv.value)?);
+        }
+        Ok(rows)
     }
 
     /// Return the DuckLake snapshot ID this reader is bound to.
@@ -1572,33 +1586,13 @@ impl CatalogReader {
     /// v0.25: List all metadata entries (all scopes) for the SQL facade.
     pub async fn list_all_metadata(&self) -> CatalogResult<Vec<MetadataRow>> {
         let prefix = keys::prefix_all_metadata();
-        let mut rows = Vec::new();
-        let mut iter = self.db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let row: MetadataRow = values::decode_value(&kv.value)?;
-            rows.push(row);
-        }
-        Ok(rows)
+        self.scan_decoded(&prefix).await
     }
 
     /// List all implementations of a macro.
     pub async fn list_macro_impls(&self, macro_id: u64) -> CatalogResult<Vec<MacroImplRow>> {
         let prefix = keys::prefix_macro_impls(macro_id);
-        let mut impls = Vec::new();
-        let mut iter = self.db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let row: MacroImplRow = values::decode_value(&kv.value)?;
-            impls.push(row);
-        }
-        Ok(impls)
+        self.scan_decoded(&prefix).await
     }
 
     /// List all parameter rows for a macro implementation.
@@ -1608,17 +1602,7 @@ impl CatalogReader {
         impl_id: u64,
     ) -> CatalogResult<Vec<MacroParametersRow>> {
         let prefix = keys::prefix_macro_params(macro_id, impl_id);
-        let mut params = Vec::new();
-        let mut iter = self.db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let row: MacroParametersRow = values::decode_value(&kv.value)?;
-            params.push(row);
-        }
-        Ok(params)
+        self.scan_decoded(&prefix).await
     }
 
     // ─── Phase 6: Tags ──────────────────────────────────────────────────────
@@ -1704,17 +1688,7 @@ impl CatalogReader {
         &self,
     ) -> CatalogResult<Vec<FilesScheduledForDeletionRow>> {
         let prefix = keys::prefix_for_tag(TAG_FILES_SCHEDULED_FOR_DELETION);
-        let mut rows = Vec::new();
-        let mut iter = self.db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let row: FilesScheduledForDeletionRow = values::decode_value(&kv.value)?;
-            rows.push(row);
-        }
-        Ok(rows)
+        self.scan_decoded(&prefix).await
     }
 
     // ─── v0.27: All-tags / all-column-tags / sort-info ──────────────────────
@@ -1794,17 +1768,7 @@ impl CatalogReader {
     /// List all `ducklake_table_column_stats` rows visible at this snapshot.
     pub async fn list_all_table_column_stats(&self) -> CatalogResult<Vec<TableColumnStatsRow>> {
         let prefix = keys::prefix_for_tag(TAG_TABLE_COLUMN_STATS);
-        let mut rows = Vec::new();
-        let mut iter = self.db.scan_prefix(&prefix).await?;
-        while let Some(kv) = iter
-            .next()
-            .await
-            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-        {
-            let row: TableColumnStatsRow = values::decode_value(&kv.value)?;
-            rows.push(row);
-        }
-        Ok(rows)
+        self.scan_decoded(&prefix).await
     }
 
     /// List all `ducklake_column_mapping` rows visible at this snapshot.

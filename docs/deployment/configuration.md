@@ -164,7 +164,6 @@ equal or ancestor/descendant prefix overlap are rejected.
 | `--encryption-key <64 hex digits>` / `--encryption-key-file <path>` | disabled |
 | `--idle-connection-timeout <seconds>` | `60` |
 | `--drain-timeout <seconds>` | `30` |
-| `--datafusion-bridge-queue-depth <n>` | `256` |
 | `--max-active-scans <n>` | `25` |
 | `--stream-queue-depth <n>` | `64` |
 | `--max-buffered-rows <n>` | `1024` |

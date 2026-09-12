@@ -166,8 +166,7 @@ jobs:
             "--metrics-path" \
             "--read-only" \
             "--idle-connection-timeout" \
-            "--drain-timeout" \
-            "--datafusion-bridge-queue-depth"; do
+            "--drain-timeout"; do
             if echo "$HELP" | grep -qF -- "$flag"; then
               echo "OK: $flag"
             else

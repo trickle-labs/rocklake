@@ -82,7 +82,6 @@ complete -c rocklake -n "__fish_rocklake_using_subcommand serve" -l extension-sc
 complete -c rocklake -n "__fish_rocklake_using_subcommand serve" -l otlp-endpoint -d 'OTLP HTTP endpoint for OpenTelemetry tracing' -r
 complete -c rocklake -n "__fish_rocklake_using_subcommand serve" -l idle-connection-timeout -d 'Close idle connections after this many seconds (default: 60)' -r
 complete -c rocklake -n "__fish_rocklake_using_subcommand serve" -l drain-timeout -d 'Maximum seconds to wait for in-flight queries during SIGTERM drain (default: 30)' -r
-complete -c rocklake -n "__fish_rocklake_using_subcommand serve" -l datafusion-bridge-queue-depth -d 'Capacity of the DataFusion AsyncBridge channel (default: 256)' -r
 complete -c rocklake -n "__fish_rocklake_using_subcommand serve" -l max-active-scans -d 'Maximum concurrent catalog scans (default: 25)' -r
 complete -c rocklake -n "__fish_rocklake_using_subcommand serve" -l stream-queue-depth -d 'Maximum queued stream items (default: 64)' -r
 complete -c rocklake -n "__fish_rocklake_using_subcommand serve" -l max-buffered-rows -d 'Maximum rows buffered for a response (default: 1024)' -r
