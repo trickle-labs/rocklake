@@ -51,6 +51,6 @@ rocklake completions zsh   > scripts/completions/_rocklake
 rocklake completions fish  > scripts/completions/rocklake.fish
 ```
 
-The v0.63.0 source tree keeps the Bash, Zsh, and Fish outputs under
+The v0.63.1 source tree keeps the Bash, Zsh, and Fish outputs under
 `scripts/completions/`; changes to the CLI must regenerate and review all three
 files in the same change.

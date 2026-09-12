@@ -1,6 +1,6 @@
 # Release process
 
-Releases are prepared from the tagged source commit. For v0.63.0, the
+Releases are prepared from the tagged source commit. For v0.63.1, the
 release-blocking `Release Certification` workflow retains the complete
 correctness matrix:
 formatting, clippy, workspace tests, DuckLake conformance, public-surface and
@@ -16,7 +16,7 @@ maintenance tests cover recovery metadata and bounded scheduling. v0.59.0
 encryption envelope, SCRAM verifier-file, and release-governance checks cover
 the supported security boundary. v0.60.0 version-domain, migration-plan,
 verified no-op, downgrade-rejection, status JSON, and v0.59.0 direct-upgrade
-checks cover the compatibility freeze. The v0.63.0 gate validates the public
+checks cover the compatibility freeze. The v0.63.1 gate validates the public
 surface manifest, beta support policy, evidence ledger, redacted support
 bundle, and release artifact contract.
 The publication stage also tests the built artifacts without rebuilding from
@@ -35,10 +35,11 @@ bash scripts/quickstart.sh
 cargo test -p rocklake-pgwire --test v046_cli_tests support_bundle_is_redacted_and_non_overwriting
 test -s docs/operations/beta-support.md
 test -s docs/operations/beta-evidence-v0.63.0.md
+test -s docs/assessments/v1-readiness.md
 ```
 
 Update `CHANGELOG.md` and current version references. Keep claims tied to
-tests: v0.63.0 supports the binary, DuckLake 1.0 targets covered by CI, local
+tests: v0.63.1 supports the binary, DuckLake 1.0 targets covered by CI, local
 and cloud object storage, server-side TLS, password authentication,
 SCRAM-SHA-256 authentication, multi-principal grants, bounded quotas, and
 typed TOML configuration. Rust client, read-only API, DataFusion, and language
@@ -46,17 +47,28 @@ bindings remain Preview or Experimental unless the support-level manifest says
 otherwise. It does not publish Docker images or support mTLS or certificate
 hot-reload.
 
-The release workflow must certify the exact commit SHA before a version tag is
-created. It verifies the tag, Cargo version, and built artifacts against that
-SHA; it does not push a version bump after tagging.
+After the release PR merges, run `Release Certification` with the merge commit
+SHA as `certified-ref`, then wait for every job to pass:
+
+```bash
+git fetch origin main
+CERTIFY_SHA=$(git rev-parse origin/main)
+gh workflow run release-certification.yml --ref main -f certified-ref="$CERTIFY_SHA"
+gh run watch
+```
+
+Create the version tag only after that run passes. The tag-triggered release
+workflow certifies the same SHA again, checks the tag against the Cargo version,
+and builds artifacts without pushing a version bump.
 
 ## Tagging
 
-After review and green CI, merge the release PR and tag the merge commit:
+After the PR checks pass, merge the release PR. After manual Release
+Certification passes on the merge SHA, tag that commit:
 
 ```bash
-git tag v0.63.0
-git push origin v0.63.0
+git tag v0.63.1
+git push origin v0.63.1
 ```
 
 Release artifacts must be built from that tag. The release contains raw

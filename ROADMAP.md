@@ -2141,7 +2141,7 @@ replacement release table is:
 | v0.60.0 | Compatibility and migration freeze | Done |
 | v0.61.0 | Performance, cost, and capacity contract | Done |
 | v0.62.0 | Public surface freeze | Planned |
-| v0.63.0–v0.63.1 | Production beta and readiness audit | Planned |
+| v0.63.0–v0.63.1 | Production beta and readiness audit | In progress (RC1 hold; see [assessment](docs/assessments/v1-readiness.md)). |
 | v0.64.0–v0.64.2 | Deferred multi-node and cloud evidence | Planned |
 | v1.0.0-rc.1–rc.2 | Release candidates | Planned |
 | v1.0.0 | Stable release | Gate-based |
