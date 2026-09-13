@@ -288,10 +288,13 @@ impl Catalog {
 
     /// Close the catalog.
     #[napi]
-    pub fn close(&mut self) {
+    pub fn close(&mut self) -> napi::Result<()> {
         if let Some(inner) = self.inner.take() {
-            inner.close();
+            inner
+                .close()
+                .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         }
+        Ok(())
     }
 }
 

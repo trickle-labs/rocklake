@@ -313,10 +313,11 @@ impl RockLakeCatalog {
     }
 
     /// Close the catalog and release all resources.
-    pub fn close(&mut self) {
+    pub fn close(&mut self) -> PyResult<()> {
         if let Some(inner) = self.inner.take() {
-            inner.close();
+            inner.close().map_err(to_py)?;
         }
+        Ok(())
     }
 
     fn __repr__(&self) -> &'static str {
@@ -336,7 +337,7 @@ impl RockLakeCatalog {
 
 /// RockLake Python extension module.
 #[pymodule]
-fn _rocklake(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn _rocklake(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RockLakeCatalog>()?;
     m.add_class::<RockLakeSnapshot>()?;
     m.add_class::<RockLakeSchema>()?;
