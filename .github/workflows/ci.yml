@@ -604,14 +604,11 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install napi-rs CLI
-        run: npm install -g @napi-rs/cli
-
       - name: Build Node.js bindings
         run: |
           cd bindings/nodejs
           npm install
-          napi build --platform 2>&1 | tail -20
+          npm run build:debug 2>&1 | tail -20
 
       - name: Run Node.js tests
         run: cd bindings/nodejs && node --test test/test_catalog.js
