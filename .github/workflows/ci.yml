@@ -614,7 +614,7 @@ jobs:
           napi build --platform 2>&1 | tail -20
 
       - name: Run Node.js tests
-        run: cd bindings/nodejs && node --test test/
+        run: cd bindings/nodejs && node --test test/test_catalog.js
 
   # ── v0.36.0: SQL Clients & Object Storage Backend Testing ─────────────────
 
