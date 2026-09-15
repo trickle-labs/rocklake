@@ -17,7 +17,7 @@ unsupported or failed operations return errors instead of empty success.
 | Catalog format | 1 / DuckLake catalog version 7 |
 | Local backend | `object_store::local::LocalFileSystem` |
 | MinIO | Testcontainers-backed suite |
-| GCS | `fsouza/fake-gcs-server:latest` |
+| GCS | `tustvold/fake-gcs-server:latest` |
 | Azure | `mcr.microsoft.com/azure-storage/azurite:latest` |
 
 ## Required checks

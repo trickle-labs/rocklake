@@ -1,6 +1,6 @@
 //! GcsEmulatorHarness: manages a fake-gcs-server container for GCS-backed tests.
 //!
-//! Enabled by the `gcs-emulator` feature flag.  Uses `fsouza/fake-gcs-server`
+//! Enabled by the `gcs-emulator` feature flag.  Uses `tustvold/fake-gcs-server`
 //! to provide a GCS-compatible HTTP API on a random local port.
 //!
 //! ## Prerequisites
@@ -29,7 +29,7 @@ pub struct GcsEmulatorHarness {
     endpoint: String,
 }
 
-const GCS_IMAGE: &str = "fsouza/fake-gcs-server:latest";
+const GCS_IMAGE: &str = "tustvold/fake-gcs-server:latest";
 const GCS_DEFAULT_BUCKET: &str = "rocklake-test";
 
 impl GcsEmulatorHarness {

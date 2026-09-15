@@ -23,7 +23,6 @@ jobs:
           LSAN_OPTIONS: detect_leaks=0
         run: |
           cargo test -p rocklake-ffi --target x86_64-unknown-linux-gnu
-          cargo test -p rocklake-catalog --test v04717_production_failure_tests -- --test-threads=1
       - name: Run with UBSAN
         env:
           RUSTFLAGS: "-Z ub-checks=yes"

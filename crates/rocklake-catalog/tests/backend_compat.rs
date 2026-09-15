@@ -71,7 +71,7 @@ mod gcs_compat {
         if harness_lock.is_none() {
             let harness = GcsEmulatorHarness::start()
                 .await
-                .map_err(|e| format!("GCS emulator unavailable (requires Docker + fake-gcs-server): {e}. \n                         Run: docker pull fsouza/fake-gcs-server:latest"))
+                .map_err(|e| format!("GCS emulator unavailable (requires Docker + fake-gcs-server): {e}. \n                         Run: docker pull tustvold/fake-gcs-server:latest"))
                 .expect("failed to initialize GCS emulator");
             *harness_lock = Some(Arc::new(harness));
         }
