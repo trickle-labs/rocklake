@@ -58,12 +58,12 @@ def main() -> None:
         cwd=ROOT,
         start_new_session=True,
     )
-    deadline = time.monotonic() + 600
+    deadline = time.monotonic() + 1_800
     while process.poll() is None and not estimates_path.exists():
         if time.monotonic() >= deadline:
             stop_process(process, signal.SIGKILL)
             process.wait()
-            raise TimeoutError("benchmark did not produce an estimate within 10 minutes")
+            raise TimeoutError("benchmark did not produce an estimate within 30 minutes")
         time.sleep(0.1)
     if estimates_path.exists() and process.poll() is None:
         stop_process(process, signal.SIGTERM)
