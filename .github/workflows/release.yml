@@ -272,6 +272,7 @@ jobs:
           name: RockLake v${{ needs.prepare.outputs.version }}
           draft: false
           prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
+          preserve_order: true
           files: |
             artifacts/*
           generate_release_notes: true
