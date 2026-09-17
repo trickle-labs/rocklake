@@ -43,7 +43,7 @@ merge SHA must pass the security jobs in Release Certification before tagging.
 
 | Risk | Owner | Rationale | User-facing documentation | Milestone |
 |---|---|---|---|---|
-| AWS S3, GCS, and Azure scale are not certified. | Release maintainer (@grove) | No qualifying scale evidence is recorded; support claims remain bounded to the tested envelope. | [Beta support](../operations/beta-support.md) | v0.64.0–v0.64.2 |
+| AWS S3, GCS, and Azure scale are not certified. | Release maintainer (@grove) | No qualifying scale evidence is recorded; support claims remain bounded to the tested envelope. | [Beta support](../operations/beta-support.md) | v0.80.0–v0.80.2 |
 
 ## Evidence
 

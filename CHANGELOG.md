@@ -37,7 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Deferred
 
-- AWS S3, GCS, and Azure scale evidence remains deferred to v0.64.0–v0.64.2.
+- AWS S3, GCS, and Azure scale evidence remains deferred to v0.80.0–v0.80.2.
 - New features, public-surface changes, and feature requests remain out of the
   beta branch until the v1.0 release-candidate process.
 

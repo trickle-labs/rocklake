@@ -11,7 +11,7 @@ interfaces keep their existing Preview or Experimental levels.
 - No new feature, query shape, public field, storage format, or backend is
   accepted into the beta branch.
 - LocalFS and MinIO evidence is complete for the existing certified envelope.
-- AWS S3, GCS, and Azure scale evidence remains deferred to v0.64.0–v0.64.2.
+- AWS S3, GCS, and Azure scale evidence remains deferred to v0.80.0–v0.80.2.
 - A support request must include a redacted `rocklake support bundle` when the
   catalog can be opened. Review paths and identifiers before sharing it.
 

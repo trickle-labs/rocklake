@@ -1,16 +1,15 @@
-# RockLake pre-1.0 roadmap and implementation plan
+# RockLake roadmap and implementation plan
 
-- **Status:** Proposal
-- **Baseline:** RockLake v0.51.4
+- **Status:** Active
+- **Baseline:** RockLake v0.63.1
 - **Prepared:** 2026-09-02
-- **Intended repository path:** `plans/pre-1.0-roadmap.md`
+- **Updated:** 2026-09-17
 - **Planning model:** Gate-based, not date-based
-- **Stable target:** v1.0.0
+- **Stable target:** Unscheduled
 
-> This document defines every planned thematic release after v0.51.4 and before
-> v1.0.0. Unscheduled patch releases remain available for security,
-> correctness, compatibility, and release-engineering fixes, but they do not
-> acquire independent feature scope.
+> The active sequence is v0.63.2 through v0.63.7 and culminates in v0.64.0. It
+> repairs the v0.63.1 baseline and certifies the result with local evidence.
+> Real-cloud testing and v1.0 release candidates are postponed indefinitely.
 
 ## 1. Purpose
 
@@ -23,13 +22,12 @@ remaining work is to prove that architecture at scale, simplify the internal
 request path, add safe multi-catalog service operation, and freeze a supportable
 public product.
 
-This roadmap proposes the full sequence from v0.51.5 through the v1.0 release
-candidates. It intentionally places multi-tenancy after the current evidence
-and consolidation work. Multi-tenancy is implemented as **routing to independent
-catalogs**, not by adding a tenant identifier to every key in one shared
-catalog.
+This roadmap records the completed sequence from v0.51.5 through v0.63.1 and
+the active repair sequence that culminates in v0.64.0. Multi-tenancy routes to
+independent catalogs. It does not add a tenant identifier to every key in one
+shared catalog.
 
-The proposal is based on the current repository direction recorded in:
+The roadmap is based on the repository direction recorded in:
 
 - [`ROADMAP.md`](../ROADMAP.md)
 - [`docs/assessments/v0.51.md`](../docs/assessments/v0.51.md)
@@ -40,7 +38,7 @@ The proposal is based on the current repository direction recorded in:
 
 ## 2. Executive decision
 
-The recommended pre-1.0 sequence is:
+The active sequence and its completed foundations are:
 
 1. Repair the binary distribution contract.
 2. Produce reproducible local and MinIO evidence.
@@ -52,19 +50,25 @@ The recommended pre-1.0 sequence is:
    distributed multi-writer semantics.
 7. Complete disaster-recovery, security, migration, performance, public-surface,
    and field-validation gates.
-8. After v0.63.0, complete the deferred multi-node and AWS S3, GCS, and Azure
-   evidence gates.
-9. Enter release-candidate mode with no new features or format changes.
+8. Repair the evidence gate, independent readers, backups, retention, router
+   concurrency, request cancellation, and native handle ownership.
+9. Remove measured local scaling obstacles and make operator output distinguish
+   observations from estimates.
+10. Certify v0.63.7 with candidate-specific local evidence, upgrade tests, and
+    release-artifact tests.
+11. Ship v0.64.0 as the resulting quality baseline without adding new scope.
+12. Keep AWS S3, GCS, Azure, multi-node field testing, and v1.0 release
+    candidates unscheduled until resources and a separate decision exist.
 
-The target v1.0 product is a **boring, measurable, recoverable DuckLake catalog
-appliance** that can run either one catalog or many independently isolated
-catalogs behind one service endpoint.
+The long-term product direction remains a measurable, recoverable DuckLake
+catalog that can run one catalog or many independently isolated catalogs behind
+one service endpoint. This roadmap assigns no v1.0 date.
 
-## 3. v1.0 product definition
+## 3. Long-term product definition
 
 ### 3.1 Supported product path
 
-The v1.0 supported path should be limited to:
+If v1.0 planning resumes, its supported path should be limited to:
 
 - The `rocklake` binary.
 - PostgreSQL wire protocol as emitted by the named supported DuckDB/DuckLake
@@ -74,8 +78,8 @@ The v1.0 supported path should be limited to:
   location, writer epoch, retention floor, backup history, limits, and metrics.
 - Local filesystem for development and certification.
 - MinIO or an explicitly certified S3-compatible service.
-- AWS S3 after the v0.64.0 real-cloud evidence gate.
-- GCS and Azure after the v0.64.2 real-cloud evidence gates.
+- AWS S3 after the v0.80.0 real-cloud evidence gate.
+- GCS and Azure after the v0.80.2 real-cloud evidence gates.
 
 The Rust client, read-only API, DataFusion integration, and language bindings
 must retain explicit support levels. They do not automatically become Supported
@@ -177,8 +181,9 @@ Every release from v0.51.5 onward must retain these gates:
 - A machine-readable release manifest listing every asset and digest.
 
 Material changes to SlateDB, `object_store`, serialization, encryption, key
-encoding, the PG-wire library, or the Rust toolchain rerun the relevant recovery
-and real-cloud baselines before release.
+encoding, the PG-wire library, or the Rust toolchain rerun the relevant local
+recovery and performance baselines. Remote-cloud baselines apply only after the
+remote-cloud program is scheduled.
 
 ## 5. Proposed release sequence
 
@@ -199,12 +204,19 @@ and real-cloud baselines before release.
 | **v0.61.0** | Performance and cost | Evidence-driven optimizations meet committed regression budgets and produce a supported capacity model. |
 | **v0.62.0** | Public surface freeze | CLI, configuration, metrics, errors, artifacts, logs, and operator workflows are frozen and documented. **Done** |
 | **v0.63.0** | Production beta | The feature-complete system enters design-partner production with no new feature work. **Done** |
-| **v0.63.1** | Beta fixes and readiness audit | All release-blocking beta findings are closed and the complete v1.0 audit is published. |
-| **v0.64.0** | AWS S3 evidence (deferred from v0.52.1) | Real-S3 results cover performance, recovery, reader scale, failures, request volume, bytes, and cost. |
-| **v0.64.1** | Multi-node soak (deferred from v0.52.2) | A 24-hour workload preserves catalog invariants and avoids progressive resource or latency degradation. |
-| **v0.64.2** | GCS, Azure, and evidence closure (deferred from v0.52.3) | Each cloud has an independent evidence decision, and all scale/support claims are reconciled with published results. |
-| **v1.0.0-rc.1** | First release candidate | No unresolved P0/P1 finding, no format change, and the complete certification matrix passes. |
-| **v1.0.0-rc.2** | Final release candidate | Only blocker fixes differ from RC1, and the full matrix and observation gate pass again. |
+| **v0.63.1** | Beta fixes and readiness audit | The readiness audit is published with an RC hold decision. **Done** |
+| **v0.63.2** | Honest baseline and evidence gate | Documentation agrees on the support boundary, and invalid or absent candidate measurements fail CI. |
+| **v0.63.3** | Safe readers and recovery | Independent readers preserve writer availability, and backup, checkpoint, retention, and retry regressions pass locally. |
+| **v0.63.4** | Predictable concurrency | Router opens, reloads, cancellation, SQL batches, and native handles obey bounded lifecycle contracts. |
+| **v0.63.5** | Local scaling obstacles | Cleanup avoids repeated full scans, response buffering has a measured bound, and job controls describe executable behavior. |
+| **v0.63.6** | Honest operator output | Cache and capacity reports distinguish observed values, user inputs, projections, and estimates. |
+| **v0.63.7** | Local release certification | Candidate-specific local evidence, previous-release upgrade and restore, and artifact-only quickstart pass. |
+| **v0.64.0** | Quality baseline | The v0.63.2 through v0.63.7 work ships as one documented, locally certified baseline. |
+| **v0.80.0** | AWS S3 evidence | **Unscheduled.** Begin only after resources and a separate approval exist. |
+| **v0.80.1** | Multi-node soak | **Unscheduled.** Begin only after its topology and operating budget exist. |
+| **v0.80.2** | GCS, Azure, and evidence closure | **Unscheduled.** Emulator results cannot graduate a backend. |
+| **v1.0.0-rc.1** | First release candidate | **Postponed indefinitely.** |
+| **v1.0.0-rc.2** | Final release candidate | **Postponed indefinitely.** |
 
 ## 6. Critical path
 
@@ -243,16 +255,34 @@ v0.54.0 static router -> v0.55.0 registry        |
                      v0.62.0 public surface freeze (done)
                                 |
                                 v
-                     v0.63.x production beta (started)
+                     v0.63.0-v0.63.1 beta baseline
                                 |
                                 v
-              v0.64.0 AWS S3 -> v0.64.1 soak
+                 v0.63.2 honest evidence gate
                                 |
                                 v
-                   v0.64.2 GCS/Azure closure
+                 v0.63.3 safe reads/recovery
                                 |
                                 v
-                   v1.0.0-rc.1 -> rc.2 -> v1.0.0
+                 v0.63.4 bounded concurrency
+                                |
+                                v
+                 v0.63.5 local scaling fixes
+                                |
+                                v
+                 v0.63.6 honest operator output
+                                |
+                                v
+                 v0.63.7 local certification
+                                |
+                                v
+                 v0.64.0 quality baseline
+                                |
+                                v
+          v0.80.x remote-cloud work (unscheduled)
+                                |
+                                v
+          v1.0 release candidates (postponed indefinitely)
 ```
 
 The multi-catalog work has an additional entry gate from the accepted routing
@@ -435,7 +465,11 @@ envelope rather than a qualitative scale claim.
 
 ---
 
-### v0.64.0 — Deferred AWS S3 production evidence
+### v0.80.0 — Deferred AWS S3 production evidence
+
+**Status: Unscheduled.** The v0.80.0 through v0.80.2 sections are retained as
+future proposals. They do not block v0.64.0, and no live-cloud work begins
+without a separate resource and scope decision.
 
 #### Scope
 
@@ -508,7 +542,7 @@ behavior, and cost assumptions.
 
 ---
 
-### v0.64.1 — Deferred multi-node 24-hour soak and fault matrix
+### v0.80.1 — Deferred multi-node 24-hour soak and fault matrix
 
 #### Scope
 
@@ -576,7 +610,7 @@ cases.
 
 ---
 
-### v0.64.2 — Deferred GCS, Azure, and evidence closure
+### v0.80.2 — Deferred GCS, Azure, and evidence closure
 
 #### Scope
 
@@ -608,7 +642,7 @@ not hidden behind a generic “object storage supported” statement.
 - [ ] Add `EVIDENCE.md` as the index of all certified bundles, schemas, machines,
       backends, dependency versions, and supported envelopes.
 - [ ] Reconcile `README.md`, `COMPATIBILITY.md`, deployment guides, and product
-      claims with the complete v0.64 results.
+      claims with the complete v0.80 results.
 - [ ] Add a release gate that rejects a support-matrix change unless it links to
       a valid evidence bundle and exact Git SHA.
 
@@ -625,7 +659,7 @@ not hidden behind a generic “object storage supported” statement.
 - LocalFS, MinIO, AWS, GCS, and Azure each have a separate decision for
   functional support, recovery certification, and scale certification.
 - No generic cloud claim exceeds the least-supported named backend.
-- The v0.64 evidence index can reproduce every published chart and table from
+- The v0.80 evidence index can reproduce every published chart and table from
   raw data.
 - Any backend that fails remains explicitly Preview or functionally supported
   only, with a named gap and owner.
@@ -1328,7 +1362,7 @@ maintenance, and rehearse disaster recovery without internal code knowledge.
 - Simulate missing referenced data, stale encryption keys, wrong registry
   generation, and conflicting destination prefixes.
 - Measure recovery on LocalFS and MinIO. Defer real-cloud measurements to
-  v0.64.0–v0.64.2.
+  v0.80.0–v0.80.2.
 
 #### Exit conditions
 
@@ -1552,7 +1586,7 @@ clear failure before any unsafe downgrade writes occur.
 
 #### Scope
 
-Optimize only the bottlenecks demonstrated by v0.52.0–v0.64.2 evidence. Freeze the
+Optimize only the bottlenecks demonstrated by v0.52.0–v0.80.2 evidence. Freeze the
 performance regression process and publish the supported capacity model for
 v1.0. v0.61.0 ships the bounded capacity-report and pricing-input contract;
 unmeasured hot-path optimizations remain deferred.
@@ -1735,7 +1769,7 @@ clarification.
 #### Entry gate
 
 - v0.52.0 LocalFS and MinIO evidence is complete.
-- AWS S3, GCS, and Azure evidence is deferred to v0.64.0–v0.64.2. These
+- AWS S3, GCS, and Azure evidence is deferred to v0.80.0–v0.80.2. These
   backends are not called scale certified before their deferred gates pass.
 - Multi-catalog isolation has passed v0.56.
 - Writer ownership, DR, security, migration, performance, and public-surface
@@ -1807,7 +1841,7 @@ publish the final readiness assessment used to decide whether RC1 may be cut.
 
 #### Exit conditions
 
-- The readiness assessment recommends RC with no unresolved release blocker.
+- The readiness assessment records the RC decision and every unresolved gate.
 - Every accepted risk has an owner, rationale, user-visible documentation, and
   post-1.0 milestone where appropriate.
 - The complete release certification passes on the tag.
@@ -1820,7 +1854,320 @@ publish the final readiness assessment used to decide whether RC1 may be cut.
 
 ---
 
+### v0.63.2: Honest baseline and evidence gate
+
+#### Scope
+
+Make the roadmap, support claims, and performance gate describe what this
+checkout can prove. The supporting source review and acceptance details are in
+[`status-as-ofv0.63.1.md`](status-as-ofv0.63.1.md).
+
+#### Implementation plan
+
+- [ ] T01: Make v0.63.2 through v0.63.7, leading to v0.64.0, the active
+      sequence. Reconcile the README, compatibility tables, beta support,
+      readiness assessment, and capacity documentation. Record post-v0.63.1
+      work in the changelog.
+- [ ] T01: Link every retained performance claim to raw results with the exact
+      source revision and environment. Withdraw or label unsupported claims.
+- [ ] T02: Give the benchmark checker separate candidate and baseline inputs.
+      Reject empty reports, missing metrics, nonfinite values, unit drift, and
+      incompatible measurement identities.
+- [ ] T02: Correct minimum-threshold lookup and cover both latency maximums and
+      throughput minimums.
+- [ ] T02: Run one small benchmark from the candidate in CI and archive its raw
+      output. Baseline updates remain a separate reviewed operation.
+- [ ] T02: Before gating on `rocklake-evidence`, make correctness mismatches
+      fatal and record accurate candidate identity and metric accounting.
+
+#### Exit conditions
+
+- Documentation agrees that v1.0 and remote-cloud testing are unscheduled.
+- Empty, incomplete, incompatible, and deliberately regressed candidate results
+  fail the performance gate.
+- Strict documentation and compatibility-manifest validation pass.
+
+#### Non-goals
+
+- No large benchmark matrix in routine CI.
+- No new capacity or cloud claim.
+
+---
+
+### v0.63.3: Safe readers and recovery
+
+#### Scope
+
+Repair the storage and recovery paths that can fence a writer, produce an
+incomplete backup, or accept an invalid retention boundary.
+
+#### Implementation plan
+
+- [ ] T03: Replace writer-capable `Db` opens in independent read paths with
+      SlateDB's reader API. Preserve encryption, exact snapshots, refresh,
+      retention checks, and close behavior.
+- [ ] T03: Route read-only server, router, Rust client, synchronous client, and
+      FFI opens through the corrected path. Audit direct `Db::open` calls in
+      read-only CLI commands.
+- [ ] T03: Replace shared-handle reader tests with independently opened local
+      handles and processes. Test one writer with 1, 4, and 16 readers.
+- [ ] T04: Include visible data and delete files in backup inventory, resolve
+      relative paths canonically, verify object sizes, and retain object-store
+      error classes.
+- [ ] T04: Collect encryption key IDs without imposing the 100,000-reference
+      inline-inventory cap on every backup.
+- [ ] T05: Cross-check the outer backup manifest with the export header. Derive
+      snapshot-dependent fields from one view, stage output, and refuse to
+      overwrite a completed artifact.
+- [ ] T06: Propagate retention-floor corruption. Reject expired and future
+      pins transactionally, and define how restorable checkpoints protect or
+      reject missing object references.
+- [ ] T06: Prevent cleanup from deleting an object that still has a live or
+      protected canonical reference.
+- [ ] T07: Retry only transaction conflicts. Propagate fencing, corruption,
+      cancellation, and permanent storage failures within a bounded deadline.
+
+#### Exit conditions
+
+- Independent readers never fence the active writer and refresh to durable
+  commits within the documented freshness bound.
+- A default backup with 100,001 references succeeds. Missing delete files,
+  wrong sizes, permission failures, and tampered restore points fail clearly.
+- Protected checkpoints keep readable objects, or unsupported restore attempts
+  fail before publishing broken metadata.
+- Permanent commit failures return promptly, while genuine conflicts can retry.
+
+#### Non-goals
+
+- No data-copy promise for metadata-only backups.
+- No new storage format unless the repair requires a versioned change.
+
+---
+
+### v0.63.4: Predictable concurrency
+
+#### Scope
+
+Make catalog opening, route reload, cancellation, SQL batching, and native
+handle ownership terminate predictably and obey their configured bounds.
+
+#### Implementation plan
+
+- [ ] T08: Replace the router's notification window with completion state that
+      survives early notification and opener cancellation.
+- [ ] T08: Reserve `max_open_catalogs` capacity before storage I/O. Count both
+      opening and cached handles and release reservations on every exit path.
+- [ ] T09: Reject storage-identity changes for a live catalog ID, or drain and
+      reopen through a documented generation transition.
+- [ ] T09: Apply supported quota changes to future admission while accounting
+      for existing permits. Reject restart-only changes without replacing the
+      active configuration.
+- [ ] T10: Reproduce cancellation during a transaction, then put abort cleanup
+      at the cancellation owner for simple query, extended query, COPY,
+      timeout, and disconnect.
+- [ ] T11: Replace keyword detection and raw semicolon splitting with the
+      installed SQL parser and existing classifier.
+- [ ] T12: Serialize Go access to each FFI handle. Add observable close errors,
+      explicit destruction, and a lifecycle that permits leak detection.
+
+#### Exit conditions
+
+- Waiters terminate after early completion, open failure, and opener abort.
+  Capacity-one tests never open two stores or acquire an epoch for a rejected
+  route.
+- Reload tests cover aliases, location, mode, quota increases, and quota
+  decreases with live sessions and an in-progress open.
+- Cancellation cannot commit earlier buffered work through a later `COMMIT`.
+- Quoted semicolons and trigger words retain their SQL meaning in a batch.
+- Go race checks and native sanitizer checks pass repeated open, close, and
+  destroy cycles with leak detection enabled.
+
+#### Non-goals
+
+- No transparent route migration between storage locations.
+- No new SQL grammar or native binding family.
+
+---
+
+### v0.63.5: Remove measured local scaling obstacles
+
+#### Scope
+
+Remove confirmed repeated work and define resource bounds where measurement
+shows that the current contract is incomplete.
+
+#### Implementation plan
+
+- [ ] T13: Gather file retirement and reference evidence once per cleanup
+      operation. Preserve canonical-path and protected-reference checks.
+- [ ] T13: Group or sort name intervals before overlap verification. Measure
+      full verification time and peak RSS before adding paging or spill.
+- [ ] T14: Measure retained rows and bytes with slow local PG-wire consumers.
+      Enforce limits at the component that owns the memory, or simplify settings
+      that duplicate sufficient native backpressure.
+- [ ] T14: Keep total response size separate from in-flight buffered bytes in
+      configuration, errors, and metrics.
+- [ ] T15: Inventory every administrative job kind against its actual execute,
+      progress, cancellation, restart, and resume behavior.
+- [ ] T15: Reject unsupported scheduling or resume operations. Retain bounded
+      foreground commands and host-supervisor scheduling where they suffice.
+- [ ] T15: Make due-claim and job creation recoverable if queued scheduling
+      remains, and mark failures retryable only when the error class permits it.
+
+#### Exit conditions
+
+- Counting-store tests show cleanup scan work grows approximately linearly from
+  1,000 to 10,000 candidates without weakening deletion safety.
+- Slow consumers stay within the declared memory bound, fast consumers make
+  progress, and disconnect releases resources.
+- Each advertised job control executes its contract or returns an explicit
+  unsupported result. State changes alone are not reported as resumed work.
+
+#### Non-goals
+
+- No new queue, spill system, or background service without a measured need.
+- No claim that every administrative operation is resumable.
+
+---
+
+### v0.63.6: Honest operator output
+
+#### Scope
+
+Make cache and capacity commands report facts that operators can distinguish
+from inputs, projections, and estimates.
+
+#### Implementation plan
+
+- [ ] T16: Remove synthetic cache hits, misses, evictions, and hit ratios from
+      observed-statistic fields, or replace them with real SlateDB observations.
+- [ ] T16: Label working-set calculations and capacity profiles as estimates,
+      including their assumptions and evidence status.
+- [ ] T16: Report unknown observations as unknown. Do not turn absent data into
+      measured zero activity.
+- [ ] T16: Recommend only controls that reach the actual serving configuration.
+- [ ] T16: Correct `snapshot_history`, which currently repeats the latest
+      snapshot ID, or rename it through the public-schema compatibility policy.
+
+#### Exit conditions
+
+- An untouched catalog reports no invented cache activity.
+- Capacity output separates operator inputs, projections, estimates, and
+  measurements in both human and JSON output.
+- Any JSON change follows the public manifest and deprecation policy.
+
+#### Non-goals
+
+- No custom cache or speculative prefetch system.
+- No automatic rejection based on an estimated capacity profile.
+
+---
+
+### v0.63.7: Local release certification
+
+#### Scope
+
+Certify the repaired release with raw local evidence, previous-release state,
+and the exact artifacts intended for distribution.
+
+#### Implementation plan
+
+- [ ] T17: Extend `rocklake-evidence` instead of adding a second framework.
+      Fail correctness mismatches, record current release identity, account for
+      transferred ranges accurately, and avoid buffering export in memory.
+- [ ] T17: Retain raw repeated samples for first-row latency, completion
+      latency, peak RSS, post-close resource use, and object-store activity.
+- [ ] T17: Run the required LocalFS matrix at 10,000 and 100,000 visible files,
+      including historical versions, deletes, wide metadata, 1/4/16 independent
+      readers, multiple catalogs, open/evict churn, cancellation, and at least
+      30 minutes of mixed work.
+- [ ] T17: Run one-million-file, larger registry, Local MinIO, and emulator
+      profiles only when local resources permit. Missing optional runs reduce
+      the published envelope.
+- [ ] T18: Run a populated DuckDB quickstart, reconnect, and persistence test
+      against the built artifact in a clean directory.
+- [ ] T18: Use v0.63.1 to create a catalog and backup. Open, read, write,
+      reopen, and restore them with the candidate. Retain the v0.60.0 minimum
+      direct-upgrade fixture and unknown-format rejection.
+- [ ] T18: Reconcile release notes, support tables, and evidence links with the
+      exact candidate SHA and artifact digests.
+
+#### Exit conditions
+
+- Raw candidate reports reproduce every retained local performance and scale
+  claim. Missing optional runs produce a smaller documented envelope.
+- One writer and 1, 4, and 16 independent readers preserve catalog invariants
+  throughout the local process test.
+- The v0.63.1 upgrade, reopen, and restore sequence passes.
+- The downloaded release artifact completes installation and populated
+  quickstart checks without rebuilding RockLake.
+
+#### Non-goals
+
+- No live AWS S3, GCS, or Azure test.
+- No field-observation or v1.0 entry gate.
+
+---
+
+### v0.64.0: Quality baseline
+
+#### Scope
+
+Ship the completed v0.63.2 through v0.63.7 work as the new quality,
+ergonomics, performance, and local scalability baseline.
+
+#### Implementation plan
+
+- [ ] Confirm that every required v0.63.2 through v0.63.7 exit condition is
+      complete on the exact candidate SHA.
+- [ ] Publish release notes that distinguish fixes, changed contracts, measured
+      local evidence, unsupported claims, and optional work that remains open.
+- [ ] Publish the certified artifacts and verify their manifests and digests.
+
+#### Exit conditions
+
+- No unresolved local correctness, recovery, isolation, or release-artifact
+  blocker remains.
+- Documentation and support tables match the candidate's demonstrated local
+  envelope.
+- The release artifact passes the v0.63.7 upgrade, restore, and quickstart
+  matrix without rebuilding RockLake.
+
+#### Non-goals
+
+- No live AWS S3, GCS, or Azure testing.
+- No v1.0 release-candidate work.
+
+---
+
+### Unscheduled optional work before v0.80
+
+The following tasks stay outside the required v0.63.2 through v0.63.7 path.
+Start one only after its dependency is complete and the required release work
+has capacity.
+
+- [ ] T19: After v0.63.3 and v0.63.4, expose existing paging, table
+      description, and refresh operations consistently across bindings. Fix the
+      checked-in Node declaration for `openReadonly`.
+- [ ] T20: After native handle ownership is safe, test a populated binding
+      fixture, numeric boundaries, Unicode, URI handling, and clean-directory
+      installation. Provide one working Go source-build path.
+- [ ] T21: Apply projection to empty DataFusion scans and test projected,
+      reordered, and aggregate schemas.
+- [ ] T22: Measure registry mutation size and latency before bounding request
+      deduplication history or adding compaction.
+- [ ] T23: If restart cost justifies it after T15, make export the first truly
+      resumable operation and prove identical output after interruption.
+
+Completion of these tasks does not change a binding or backend support level
+without its separate certification.
+
+---
+
 ### v1.0.0-rc.1 — First stable-line release candidate
+
+**Status: Postponed indefinitely.** The release-candidate sections remain as
+long-term reference material and are not part of the active v0.63.x sequence.
 
 #### Scope
 
@@ -1904,10 +2251,10 @@ RCs are not thematic roadmap versions and introduce no new scope.
 
 ---
 
-### 8. v1.0.0 release gate
+### 8. Long-term v1.0.0 release gate (inactive)
 
-v1.0.0 is a release decision, not another implementation milestone. The tag may
-be created only when all of the following are true.
+v1.0.0 is postponed indefinitely. If planning resumes, the tag may be created
+only when all of the following are true.
 
 ### 8.1 Correctness and durability
 
@@ -1974,13 +2321,13 @@ be created only when all of the following are true.
 
 ## 9. Cross-release certification matrix
 
-| Capability | First owning release | Must remain green through v1.0 |
+| Capability | First owning release | Ongoing gate |
 |---|---:|---|
 | Artifact-only installation | v0.51.5 | All supported platforms and every release candidate |
 | Fresh-process scale schema | v0.52.0 | Every material storage/runtime dependency change |
-| Real AWS recovery and cost | v0.64.0 | Every material object-store/SlateDB change |
-| Sustained mixed-workload soak | v0.64.1 | Availability, job, cache, and routing changes |
-| GCS/Azure evidence | v0.64.2 | Only for backends that remain Supported |
+| Real AWS recovery and cost | v0.80.0 | Unscheduled; required only if this program resumes |
+| Sustained multi-node soak | v0.80.1 | Unscheduled; required only if this program resumes |
+| GCS/Azure evidence | v0.80.2 | Unscheduled; required only if this program resumes |
 | Request lifecycle state machine | v0.53.0 | Every protocol and server change |
 | Unified bounded encoding | v0.53.1 | Every metadata schema or encoder change |
 | Resumable job contract | v0.53.2 | Every maintenance operation |
@@ -1994,11 +2341,17 @@ be created only when all of the following are true.
 | Performance/capacity budgets | v0.61.0 | Every runtime/storage dependency or hot-path change |
 | Public surface manifest | v0.62.0 | Every commit after freeze |
 | Design-partner observation | v0.63.0 | RC blocker fixes restart affected gates |
+| Candidate evidence integrity | v0.63.2 | Every performance-gate or evidence-schema change |
+| Independent reader and recovery safety | v0.63.3 | Every storage-open, backup, retention, checkpoint, or retry change |
+| Router and request lifecycle bounds | v0.63.4 | Every route, quota, cancellation, SQL batch, FFI, or Go lifecycle change |
+| Local maintenance and response bounds | v0.63.5 | Every cleanup, verify, response-buffer, or job-control change |
+| Operator output semantics | v0.63.6 | Every cache, capacity, recommendation, or public JSON change |
+| Local artifact and upgrade certification | v0.63.7 | Every subsequent release |
 
-## 10. Recommended repository structure for the roadmap
+## 10. Release plan file structure
 
-If adopted, split this proposal into release-owned files while retaining this
-file as the index:
+When a release needs a separate implementation plan, use a release-owned file
+and retain this file as the index:
 
 ```text
 plans/
@@ -2019,9 +2372,16 @@ plans/
 ├── v0.62.0.md
 ├── v0.63.0.md
 ├── v0.63.1.md
+├── v0.63.2.md
+├── v0.63.3.md
+├── v0.63.4.md
+├── v0.63.5.md
+├── v0.63.6.md
+├── v0.63.7.md
 ├── v0.64.0.md
-├── v0.64.1.md
-├── v0.64.2.md
+├── v0.80.0.md
+├── v0.80.1.md
+├── v0.80.2.md
 ├── v1.0.0-rc.1.md
 └── v1.0.0-rc.2.md
 ```
@@ -2084,7 +2444,10 @@ Additional required ownership:
 | Risk | Consequence | Mitigation and owning release |
 |---|---|---|
 | Evidence is run on convenient but unrepresentative hardware | Misleading scale claims | Fresh-process schema, pinned environments, and raw data in v0.52.0 |
-| Cloud emulator behavior is treated as production evidence | Recovery or retry surprises | Real-cloud gates in v0.64.0 and v0.64.2 |
+| Cloud emulator behavior is treated as production evidence | Recovery or retry surprises | Keep emulator labels; graduate no backend until the unscheduled real-cloud program runs |
+| A read-only open fences the active writer | Writer outage during inspection or reader scale-out | Native SlateDB reader path and independent-process regressions in v0.63.3 |
+| Backup metadata disagrees with its export or referenced objects | Restore failure or incomplete recovery evidence | Snapshot-consistent manifest checks and referenced-object tests in v0.63.3 |
+| Router open or reload exceeds its lifecycle bounds | Stuck waiters, excess handles, or wrong-catalog access | Cancellation-safe first open, pre-open reservation, and reload tests in v0.63.4 |
 | Multi-catalog routing leaks identity through aliases, caches, logs, or metrics | Cross-tenant disclosure | Stable CatalogId, prefix proof, auth-before-disclosure, and adversarial certification in v0.54–v0.56 |
 | Registry becomes a new single point of failure | Service-wide route outage | Independent registry backup, immutable snapshots, emergency read-only mode, and DR in v0.55/v0.58 |
 | Writer ownership weakens fencing | Split-brain writes | Fencing remains authoritative; assignment is only an availability layer in v0.57 |
@@ -2118,11 +2481,17 @@ implemented:
 12. v1.0 supported capacity envelope and performance budgets — v0.61.0.
 13. Stable public surface and support-level graduation decisions — v0.62.0.
 14. Beta severity policy and RC entry criteria — v0.63.0.
+15. Native reader freshness, checkpoint behavior, and read-only API contract —
+    v0.63.3.
+16. Backup restore-point identity and protected-object contract — v0.63.3.
+17. Router descriptor reload and live quota-transition policy — v0.63.4.
+18. Candidate evidence identity, required metrics, and local acceptance budgets —
+    v0.63.7.
 
-## 15. Recommended update to the root roadmap
+## 15. Concise release index
 
-The root `ROADMAP.md` should remain concise and link to this document. A proposed
-replacement release table is:
+Use this table when a concise copy of the active sequence is needed in the
+README or documentation:
 
 ```markdown
 ## Pre-1.0 release sequence
@@ -2141,27 +2510,29 @@ replacement release table is:
 | v0.60.0 | Compatibility and migration freeze | Done |
 | v0.61.0 | Performance, cost, and capacity contract | Done |
 | v0.62.0 | Public surface freeze | Planned |
-| v0.63.0–v0.63.1 | Production beta and readiness audit | In progress (RC1 hold; see [assessment](docs/assessments/v1-readiness.md)). |
-| v0.64.0–v0.64.2 | Deferred multi-node and cloud evidence | Planned |
-| v1.0.0-rc.1–rc.2 | Release candidates | Planned |
-| v1.0.0 | Stable release | Gate-based |
+| v0.63.0–v0.63.1 | Production beta and readiness audit | Done; RC1 held |
+| v0.63.2 | Honest baseline and evidence gate | Active next release |
+| v0.63.3 | Safe readers and recovery | Planned |
+| v0.63.4 | Predictable concurrency | Planned |
+| v0.63.5 | Local scaling obstacles | Planned |
+| v0.63.6 | Honest operator output | Planned |
+| v0.63.7 | Local release certification | Planned |
+| v0.64.0 | Quality baseline | Planned |
+| v0.80.0–v0.80.2 | Remote-cloud and multi-node evidence | Unscheduled |
+| v1.0.0-rc.1–rc.2 | Release candidates | Postponed indefinitely |
+| v1.0.0 | Stable release | Postponed indefinitely |
 ```
 
 ## 16. Final recommendation
 
-Adopt this roadmap with three immediate actions:
+Proceed with three immediate actions:
 
-1. Cut v0.51.5 as a release-distribution and platform-correctness patch.
-2. Open the v0.52.0 LocalFS and MinIO evidence epic and freeze the evidence
-   schema. Defer the multi-node and cloud evidence epics to v0.64.0–v0.64.2,
-   after v0.63.0.
-3. Convert issue #92 into the v0.54–v0.56 multi-catalog epic, explicitly stating
-   that the supported design routes to independent catalog locations and will
-   not add tenant IDs to the shared RockLake keyspace.
+1. Complete v0.63.2 so the documentation and CI gates state only what the
+   repository can prove.
+2. Start v0.63.3 from the reproduced reader-fencing regression, then close the
+   backup, retention, checkpoint, and retry findings on the same safe baseline.
+3. Keep v0.80 remote-cloud work and v1.0 release candidates unscheduled. Reopen
+   either program only through a separate decision with named resources.
 
-The most important discipline is sequencing. Multi-tenancy is valuable, but it
-should be built on measured single-catalog behavior and the consolidated
-request/job model. Likewise, v1.0 should follow field observation rather than a
-version-number target. If the evidence or beta gates expose a correctness,
-isolation, recovery, or governance gap, the roadmap pauses at that gate and
-fixes the gap before advancing.
+Do not skip a failed gate to preserve the version sequence. A smaller proven
+release is preferable to a larger undocumented support claim.
