@@ -3,7 +3,7 @@
 v0.63.2 publishes only the small candidate report produced by the CI evidence
 gate. It records the exact source revision, machine, workload, unit, and raw
 Criterion result. The gate compares that report with
-[`v0.63.2-baseline.json`](../../benchmarks/v0.63.2-baseline.json).
+[`v0.63.2-baseline.json`](https://github.com/trickle-labs/rocklake/blob/main/benchmarks/v0.63.2-baseline.json).
 
 The older performance tables are not release claims. The v0.42 report has no
 exact source revision, and the v0.52 directory contains a schema and README but

@@ -50,7 +50,7 @@ merge SHA must pass the security jobs in Release Certification before tagging.
 - [Beta evidence ledger](../operations/beta-evidence-v0.63.0.md)
 - [Beta support boundary](../operations/beta-support.md)
 - [Release certification workflow](https://github.com/trickle-labs/rocklake/blob/main/.github/workflows/release-certification.yml)
-- [Benchmark baseline](../../benchmarks/v0.63.2-baseline.json)
+- [Benchmark baseline](https://github.com/trickle-labs/rocklake/blob/main/benchmarks/v0.63.2-baseline.json)
 - [Benchmark regression gate](../contributing/release-process.md)
 - [Public-surface compatibility test](https://github.com/trickle-labs/rocklake/blob/main/crates/rocklake-pgwire/tests/v0478_surface_manifest_tests.rs)
 - [PG-wire security tests](https://github.com/trickle-labs/rocklake/blob/main/crates/rocklake-pgwire/tests/security_tests.rs)
