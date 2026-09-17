@@ -1,5 +1,8 @@
 # Zone-Map Readiness
 
+> Historical reference only. The ratios below are not v0.63.2 measurements or
+> support limits.
+
 Zone maps (a.k.a. min/max indexes or "column statistics") allow a query
 engine to skip entire SST files when evaluating range predicates.  This page
 documents the evaluation done for v0.9 and the decision reached.

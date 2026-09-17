@@ -1,5 +1,9 @@
 # S3 API Cost Analysis
 
+> Historical reference only. The examples below are not v0.63.2 cost claims.
+> Use a dated pricing input and a fresh candidate report before publishing an
+> estimate.
+
 > Pricing examples on this page use 2024 S3 rates and are illustrative only.
 > They are not a v0.49.0 cost guarantee; check current provider pricing and
 > measure your workload before publishing an estimate.

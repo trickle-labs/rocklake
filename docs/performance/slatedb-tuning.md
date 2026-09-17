@@ -1,5 +1,8 @@
 # SlateDB Tuning
 
+> Historical reference only. The timing and cache thresholds below are not
+> v0.63.2 measurements or operating limits.
+
 RockLake inherits its storage engine from [SlateDB](https://slatedb.io), an
 embedded LSM-tree key-value store that writes directly to object storage.
 This page documents the parameters exposed through `rocklake tune` and the

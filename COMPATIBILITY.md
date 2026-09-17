@@ -25,14 +25,14 @@ backend versions that CI covers.
 
 | Catalog format | Current read support | Current write support |
 |---|---|---|
-| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.63.1 | v0.63.1 |
+| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.63.2 | v0.63.2 |
 
-RockLake v0.63.1 reports independent version domains in `status --output json`:
+RockLake v0.63.2 reports independent version domains in `status --output json`:
 DuckLake catalog `7`, catalog storage `1`, registry `1`, catalog backup `2`,
 job ledger `1`, audit `1`, public JSON `1`, and evidence `1`. v0.60.0 is the
 minimum direct-upgrade source. Unknown required formats and unsafe downgrades
 are rejected before a write; a format-changing migration is not shipped in
-v0.63.1.
+v0.63.2.
 
 ## Metrics
 
@@ -60,7 +60,7 @@ The v0.60.0 migration command is read-only by default. It uses the typed
 migration registry, records an administrative job when applied, verifies the
 catalog before activation, and rejects unregistered targets. Since v0.60.0
 does not change the catalog storage format, the supported apply path is a
-verified no-op. v0.63.1 enters production beta with the documented public
+verified no-op. v0.63.2 enters production beta with the documented public
 surface frozen and adds no persisted catalog format changes.
 
 Backups and exports state whether they restore into a current release and which
@@ -92,17 +92,22 @@ tested matrix.
 Every release receives correctness and security fixes during its declared
 support window. Security and correctness dependency updates can land in any
 release. SlateDB, object-store, serialization, and other material dependency
-changes rerun recovery and real-cloud baselines before the next scale claim.
+changes rerun recovery and local baselines before the next scale claim.
+Remote-cloud baselines are unscheduled.
 
 ## Object-store evidence
 
 Functional support, recovery certification, and scale certification are separate
 claims.
 
-| Backend | Functional support | Recovery certified | Scale certified |
-|---|---:|---:|---:|
-| Local filesystem | Yes | Yes | Pending v0.52.0 |
-| MinIO or S3-compatible | Yes | Yes | Pending v0.52.0 |
-| AWS S3 | Yes | Yes | Pending v0.52.1 |
-| Google Cloud Storage | Yes | Yes | Not yet |
-| Azure Blob Storage | Yes | Yes | Not yet |
+| Backend | Implemented integration | Executed checks | Measured scale |
+|---|---:|---|---|
+| Local filesystem | Yes | Local backend tests | Unverified; v0.52 raw reports are absent |
+| MinIO or S3-compatible | Yes | Emulator tests | Unverified; v0.52 raw reports are absent |
+| AWS S3 | Yes | Not run in this checkout | Unscheduled, v0.80.0 |
+| Google Cloud Storage | Yes | Emulator tests | Unscheduled, v0.80.2 |
+| Azure Blob Storage | Yes | Emulator tests | Unscheduled, v0.80.2 |
+
+The table separates code paths from evidence. The v0.52 schema and README are
+checked in, but the raw scale reports are not. The capacity profiles are
+historical inputs, not a certification of any backend or workload.

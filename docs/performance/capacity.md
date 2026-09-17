@@ -6,7 +6,9 @@ history, request rates, byte rates, cache budget, configured limits, and the
 selected evidence envelope independently.
 
 The report does not claim that a catalog can sustain an unmeasured workload.
-The built-in profiles correspond to the v0.52 LocalFS/MinIO scale classes:
+The built-in profiles are historical v0.61 inputs based on the v0.52 LocalFS
+and MinIO plan. The raw v0.52 scale reports are absent from this checkout, so
+the profiles are guidance only and are not certified capacity limits:
 
 | Profile | Data files | Reads/s | Writes/s |
 |---|---:|---:|---:|
@@ -15,8 +17,8 @@ The built-in profiles correspond to the v0.52 LocalFS/MinIO scale classes:
 | `large` | 1,000,000 | 1,000 | 100 |
 
 Choose a profile with `--evidence-profile`. A report outside its profile is a
-recommendation to split catalogs or service instances and re-measure, not an
-automatic rejection of the workload.
+recommendation to split catalogs or service instances and run a fresh local
+measurement. It is not an automatic rejection of the workload.
 
 ## Example
 

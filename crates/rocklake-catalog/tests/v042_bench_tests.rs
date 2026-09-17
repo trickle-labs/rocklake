@@ -155,12 +155,12 @@ fn s3_express_validation_doc_present() {
 
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(
-        content.contains("acceptance gate"),
-        "doc must describe the acceptance gate"
+        content.contains("withdrawn"),
+        "doc must withdraw the unsupported acceptance claim"
     );
     assert!(
-        content.contains("ACCEPTED"),
-        "doc must record the acceptance decision"
+        content.contains("real AWS"),
+        "doc must require real AWS evidence"
     );
 }
 

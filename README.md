@@ -34,9 +34,12 @@ RockLake makes a binding architectural promise: **committed facts are never phys
 
 Because every row ever written to the catalog is preserved, time travel is not a special mode — it is the natural way the storage engine works. You can read the complete, consistent state of your catalog at any historical `dl_snapshot_id` with no extra overhead, no snapshot tables, no log-file archaeology. Whether you want to audit what your schema looked like last Tuesday or reproduce the exact table state from which a quarterly report was generated six months ago, you do it with a single snapshot ID and a `SELECT`.
 
-### Horizontal Read Scale-Out
+### Horizontal read scale-out
 
-Because catalog keys are stable once written, an **unbounded number of stateless reader replicas** can serve queries at any historical snapshot without coordinating with the writer or with each other. No consensus, no rebalancing protocol — just SlateDB's CAS primitive and immutable catalog snapshots.
+The catalog format is designed for independent readers, but v0.63.2 does not
+claim reader-process scale-out. The independent SlateDB reader path is the next
+correctness milestone, and the v0.63.3 gate will publish only the reader count
+that local tests demonstrate.
 
 ---
 
@@ -79,8 +82,9 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.63.1 is a feature-complete production beta distributed and tested as a standalone binary. There is no published
-Docker image; release binaries are the primary supported installation path.
+RockLake v0.63.2 is a production-beta evidence release distributed as a
+standalone binary. The supported path remains the binary, PostgreSQL wire
+protocol, and DuckLake 1.0. There is no published Docker image.
 
 ### Install Release Binary
 
@@ -90,8 +94,8 @@ single `SHA256SUMS`, and `release-manifest.json`.
 
 ```bash
 # Download binary and checksum
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.1/rocklake-linux-x86_64
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.1/rocklake-linux-x86_64.sha256
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.2/rocklake-linux-x86_64
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.2/rocklake-linux-x86_64.sha256
 
 # Verify checksum
 sha256sum -c rocklake-linux-x86_64.sha256
@@ -211,8 +215,16 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | **v0.60.0** | Compatibility, migration, upgrade, and downgrade safety | Done |
 | **v0.61.0** | Performance, cost, and capacity contract | Done |
 | **v0.63.0** | Feature-complete production beta | Done |
-| **v0.63.1** | Beta maintenance and v1.0 readiness assessment | **Current** |
-| Next | See [ROADMAP.md](ROADMAP.md) for the live Now/Next/Later plan | Planned |
+| **v0.63.1** | Beta maintenance and v1.0 readiness assessment | Done |
+| **v0.63.2** | Honest baseline and evidence gate | **Current** |
+| **v0.63.3** | Safe readers and recovery | Planned |
+| **v0.63.4** | Predictable concurrency | Planned |
+| **v0.63.5** | Local scaling obstacles | Planned |
+| **v0.63.6** | Honest operator output | Planned |
+| **v0.63.7** | Local release certification | Planned |
+| **v0.64.0** | Quality baseline | Planned |
+| v0.80.x | Remote-cloud and multi-node evidence | Unscheduled |
+| v1.0.x | Release candidates and stable release | Postponed indefinitely |
 
 See [ROADMAP.md](ROADMAP.md) for full milestone details.
 

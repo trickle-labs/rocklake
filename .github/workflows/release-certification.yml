@@ -47,13 +47,17 @@ jobs:
           cargo test -p rocklake-core version
           cargo test -p rocklake-catalog migrate
           cargo test -p rocklake-pgwire --test v046_cli_tests version_json_reports_release_contract
-      - name: v0.63.1 readiness gate
+      - name: v0.63.2 evidence gate
         run: |
           cargo test -p rocklake-pgwire --test v046_cli_tests support_bundle_is_redacted_and_non_overwriting
           cargo test -p rocklake-pgwire --test v0478_surface_manifest_tests
           cargo test -p rocklake-catalog capacity
           python scripts/validate_capacity_contract.py
-          python scripts/check_benchmark_regression.py benchmarks/baseline.json
+          python scripts/run_benchmark_candidate.py --output target/benchmarks/v0.63.2-candidate.json
+          python scripts/check_benchmark_regression.py \
+            --candidate target/benchmarks/v0.63.2-candidate.json \
+            --baseline benchmarks/v0.63.2-baseline.json
+          python tests/test_benchmark_regression.py
           test -s docs/operations/beta-support.md
           test -s docs/operations/beta-evidence-v0.63.0.md
           test -s docs/assessments/v1-readiness.md

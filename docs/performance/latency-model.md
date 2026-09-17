@@ -1,5 +1,8 @@
 # Latency Model
 
+> Historical reference only. The numbers below lack a v0.63.2
+> source-identified candidate run and are not release performance claims.
+
 > Historical reference: the measurements on this page are not a v0.48.0
 > support promise. Native DuckDB extension measurements are excluded because
 > that integration is not supported.

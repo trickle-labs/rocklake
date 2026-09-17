@@ -1,5 +1,9 @@
 # v0.52.0 scale evidence
 
+> Historical reference only. This checkout contains the report schema and
+> runner instructions, but no raw v0.52.0 scale reports. Do not treat the
+> planned matrix as measured release evidence.
+
 v0.52.0 measures LocalFS and MinIO catalog behavior in fresh child processes.
 The evidence runner is internal tooling; it is not part of the supported
 RockLake binary API.

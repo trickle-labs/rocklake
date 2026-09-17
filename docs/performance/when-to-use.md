@@ -1,5 +1,8 @@
 # When to Use RockLake
 
+> Historical guidance only. The workload ranges and thresholds below are not
+> v0.63.2 support or capacity claims.
+
 Every tool has a sweet spot — a set of conditions where it outperforms alternatives and a set of conditions where it falls short. RockLake's sweet spot is precisely defined by its architecture: single-writer, object-storage-backed, bounded-SQL, serverless. This page provides specific, actionable criteria for evaluating whether RockLake is right for your workload. It includes both the scenarios where RockLake excels (and you should strongly consider it) and the scenarios where it is a poor fit (and you should look elsewhere).
 
 The goal is to save you time. If your workload matches the "RockLake excels" criteria, you can adopt it with confidence that it will serve you well. If your workload matches the "RockLake is not ideal" criteria, you now know before investing deployment effort.

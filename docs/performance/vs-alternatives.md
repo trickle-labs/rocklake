@@ -1,5 +1,9 @@
 # RockLake vs. Alternatives
 
+> Historical reference only. The comparison numbers below are not
+> v0.63.2-supported measurements. Re-run the candidate and comparison system
+> on the same workload before relying on them.
+
 Choosing a DuckLake catalog backend is not a question of "which is best" — it is a question of "which trade-offs match my priorities." This page provides an honest, detailed comparison between RockLake and the alternative backends that DuckLake supports: PostgreSQL, SQLite, and MySQL. Each comparison includes raw performance numbers, operational complexity analysis, cost modeling, and clear guidance on when each option is the better choice.
 
 This page does not claim RockLake is universally superior. It is faster in some dimensions, slower in others, simpler in some aspects, less capable in others. The goal is to help you make an informed decision based on your specific circumstances — not to sell you on RockLake when PostgreSQL would serve you better.

@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.63.2] — 2026-09-17
+
+### Added
+
+- Added a fresh, candidate-specific catalog benchmark report to the CI gate.
+- Added a reviewed v0.63.2 benchmark baseline and standard-library regression
+  checks for missing, empty, incompatible, and nonfinite evidence.
+
+### Changed
+
+- Reconciled release, support, compatibility, capacity, and performance
+  documentation with the evidence available in this checkout.
+- Kept v1.0 release candidates and remote-cloud scale work unscheduled.
+
+### Fixed
+
+- Corrected minimum-threshold lookup so throughput minimums are checked against
+  the base metric instead of being skipped.
+
 ## [0.63.1] — 2026-09-12
 
 ### Added

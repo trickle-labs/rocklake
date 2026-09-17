@@ -1,14 +1,15 @@
 # RockLake roadmap and implementation plan
 
 - **Status:** Active
-- **Baseline:** RockLake v0.63.1
+- **Baseline:** RockLake v0.63.2
 - **Prepared:** 2026-09-02
 - **Updated:** 2026-09-17
 - **Planning model:** Gate-based, not date-based
 - **Stable target:** Unscheduled
 
 > The active sequence is v0.63.2 through v0.63.7 and culminates in v0.64.0. It
-> repairs the v0.63.1 baseline and certifies the result with local evidence.
+> records the v0.63.2 evidence baseline and certifies the result with local
+> evidence.
 > Real-cloud testing and v1.0 release candidates are postponed indefinitely.
 
 ## 1. Purpose
@@ -205,8 +206,8 @@ remote-cloud program is scheduled.
 | **v0.62.0** | Public surface freeze | CLI, configuration, metrics, errors, artifacts, logs, and operator workflows are frozen and documented. **Done** |
 | **v0.63.0** | Production beta | The feature-complete system enters design-partner production with no new feature work. **Done** |
 | **v0.63.1** | Beta fixes and readiness audit | The readiness audit is published with an RC hold decision. **Done** |
-| **v0.63.2** | Honest baseline and evidence gate | Documentation agrees on the support boundary, and invalid or absent candidate measurements fail CI. |
-| **v0.63.3** | Safe readers and recovery | Independent readers preserve writer availability, and backup, checkpoint, retention, and retry regressions pass locally. |
+| **v0.63.2** | Honest baseline and evidence gate | Documentation agrees on the support boundary, and invalid or absent candidate measurements fail CI. **Done** |
+| **v0.63.3** | Safe readers and recovery | Independent readers preserve writer availability, and backup, checkpoint, retention, and retry regressions pass locally. **Active next release** |
 | **v0.63.4** | Predictable concurrency | Router opens, reloads, cancellation, SQL batches, and native handles obey bounded lifecycle contracts. |
 | **v0.63.5** | Local scaling obstacles | Cleanup avoids repeated full scans, response buffering has a measured bound, and job controls describe executable behavior. |
 | **v0.63.6** | Honest operator output | Cache and capacity reports distinguish observed values, user inputs, projections, and estimates. |
@@ -1864,20 +1865,20 @@ checkout can prove. The supporting source review and acceptance details are in
 
 #### Implementation plan
 
-- [ ] T01: Make v0.63.2 through v0.63.7, leading to v0.64.0, the active
+- [x] T01: Make v0.63.2 through v0.63.7, leading to v0.64.0, the active
       sequence. Reconcile the README, compatibility tables, beta support,
       readiness assessment, and capacity documentation. Record post-v0.63.1
       work in the changelog.
-- [ ] T01: Link every retained performance claim to raw results with the exact
+- [x] T01: Link every retained performance claim to raw results with the exact
       source revision and environment. Withdraw or label unsupported claims.
-- [ ] T02: Give the benchmark checker separate candidate and baseline inputs.
+- [x] T02: Give the benchmark checker separate candidate and baseline inputs.
       Reject empty reports, missing metrics, nonfinite values, unit drift, and
       incompatible measurement identities.
-- [ ] T02: Correct minimum-threshold lookup and cover both latency maximums and
+- [x] T02: Correct minimum-threshold lookup and cover both latency maximums and
       throughput minimums.
-- [ ] T02: Run one small benchmark from the candidate in CI and archive its raw
+- [x] T02: Run one small benchmark from the candidate in CI and archive its raw
       output. Baseline updates remain a separate reviewed operation.
-- [ ] T02: Before gating on `rocklake-evidence`, make correctness mismatches
+- [x] T02: Before gating on `rocklake-evidence`, make correctness mismatches
       fatal and record accurate candidate identity and metric accounting.
 
 #### Exit conditions
@@ -2509,10 +2510,10 @@ README or documentation:
 | v0.59.0 | Security, secrets, audit, and governance | Done |
 | v0.60.0 | Compatibility and migration freeze | Done |
 | v0.61.0 | Performance, cost, and capacity contract | Done |
-| v0.62.0 | Public surface freeze | Planned |
+| v0.62.0 | Public surface freeze | Done |
 | v0.63.0–v0.63.1 | Production beta and readiness audit | Done; RC1 held |
-| v0.63.2 | Honest baseline and evidence gate | Active next release |
-| v0.63.3 | Safe readers and recovery | Planned |
+| v0.63.2 | Honest baseline and evidence gate | Done |
+| v0.63.3 | Safe readers and recovery | Active next release |
 | v0.63.4 | Predictable concurrency | Planned |
 | v0.63.5 | Local scaling obstacles | Planned |
 | v0.63.6 | Honest operator output | Planned |

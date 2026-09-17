@@ -1,5 +1,9 @@
 # Performance Tuning
 
+> Historical reference only. Backend timings and workload thresholds below are
+> not v0.63.2 measurements. Re-measure the candidate before using them as
+> operating limits.
+
 This page covers the configuration options and operational practices that improve RockLake's performance for specific workloads. The guidance is ordered by impact — the first item provides the largest performance improvement for the least effort, and subsequent items provide diminishing returns. For most deployments, applying the first two or three recommendations is sufficient. Going further is for environments where every millisecond matters.
 
 Performance tuning in RockLake is different from tuning a traditional database. There are no query plans to optimize, no indexes to create, no buffer pool sizes to calculate. The primary knobs are: where data lives (storage backend), how much is cached (block cache size), how clean the data is (garbage collection), and how work is organized (write batching). These are operational decisions, not code changes.

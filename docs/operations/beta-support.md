@@ -1,17 +1,21 @@
 # Production beta support
 
-RockLake v0.63.1 is a feature-complete production beta. It is intended for
-named design-partner workloads while the observation and evidence gates run.
+RockLake v0.63.2 is a production-beta evidence release. It is intended for
+named design-partner workloads within the documented supported path while the
+observation and evidence gates run.
 The binary, PostgreSQL wire protocol, and DuckLake 1.0 path remain the
 supported interfaces. Rust, read-only, DataFusion, and language-binding
 interfaces keep their existing Preview or Experimental levels.
 
 ## Support boundary
 
-- No new feature, query shape, public field, storage format, or backend is
-  accepted into the beta branch.
-- LocalFS and MinIO evidence is complete for the existing certified envelope.
-- AWS S3, GCS, and Azure scale evidence remains deferred to v0.80.0–v0.80.2.
+- The bounded v0.63.2 through v0.63.7 repair and certification scope is open.
+  New feature requests and unrelated public-surface changes remain deferred.
+- LocalFS and MinIO integrations have local or emulator checks, but their raw
+  v0.52 scale reports are absent. No scale envelope is certified here.
+- AWS S3, GCS, and Azure scale evidence is unscheduled work for v0.80.0–v0.80.2.
+- v1.0 release candidates are postponed indefinitely. The v0.63.2 release does
+  not graduate any Preview or Experimental interface.
 - A support request must include a redacted `rocklake support bundle` when the
   catalog can be opened. Review paths and identifiers before sharing it.
 
