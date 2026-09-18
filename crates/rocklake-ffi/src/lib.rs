@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
-use rocklake_catalog::{CatalogStore, OpenOptions};
+use rocklake_catalog::{CatalogReader, CatalogStore, OpenOptions, ReadOnlyCatalog};
 use rocklake_core::mvcc::SnapshotId;
 
 // ─── ABI Version ───────────────────────────────────────────────────────────
@@ -193,8 +193,36 @@ const CATALOG_MAGIC: u32 = 0x4455_434B;
 /// which is small and bounded by the number of catalog open/close cycles.
 pub struct RockLakeCatalog {
     magic: u32,
-    store: Option<CatalogStore>,
+    store: Option<CatalogBackend>,
     runtime: Option<Arc<tokio::runtime::Runtime>>,
+}
+
+enum CatalogBackend {
+    Writer(CatalogStore),
+    Reader(ReadOnlyCatalog),
+}
+
+impl CatalogBackend {
+    fn read_latest(&self) -> rocklake_catalog::CatalogResult<CatalogReader> {
+        match self {
+            Self::Writer(store) => Ok(store.read_latest()),
+            Self::Reader(catalog) => catalog.reader(),
+        }
+    }
+
+    fn read_at(&self, snapshot_id: SnapshotId) -> rocklake_catalog::CatalogResult<CatalogReader> {
+        match self {
+            Self::Writer(store) => store.read_at(snapshot_id),
+            Self::Reader(catalog) => catalog.read_at(snapshot_id),
+        }
+    }
+
+    async fn close(self) -> rocklake_catalog::CatalogResult<()> {
+        match self {
+            Self::Writer(store) => store.close().await,
+            Self::Reader(catalog) => catalog.close().await,
+        }
+    }
 }
 
 /// Validate a catalog handle and run a function with scoped mutable access.
@@ -371,7 +399,7 @@ pub extern "C" fn rocklake_open(
             write_error(err, RockLakeError::ok());
             Box::into_raw(Box::new(RockLakeCatalog {
                 magic: CATALOG_MAGIC,
-                store: Some(store),
+                store: Some(CatalogBackend::Writer(store)),
                 runtime: Some(runtime),
             }))
         }
@@ -443,7 +471,7 @@ pub extern "C" fn rocklake_open_readonly(
             encryption: None,
         };
 
-        CatalogStore::open_without_epoch(opts).await
+        ReadOnlyCatalog::open(opts).await
     });
 
     match result {
@@ -451,7 +479,7 @@ pub extern "C" fn rocklake_open_readonly(
             write_error(err, RockLakeError::ok());
             Box::into_raw(Box::new(RockLakeCatalog {
                 magic: CATALOG_MAGIC,
-                store: Some(store),
+                store: Some(CatalogBackend::Reader(store)),
                 runtime: Some(runtime),
             }))
         }
@@ -509,7 +537,11 @@ pub extern "C" fn rocklake_get_current_snapshot(
 ) -> RockLakeSnapshot {
     let inner = with_catalog(catalog, |cat| {
         // SAFETY: magic == CATALOG_MAGIC guarantees store and runtime are Some.
-        let reader = cat.store.as_ref().unwrap().read_latest();
+        let reader = cat
+            .store
+            .as_ref()
+            .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
+            .read_latest()?;
         // SAFETY: `block_on` drives the future to completion synchronously.
         // The future borrows `reader` which is scoped to this closure frame.
         cat.runtime
@@ -568,7 +600,7 @@ fn list_schemas_impl(
                     .store
                     .as_ref()
                     .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
-                    .read_latest(),
+                    .read_latest()?,
             };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
@@ -663,7 +695,7 @@ fn list_tables_impl(
                     .store
                     .as_ref()
                     .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
-                    .read_latest(),
+                    .read_latest()?,
             };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
@@ -762,7 +794,7 @@ fn describe_table_impl(
                     .store
                     .as_ref()
                     .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
-                    .read_latest(),
+                    .read_latest()?,
             };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime
@@ -876,7 +908,7 @@ fn list_data_files_impl(
                     .store
                     .as_ref()
                     .ok_or(rocklake_catalog::CatalogError::NotInitialized)?
-                    .read_latest(),
+                    .read_latest()?,
             };
             // SAFETY: future is driven to completion; reader is scoped to this closure.
             cat.runtime

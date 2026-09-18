@@ -7,12 +7,13 @@ use crate::inspect::inspect_snapshot;
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectStore;
 use rocklake_core::mvcc;
-use rocklake_core::rows::DataFileRow;
-use rocklake_core::tags::TAG_DATA_FILE;
+use rocklake_core::rows::{DataFileRow, DeleteFileRow};
+use rocklake_core::tags::{TAG_DATA_FILE, TAG_DELETE_FILE};
 use rocklake_core::{keys, values};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use slatedb::Db;
+use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,7 +21,6 @@ use tokio::io::AsyncBufReadExt;
 
 const MANIFEST_FILE: &str = "manifest.json";
 const DATA_FILE: &str = "catalog.ndjson";
-const MAX_OBJECT_REFERENCE_INVENTORY: usize = 100_000;
 /// Current backup artifact format.
 pub const BACKUP_FORMAT_VERSION: u32 = rocklake_core::version::BACKUP_MANIFEST_VERSION;
 
@@ -88,7 +88,10 @@ pub enum JobStatePolicy {
 pub struct ObjectReference {
     /// Catalog data-file ID.
     pub data_file_id: u64,
-    /// Object path relative to the configured data root.
+    /// Catalog delete-file ID, when this reference is a delete file.
+    #[serde(default)]
+    pub delete_file_id: Option<u64>,
+    /// Canonical object-store path resolved against the configured data root.
     pub path: String,
     /// Size recorded in the catalog.
     pub expected_size_bytes: u64,
@@ -177,61 +180,104 @@ pub async fn create_backup_with_options(
     options: BackupOptions,
 ) -> CatalogResult<BackupInfo> {
     let directory = directory.as_ref();
-    tokio::fs::create_dir_all(directory)
+    if directory.exists() {
+        return Err(CatalogError::InvalidInput(format!(
+            "backup artifact already exists: {}",
+            directory.display()
+        )));
+    }
+    if let Some(parent) = directory
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| CatalogError::InvalidInput(format!("create backup parent: {e}")))?;
+    }
+    let staging = directory.with_extension(format!("staging-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir(&staging)
         .await
-        .map_err(|e| CatalogError::InvalidInput(format!("create backup directory: {e}")))?;
-    let file = std::fs::File::create(directory.join(DATA_FILE))
-        .map_err(|e| CatalogError::InvalidInput(format!("create backup data: {e}")))?;
-    let mut writer = DigestWriter::new(file);
-    let export = export_catalog(db, options.snapshot_id, &mut writer).await?;
-    writer
-        .flush()
-        .map_err(|e| CatalogError::InvalidInput(format!("flush backup data: {e}")))?;
-    let selected_snapshot = writer
-        .snapshot_id()
-        .or(options.snapshot_id)
-        .ok_or_else(|| CatalogError::Corruption("export did not contain a manifest".into()))?;
-    let (byte_count, sha256) = writer.finish();
-    let state = inspect_snapshot(db).await?;
-    let checkpoint_pins = read_pinned_snapshots(db).await?;
-    let object_references = if options.include_data_inventory || options.verify_data {
-        Some(
-            collect_object_references(
-                db,
-                selected_snapshot,
-                options.data_store.as_ref(),
-                options.data_root.as_ref(),
-                options.verify_data,
+        .map_err(|e| CatalogError::InvalidInput(format!("create backup staging directory: {e}")))?;
+    let result = async {
+        let file = std::fs::File::create(staging.join(DATA_FILE))
+            .map_err(|e| CatalogError::InvalidInput(format!("create backup data: {e}")))?;
+        let mut writer = DigestWriter::new(file);
+        let export = export_catalog(db, options.snapshot_id, &mut writer).await?;
+        writer
+            .flush()
+            .map_err(|e| CatalogError::InvalidInput(format!("flush backup data: {e}")))?;
+        let selected_snapshot = writer
+            .snapshot_id()
+            .ok_or_else(|| CatalogError::Corruption("export did not contain a manifest".into()))?;
+        if options
+            .snapshot_id
+            .is_some_and(|requested| requested != selected_snapshot)
+        {
+            return Err(CatalogError::Corruption(
+                "export header snapshot does not match the requested snapshot".into(),
+            ));
+        }
+        let (byte_count, sha256) = writer.finish();
+        let state = inspect_snapshot(db).await?;
+        let checkpoint_pins = read_pinned_snapshots(db).await?;
+        let object_references = if options.include_data_inventory || options.verify_data {
+            Some(
+                collect_object_references(
+                    db,
+                    selected_snapshot,
+                    options.data_store.as_ref(),
+                    options.data_root.as_ref(),
+                    options.verify_data,
+                )
+                .await?,
             )
-            .await?,
-        )
-    } else {
-        None
+        } else {
+            None
+        };
+        let manifest = BackupManifest {
+            version: BACKUP_FORMAT_VERSION,
+            source_identity: options.source_identity,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            snapshot_id: selected_snapshot,
+            row_count: export.rows_exported,
+            byte_count,
+            sha256,
+            catalog_format: state.format_version,
+            latest_snapshot: selected_snapshot,
+            retention_floor: state.retain_from,
+            checkpoint_pins,
+            job_state_policy: JobStatePolicy::Exclude,
+            object_references,
+            data_files_copied: false,
+            encryption_key_ids: encryption_key_ids(db, selected_snapshot).await?,
+            registry_generation: options.registry_generation,
+            catalog_ids: options.catalog_ids,
+        };
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+            .map_err(|e| CatalogError::Internal(format!("serialize backup manifest: {e}")))?;
+        tokio::fs::write(staging.join(MANIFEST_FILE), manifest_bytes)
+            .await
+            .map_err(|e| CatalogError::InvalidInput(format!("write backup manifest: {e}")))?;
+        Ok::<_, CatalogError>(manifest)
+    }
+    .await;
+    let manifest = match result {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+            return Err(error);
+        }
     };
-    let manifest = BackupManifest {
-        version: BACKUP_FORMAT_VERSION,
-        source_identity: options.source_identity,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        snapshot_id: selected_snapshot,
-        row_count: export.rows_exported,
-        byte_count,
-        sha256,
-        catalog_format: state.format_version,
-        latest_snapshot: selected_snapshot,
-        retention_floor: state.retain_from,
-        checkpoint_pins,
-        job_state_policy: JobStatePolicy::Exclude,
-        object_references,
-        data_files_copied: false,
-        encryption_key_ids: encryption_key_ids(db, selected_snapshot).await?,
-        registry_generation: options.registry_generation,
-        catalog_ids: options.catalog_ids,
-    };
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
-        .map_err(|e| CatalogError::Internal(format!("serialize backup manifest: {e}")))?;
-    tokio::fs::write(directory.join(MANIFEST_FILE), manifest_bytes)
+    if directory.exists() {
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(CatalogError::InvalidInput(format!(
+            "backup artifact already exists: {}",
+            directory.display()
+        )));
+    }
+    tokio::fs::rename(&staging, directory)
         .await
-        .map_err(|e| CatalogError::InvalidInput(format!("write backup manifest: {e}")))?;
+        .map_err(|e| CatalogError::InvalidInput(format!("publish backup artifact: {e}")))?;
     Ok(BackupInfo {
         path: directory.to_path_buf(),
         manifest,
@@ -245,61 +291,94 @@ async fn collect_object_references(
     data_root: Option<&ObjectPath>,
     verify_data: bool,
 ) -> CatalogResult<ObjectReferenceInventory> {
-    let prefix = keys::prefix_for_tag(TAG_DATA_FILE);
     let mut files = Vec::new();
-    let mut iter = db.scan_prefix(&prefix).await?;
-    while let Some(kv) = iter
-        .next()
-        .await
-        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-    {
-        let row: DataFileRow = values::decode_value(&kv.value)?;
-        if !mvcc::is_visible(
-            row.begin_snapshot.unwrap_or(0),
-            row.end_snapshot,
-            rocklake_core::mvcc::SnapshotId::new(snapshot_id),
-        ) {
-            continue;
-        }
-        let head = if verify_data {
-            let store = data_store.ok_or_else(|| {
-                CatalogError::InvalidInput(
-                    "--verify-data requires a referenced data object store".into(),
+    for tag in [TAG_DATA_FILE, TAG_DELETE_FILE] {
+        let prefix = keys::prefix_for_tag(tag);
+        let mut iter = db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let (
+                data_file_id,
+                delete_file_id,
+                path,
+                path_is_relative,
+                expected_size_bytes,
+                begin,
+                end,
+                encryption_key,
+            ) = if tag == TAG_DATA_FILE {
+                let row: DataFileRow = values::decode_value(&kv.value)?;
+                (
+                    row.data_file_id,
+                    None,
+                    row.path,
+                    row.path_is_relative,
+                    row.file_size_bytes,
+                    row.begin_snapshot.unwrap_or(0),
+                    row.end_snapshot,
+                    row.encryption_key,
                 )
-            })?;
-            let path = data_root.map_or_else(
-                || ObjectPath::from(row.path.as_str()),
-                |root| root.child(row.path.as_str()),
-            );
-            match store.head(&path).await {
-                Ok(meta) => Some(ObjectHeadResult {
+            } else {
+                let row: DeleteFileRow = values::decode_value(&kv.value)?;
+                (
+                    row.data_file_id,
+                    Some(row.delete_file_id),
+                    row.path,
+                    row.path_is_relative,
+                    row.file_size_bytes,
+                    row.begin_snapshot.unwrap_or(row.snapshot_id),
+                    row.end_snapshot,
+                    row.encryption_key,
+                )
+            };
+            if !mvcc::is_visible(
+                begin,
+                end,
+                rocklake_core::mvcc::SnapshotId::new(snapshot_id),
+            ) {
+                continue;
+            }
+            let canonical_path = rocklake_core::path::resolve_object_path(
+                data_root.map_or("", ObjectPath::as_ref),
+                &path,
+                path_is_relative,
+            )
+            .map(ObjectPath::from)
+            .map_err(|e| CatalogError::InvalidInput(e.to_string()))?;
+            let head = if verify_data {
+                let store = data_store.ok_or_else(|| {
+                    CatalogError::InvalidInput(
+                        "--verify-data requires a referenced data object store".into(),
+                    )
+                })?;
+                let meta = store.head(&canonical_path).await.map_err(|error| {
+                    classify_object_store_error(canonical_path.as_ref(), &error)
+                })?;
+                if meta.size != expected_size_bytes {
+                    return Err(CatalogError::Corruption(format!(
+                        "referenced object size mismatch for {}: expected {}, got {}",
+                        canonical_path, expected_size_bytes, meta.size
+                    )));
+                }
+                Some(ObjectHeadResult {
                     present: true,
                     size_bytes: Some(meta.size),
-                }),
-                Err(_) => {
-                    return Err(CatalogError::InvalidInput(format!(
-                        "referenced data file is missing: {}",
-                        row.path
-                    )))
-                }
-            }
-        } else {
-            None
-        };
-        // ponytail: cap inventory memory at 100k references; raise the cap or
-        // stream inventory to a sidecar file when larger catalogs need it.
-        if files.len() >= MAX_OBJECT_REFERENCE_INVENTORY {
-            return Err(CatalogError::InvalidInput(format!(
-                "referenced data inventory exceeds {MAX_OBJECT_REFERENCE_INVENTORY} files"
-            )));
+                })
+            } else {
+                None
+            };
+            files.push(ObjectReference {
+                data_file_id,
+                delete_file_id,
+                path: canonical_path.to_string(),
+                expected_size_bytes,
+                head,
+                encryption_key_id: encryption_key,
+            });
         }
-        files.push(ObjectReference {
-            data_file_id: row.data_file_id,
-            path: row.path,
-            expected_size_bytes: row.file_size_bytes,
-            head,
-            encryption_key_id: row.encryption_key,
-        });
     }
     Ok(ObjectReferenceInventory {
         count: files.len() as u64,
@@ -309,15 +388,58 @@ async fn collect_object_references(
 }
 
 async fn encryption_key_ids(db: &Db, snapshot_id: u64) -> CatalogResult<Vec<String>> {
-    let inventory = collect_object_references(db, snapshot_id, None, None, false).await?;
-    let mut ids: Vec<_> = inventory
-        .files
-        .into_iter()
-        .filter_map(|file| file.encryption_key_id)
-        .collect();
-    ids.sort();
-    ids.dedup();
-    Ok(ids)
+    let mut ids = BTreeSet::new();
+    for tag in [TAG_DATA_FILE, TAG_DELETE_FILE] {
+        let mut iter = db.scan_prefix(&keys::prefix_for_tag(tag)).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let (begin, end, key_id) = if tag == TAG_DATA_FILE {
+                let row: DataFileRow = values::decode_value(&kv.value)?;
+                (
+                    row.begin_snapshot.unwrap_or(0),
+                    row.end_snapshot,
+                    row.encryption_key,
+                )
+            } else {
+                let row: DeleteFileRow = values::decode_value(&kv.value)?;
+                (
+                    row.begin_snapshot.unwrap_or(row.snapshot_id),
+                    row.end_snapshot,
+                    row.encryption_key,
+                )
+            };
+            if mvcc::is_visible(
+                begin,
+                end,
+                rocklake_core::mvcc::SnapshotId::new(snapshot_id),
+            ) {
+                if let Some(key_id) = key_id {
+                    ids.insert(key_id);
+                }
+            }
+        }
+    }
+    Ok(ids.into_iter().collect())
+}
+
+fn classify_object_store_error(path: &str, error: &object_store::Error) -> CatalogError {
+    let message = error.to_string();
+    let lower = message.to_ascii_lowercase();
+    let detail = format!("{path}: {message}");
+    if lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("connection")
+        || lower.contains("throttl")
+        || lower.contains("503")
+        || lower.contains("temporary")
+    {
+        CatalogError::ObjectStoreTransient(detail)
+    } else {
+        CatalogError::ObjectStorePermanent(detail)
+    }
 }
 
 /// Inspect and validate a backup directory without opening or mutating a catalog.
@@ -342,6 +464,7 @@ pub async fn inspect_backup(directory: impl AsRef<Path>) -> CatalogResult<Backup
     let mut line = String::new();
     let mut byte_count = 0u64;
     let mut row_count = 0u64;
+    let mut export_header = None;
     let mut digest = Sha256::new();
     while reader
         .read_line(&mut line)
@@ -352,6 +475,11 @@ pub async fn inspect_backup(directory: impl AsRef<Path>) -> CatalogResult<Backup
         digest.update(line.as_bytes());
         byte_count += line.len() as u64;
         if !line.trim().is_empty() {
+            if export_header.is_none() {
+                export_header = Some(serde_json::from_str::<ExportManifest>(line.trim()).map_err(
+                    |e| CatalogError::Corruption(format!("invalid export header: {e}")),
+                )?);
+            }
             row_count += 1;
         }
         line.clear();
@@ -363,6 +491,17 @@ pub async fn inspect_backup(directory: impl AsRef<Path>) -> CatalogResult<Backup
     }
     if row_count == 0 || manifest.row_count != row_count - 1 {
         return Err(CatalogError::Corruption("backup row count mismatch".into()));
+    }
+    let header = export_header
+        .ok_or_else(|| CatalogError::Corruption("backup is missing its export header".into()))?;
+    if header.kind != crate::export::EXPORT_MANIFEST_TABLE
+        || header.version != crate::export::CATALOG_EXPORT_FORMAT_VERSION
+        || header.snapshot_id != manifest.snapshot_id
+        || manifest.latest_snapshot != manifest.snapshot_id
+    {
+        return Err(CatalogError::Corruption(
+            "backup manifest and export header disagree".into(),
+        ));
     }
     Ok(BackupInfo {
         path: directory.to_path_buf(),
@@ -434,6 +573,7 @@ impl Write for DigestWriter {
 #[cfg(test)]
 mod tests {
     use super::sha256_hex;
+    use crate::error::CatalogError;
     use object_store::path::Path as ObjectPath;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -470,6 +610,35 @@ mod tests {
             .unwrap();
         let inspected = super::inspect_backup(&backup_path).await.unwrap();
         assert_eq!(created.manifest, inspected.manifest);
+        db.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn backup_refuses_overwrite() {
+        let dir = TempDir::new().unwrap();
+        let store =
+            Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir.path()).unwrap());
+        let catalog = crate::CatalogStore::open(crate::OpenOptions {
+            object_store: store,
+            path: ObjectPath::from("catalog"),
+            encryption: None,
+        })
+        .await
+        .unwrap();
+        catalog.close().await.unwrap();
+        let store =
+            Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir.path()).unwrap());
+        let db = slatedb::Db::open(ObjectPath::from("catalog"), store)
+            .await
+            .unwrap();
+        let backup_path = dir.path().join("backup");
+        super::create_backup(&db, &backup_path, "local", None)
+            .await
+            .unwrap();
+        let error = super::create_backup(&db, &backup_path, "local", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CatalogError::InvalidInput(_)));
         db.close().await.unwrap();
     }
 }

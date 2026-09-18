@@ -38,7 +38,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use slatedb::Db;
+use slatedb::{config::DbReaderOptions, Db, DbReader};
 
 use rocklake_core::keys;
 use rocklake_core::mvcc::SnapshotId;
@@ -47,7 +47,7 @@ use rocklake_core::values;
 
 use crate::encryption::AesGcmTransformer;
 use crate::error::{CatalogError, CatalogResult};
-use crate::reader::CatalogReader;
+use crate::reader::{CatalogDb, CatalogReader};
 use crate::store::OpenOptions;
 
 /// A read-only catalog handle.
@@ -55,7 +55,9 @@ use crate::store::OpenOptions;
 /// Does **not** hold a writer epoch — multiple instances may be opened against
 /// the same S3/GCS prefix without contention.
 pub struct ReadOnlyCatalog {
-    db: Db,
+    db: ReadOnlyDb,
+    path: object_store::path::Path,
+    encryption: Option<crate::encryption::EncryptionConfig>,
     /// Snapshot ID of the latest committed snapshot at the time of the last
     /// `refresh()` call (or `open()`).
     current_snapshot_id: Arc<AtomicU64>,
@@ -65,6 +67,20 @@ pub struct ReadOnlyCatalog {
     object_store: Arc<dyn object_store::ObjectStore>,
 }
 
+enum ReadOnlyDb {
+    Reader(Arc<DbReader>),
+    Test(Db),
+}
+
+impl ReadOnlyDb {
+    fn catalog_db(&self) -> CatalogDb {
+        match self {
+            Self::Reader(db) => CatalogDb::reader(Arc::clone(db)),
+            Self::Test(db) => CatalogDb::writer(db.clone()),
+        }
+    }
+}
+
 impl ReadOnlyCatalog {
     /// Open a read-only catalog.  No writer epoch is acquired or incremented.
     ///
@@ -72,27 +88,21 @@ impl ReadOnlyCatalog {
     pub async fn open(opts: OpenOptions) -> CatalogResult<Self> {
         let object_store_ref = Arc::clone(&opts.object_store);
 
-        let db = if let Some(ref enc) = opts.encryption {
-            let transformer = Arc::new(AesGcmTransformer::new(enc));
-            Db::builder(opts.path, opts.object_store)
-                .with_block_transformer(transformer)
-                .build()
-                .await?
-        } else {
-            Db::open(opts.path, opts.object_store).await?
-        };
+        let db = Arc::new(open_reader(&opts).await?);
 
-        crate::init::verify_format_version(&db).await?;
-        crate::init::verify_migrations_complete(&db).await?;
-        crate::init::load_counters_from_db(&db).await?;
+        crate::init::verify_format_version(db.as_ref()).await?;
+        crate::init::verify_migrations_complete(db.as_ref()).await?;
+        crate::init::load_counters_from_db(db.as_ref()).await?;
 
-        let current_snapshot_id = Self::read_latest_snapshot_id(&db).await?;
+        let current_snapshot_id = Self::read_latest_snapshot_id(db.as_ref()).await?;
 
         // Read the retain-from floor.
-        let retain_from_initial = Self::read_retain_from(&db).await?;
+        let retain_from_initial = Self::read_retain_from(db.as_ref()).await?;
 
         Ok(Self {
-            db,
+            db: ReadOnlyDb::Reader(db),
+            path: opts.path,
+            encryption: opts.encryption,
             current_snapshot_id: Arc::new(AtomicU64::new(current_snapshot_id.as_u64())),
             retain_from: Arc::new(AtomicU64::new(retain_from_initial)),
             object_store: object_store_ref,
@@ -128,7 +138,10 @@ impl ReadOnlyCatalog {
                 latest_committed: latest,
             });
         }
-        Ok(CatalogReader::new(self.db.clone(), dl_snapshot_id))
+        Ok(CatalogReader::new_from_db(
+            self.db.catalog_db(),
+            dl_snapshot_id,
+        ))
     }
 
     /// Advance to the latest committed snapshot without writer coordination.
@@ -136,15 +149,42 @@ impl ReadOnlyCatalog {
     /// Re-reads the `next_snapshot_id` counter and the `retain_from` key from
     /// SlateDB.  Returns the newly observed snapshot ID.
     pub async fn refresh(&mut self) -> CatalogResult<SnapshotId> {
-        crate::init::verify_format_version(&self.db).await?;
-        crate::init::verify_migrations_complete(&self.db).await?;
-        crate::init::load_counters_from_db(&self.db).await?;
+        if matches!(self.db, ReadOnlyDb::Reader(_)) {
+            let opts = OpenOptions {
+                object_store: Arc::clone(&self.object_store),
+                path: self.path.clone(),
+                encryption: self.encryption.clone(),
+            };
+            let new = Arc::new(open_reader(&opts).await?);
+            let old_db = std::mem::replace(&mut self.db, ReadOnlyDb::Reader(new));
+            if let ReadOnlyDb::Reader(old) = old_db {
+                if Arc::strong_count(&old) == 1 {
+                    old.close().await?;
+                }
+            }
+        }
+        match &self.db {
+            ReadOnlyDb::Reader(db) => {
+                crate::init::verify_format_version(db.as_ref()).await?;
+                crate::init::verify_migrations_complete(db.as_ref()).await?;
+                crate::init::load_counters_from_db(db.as_ref()).await?;
+            }
+            ReadOnlyDb::Test(db) => {
+                crate::init::verify_format_version(db).await?;
+                crate::init::verify_migrations_complete(db).await?;
+                crate::init::load_counters_from_db(db).await?;
+            }
+        }
 
-        // Refresh snapshot ID.
-        let current_snapshot_id = Self::read_latest_snapshot_id(&self.db).await?;
+        let current_snapshot_id = match &self.db {
+            ReadOnlyDb::Reader(db) => Self::read_latest_snapshot_id(db.as_ref()).await?,
+            ReadOnlyDb::Test(db) => Self::read_latest_snapshot_id(db).await?,
+        };
 
-        // Refresh retain-from floor.
-        let retain_from = Self::read_retain_from(&self.db).await?;
+        let retain_from = match &self.db {
+            ReadOnlyDb::Reader(db) => Self::read_retain_from(db.as_ref()).await?,
+            ReadOnlyDb::Test(db) => Self::read_retain_from(db).await?,
+        };
         self.current_snapshot_id
             .store(current_snapshot_id.as_u64(), Ordering::Release);
         self.retain_from.store(retain_from, Ordering::Release);
@@ -155,6 +195,11 @@ impl ReadOnlyCatalog {
     /// Return the snapshot ID observed at the last `refresh()` (or `open()`).
     pub fn current_snapshot_id(&self) -> SnapshotId {
         SnapshotId::new(self.current_snapshot_id.load(Ordering::Acquire))
+    }
+
+    /// Return the retention floor observed at the last `refresh()` (or `open()`).
+    pub fn retain_from(&self) -> u64 {
+        self.retain_from.load(Ordering::Acquire)
     }
 
     /// Return an atomic handle to the current snapshot ID.
@@ -173,7 +218,10 @@ impl ReadOnlyCatalog {
             crate::fault_injection::WriteFaultPoint::BeforeCatalogClose,
         )
         .await?;
-        self.db.close().await?;
+        match self.db {
+            ReadOnlyDb::Reader(db) => db.close().await?,
+            ReadOnlyDb::Test(db) => db.close().await?,
+        }
         Ok(())
     }
 
@@ -193,7 +241,9 @@ impl ReadOnlyCatalog {
     #[doc(hidden)]
     pub fn from_db_for_test(db: Db, object_store: Arc<dyn object_store::ObjectStore>) -> Self {
         Self {
-            db,
+            db: ReadOnlyDb::Test(db),
+            path: object_store::path::Path::from(""),
+            encryption: None,
             current_snapshot_id: Arc::new(AtomicU64::new(0)),
             retain_from: Arc::new(AtomicU64::new(0)),
             object_store,
@@ -202,7 +252,9 @@ impl ReadOnlyCatalog {
 
     // ── internal ───────────────────────────────────────────────────────────
 
-    async fn read_latest_snapshot_id(db: &Db) -> CatalogResult<SnapshotId> {
+    async fn read_latest_snapshot_id<D: slatedb::DbReadOps + Sync>(
+        db: &D,
+    ) -> CatalogResult<SnapshotId> {
         let key = keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID);
         let data = db.get(&key).await?.ok_or(CatalogError::NotInitialized)?;
         let next = values::decode_counter(&data)?;
@@ -215,9 +267,29 @@ impl ReadOnlyCatalog {
         Ok(SnapshotId::new(next - 1))
     }
 
-    async fn read_retain_from(db: &Db) -> CatalogResult<u64> {
+    async fn read_retain_from<D: slatedb::DbReadOps + Sync>(db: &D) -> CatalogResult<u64> {
         let key = keys::key_system(rocklake_core::tags::SYSTEM_RETAIN_FROM);
         let data = db.get(&key).await?.ok_or(CatalogError::NotInitialized)?;
         Ok(values::decode_counter(&data)?)
     }
+}
+
+async fn open_reader(opts: &OpenOptions) -> CatalogResult<DbReader> {
+    let builder = DbReader::builder(opts.path.clone(), Arc::clone(&opts.object_store))
+        .with_options(DbReaderOptions::default());
+    let builder = if let Some(ref enc) = opts.encryption {
+        builder.with_block_transformer(Arc::new(AesGcmTransformer::new(enc)))
+    } else {
+        builder
+    };
+    builder.build().await.map_err(|err| {
+        let message = err.to_string();
+        if message.contains("invalid DB state")
+            || message.contains("failed to find latest transactional object")
+        {
+            CatalogError::NotInitialized
+        } else {
+            err.into()
+        }
+    })
 }

@@ -9,7 +9,7 @@ use rocklake_core::keys;
 use rocklake_core::rows::ExtensionSchemaRow;
 use slatedb::{Db, IsolationLevel};
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogResult, MAX_TRANSACTION_RETRIES};
 
 /// Known extension schemas and their IDs.
 pub const EXTENSION_PGTRICKLE: u8 = 0x01;
@@ -64,7 +64,7 @@ pub async fn insert_extension_row(
 ) -> CatalogResult<u64> {
     let counter_key = keys::key_extension_schema(extension_id, table_name, 0)?;
 
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
@@ -117,9 +117,20 @@ pub async fn insert_extension_row(
 
         match tx.commit().await {
             Ok(_) => return Ok(next_id),
-            Err(_) => continue, // Retry on contention
+            Err(error) => {
+                let error: CatalogError = error.into();
+                if matches!(error, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(error);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "extension row retries exhausted".into(),
+    ))
 }
 
 /// Select all rows from an extension table.

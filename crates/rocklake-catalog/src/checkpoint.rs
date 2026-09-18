@@ -10,7 +10,7 @@ use rocklake_core::tags::*;
 use rocklake_core::values;
 use slatedb::{Db, IsolationLevel};
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogResult, MAX_TRANSACTION_RETRIES};
 
 /// Information about a checkpoint.
 #[derive(Debug, Clone)]
@@ -47,7 +47,7 @@ pub struct CheckpointMetadata {
 pub async fn create_checkpoint(db: &Db, label: Option<&str>) -> CatalogResult<CheckpointInfo> {
     let created_at = chrono::Utc::now().to_rfc3339();
 
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
@@ -116,10 +116,20 @@ pub async fn create_checkpoint(db: &Db, label: Option<&str>) -> CatalogResult<Ch
                     restore_snapshot_id: None,
                 });
             }
-            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
-            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+            Err(e) => {
+                let e: CatalogError = e.into();
+                if matches!(e, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(e);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "checkpoint creation retries exhausted".into(),
+    ))
 }
 
 /// List all available checkpoints.
@@ -148,7 +158,7 @@ pub async fn list_checkpoints(db: &Db) -> CatalogResult<Vec<CheckpointInfo>> {
 /// Restore the checkpoint's complete logical catalog state as a fresh snapshot.
 /// Snapshot counters remain monotonic so new writes cannot reuse historical IDs.
 pub async fn restore_checkpoint(db: &Db, checkpoint_id: u64) -> CatalogResult<CheckpointInfo> {
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
@@ -268,10 +278,20 @@ pub async fn restore_checkpoint(db: &Db, checkpoint_id: u64) -> CatalogResult<Ch
                     restore_snapshot_id: Some(restore_snapshot_id),
                 });
             }
-            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
-            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+            Err(e) => {
+                let e: CatalogError = e.into();
+                if matches!(e, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(e);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "checkpoint restore retries exhausted".into(),
+    ))
 }
 
 // ─── Checkpoint Pin API ────────────────────────────────────────────────────
@@ -306,18 +326,63 @@ pub async fn pin_checkpoint(db: &Db, name: &str, snapshot_id: u64) -> CatalogRes
     };
 
     let value = values::encode_value(&meta);
-    loop {
+    let mut committed = false;
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        if let Some(latest_committed) = tx
+            .get(&keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID))
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .map(|data| values::decode_counter(&data))
+            .transpose()?
+            .map(|next| next.saturating_sub(1))
+            .filter(|latest| *latest > 0)
+        {
+            let retain_from = tx
+                .get(&keys::key_system(SYSTEM_RETAIN_FROM))
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+                .map(|data| values::decode_counter(&data))
+                .transpose()?
+                .unwrap_or(0);
+            if retain_from > 0 && snapshot_id < retain_from {
+                return Err(CatalogError::SnapshotOutOfRetention {
+                    requested: snapshot_id,
+                    retain_from,
+                });
+            }
+            if snapshot_id > latest_committed {
+                return Err(CatalogError::SnapshotNotFound {
+                    requested: snapshot_id,
+                    latest_committed,
+                });
+            }
+        }
         tx.put(&key, value.clone())
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         match tx.commit().await {
-            Ok(_) => break,
-            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
-            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+            Ok(_) => {
+                committed = true;
+                break;
+            }
+            Err(e) => {
+                let e: CatalogError = e.into();
+                if matches!(e, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(e);
+            }
         }
+    }
+    if !committed {
+        return Err(CatalogError::TransactionConflict(
+            "checkpoint pin retries exhausted".into(),
+        ));
     }
 
     Ok(CheckpointPin {
@@ -332,7 +397,7 @@ pub async fn pin_checkpoint(db: &Db, name: &str, snapshot_id: u64) -> CatalogRes
 /// Returns `CatalogError::NotFound` if no pin with the given name exists.
 pub async fn unpin_checkpoint(db: &Db, name: &str) -> CatalogResult<()> {
     let key = checkpoint_pin_key(name);
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
@@ -345,10 +410,20 @@ pub async fn unpin_checkpoint(db: &Db, name: &str) -> CatalogResult<()> {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         match tx.commit().await {
             Ok(_) => return Ok(()),
-            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
-            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+            Err(e) => {
+                let e: CatalogError = e.into();
+                if matches!(e, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(e);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "checkpoint unpin retries exhausted".into(),
+    ))
 }
 
 /// List all named checkpoint pins.

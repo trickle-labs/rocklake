@@ -1,6 +1,6 @@
 //! Durable maintenance policy and bounded due-work selection.
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogResult, MAX_TRANSACTION_RETRIES};
 use crate::jobs::{JobKind, JobLedger};
 use rocklake_core::{keys, values};
 use serde::{Deserialize, Serialize};
@@ -164,7 +164,7 @@ impl MaintenanceScheduler {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        loop {
+        for attempt in 0..=MAX_TRANSACTION_RETRIES {
             let tx = self.db.begin(IsolationLevel::SerializableSnapshot).await?;
             let mut iter = tx
                 .scan_prefix(&schedule_prefix())
@@ -197,12 +197,21 @@ impl MaintenanceScheduler {
             }
             match tx.commit().await {
                 Ok(_) => return Ok(due),
-                Err(error) if error.to_string().to_ascii_lowercase().contains("conflict") => {
-                    tokio::task::yield_now().await;
+                Err(error) => {
+                    let error: CatalogError = error.into();
+                    if matches!(error, CatalogError::TransactionConflict(_))
+                        && attempt < MAX_TRANSACTION_RETRIES
+                    {
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                    return Err(error);
                 }
-                Err(error) => return Err(CatalogError::SlateDb(error.to_string())),
             }
         }
+        Err(CatalogError::TransactionConflict(
+            "maintenance claim retries exhausted".into(),
+        ))
     }
 
     /// Return active-job alert candidates using the existing durable ledger.

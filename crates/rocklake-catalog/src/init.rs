@@ -4,7 +4,7 @@ use rocklake_core::counters::CounterCache;
 use rocklake_core::keys;
 use rocklake_core::tags::*;
 use rocklake_core::values;
-use slatedb::{Db, DbTransaction, IsolationLevel};
+use slatedb::{Db, DbReadOps, DbTransaction, IsolationLevel};
 
 use crate::error::{CatalogError, CatalogResult};
 
@@ -92,21 +92,21 @@ pub async fn initialize_catalog(db: &Db) -> CatalogResult<CounterCache> {
 /// Load counter values from SlateDB within a transaction.
 async fn load_counters(tx: &DbTransaction) -> CatalogResult<CounterCache> {
     let snap_data = tx
-        .get(&keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID))
+        .get(keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID))
         .await
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         .ok_or(CatalogError::NotInitialized)?;
     let next_snapshot_id = values::decode_counter(&snap_data)?;
 
     let cat_data = tx
-        .get(&keys::key_counter(COUNTER_NEXT_CATALOG_ID))
+        .get(keys::key_counter(COUNTER_NEXT_CATALOG_ID))
         .await
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         .ok_or(CatalogError::NotInitialized)?;
     let next_catalog_id = values::decode_counter(&cat_data)?;
 
     let file_data = tx
-        .get(&keys::key_counter(COUNTER_NEXT_FILE_ID))
+        .get(keys::key_counter(COUNTER_NEXT_FILE_ID))
         .await
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         .ok_or(CatalogError::NotInitialized)?;
@@ -120,21 +120,21 @@ async fn load_counters(tx: &DbTransaction) -> CatalogResult<CounterCache> {
 }
 
 /// Load counter values from the database directly (non-transactional read).
-pub async fn load_counters_from_db(db: &Db) -> CatalogResult<CounterCache> {
+pub async fn load_counters_from_db<D: DbReadOps + Sync>(db: &D) -> CatalogResult<CounterCache> {
     let snap_data = db
-        .get(&keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID))
+        .get(keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID))
         .await?
         .ok_or(CatalogError::NotInitialized)?;
     let next_snapshot_id = values::decode_counter(&snap_data)?;
 
     let cat_data = db
-        .get(&keys::key_counter(COUNTER_NEXT_CATALOG_ID))
+        .get(keys::key_counter(COUNTER_NEXT_CATALOG_ID))
         .await?
         .ok_or(CatalogError::NotInitialized)?;
     let next_catalog_id = values::decode_counter(&cat_data)?;
 
     let file_data = db
-        .get(&keys::key_counter(COUNTER_NEXT_FILE_ID))
+        .get(keys::key_counter(COUNTER_NEXT_FILE_ID))
         .await?
         .ok_or(CatalogError::NotInitialized)?;
     let next_file_id = values::decode_counter(&file_data)?;
@@ -147,7 +147,7 @@ pub async fn load_counters_from_db(db: &Db) -> CatalogResult<CounterCache> {
 }
 
 /// Verify the catalog format version matches expectations.
-pub async fn verify_format_version(db: &Db) -> CatalogResult<()> {
+pub async fn verify_format_version<D: DbReadOps + Sync>(db: &D) -> CatalogResult<()> {
     let format_key = keys::key_system(SYSTEM_CATALOG_FORMAT_VERSION);
     let data = db
         .get(&format_key)
@@ -165,7 +165,7 @@ pub async fn verify_format_version(db: &Db) -> CatalogResult<()> {
 }
 
 /// Verify that all writer-only key migrations have already completed.
-pub async fn verify_migrations_complete(db: &Db) -> CatalogResult<()> {
+pub async fn verify_migrations_complete<D: DbReadOps + Sync>(db: &D) -> CatalogResult<()> {
     let key = keys::key_system(SYSTEM_KEY_ENCODING_V020_MIGRATED);
     if db.get(&key).await?.is_none() {
         return Err(CatalogError::NotInitialized);

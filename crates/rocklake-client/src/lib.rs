@@ -910,7 +910,12 @@ impl CatalogReaderOps for ReadOnlyClient {
 /// ```
 pub struct CatalogClientSync {
     runtime: tokio::runtime::Runtime,
-    inner: CatalogClient,
+    inner: SyncClient,
+}
+
+enum SyncClient {
+    Writer(CatalogClient),
+    Reader(ReadOnlyClient),
 }
 
 impl CatalogClientSync {
@@ -919,7 +924,10 @@ impl CatalogClientSync {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| ClientError::Config(format!("failed to create Tokio runtime: {e}")))?;
         let inner = runtime.block_on(CatalogClientBuilder::new(uri).build())?;
-        Ok(Self { runtime, inner })
+        Ok(Self {
+            runtime,
+            inner: SyncClient::Writer(inner),
+        })
     }
 
     /// Open a catalog in read-only mode (no writer epoch acquired).
@@ -929,32 +937,31 @@ impl CatalogClientSync {
     pub fn open_readonly(uri: impl Into<String>) -> ClientResult<Self> {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| ClientError::Config(format!("failed to create Tokio runtime: {e}")))?;
-        // build_readonly returns a ReadOnlyClient; wrap it in a CatalogClient
-        // via the underlying open_without_epoch path so we keep the same sync API.
-        let uri_str = uri.into();
-        let path = catalog_path(&uri_str)?;
-        let os = build_object_store(&uri_str)?;
-        let opts = OpenOptions {
-            object_store: os,
-            path,
-            encryption: None,
-        };
-        let object_store =
-            runtime.block_on(rocklake_catalog::CatalogStore::open_without_epoch(opts))?;
-        let inner = CatalogClient {
-            store: object_store,
-        };
-        Ok(Self { runtime, inner })
+        let inner = runtime.block_on(CatalogClientBuilder::new(uri).build_readonly())?;
+        Ok(Self {
+            runtime,
+            inner: SyncClient::Reader(inner),
+        })
     }
 
     /// Return the current snapshot ID.
     pub fn snapshot_id(&self) -> ClientResult<u64> {
-        self.runtime.block_on(self.inner.snapshot_id())
+        match &self.inner {
+            SyncClient::Writer(client) => self.runtime.block_on(client.snapshot_id()),
+            SyncClient::Reader(client) => self.runtime.block_on(client.snapshot_id()),
+        }
     }
 
     /// List schemas at the selected snapshot.
     pub fn list_schemas(&self, snapshot: impl Into<SnapshotRef>) -> ClientResult<Vec<Schema>> {
-        self.runtime.block_on(self.inner.list_schemas(snapshot))
+        match &self.inner {
+            SyncClient::Writer(client) => {
+                self.runtime.block_on(client.list_schemas(snapshot.into()))
+            }
+            SyncClient::Reader(client) => {
+                self.runtime.block_on(client.list_schemas(snapshot.into()))
+            }
+        }
     }
 
     /// List tables in `schema_id` at the selected snapshot.
@@ -963,8 +970,15 @@ impl CatalogClientSync {
         schema_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<Table>> {
-        self.runtime
-            .block_on(self.inner.list_tables(schema_id, snapshot))
+        let snapshot = snapshot.into();
+        match &self.inner {
+            SyncClient::Writer(client) => self
+                .runtime
+                .block_on(client.list_tables(schema_id, snapshot)),
+            SyncClient::Reader(client) => self
+                .runtime
+                .block_on(client.list_tables(schema_id, snapshot)),
+        }
     }
 
     /// Describe columns of `table_id` at the selected snapshot.
@@ -973,8 +987,15 @@ impl CatalogClientSync {
         table_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Option<Vec<Column>>> {
-        self.runtime
-            .block_on(self.inner.get_table(table_id, snapshot))
+        let snapshot = snapshot.into();
+        match &self.inner {
+            SyncClient::Writer(client) => {
+                self.runtime.block_on(client.get_table(table_id, snapshot))
+            }
+            SyncClient::Reader(client) => {
+                self.runtime.block_on(client.get_table(table_id, snapshot))
+            }
+        }
     }
 
     /// List data files for `table_id` at the selected snapshot.
@@ -983,8 +1004,15 @@ impl CatalogClientSync {
         table_id: u64,
         snapshot: impl Into<SnapshotRef>,
     ) -> ClientResult<Vec<DataFile>> {
-        self.runtime
-            .block_on(self.inner.list_data_files(table_id, snapshot))
+        let snapshot = snapshot.into();
+        match &self.inner {
+            SyncClient::Writer(client) => self
+                .runtime
+                .block_on(client.list_data_files(table_id, snapshot)),
+            SyncClient::Reader(client) => self
+                .runtime
+                .block_on(client.list_data_files(table_id, snapshot)),
+        }
     }
 
     /// List one bounded page of data files at the selected snapshot.
@@ -995,17 +1023,29 @@ impl CatalogClientSync {
         page_size: usize,
         continuation_token: Option<&str>,
     ) -> ClientResult<DataFilePage> {
-        self.runtime.block_on(self.inner.list_data_files_paged(
-            table_id,
-            snapshot,
-            page_size,
-            continuation_token,
-        ))
+        let snapshot = snapshot.into();
+        match &self.inner {
+            SyncClient::Writer(client) => self.runtime.block_on(client.list_data_files_paged(
+                table_id,
+                snapshot,
+                page_size,
+                continuation_token,
+            )),
+            SyncClient::Reader(client) => self.runtime.block_on(client.list_data_files_paged(
+                table_id,
+                snapshot,
+                page_size,
+                continuation_token,
+            )),
+        }
     }
 
     /// Close the catalog.
     pub fn close(self) -> ClientResult<()> {
-        self.runtime.block_on(self.inner.close())
+        match self.inner {
+            SyncClient::Writer(client) => self.runtime.block_on(client.close()),
+            SyncClient::Reader(client) => self.runtime.block_on(client.close()),
+        }
     }
 }
 
@@ -1087,6 +1127,19 @@ mod tests {
             .unwrap();
         assert!(schemas.is_empty());
         client.close().unwrap();
+    }
+
+    #[test]
+    fn sync_readonly_client_uses_independent_reader() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let uri = format!("file://{}", dir.path().to_str().unwrap());
+        let writer = CatalogClientSync::open(&uri).unwrap();
+        writer.close().unwrap();
+
+        let reader = CatalogClientSync::open_readonly(&uri).unwrap();
+        assert_eq!(reader.snapshot_id().unwrap(), 0);
+        assert!(reader.list_schemas(SnapshotRef::Latest).unwrap().is_empty());
+        reader.close().unwrap();
     }
 
     #[test]

@@ -9,9 +9,9 @@ use rocklake_core::keys;
 use rocklake_core::rows::SnapshotRow;
 use rocklake_core::tags::*;
 use rocklake_core::values;
-use slatedb::{Db, DbTransaction, IsolationLevel};
+use slatedb::{Db, DbReadOps, DbTransaction, IsolationLevel};
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogResult, MAX_TRANSACTION_RETRIES};
 
 /// Result of a GC plan operation.
 #[derive(Debug, Clone)]
@@ -40,7 +40,7 @@ pub struct GcApplyResult {
 }
 
 /// Read the current `retain-from` value from the catalog.
-pub async fn read_retain_from(db: &Db) -> CatalogResult<u64> {
+pub async fn read_retain_from<D: DbReadOps + Sync>(db: &D) -> CatalogResult<u64> {
     let key = keys::key_system(SYSTEM_RETAIN_FROM);
     match db.get(&key).await? {
         None => Ok(0), // infinite retention by default
@@ -99,7 +99,7 @@ pub async fn gc_plan(db: &Db, retention_days: u64) -> CatalogResult<GcPlan> {
 pub async fn gc_apply(db: &Db, new_retain_from: u64) -> CatalogResult<GcApplyResult> {
     let retain_from_key = keys::key_system(SYSTEM_RETAIN_FROM);
 
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
@@ -157,33 +157,81 @@ pub async fn gc_apply(db: &Db, new_retain_from: u64) -> CatalogResult<GcApplyRes
                     snapshots_hidden,
                 });
             }
-            Err(_) => continue, // CAS conflict — retry
+            Err(error) => {
+                let error: CatalogError = error.into();
+                if matches!(error, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(error);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "GC transaction retries exhausted".into(),
+    ))
 }
 
 /// Pin a snapshot to prevent GC from advancing past it.
 pub async fn pin_snapshot(db: &Db, snapshot_id: u64) -> CatalogResult<()> {
     let key = key_pinned_snapshot(snapshot_id);
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        let retain_from = tx
+            .get(&keys::key_system(SYSTEM_RETAIN_FROM))
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .map(|data| values::decode_counter(&data))
+            .transpose()?
+            .unwrap_or(0);
+        let latest_committed = tx
+            .get(&keys::key_counter(COUNTER_NEXT_SNAPSHOT_ID))
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            .map(|data| values::decode_counter(&data))
+            .transpose()?
+            .unwrap_or(1)
+            .saturating_sub(1);
+        if retain_from > 0 && snapshot_id < retain_from {
+            return Err(CatalogError::SnapshotOutOfRetention {
+                requested: snapshot_id,
+                retain_from,
+            });
+        }
+        if snapshot_id > latest_committed {
+            return Err(CatalogError::SnapshotNotFound {
+                requested: snapshot_id,
+                latest_committed,
+            });
+        }
         tx.put(&key, values::encode_counter(snapshot_id))
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         match tx.commit().await {
             Ok(_) => return Ok(()),
-            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
-            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+            Err(e) => {
+                let e: CatalogError = e.into();
+                if matches!(e, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(e);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "pin transaction retries exhausted".into(),
+    ))
 }
 
 /// Unpin a snapshot.
 pub async fn unpin_snapshot(db: &Db, snapshot_id: u64) -> CatalogResult<()> {
     let key = key_pinned_snapshot(snapshot_id);
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
@@ -192,10 +240,20 @@ pub async fn unpin_snapshot(db: &Db, snapshot_id: u64) -> CatalogResult<()> {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         match tx.commit().await {
             Ok(_) => return Ok(()),
-            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
-            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+            Err(e) => {
+                let e: CatalogError = e.into();
+                if matches!(e, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(e);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "unpin transaction retries exhausted".into(),
+    ))
 }
 
 /// Read all pinned snapshots.

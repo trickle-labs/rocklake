@@ -27,7 +27,7 @@ use rocklake_core::tags::*;
 use rocklake_core::values::{self, MAX_INLINED_VALUE_SIZE};
 use slatedb::{Db, IsolationLevel};
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogResult, MAX_TRANSACTION_RETRIES};
 
 fn validate_registered_path(path: &str, declared_relative: Option<bool>) -> CatalogResult<bool> {
     if path.trim_matches('/').is_empty() {
@@ -2932,7 +2932,7 @@ impl CatalogWriter {
             ));
         }
         let key = keys::key_counter_rowid(table_id);
-        loop {
+        for attempt in 0..=MAX_TRANSACTION_RETRIES {
             let tx = self.begin_tx().await?;
             let current = match tx
                 .get(&key)
@@ -2952,9 +2952,20 @@ impl CatalogWriter {
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
             match tx.commit().await {
                 Ok(_) => return Ok((start, end)),
-                Err(_) => continue, // Retry on contention
+                Err(error) => {
+                    let error: CatalogError = error.into();
+                    if matches!(error, CatalogError::TransactionConflict(_))
+                        && attempt < MAX_TRANSACTION_RETRIES
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
             }
         }
+        Err(CatalogError::TransactionConflict(
+            "rowid range retries exhausted".into(),
+        ))
     }
 
     // ─── v0.24: SnapshotChanges and delta stats ────────────────────────────
@@ -3113,7 +3124,7 @@ pub async fn next_rowid_range(db: &Db, table_id: u64, count: u64) -> CatalogResu
         ));
     }
     let key = keys::key_counter_rowid(table_id);
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
@@ -3136,7 +3147,18 @@ pub async fn next_rowid_range(db: &Db, table_id: u64, count: u64) -> CatalogResu
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         match tx.commit().await {
             Ok(_) => return Ok((start, end)),
-            Err(_) => continue,
+            Err(error) => {
+                let error: CatalogError = error.into();
+                if matches!(error, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(error);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "rowid range retries exhausted".into(),
+    ))
 }

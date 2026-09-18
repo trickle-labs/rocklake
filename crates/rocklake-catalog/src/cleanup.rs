@@ -317,6 +317,7 @@ async fn file_retired_at(
     scheduled: &FilesScheduledForDeletionRow,
     retain_from: u64,
 ) -> CatalogResult<bool> {
+    let mut retired = false;
     let mut iter = db.scan_prefix(&keys::prefix_for_tag(TAG_DATA_FILE)).await?;
     while let Some(kv) = iter
         .next()
@@ -324,11 +325,14 @@ async fn file_retired_at(
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
     {
         let row: DataFileRow = values::decode_value(&kv.value)?;
-        if row.data_file_id == scheduled.data_file_id
-            && row.path == scheduled.path
-            && row.end_snapshot.is_some_and(|end| end <= retain_from)
-        {
-            return Ok(true);
+        if row.path == scheduled.path && row.path_is_relative == scheduled.path_is_relative {
+            if row.data_file_id == scheduled.data_file_id
+                && row.end_snapshot.is_some_and(|end| end <= retain_from)
+            {
+                retired = true;
+            } else if row.end_snapshot.is_none_or(|end| end > retain_from) {
+                return Ok(false);
+            }
         }
     }
 
@@ -341,14 +345,17 @@ async fn file_retired_at(
         .map_err(|e| CatalogError::SlateDb(e.to_string()))?
     {
         let row: DeleteFileRow = values::decode_value(&kv.value)?;
-        if row.data_file_id == scheduled.data_file_id
-            && row.path == scheduled.path
-            && row.end_snapshot.is_some_and(|end| end <= retain_from)
-        {
-            return Ok(true);
+        if row.path == scheduled.path && row.path_is_relative == scheduled.path_is_relative {
+            if row.data_file_id == scheduled.data_file_id
+                && row.end_snapshot.is_some_and(|end| end <= retain_from)
+            {
+                retired = true;
+            } else if row.end_snapshot.is_none_or(|end| end > retain_from) {
+                return Ok(false);
+            }
         }
     }
-    Ok(false)
+    Ok(retired)
 }
 
 fn canonical_object_path(

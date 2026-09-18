@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogResult, MAX_TRANSACTION_RETRIES};
 
 /// Current durable job-ledger schema version.
 pub const JOB_LEDGER_FORMAT_VERSION: u32 = rocklake_core::version::JOB_LEDGER_VERSION;
@@ -335,7 +335,7 @@ impl JobLedger {
             ));
         }
 
-        loop {
+        for attempt in 0..=MAX_TRANSACTION_RETRIES {
             let tx = self.db.begin(IsolationLevel::SerializableSnapshot).await?;
             let existing = scan_records_tx(&tx).await?;
             if let Some(key) = request.idempotency_key.as_deref() {
@@ -377,10 +377,13 @@ impl JobLedger {
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
             match tx.commit().await {
                 Ok(_) => return Ok(record),
-                Err(error) if is_conflict(&error) => continue,
+                Err(error) if is_conflict(&error) && attempt < MAX_TRANSACTION_RETRIES => continue,
                 Err(error) => return Err(error.into()),
             }
         }
+        Err(CatalogError::TransactionConflict(
+            "job creation retries exhausted".into(),
+        ))
     }
 
     /// Return one job by ID.
@@ -533,7 +536,7 @@ impl JobLedger {
     where
         F: Fn(&mut JobRecord) -> CatalogResult<()> + Send + Sync,
     {
-        loop {
+        for attempt in 0..=MAX_TRANSACTION_RETRIES {
             let tx = self.db.begin(IsolationLevel::SerializableSnapshot).await?;
             let value = tx
                 .get(&job_key(id))
@@ -548,10 +551,13 @@ impl JobLedger {
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
             match tx.commit().await {
                 Ok(_) => return Ok(record),
-                Err(error) if is_conflict(&error) => continue,
+                Err(error) if is_conflict(&error) && attempt < MAX_TRANSACTION_RETRIES => continue,
                 Err(error) => return Err(error.into()),
             }
         }
+        Err(CatalogError::TransactionConflict(
+            "job mutation retries exhausted".into(),
+        ))
     }
 }
 

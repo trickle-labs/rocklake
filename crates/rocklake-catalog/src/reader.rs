@@ -1,6 +1,7 @@
 //! CatalogReader: read catalog state at a specific DuckLake snapshot.
 
 use base64::Engine as _;
+use bytes::Bytes;
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use prost::Message;
@@ -11,7 +12,9 @@ use rocklake_core::tags::*;
 use rocklake_core::types::DuckLakeType;
 use rocklake_core::values;
 use serde::{Deserialize, Serialize};
-use slatedb::Db;
+use slatedb::{Db, DbIterator, DbReader};
+use std::ops::RangeBounds;
+use std::sync::Arc;
 
 use crate::error::{CatalogError, CatalogResult};
 
@@ -76,8 +79,52 @@ impl SnapshotDiff {
 /// Reads catalog state at a specific DuckLake snapshot ID.
 #[derive(Clone)]
 pub struct CatalogReader {
-    db: Db,
+    db: CatalogDb,
     dl_snapshot_id: SnapshotId,
+}
+
+#[derive(Clone)]
+pub(crate) enum CatalogDb {
+    Writer(Db),
+    Reader(Arc<DbReader>),
+}
+
+impl CatalogDb {
+    pub(crate) fn writer(db: Db) -> Self {
+        Self::Writer(db)
+    }
+
+    pub(crate) fn reader(db: Arc<DbReader>) -> Self {
+        Self::Reader(db)
+    }
+
+    async fn get<K: AsRef<[u8]> + Send>(&self, key: K) -> Result<Option<Bytes>, slatedb::Error> {
+        match self {
+            Self::Writer(db) => db.get(key).await,
+            Self::Reader(db) => db.get(key).await,
+        }
+    }
+
+    async fn scan<K, T>(&self, range: T) -> Result<DbIterator, slatedb::Error>
+    where
+        K: AsRef<[u8]> + Send,
+        T: RangeBounds<K> + Send,
+    {
+        match self {
+            Self::Writer(db) => db.scan::<K, T>(range).await,
+            Self::Reader(db) => db.scan::<K, T>(range).await,
+        }
+    }
+
+    async fn scan_prefix<P: AsRef<[u8]> + Send>(
+        &self,
+        prefix: P,
+    ) -> Result<DbIterator, slatedb::Error> {
+        match self {
+            Self::Writer(db) => db.scan_prefix(prefix).await,
+            Self::Reader(db) => db.scan_prefix(prefix).await,
+        }
+    }
 }
 
 /// Maximum number of rows returned by one paginated data-file read.
@@ -269,9 +316,15 @@ fn page_legacy_metadata<T: Clone>(
 
 impl CatalogReader {
     pub(crate) fn new(db: Db, dl_snapshot_id: SnapshotId) -> Self {
-        Self { db, dl_snapshot_id }
+        Self {
+            db: CatalogDb::writer(db),
+            dl_snapshot_id,
+        }
     }
 
+    pub(crate) fn new_from_db(db: CatalogDb, dl_snapshot_id: SnapshotId) -> Self {
+        Self { db, dl_snapshot_id }
+    }
     async fn scan_decoded<T: Message + Default>(&self, prefix: &[u8]) -> CatalogResult<Vec<T>> {
         let mut rows = Vec::new();
         let mut iter = self.db.scan_prefix(prefix).await?;
@@ -1964,7 +2017,14 @@ impl CatalogReader {
             )));
         }
 
-        let retain_from = crate::gc::read_retain_from(&self.db).await.unwrap_or(0);
+        let retain_key = keys::key_system(SYSTEM_RETAIN_FROM);
+        let retain_from = self
+            .db
+            .get(&retain_key)
+            .await?
+            .map(|data| values::decode_counter(&data))
+            .transpose()?
+            .unwrap_or(0);
         if retain_from > 0 && from < retain_from {
             return Err(CatalogError::SnapshotOutOfRetention {
                 requested: from,
@@ -2130,7 +2190,7 @@ impl CatalogReader {
 }
 
 async fn data_file_visible(
-    db: &Db,
+    db: &CatalogDb,
     table_id: u64,
     data_file_id: u64,
     snapshot_id: u64,

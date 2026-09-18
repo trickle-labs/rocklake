@@ -9,7 +9,7 @@ use rocklake_core::keys;
 use rocklake_core::rows::SnapshotLeaseRow;
 use slatedb::{Db, DbTransaction, IsolationLevel};
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogResult, MAX_TRANSACTION_RETRIES};
 
 /// Hold a snapshot lease: prevents GC from advancing past `min_snapshot_id`.
 ///
@@ -49,7 +49,7 @@ pub async fn hold_snapshot(
     let retain_key = keys::key_system(rocklake_core::tags::SYSTEM_RETAIN_FROM);
     let next_snap_key = keys::key_counter(rocklake_core::tags::COUNTER_NEXT_SNAPSHOT_ID);
 
-    loop {
+    for attempt in 0..=MAX_TRANSACTION_RETRIES {
         let tx = db
             .begin(IsolationLevel::SerializableSnapshot)
             .await
@@ -85,10 +85,20 @@ pub async fn hold_snapshot(
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
         match tx.commit().await {
             Ok(_) => return Ok(row),
-            Err(e) if e.to_string().to_ascii_lowercase().contains("conflict") => continue,
-            Err(e) => return Err(CatalogError::SlateDb(e.to_string())),
+            Err(e) => {
+                let e: CatalogError = e.into();
+                if matches!(e, CatalogError::TransactionConflict(_))
+                    && attempt < MAX_TRANSACTION_RETRIES
+                {
+                    continue;
+                }
+                return Err(e);
+            }
         }
     }
+    Err(CatalogError::TransactionConflict(
+        "lease transaction retries exhausted".into(),
+    ))
 }
 
 /// Release a snapshot lease by consumer_id.

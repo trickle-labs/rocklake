@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::encryption::{AesGcmTransformer, EncryptionConfig};
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogResult, MAX_TRANSACTION_RETRIES};
 use crate::init;
 use crate::reader::CatalogReader;
 use crate::writer::{snapshot::CommitResult, CatalogWriter};
@@ -102,6 +102,7 @@ impl CatalogStore {
         let nonce_key = keys::key_system(SYSTEM_WRITER_NONCE);
         let writer_nonce = uuid::Uuid::new_v4().to_string();
 
+        let mut attempts = 0;
         let writer_epoch = loop {
             let tx = db
                 .begin(IsolationLevel::SerializableSnapshot)
@@ -130,7 +131,16 @@ impl CatalogStore {
 
             match tx.commit().await {
                 Ok(_) => break new_epoch,
-                Err(_) => continue, // CAS conflict — another writer beat us; retry
+                Err(error) => {
+                    let error: CatalogError = error.into();
+                    if matches!(error, CatalogError::TransactionConflict(_))
+                        && attempts < MAX_TRANSACTION_RETRIES
+                    {
+                        attempts += 1;
+                        continue;
+                    }
+                    return Err(error);
+                }
             }
         };
 
@@ -138,7 +148,7 @@ impl CatalogStore {
         let schema_version = Self::load_schema_version(&db, &counters).await?;
 
         // Seed the retain-from cache from SlateDB (single read at startup).
-        let retain_from_initial = crate::gc::read_retain_from(&db).await.unwrap_or(0);
+        let retain_from_initial = crate::gc::read_retain_from(&db).await?;
         let retain_from_cache = Arc::new(AtomicU64::new(retain_from_initial));
         let latest_initial = if counters.peek_snapshot_id() > 1 {
             counters.peek_snapshot_id() - 1

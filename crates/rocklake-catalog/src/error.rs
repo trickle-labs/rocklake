@@ -80,6 +80,8 @@ pub enum CatalogError {
     InjectedFault { point: String, message: String },
 }
 
+pub(crate) const MAX_TRANSACTION_RETRIES: usize = 8;
+
 impl From<slatedb::Error> for CatalogError {
     fn from(e: slatedb::Error) -> Self {
         classify_slatedb_error(e)

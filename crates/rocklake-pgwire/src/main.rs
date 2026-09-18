@@ -26,7 +26,7 @@ use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
 use rocklake_catalog::metrics::CatalogMetrics;
-use rocklake_catalog::{CatalogStore, OpenOptions};
+use rocklake_catalog::{CatalogStore, OpenOptions, ReadOnlyCatalog};
 use rocklake_pgwire::server::{
     run_server_with_mode, run_server_with_router_and_catalog_and_auth, MultiPrincipalAuth,
     ServerConfig,
@@ -3850,20 +3850,27 @@ async fn collect_status(
     };
     let (catalog_path, object_store) =
         resolve_catalog_with_opts_mode(catalog_url, &s3_opts, false)?;
-    let store = CatalogStore::open_without_epoch(OpenOptions {
+    let store = ReadOnlyCatalog::open(OpenOptions {
         object_store,
         path: catalog_path,
         encryption: None,
     })
     .await?;
+    let snapshot = store.current_snapshot_id().as_u64();
+    let schema_version = store
+        .reader()?
+        .get_snapshot()
+        .await?
+        .map(|row| row.schema_version)
+        .unwrap_or(0);
     let json = serde_json::json!({
         "output_schema_version": rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION,
         "catalog": redact_catalog_url(catalog_url),
         "status": "ready",
-        "snapshot_id": store.latest_committed_snapshot_id(),
-        "retain_from": rocklake_catalog::gc::read_retain_from(store.db()).await?,
+        "snapshot_id": snapshot,
+        "retain_from": store.retain_from(),
         "format_version": "DuckLake 1.0 (V1_0)",
-        "schema_version": store.schema_version(),
+        "schema_version": schema_version,
         "versions": rocklake_core::version::CURRENT_VERSIONS,
         "compatibility": {
             "ducklake_catalog_read": [rocklake_core::version::DUCKLAKE_CATALOG_VERSION],
