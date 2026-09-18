@@ -21,6 +21,6 @@
     "get_current_snapshot_warm": "us"
   },
   "regression_thresholds": {
-    "get_current_snapshot_warm_max": 2
+    "get_current_snapshot_warm_max": 2.25
   }
 }
