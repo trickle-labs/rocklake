@@ -37,7 +37,7 @@ use pgwire::messages::{copy::CopyOutResponse, PgWireBackendMessage, PgWireFronte
 use sqlparser::ast::{Expr, SelectItem, SetExpr, Statement};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tracing::Instrument;
 
 use rocklake_catalog::metrics::CatalogMetrics;
@@ -343,6 +343,34 @@ where
     Ok(())
 }
 
+async fn send_copy_chunk<C>(
+    client: &mut C,
+    data: Bytes,
+    query: &RequestContext,
+    response_buffer: &Arc<Semaphore>,
+    max_in_flight_response_bytes: usize,
+) -> PgWireResult<()>
+where
+    C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+    C::Error: Debug,
+    PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+{
+    let permit = acquire_response_buffer(
+        response_buffer,
+        max_in_flight_response_bytes,
+        data.len(),
+        query,
+    )
+    .await?;
+    client
+        .send(PgWireBackendMessage::CopyData(
+            pgwire::messages::copy::CopyData::new(data),
+        ))
+        .await?;
+    drop(permit);
+    Ok(())
+}
+
 /// The main RockLake query handler.
 pub struct RockLakeHandler {
     pub catalog: Arc<Mutex<CatalogStore>>,
@@ -359,17 +387,69 @@ pub struct RockLakeHandler {
     pub access_mode: executor::AccessMode,
     scan_semaphore: Arc<Semaphore>,
     max_active_scans: usize,
-    max_buffered_rows: usize,
     max_response_bytes: usize,
+    max_in_flight_response_bytes: usize,
     response_buffer: Arc<Semaphore>,
     slow_operation_threshold: Duration,
+}
+
+const DEFAULT_MAX_IN_FLIGHT_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+struct ResponseBufferPermit {
+    _permit: OwnedSemaphorePermit,
+    metrics: Option<Arc<CatalogMetrics>>,
+    bytes: u64,
+}
+
+impl Drop for ResponseBufferPermit {
+    fn drop(&mut self) {
+        if let Some(metrics) = &self.metrics {
+            metrics.sub_pgwire_in_flight_response_bytes(self.bytes);
+        }
+    }
+}
+
+async fn acquire_response_buffer(
+    response_buffer: &Arc<Semaphore>,
+    max_in_flight_response_bytes: usize,
+    bytes: usize,
+    query: &RequestContext,
+) -> Result<ResponseBufferPermit, PgWireError> {
+    let permits = u32::try_from(bytes.max(1)).map_err(|_| {
+        resource_limit_error("in-flight response byte limit is smaller than one row")
+    })?;
+    if permits as usize > max_in_flight_response_bytes {
+        if let Some(metrics) = query.metrics() {
+            metrics.increment_resource_limit_exhaustions();
+        }
+        return Err(resource_limit_error(
+            "in-flight response byte limit is smaller than one row",
+        ));
+    }
+    let permit = tokio::select! {
+        permit = response_buffer.clone().acquire_many_owned(permits) => permit,
+        _ = query.cancelled() => {
+            query.abort_transaction().await;
+            return Err(query.cancellation_error());
+        }
+    }
+    .map_err(|_| resource_limit_error("in-flight response byte limit exhausted"))?;
+    let metrics = query.metrics();
+    if let Some(metrics) = &metrics {
+        metrics.add_pgwire_in_flight_response_bytes(bytes as u64);
+    }
+    Ok(ResponseBufferPermit {
+        _permit: permit,
+        metrics,
+        bytes: bytes as u64,
+    })
 }
 
 fn wrap_query_response<'a>(
     response: Response<'a>,
     permit: Option<AdmissionPermit>,
-    max_buffered_rows: usize,
     max_response_bytes: usize,
+    max_in_flight_response_bytes: usize,
     response_buffer: Arc<Semaphore>,
     query: RequestContext,
 ) -> Response<'a> {
@@ -380,84 +460,88 @@ fn wrap_query_response<'a>(
     let schema = query_response.row_schema();
     let command_tag = query_response.command_tag().to_string();
     let rows = query_response.data_rows();
-    let state = (rows, permit, 0usize, query.response_observer());
-    let rows = futures::stream::unfold(state, move |(mut rows, permit, bytes, mut observation)| {
-        let response_buffer = response_buffer.clone();
-        async move {
-            if observation.request.is_cancelled() {
-                observation.set_terminal(RequestTerminalState::Cancelled);
-                observation.request.abort_transaction().await;
-                return Some((
-                    Err(observation.request.cancellation_error()),
-                    (rows, permit, bytes, observation),
-                ));
-            }
-            let item = tokio::select! {
-                item = rows.next() => item,
-                _ = observation.request.cancelled() => {
+    let state = (rows, permit, 0usize, None, query.response_observer());
+    let rows = futures::stream::unfold(
+        state,
+        move |(mut rows, permit, bytes, mut in_flight, mut observation)| {
+            let response_buffer = response_buffer.clone();
+            async move {
+                drop(in_flight.take());
+                if observation.request.is_cancelled() {
                     observation.set_terminal(RequestTerminalState::Cancelled);
                     observation.request.abort_transaction().await;
                     return Some((
                         Err(observation.request.cancellation_error()),
-                        (rows, permit, bytes, observation),
+                        (rows, permit, bytes, None, observation),
                     ));
                 }
-            };
-            let Some(item) = item else {
-                observation.set_terminal(RequestTerminalState::Completed);
-                let request = observation.request.clone();
-                observation.finish();
-                request.finish(RequestTerminalState::Completed);
-                return None;
-            };
-            let mut next_bytes = bytes;
-            let item = match item {
-                Ok(row) => {
-                    if max_buffered_rows < 1 {
-                        if let Some(metrics) = observation.request.metrics() {
-                            metrics.increment_resource_limit_exhaustions();
-                        }
-                        observation.set_terminal(RequestTerminalState::Error);
+                let item = tokio::select! {
+                    item = rows.next() => item,
+                    _ = observation.request.cancelled() => {
+                        observation.set_terminal(RequestTerminalState::Cancelled);
+                        observation.request.abort_transaction().await;
                         return Some((
-                            Err(resource_limit_error("buffered row limit exhausted")),
-                            (rows, permit, bytes, observation),
+                            Err(observation.request.cancellation_error()),
+                            (rows, permit, bytes, None, observation),
                         ));
                     }
-                    let buffer_permit = match response_buffer.clone().try_acquire_owned() {
-                        Ok(permit) => AdmissionPermit::response_buffer(permit),
-                        Err(_) => {
+                };
+                let Some(item) = item else {
+                    observation.set_terminal(RequestTerminalState::Completed);
+                    let request = observation.request.clone();
+                    observation.finish();
+                    request.finish(RequestTerminalState::Completed);
+                    return None;
+                };
+                let mut next_bytes = bytes;
+                let (item, in_flight) = match item {
+                    Ok(row) => {
+                        next_bytes = bytes.saturating_add(row.data.len());
+                        if next_bytes > max_response_bytes {
                             if let Some(metrics) = observation.request.metrics() {
                                 metrics.increment_resource_limit_exhaustions();
                             }
                             observation.set_terminal(RequestTerminalState::Error);
-                            return Some((
-                                Err(resource_limit_error("response buffer capacity exhausted")),
-                                (rows, permit, bytes, observation),
-                            ));
+                            (
+                                Err(resource_limit_error("response byte limit exhausted")),
+                                None,
+                            )
+                        } else {
+                            match acquire_response_buffer(
+                                &response_buffer,
+                                max_in_flight_response_bytes,
+                                row.data.len(),
+                                &observation.request,
+                            )
+                            .await
+                            {
+                                Ok(permit) => {
+                                    observation.observe_row(row.data.len());
+                                    observation.mark_first_row();
+                                    (Ok(row), Some(permit))
+                                }
+                                Err(error) => {
+                                    observation.set_terminal(
+                                        if observation.request.is_cancelled() {
+                                            RequestTerminalState::Cancelled
+                                        } else {
+                                            RequestTerminalState::Error
+                                        },
+                                    );
+                                    (Err(error), None)
+                                }
+                            }
                         }
-                    };
-                    next_bytes = bytes.saturating_add(row.data.len());
-                    if next_bytes > max_response_bytes {
-                        if let Some(metrics) = observation.request.metrics() {
-                            metrics.increment_resource_limit_exhaustions();
-                        }
-                        observation.set_terminal(RequestTerminalState::Error);
-                        Err(resource_limit_error("response byte limit exhausted"))
-                    } else {
-                        observation.observe_row(row.data.len());
-                        observation.mark_first_row();
-                        drop(buffer_permit);
-                        Ok(row)
                     }
-                }
-                Err(error) => {
-                    observation.set_terminal(RequestTerminalState::Error);
-                    Err(error)
-                }
-            };
-            Some((item, (rows, permit, next_bytes, observation)))
-        }
-    })
+                    Err(error) => {
+                        observation.set_terminal(RequestTerminalState::Error);
+                        (Err(error), None)
+                    }
+                };
+                Some((item, (rows, permit, next_bytes, in_flight, observation)))
+            }
+        },
+    )
     .boxed();
     let mut wrapped = QueryResponse::new(schema, rows);
     wrapped.set_command_tag(&command_tag);
@@ -495,9 +579,9 @@ impl RockLakeHandler {
             access_mode,
             scan_semaphore: Arc::new(Semaphore::new(25)),
             max_active_scans: 25,
-            max_buffered_rows: 1024,
             max_response_bytes: usize::MAX,
-            response_buffer: Arc::new(Semaphore::new(1024)),
+            max_in_flight_response_bytes: DEFAULT_MAX_IN_FLIGHT_RESPONSE_BYTES,
+            response_buffer: Arc::new(Semaphore::new(DEFAULT_MAX_IN_FLIGHT_RESPONSE_BYTES)),
             slow_operation_threshold: Duration::from_secs(1),
         }
     }
@@ -525,9 +609,9 @@ impl RockLakeHandler {
             access_mode,
             scan_semaphore: Arc::new(Semaphore::new(25)),
             max_active_scans: 25,
-            max_buffered_rows: 1024,
             max_response_bytes: usize::MAX,
-            response_buffer: Arc::new(Semaphore::new(1024)),
+            max_in_flight_response_bytes: DEFAULT_MAX_IN_FLIGHT_RESPONSE_BYTES,
+            response_buffer: Arc::new(Semaphore::new(DEFAULT_MAX_IN_FLIGHT_RESPONSE_BYTES)),
             slow_operation_threshold: Duration::from_secs(1),
         }
     }
@@ -625,6 +709,7 @@ impl RockLakeHandler {
             slow_operation_threshold,
             connection,
             None,
+            DEFAULT_MAX_IN_FLIGHT_RESPONSE_BYTES,
         )
     }
 
@@ -642,6 +727,7 @@ impl RockLakeHandler {
         slow_operation_threshold: Duration,
         connection: Arc<ConnectionContext>,
         router: Option<Arc<CatalogRouter>>,
+        max_in_flight_response_bytes: usize,
     ) -> Self {
         Self::new_with_config_mode_and_limits_and_lifecycle_and_router_and_auth(
             catalog,
@@ -658,6 +744,7 @@ impl RockLakeHandler {
             router,
             None,
             None,
+            max_in_flight_response_bytes,
         )
     }
 
@@ -670,13 +757,14 @@ impl RockLakeHandler {
         access_mode: executor::AccessMode,
         scan_semaphore: Arc<Semaphore>,
         max_active_scans: usize,
-        max_buffered_rows: usize,
+        _max_buffered_rows: usize,
         max_response_bytes: usize,
         slow_operation_threshold: Duration,
         connection: Arc<ConnectionContext>,
         router: Option<Arc<CatalogRouter>>,
         multi_auth: Option<Arc<MultiPrincipalAuth>>,
         quota_manager: Option<Arc<CatalogQuotaManager>>,
+        max_in_flight_response_bytes: usize,
     ) -> Self {
         Self {
             catalog,
@@ -691,9 +779,9 @@ impl RockLakeHandler {
             access_mode,
             scan_semaphore,
             max_active_scans,
-            max_buffered_rows,
             max_response_bytes,
-            response_buffer: Arc::new(Semaphore::new(max_buffered_rows.max(1))),
+            max_in_flight_response_bytes: max_in_flight_response_bytes.max(1),
+            response_buffer: Arc::new(Semaphore::new(max_in_flight_response_bytes.max(1))),
             slow_operation_threshold,
         }
     }
@@ -1029,6 +1117,13 @@ impl RockLakeHandler {
         let mut row_count = 0usize;
         let mut response_bytes = 0usize;
         let mut payload = BytesMut::from(binary_copy_header().as_ref());
+        let payload_limit = self.max_in_flight_response_bytes.min(64 * 1024);
+        if payload.len() > payload_limit {
+            observation.set_terminal(RequestTerminalState::Error);
+            return Err(resource_limit_error(
+                "in-flight response byte limit is smaller than COPY header",
+            ));
+        }
         let mut rows = query_response.data_rows();
         loop {
             let Some(row_result) = (tokio::select! {
@@ -1068,29 +1163,63 @@ impl RockLakeHandler {
                 observation.set_terminal(RequestTerminalState::Error);
                 return Err(resource_limit_error("response byte limit exhausted"));
             }
+            if payload.len().saturating_add(row_bytes) > payload_limit {
+                let chunk = payload.split().freeze();
+                send_copy_chunk(
+                    client,
+                    chunk,
+                    query,
+                    &self.response_buffer,
+                    self.max_in_flight_response_bytes,
+                )
+                .await?;
+                observation.mark_first_row();
+            }
+            if payload.len().saturating_add(row_bytes) > payload_limit {
+                observation.set_terminal(RequestTerminalState::Error);
+                return Err(resource_limit_error(
+                    "in-flight response byte limit is smaller than one COPY row",
+                ));
+            }
             payload.put_i16(columns as i16);
             payload.put_slice(&projected_row);
             observation.observe_row(row_bytes);
             row_count += 1;
-            if payload.len() >= self.max_response_bytes.min(64 * 1024) {
-                client
-                    .send(PgWireBackendMessage::CopyData(
-                        pgwire::messages::copy::CopyData::new(payload.split().freeze()),
-                    ))
-                    .await?;
+            if payload.len() >= payload_limit {
+                send_copy_chunk(
+                    client,
+                    payload.split().freeze(),
+                    query,
+                    &self.response_buffer,
+                    self.max_in_flight_response_bytes,
+                )
+                .await?;
                 observation.mark_first_row();
             }
         }
 
         // End-of-copy marker: int16 -1.
+        if payload.len().saturating_add(2) > payload_limit {
+            send_copy_chunk(
+                client,
+                payload.split().freeze(),
+                query,
+                &self.response_buffer,
+                self.max_in_flight_response_bytes,
+            )
+            .await?;
+        }
         payload.put_i16(-1);
 
         if !payload.is_empty() {
-            client
-                .send(PgWireBackendMessage::CopyData(
-                    pgwire::messages::copy::CopyData::new(payload.freeze()),
-                ))
-                .await?;
+            send_copy_chunk(
+                client,
+                payload.freeze(),
+                query,
+                &self.response_buffer,
+                self.max_in_flight_response_bytes,
+            )
+            .await?;
             if row_count > 0 {
                 observation.mark_first_row();
             }
@@ -2019,23 +2148,6 @@ impl RockLakeHandler {
                     return Err(error);
                 }
             };
-            if self.max_buffered_rows < 1 {
-                if let Some(metrics) = query.metrics() {
-                    metrics.increment_resource_limit_exhaustions();
-                }
-                observation.set_terminal(RequestTerminalState::Error);
-                return Err(resource_limit_error("buffered row limit exhausted"));
-            }
-            let _buffer_permit = match self.response_buffer.clone().try_acquire_owned() {
-                Ok(permit) => AdmissionPermit::response_buffer(permit),
-                Err(_) => {
-                    if let Some(metrics) = query.metrics() {
-                        metrics.increment_resource_limit_exhaustions();
-                    }
-                    observation.set_terminal(RequestTerminalState::Error);
-                    return Err(resource_limit_error("response buffer capacity exhausted"));
-                }
-            };
             let next_bytes = response_bytes.saturating_add(row.data.len() as u64);
             if next_bytes > self.max_response_bytes as u64 {
                 if let Some(metrics) = query.metrics() {
@@ -2044,6 +2156,24 @@ impl RockLakeHandler {
                 observation.set_terminal(RequestTerminalState::Error);
                 return Err(resource_limit_error("response byte limit exhausted"));
             }
+            let _buffer_permit = match acquire_response_buffer(
+                &self.response_buffer,
+                self.max_in_flight_response_bytes,
+                row.data.len(),
+                query,
+            )
+            .await
+            {
+                Ok(permit) => permit,
+                Err(error) => {
+                    observation.set_terminal(if query.is_cancelled() {
+                        RequestTerminalState::Cancelled
+                    } else {
+                        RequestTerminalState::Error
+                    });
+                    return Err(error);
+                }
+            };
             response_bytes = next_bytes;
             row_count += 1;
             observation.observe_row(row.data.len());
@@ -2246,8 +2376,8 @@ impl SimpleQueryHandler for RockLakeHandler {
                     wrap_query_response(
                         response,
                         permit.take(),
-                        self.max_buffered_rows,
                         self.max_response_bytes,
+                        self.max_in_flight_response_bytes,
                         self.response_buffer.clone(),
                         telemetry.clone(),
                     )
@@ -2378,8 +2508,8 @@ impl ExtendedQueryHandler for RockLakeHandler {
             let response = wrap_query_response(
                 response,
                 permit.take(),
-                self.max_buffered_rows,
                 self.max_response_bytes,
+                self.max_in_flight_response_bytes,
                 self.response_buffer.clone(),
                 telemetry.clone(),
             );
@@ -2637,6 +2767,7 @@ impl RockLakeServerHandlers {
             router,
             None,
             None,
+            DEFAULT_MAX_IN_FLIGHT_RESPONSE_BYTES,
         )
     }
 
@@ -2657,6 +2788,7 @@ impl RockLakeServerHandlers {
         router: Option<Arc<CatalogRouter>>,
         multi_auth: Option<Arc<MultiPrincipalAuth>>,
         quota_manager: Option<Arc<CatalogQuotaManager>>,
+        max_in_flight_response_bytes: usize,
     ) -> Self {
         let handler = Arc::new(
             RockLakeHandler::new_with_config_mode_and_limits_and_lifecycle_and_router_and_auth(
@@ -2674,6 +2806,7 @@ impl RockLakeServerHandlers {
                 router.clone(),
                 multi_auth.clone(),
                 quota_manager,
+                max_in_flight_response_bytes,
             ),
         );
         let copy_handler = Arc::new(RockLakeCopyHandler::new_with_connection_and_router(

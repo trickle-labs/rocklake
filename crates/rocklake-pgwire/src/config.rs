@@ -44,6 +44,7 @@ pub struct ConfigFile {
     pub stream_queue_depth: Option<usize>,
     pub max_buffered_rows: Option<usize>,
     pub max_response_bytes: Option<usize>,
+    pub max_in_flight_response_bytes: Option<usize>,
     pub slow_operation_threshold_ms: Option<u64>,
 }
 
@@ -63,7 +64,7 @@ pub fn load(explicit: Option<&Path>) -> Result<(Option<PathBuf>, ConfigFile), St
 }
 
 pub fn example() -> &'static str {
-    r#"# RockLake v0.63.4 configuration
+    r#"# RockLake v0.63.5 configuration
 catalog = "./lake"
 bind = "127.0.0.1:5432"
 mode = "writer"
@@ -74,6 +75,7 @@ idle_connection_timeout = 60
 drain_timeout = 30
 max_active_scans = 25
 # max_response_bytes = 16777216
+max_in_flight_response_bytes = 67108864
 slow_operation_threshold_ms = 1000
 
 # For cloud catalogs, use environment/provider credentials. Secrets may use files:

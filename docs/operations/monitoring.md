@@ -112,8 +112,11 @@ migration.
 | `rocklake_max_active_scans` | Gauge | Maximum concurrent catalog scans |
 | `rocklake_stream_queue_depth` | Gauge | Legacy configured value; no independent runtime effect |
 | `rocklake_max_buffered_rows` | Gauge | Legacy configured value; no independent runtime effect |
-| `rocklake_pgwire_peak_buffered_rows` | Gauge | Observed peak response rows buffered |
+| `rocklake_pgwire_peak_buffered_rows` | Gauge | Legacy metric; no independent runtime effect |
 | `rocklake_max_response_bytes` | Gauge | Maximum response bytes allowed per request |
+| `rocklake_pgwire_in_flight_response_bytes` | Gauge | Response bytes currently retained during delivery |
+| `rocklake_pgwire_peak_in_flight_response_bytes` | Gauge | Peak response bytes retained during delivery |
+| `rocklake_max_in_flight_response_bytes` | Gauge | Maximum response bytes retained during delivery |
 | `rocklake_process_rss_bytes` | Gauge | Current process resident set size |
 | `rocklake_process_peak_rss_bytes` | Gauge | Peak observed process resident set size |
 | `rocklake_resource_limit_exhaustions_total` | Counter | Requests rejected or stopped by a resource limit |

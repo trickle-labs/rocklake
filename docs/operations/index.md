@@ -31,7 +31,7 @@ Each guide provides step-by-step instructions, explains what happens internally 
 
 - **[Backup & Restore](backup-restore.md)** — NDJSON export, point-in-time snapshots, and disaster recovery. How to create portable backups and restore to a new storage location.
 
-- **[Production Beta Support](beta-support.md)** — v0.63.4 support boundaries, escalation route, severity definitions, and the linked evidence ledger.
+- **[Production Beta Support](beta-support.md)** — v0.63.5 support boundaries, escalation route, severity definitions, and the linked evidence ledger.
 
 - **[Export](export.md)** — Extracting catalog metadata for migration to other systems, compliance audits, or offline analysis.
 

@@ -37,8 +37,9 @@ Because every row ever written to the catalog is preserved, time travel is not a
 ### Horizontal read scale-out
 
 The catalog format supports independent readers through SlateDB's reader API.
-v0.63.4 validates bounded concurrent opens, live route reloads, cancellation
-cleanup, and concurrent local readers without fencing the active writer.
+v0.63.5 removes repeated cleanup scans, bounds PG-wire response bytes owned by
+the delivery path, and makes administrative job controls report their real
+execution contract.
 
 ---
 
@@ -81,7 +82,7 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.63.4 is a production-beta evidence release distributed as a
+RockLake v0.63.5 is a production-beta evidence release distributed as a
 standalone binary. The supported path remains the binary, PostgreSQL wire
 protocol, and DuckLake 1.0. There is no published Docker image.
 
@@ -93,8 +94,8 @@ single `SHA256SUMS`, and `release-manifest.json`.
 
 ```bash
 # Download binary and checksum
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.4/rocklake-linux-x86_64
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.4/rocklake-linux-x86_64.sha256
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.5/rocklake-linux-x86_64
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.5/rocklake-linux-x86_64.sha256
 
 # Verify checksum
 sha256sum -c rocklake-linux-x86_64.sha256
@@ -217,8 +218,8 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | **v0.63.1** | Beta maintenance and v1.0 readiness assessment | Done |
 | **v0.63.2** | Honest baseline and evidence gate | Done |
 | **v0.63.3** | Safe readers and recovery | Done |
-| **v0.63.4** | Predictable concurrency | **Current** |
-| **v0.63.5** | Local scaling obstacles | Planned |
+| **v0.63.4** | Predictable concurrency | Done |
+| **v0.63.5** | Local scaling obstacles | **Current** |
 | **v0.63.6** | Honest operator output | Planned |
 | **v0.63.7** | Local release certification | Planned |
 | **v0.64.0** | Quality baseline | Planned |

@@ -569,7 +569,7 @@ pub enum JobSubcommand {
     Status(JobStatusArgs),
     /// Request cancellation at the next safe checkpoint.
     Cancel(JobControlArgs),
-    /// Explicitly requeue a failed, cancelled, or abandoned job.
+    /// Report that resume is unsupported without a registered worker.
     Resume(JobControlArgs),
 }
 
@@ -582,7 +582,7 @@ pub enum MaintenanceSubcommand {
     List(MaintenanceListArgs),
     /// Remove a maintenance schedule.
     Remove(MaintenanceRemoveArgs),
-    /// Claim due schedules as durable administrative jobs.
+    /// Report that scheduled execution is unsupported without a worker.
     Run(MaintenanceRunArgs),
 }
 
@@ -902,6 +902,9 @@ pub struct ServeArgs {
     /// Optional total response-byte policy; omitted means unlimited.
     #[arg(long)]
     pub max_response_bytes: Option<usize>,
+    /// Maximum response bytes retained while delivering a response (default: 64 MiB).
+    #[arg(long)]
+    pub max_in_flight_response_bytes: Option<usize>,
     /// Log operations slower than this threshold in milliseconds (default: 1000).
     #[arg(long)]
     pub slow_operation_threshold_ms: Option<u64>,

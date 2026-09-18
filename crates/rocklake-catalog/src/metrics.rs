@@ -131,12 +131,17 @@ pub struct CatalogMetrics {
     pub pgwire_response_delivery_us_total: AtomicU64,
     /// Number of PG-wire response delivery observations.
     pub pgwire_response_delivery_count: AtomicU64,
+    /// Response bytes currently retained by the PG-wire response path.
+    pub pgwire_in_flight_response_bytes: AtomicU64,
+    /// Peak response bytes retained by the PG-wire response path.
+    pub pgwire_peak_in_flight_response_bytes: AtomicU64,
     pub pgwire_peak_buffered_rows: AtomicU64,
     pub active_scans: AtomicU64,
     pub max_active_scans: AtomicU64,
     pub stream_queue_depth: AtomicU64,
     pub max_buffered_rows: AtomicU64,
     pub max_response_bytes: AtomicU64,
+    pub max_in_flight_response_bytes: AtomicU64,
     pub process_rss_bytes: AtomicU64,
     pub process_peak_rss_bytes: AtomicU64,
     pub resource_limit_exhaustions: AtomicU64,
@@ -209,12 +214,15 @@ impl CatalogMetrics {
             pgwire_execution_count: AtomicU64::new(0),
             pgwire_response_delivery_us_total: AtomicU64::new(0),
             pgwire_response_delivery_count: AtomicU64::new(0),
+            pgwire_in_flight_response_bytes: AtomicU64::new(0),
+            pgwire_peak_in_flight_response_bytes: AtomicU64::new(0),
             pgwire_peak_buffered_rows: AtomicU64::new(0),
             active_scans: AtomicU64::new(0),
             max_active_scans: AtomicU64::new(25),
             stream_queue_depth: AtomicU64::new(64),
             max_buffered_rows: AtomicU64::new(1024),
             max_response_bytes: AtomicU64::new(u64::MAX),
+            max_in_flight_response_bytes: AtomicU64::new(64 * 1024 * 1024),
             process_rss_bytes: AtomicU64::new(0),
             process_peak_rss_bytes: AtomicU64::new(0),
             resource_limit_exhaustions: AtomicU64::new(0),
@@ -287,6 +295,30 @@ impl CatalogMetrics {
         self.stream_queue_depth.store(queue, Ordering::Relaxed);
         self.max_buffered_rows.store(rows, Ordering::Relaxed);
         self.max_response_bytes.store(bytes, Ordering::Relaxed);
+    }
+
+    pub fn set_max_in_flight_response_bytes(&self, bytes: u64) {
+        self.max_in_flight_response_bytes
+            .store(bytes, Ordering::Relaxed);
+    }
+
+    pub fn add_pgwire_in_flight_response_bytes(&self, bytes: u64) {
+        let current = self
+            .pgwire_in_flight_response_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(bytes))
+            })
+            .expect("in-flight response byte update always succeeds");
+        self.pgwire_peak_in_flight_response_bytes
+            .fetch_max(current.saturating_add(bytes), Ordering::Relaxed);
+    }
+
+    pub fn sub_pgwire_in_flight_response_bytes(&self, bytes: u64) {
+        self.pgwire_in_flight_response_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(bytes))
+            })
+            .expect("in-flight response byte update always succeeds");
     }
 
     pub fn set_active_scans(&self, count: u64) {
@@ -424,8 +456,6 @@ impl CatalogMetrics {
         self.pgwire_ttfr_us_total
             .fetch_add(ttfr_us, Ordering::Relaxed);
         self.pgwire_ttfr_count.fetch_add(1, Ordering::Relaxed);
-        self.pgwire_peak_buffered_rows
-            .fetch_max(u64::from(rows > 0), Ordering::Relaxed);
         if let Some(rows_per_second) = rows.saturating_mul(1_000_000).checked_div(duration_us) {
             self.pgwire_response_rows_per_second
                 .store(rows_per_second, Ordering::Relaxed);
@@ -866,25 +896,41 @@ impl CatalogMetrics {
             "rocklake_max_active_scans {}\n",
             self.max_active_scans.load(Ordering::Relaxed)
         ));
-        out.push_str("# HELP rocklake_stream_queue_depth Configured stream queue depth.\n# TYPE rocklake_stream_queue_depth gauge\n");
+        out.push_str("# HELP rocklake_stream_queue_depth Legacy configured value; no independent runtime effect.\n# TYPE rocklake_stream_queue_depth gauge\n");
         out.push_str(&format!(
             "rocklake_stream_queue_depth {}\n",
             self.stream_queue_depth.load(Ordering::Relaxed)
         ));
-        out.push_str("# HELP rocklake_max_buffered_rows Maximum buffered response rows.\n# TYPE rocklake_max_buffered_rows gauge\n");
+        out.push_str("# HELP rocklake_max_buffered_rows Legacy configured value; no independent runtime effect.\n# TYPE rocklake_max_buffered_rows gauge\n");
         out.push_str(&format!(
             "rocklake_max_buffered_rows {}\n",
             self.max_buffered_rows.load(Ordering::Relaxed)
         ));
-        out.push_str("# HELP rocklake_pgwire_peak_buffered_rows Observed peak buffered response rows.\n# TYPE rocklake_pgwire_peak_buffered_rows gauge\n");
+        out.push_str("# HELP rocklake_pgwire_peak_buffered_rows Legacy metric; no independent runtime effect.\n# TYPE rocklake_pgwire_peak_buffered_rows gauge\n");
         out.push_str(&format!(
             "rocklake_pgwire_peak_buffered_rows {}\n",
             self.pgwire_peak_buffered_rows.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_pgwire_in_flight_response_bytes Current response bytes retained by PG-wire.\n# TYPE rocklake_pgwire_in_flight_response_bytes gauge\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_in_flight_response_bytes {}\n",
+            self.pgwire_in_flight_response_bytes.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_pgwire_peak_in_flight_response_bytes Peak response bytes retained by PG-wire.\n# TYPE rocklake_pgwire_peak_in_flight_response_bytes gauge\n");
+        out.push_str(&format!(
+            "rocklake_pgwire_peak_in_flight_response_bytes {}\n",
+            self.pgwire_peak_in_flight_response_bytes
+                .load(Ordering::Relaxed)
         ));
         out.push_str("# HELP rocklake_max_response_bytes Maximum response bytes per request.\n# TYPE rocklake_max_response_bytes gauge\n");
         out.push_str(&format!(
             "rocklake_max_response_bytes {}\n",
             self.max_response_bytes.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP rocklake_max_in_flight_response_bytes Maximum response bytes retained by PG-wire.\n# TYPE rocklake_max_in_flight_response_bytes gauge\n");
+        out.push_str(&format!(
+            "rocklake_max_in_flight_response_bytes {}\n",
+            self.max_in_flight_response_bytes.load(Ordering::Relaxed)
         ));
         out.push_str("# HELP rocklake_process_rss_bytes Current process resident set size.\n# TYPE rocklake_process_rss_bytes gauge\n");
         out.push_str(&format!(

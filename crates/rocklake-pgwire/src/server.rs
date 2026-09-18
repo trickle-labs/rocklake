@@ -128,6 +128,8 @@ pub struct ServerConfig {
     pub max_buffered_rows: usize,
     /// Optional total response-byte policy; `usize::MAX` means unlimited.
     pub max_response_bytes: usize,
+    /// Maximum response bytes retained while delivering a response.
+    pub max_in_flight_response_bytes: usize,
     pub slow_operation_threshold: std::time::Duration,
     /// TLS configuration.
     pub tls: TlsConfig,
@@ -153,6 +155,7 @@ impl Default for ServerConfig {
             stream_queue_depth: 64,
             max_buffered_rows: 1024,
             max_response_bytes: usize::MAX,
+            max_in_flight_response_bytes: 64 * 1024 * 1024,
             slow_operation_threshold: std::time::Duration::from_secs(1),
             tls: TlsConfig::default(),
             auth: AuthConfig::default(),
@@ -428,10 +431,6 @@ async fn run_server_with_shutdown_mode_inner(
     let counters = SessionCounters::new();
     let metrics_ref = config.metrics.clone();
     let max_active_scans = config.max_active_scans;
-    // The effective row window is the tighter of the compatibility row limit
-    // and the stream queue limit. The response path is lazy, so this bounds
-    // rows held between storage decoding and wire delivery.
-    let response_row_limit = config.max_buffered_rows.min(config.stream_queue_depth);
     if let Some(ref metrics) = metrics_ref {
         metrics.set_resource_limits(
             config.max_active_scans as u64,
@@ -439,6 +438,7 @@ async fn run_server_with_shutdown_mode_inner(
             config.max_buffered_rows as u64,
             config.max_response_bytes as u64,
         );
+        metrics.set_max_in_flight_response_bytes(config.max_in_flight_response_bytes as u64);
     }
 
     tokio::select! {
@@ -504,13 +504,14 @@ async fn run_server_with_shutdown_mode_inner(
                         access_mode,
                         scans,
                         max_active_scans,
-                        response_row_limit,
+                        config.max_buffered_rows,
                         config.max_response_bytes,
                         config.slow_operation_threshold,
                         connection_context.clone(),
                         router,
                         multi_auth,
                         quota_manager,
+                        config.max_in_flight_response_bytes,
                     );
                     let connection_id = handlers.handler.connection_id();
                     let span = info_span!("pgwire_connection", connection_id = %connection_id);

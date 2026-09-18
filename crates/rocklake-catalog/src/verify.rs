@@ -508,21 +508,32 @@ fn verify_duplicate_names(
 }
 
 fn verify_name_set(result: &mut VerifyResult, label: &str, rows: &[VersionedName]) {
-    // ponytail: O(n²) is intentional; catalogs are metadata-sized and this
-    // keeps interval overlap detection exact without another index structure.
-    for (index, left) in rows.iter().enumerate() {
-        for right in rows.iter().skip(index + 1) {
-            if left.owner != right.owner || left.name != right.name {
-                continue;
-            }
-            let left_end = left.end.unwrap_or(u64::MAX);
-            let right_end = right.end.unwrap_or(u64::MAX);
-            if left.begin < right_end && right.begin < left_end {
-                result.errors.push(format!(
-                    "overlapping live {label} name '{}' (ids {} and {})",
-                    left.name, left.id, right.id
-                ));
-            }
+    let mut sorted = rows.to_vec();
+    sorted.sort_unstable_by(|left, right| {
+        (left.owner, &left.name, left.begin, left.id).cmp(&(
+            right.owner,
+            &right.name,
+            right.begin,
+            right.id,
+        ))
+    });
+
+    let mut active: Option<&VersionedName> = None;
+    let mut active_end = 0;
+    for current in &sorted {
+        let same_group = active.is_some_and(|previous| {
+            previous.owner == current.owner && previous.name == current.name
+        });
+        if same_group && current.begin < active_end {
+            let previous = active.expect("active interval exists for matching group");
+            result.errors.push(format!(
+                "overlapping live {label} name '{}' (ids {} and {})",
+                current.name, previous.id, current.id
+            ));
+        }
+        if !same_group || current.end.unwrap_or(u64::MAX) > active_end {
+            active_end = current.end.unwrap_or(u64::MAX);
+            active = Some(current);
         }
     }
 }
@@ -1454,4 +1465,42 @@ fn be_u64(bytes: &[u8]) -> u64 {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{verify_name_set, VersionedName};
+
+    #[test]
+    fn sorted_name_intervals_find_overlaps_beyond_adjacent_rows() {
+        let rows = vec![
+            VersionedName {
+                id: 1,
+                owner: 7,
+                name: "events".into(),
+                begin: 1,
+                end: Some(100),
+            },
+            VersionedName {
+                id: 2,
+                owner: 7,
+                name: "events".into(),
+                begin: 10,
+                end: Some(20),
+            },
+            VersionedName {
+                id: 3,
+                owner: 7,
+                name: "events".into(),
+                begin: 30,
+                end: Some(40),
+            },
+        ];
+        let mut result = super::VerifyResult::default();
+
+        verify_name_set(&mut result, "table", &rows);
+
+        assert_eq!(result.errors.len(), 2);
+        assert!(result.errors.iter().all(|error| error.contains("events")));
+    }
 }

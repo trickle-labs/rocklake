@@ -48,13 +48,20 @@ The v0.51.3 binary exports these Prometheus metrics:
 - Resource limits: `rocklake_active_scans`, `rocklake_max_active_scans`,
   `rocklake_stream_queue_depth`, `rocklake_max_buffered_rows` (legacy configured
   values with no independent runtime effect),
-  `rocklake_pgwire_peak_buffered_rows`, `rocklake_max_response_bytes`,
+  `rocklake_pgwire_peak_buffered_rows` (legacy metric with no independent
+  runtime effect), `rocklake_max_response_bytes`,
+  `rocklake_pgwire_in_flight_response_bytes`,
+  `rocklake_pgwire_peak_in_flight_response_bytes`,
+  `rocklake_max_in_flight_response_bytes`,
   `rocklake_process_rss_bytes`, `rocklake_process_peak_rss_bytes`,
   `rocklake_resource_limit_exhaustions_total`,
   `rocklake_stream_backpressure_total`.
 
 Capacity rejections (`SQLSTATE 53300`) increment `rocklake_resource_limit_exhaustions_total`
-when `--max-sessions`, `--max-active-scans`, or `--max-response-bytes` thresholds are reached.
+when `--max-sessions`, `--max-active-scans`, `--max-response-bytes`, or
+`--max-in-flight-response-bytes` thresholds are reached. The total response limit
+caps one request; the in-flight limit bounds bytes retained while that request is
+being delivered.
 
 The configuration keys `stream_queue_depth` and `max_buffered_rows` remain
 accepted for compatibility. They have no independent runtime effect, and

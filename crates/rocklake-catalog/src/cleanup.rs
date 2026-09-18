@@ -11,7 +11,7 @@ use rocklake_core::rows::*;
 use rocklake_core::tags::*;
 use rocklake_core::values;
 use slatedb::Db;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::error::{CatalogError, CatalogResult};
@@ -221,6 +221,12 @@ pub struct ScheduledDeletionResult {
     pub skipped: u64,
 }
 
+#[derive(Debug, Default)]
+struct RetirementEvidence {
+    retired_ids: HashSet<u64>,
+    live: bool,
+}
+
 /// Process scheduled file deletions.
 pub async fn process_scheduled_deletions(
     db: &Db,
@@ -260,6 +266,12 @@ pub async fn process_scheduled_deletions_report_at(
         .unwrap_or_default()
         .as_secs();
 
+    let evidence = if retain_from == 0 {
+        HashMap::new()
+    } else {
+        collect_retirement_evidence(db, retain_from).await?
+    };
+
     let mut iter = db.scan_prefix(&prefix).await?;
     while let Some(kv) = iter
         .next()
@@ -270,7 +282,11 @@ pub async fn process_scheduled_deletions_report_at(
 
         if retain_from == 0
             || row.schedule_start > now
-            || !file_retired_at(db, &row, retain_from).await?
+            || !evidence
+                .get(&(row.path.clone(), row.path_is_relative))
+                .is_some_and(|evidence| {
+                    evidence.retired_ids.contains(&row.data_file_id) && !evidence.live
+                })
         {
             result.skipped += 1;
             continue;
@@ -312,50 +328,44 @@ pub async fn process_scheduled_deletions_report_at(
     Ok(result)
 }
 
-async fn file_retired_at(
+async fn collect_retirement_evidence(
     db: &Db,
-    scheduled: &FilesScheduledForDeletionRow,
     retain_from: u64,
-) -> CatalogResult<bool> {
-    let mut retired = false;
-    let mut iter = db.scan_prefix(&keys::prefix_for_tag(TAG_DATA_FILE)).await?;
-    while let Some(kv) = iter
-        .next()
-        .await
-        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-    {
-        let row: DataFileRow = values::decode_value(&kv.value)?;
-        if row.path == scheduled.path && row.path_is_relative == scheduled.path_is_relative {
-            if row.data_file_id == scheduled.data_file_id
-                && row.end_snapshot.is_some_and(|end| end <= retain_from)
-            {
-                retired = true;
-            } else if row.end_snapshot.is_none_or(|end| end > retain_from) {
-                return Ok(false);
+) -> CatalogResult<HashMap<(String, Option<bool>), RetirementEvidence>> {
+    let mut evidence: HashMap<(String, Option<bool>), RetirementEvidence> = HashMap::new();
+    for tag in [TAG_DATA_FILE, TAG_DELETE_FILE] {
+        let mut iter = db.scan_prefix(&keys::prefix_for_tag(tag)).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let (path, path_is_relative, data_file_id, end_snapshot) = if tag == TAG_DATA_FILE {
+                let row: DataFileRow = values::decode_value(&kv.value)?;
+                (
+                    row.path,
+                    row.path_is_relative,
+                    row.data_file_id,
+                    row.end_snapshot,
+                )
+            } else {
+                let row: DeleteFileRow = values::decode_value(&kv.value)?;
+                (
+                    row.path,
+                    row.path_is_relative,
+                    row.data_file_id,
+                    row.end_snapshot,
+                )
+            };
+            let entry = evidence.entry((path, path_is_relative)).or_default();
+            if end_snapshot.is_some_and(|end| end <= retain_from) {
+                entry.retired_ids.insert(data_file_id);
+            } else {
+                entry.live = true;
             }
         }
     }
-
-    let mut iter = db
-        .scan_prefix(&keys::prefix_for_tag(TAG_DELETE_FILE))
-        .await?;
-    while let Some(kv) = iter
-        .next()
-        .await
-        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
-    {
-        let row: DeleteFileRow = values::decode_value(&kv.value)?;
-        if row.path == scheduled.path && row.path_is_relative == scheduled.path_is_relative {
-            if row.data_file_id == scheduled.data_file_id
-                && row.end_snapshot.is_some_and(|end| end <= retain_from)
-            {
-                retired = true;
-            } else if row.end_snapshot.is_none_or(|end| end > retain_from) {
-                return Ok(false);
-            }
-        }
-    }
-    Ok(retired)
+    Ok(evidence)
 }
 
 fn canonical_object_path(

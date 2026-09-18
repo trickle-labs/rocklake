@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.63.5] — 2026-09-18
+
+### Fixed
+
+- Gathered cleanup retirement evidence once per operation and made versioned
+  name overlap checks sort before scanning intervals.
+- Added a real in-flight PG-wire response-byte bound with separate metrics from
+  the cumulative response-size limit, including COPY delivery.
+- Made unsupported maintenance scheduling and job resume explicit, required a
+  safe checkpoint for ledger resume, and classified permanent job failures as
+  non-retryable.
+
 ## [0.63.4] — 2026-09-18
 
 ### Fixed

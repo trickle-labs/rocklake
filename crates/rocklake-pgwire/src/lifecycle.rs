@@ -463,6 +463,7 @@ impl AdmissionPermit {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn response_buffer(permit: OwnedSemaphorePermit) -> Self {
         Self {
             kind: AdmissionKind::ResponseBuffer,

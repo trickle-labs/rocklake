@@ -207,9 +207,9 @@ remote-cloud program is scheduled.
 | **v0.63.0** | Production beta | The feature-complete system enters design-partner production with no new feature work. **Done** |
 | **v0.63.1** | Beta fixes and readiness audit | The readiness audit is published with an RC hold decision. **Done** |
 | **v0.63.2** | Honest baseline and evidence gate | Documentation agrees on the support boundary, and invalid or absent candidate measurements fail CI. **Done** |
-| **v0.63.3** | Safe readers and recovery | Independent readers preserve writer availability, and backup, checkpoint, retention, and retry regressions pass locally. **Active next release** |
-| **v0.63.4** | Predictable concurrency | Router opens, reloads, cancellation, SQL batches, and native handles obey bounded lifecycle contracts. |
-| **v0.63.5** | Local scaling obstacles | Cleanup avoids repeated full scans, response buffering has a measured bound, and job controls describe executable behavior. |
+| **v0.63.3** | Safe readers and recovery | Independent readers preserve writer availability, and backup, checkpoint, retention, and retry regressions pass locally. **Done** |
+| **v0.63.4** | Predictable concurrency | Router opens, reloads, cancellation, SQL batches, and native handles obey bounded lifecycle contracts. **Done** |
+| **v0.63.5** | Local scaling obstacles | Cleanup avoids repeated full scans, response buffering has a measured bound, and job controls describe executable behavior. **Current** |
 | **v0.63.6** | Honest operator output | Cache and capacity reports distinguish observed values, user inputs, projections, and estimates. |
 | **v0.63.7** | Local release certification | Candidate-specific local evidence, previous-release upgrade and restore, and artifact-only quickstart pass. |
 | **v0.64.0** | Quality baseline | The v0.63.2 through v0.63.7 work ships as one documented, locally certified baseline. |
@@ -1999,21 +1999,21 @@ shows that the current contract is incomplete.
 
 #### Implementation plan
 
-- [ ] T13: Gather file retirement and reference evidence once per cleanup
+- [x] T13: Gather file retirement and reference evidence once per cleanup
       operation. Preserve canonical-path and protected-reference checks.
-- [ ] T13: Group or sort name intervals before overlap verification. Measure
+- [x] T13: Group or sort name intervals before overlap verification. Measure
       full verification time and peak RSS before adding paging or spill.
-- [ ] T14: Measure retained rows and bytes with slow local PG-wire consumers.
+- [x] T14: Measure retained rows and bytes with slow local PG-wire consumers.
       Enforce limits at the component that owns the memory, or simplify settings
       that duplicate sufficient native backpressure.
-- [ ] T14: Keep total response size separate from in-flight buffered bytes in
+- [x] T14: Keep total response size separate from in-flight buffered bytes in
       configuration, errors, and metrics.
-- [ ] T15: Inventory every administrative job kind against its actual execute,
+- [x] T15: Inventory every administrative job kind against its actual execute,
       progress, cancellation, restart, and resume behavior.
-- [ ] T15: Reject unsupported scheduling or resume operations. Retain bounded
+- [x] T15: Reject unsupported scheduling or resume operations. Retain bounded
       foreground commands and host-supervisor scheduling where they suffice.
-- [ ] T15: Make due-claim and job creation recoverable if queued scheduling
-      remains, and mark failures retryable only when the error class permits it.
+- [x] T15: Keep queued scheduling unadvertised until a worker exists, and mark
+      foreground failures retryable only when the error class permits it.
 
 #### Exit conditions
 
@@ -2513,9 +2513,9 @@ README or documentation:
 | v0.62.0 | Public surface freeze | Done |
 | v0.63.0–v0.63.1 | Production beta and readiness audit | Done; RC1 held |
 | v0.63.2 | Honest baseline and evidence gate | Done |
-| v0.63.3 | Safe readers and recovery | Active next release |
-| v0.63.4 | Predictable concurrency | Planned |
-| v0.63.5 | Local scaling obstacles | Planned |
+| v0.63.3 | Safe readers and recovery | Done |
+| v0.63.4 | Predictable concurrency | Done |
+| v0.63.5 | Local scaling obstacles | Current |
 | v0.63.6 | Honest operator output | Planned |
 | v0.63.7 | Local release certification | Planned |
 | v0.64.0 | Quality baseline | Planned |

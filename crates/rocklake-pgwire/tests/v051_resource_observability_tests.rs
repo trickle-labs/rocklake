@@ -16,6 +16,7 @@ fn default_limits_are_bounded() {
     assert!(config.stream_queue_depth > 0);
     assert!(config.max_buffered_rows > 0);
     assert!(config.max_response_bytes > 0);
+    assert!(config.max_in_flight_response_bytes > 0);
     assert!(!config.slow_operation_threshold.is_zero());
 }
 
@@ -26,6 +27,8 @@ fn metrics_render_histogram_and_resource_signals() {
     metrics.set_active_scans(1);
     metrics.record_pgwire_query(10_000);
     metrics.record_pgwire_response_with_timing(3, 300, 2_000, 10_000);
+    metrics.add_pgwire_in_flight_response_bytes(128);
+    metrics.sub_pgwire_in_flight_response_bytes(128);
     metrics.increment_resource_limit_exhaustions();
     metrics.increment_stream_backpressure();
 
@@ -39,6 +42,7 @@ fn metrics_render_histogram_and_resource_signals() {
     assert!(output.contains("rocklake_pgwire_response_bytes_per_second 30000"));
     assert!(output.contains("rocklake_process_rss_bytes"));
     assert!(output.contains("rocklake_process_peak_rss_bytes"));
+    assert!(output.contains("rocklake_pgwire_peak_in_flight_response_bytes 128"));
 }
 
 #[test]

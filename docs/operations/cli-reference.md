@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.63.4 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.63.5 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -80,10 +80,10 @@ rocklake restore apply --backup ./lake-backup --catalog ./restored
 rocklake catalog jobs list --catalog ./lake --output json
 rocklake catalog jobs status --catalog ./lake --id <job-uuid> --output json
 rocklake catalog jobs cancel --catalog ./lake --id <job-uuid>
-rocklake catalog jobs resume --catalog ./lake --id <job-uuid>
+# `jobs resume` is currently rejected: no background worker is registered.
 rocklake catalog maintenance schedule --catalog ./lake --id nightly \
   --task backup --interval-seconds 86400
-rocklake catalog maintenance run --catalog ./lake --limit 1
+# `maintenance run` is currently rejected: schedules are metadata only.
 rocklake catalog recovery report --drill lost-process --started-at <rfc3339> \
   --rpo-seconds <n> --rto-seconds <n> --verified --output recovery.json
 rocklake catalog backup-set create --registry <location> --output <directory>
@@ -156,7 +156,7 @@ GC and excision expose separate `plan` and `apply` subcommands. `repair` and
 `migrate` expose explicit `--dry-run` and `--apply` options. All destructive
 operations remain explicit in the command syntax.
 
-The v0.63.4 migration registry contains a verified same-format no-op. Unknown
+The v0.63.5 migration registry contains a verified same-format no-op. Unknown
 targets and downgrades fail before a write; an apply attempt is recorded in the
 administrative job ledger.
 
@@ -167,10 +167,11 @@ metadata-only unless their manifests explicitly include referenced-object
 inventory, so copying a backup never implies copying Parquet data.
 
 Long-running backup, restore, export, import, verification, repair, retention,
-excision, orphan-sweep, and rebuild operations record a durable job. Pass
-`--idempotency-key` to reuse a retry identity. A failed, cancelled, or
-abandoned job is never resumed automatically; inspect its checkpoint and use
-`catalog jobs resume` explicitly.
+excision, orphan-sweep, checkpoint, migration, and rebuild operations record a
+durable job while the foreground command executes. Pass `--idempotency-key` to
+reuse a retry identity. The ledger retains checkpoints for worker integrations, but this
+release has no background worker: `jobs resume` and `maintenance run` return an
+explicit unsupported result and do not claim work was requeued.
 operations remain explicit in the command syntax.
 
 ## Environment variables

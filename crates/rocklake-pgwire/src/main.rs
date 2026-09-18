@@ -229,8 +229,15 @@ async fn cmd_jobs(command: cli::JobSubcommand) -> Result<(), Box<dyn std::error:
         }
         cli::JobSubcommand::Resume(args) => {
             let id: rocklake_catalog::JobId = args.id.parse()?;
-            let job = ledger.resume(&id).await?;
-            println!("Job {} requeued ({:?}).", job.id, job.state);
+            let _job = ledger
+                .get(&id)
+                .await?
+                .ok_or_else(|| format!("job {id} not found"))?;
+            db.close().await?;
+            return Err(format!(
+                "job {id} resume unsupported: no worker is registered for administrative jobs"
+            )
+            .into());
         }
     }
 
@@ -241,6 +248,9 @@ async fn cmd_jobs(command: cli::JobSubcommand) -> Result<(), Box<dyn std::error:
 async fn cmd_maintenance(
     command: cli::MaintenanceSubcommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(&command, cli::MaintenanceSubcommand::Run(_)) {
+        return Err("maintenance run unsupported: scheduling metadata has no registered worker; invoke the foreground command with its required parameters".into());
+    }
     let catalog_url = match &command {
         cli::MaintenanceSubcommand::Schedule(args) => &args.catalog,
         cli::MaintenanceSubcommand::List(args) => &args.catalog,
@@ -312,30 +322,8 @@ async fn cmd_maintenance(
             scheduler.remove(&args.id).await?;
             println!("Maintenance schedule removed: {}", args.id);
         }
-        cli::MaintenanceSubcommand::Run(args) => {
-            let now = args.now_ms.unwrap_or(unix_now_ms()?);
-            let due = scheduler.claim_due(now, args.limit).await?;
-            let ledger = rocklake_catalog::JobLedger::new(&db);
-            let mut jobs = Vec::with_capacity(due.len());
-            for item in due {
-                let record = ledger
-                    .create(rocklake_catalog::JobRequest::new(
-                        item.job_kind,
-                        None,
-                        serde_json::json!({"schedule_id": item.schedule.id, "claimed_at_ms": now}),
-                        None,
-                    ))
-                    .await?;
-                jobs.push(record.id.to_string());
-            }
-            match args.output {
-                cli::OutputFormat::Json => println!("{}", serde_json::json!({"jobs": jobs})),
-                cli::OutputFormat::Human => {
-                    for job in jobs {
-                        println!("Maintenance job queued: {job}");
-                    }
-                }
-            }
+        cli::MaintenanceSubcommand::Run(_) => {
+            unreachable!("maintenance run was rejected before opening the catalog")
         }
     }
     db.close().await?;
@@ -640,19 +628,33 @@ where
             Ok((result, id))
         }
         Err(error) => {
+            let (code, retryable) = classify_job_error(error.as_ref());
             let _ = ledger
                 .fail(
                     &id,
                     rocklake_catalog::JobError {
-                        code: "operation_failed".to_string(),
+                        code: code.to_string(),
                         message: error.to_string(),
-                        retryable: true,
+                        retryable,
                     },
                 )
                 .await;
             Err(error)
         }
     }
+}
+
+fn classify_job_error(error: &(dyn std::error::Error + 'static)) -> (&'static str, bool) {
+    if let Some(error) = error.downcast_ref::<rocklake_catalog::CatalogError>() {
+        if matches!(
+            error,
+            rocklake_catalog::CatalogError::TransactionConflict(_)
+                | rocklake_catalog::CatalogError::ObjectStoreTransient(_)
+        ) {
+            return ("operation_failed", true);
+        }
+    }
+    ("operation_rejected", false)
 }
 
 // ─── serve ─────────────────────────────────────────────────────────────────
@@ -1506,6 +1508,14 @@ async fn cmd_serve(
             "max response bytes",
         )?
         .expect("response bytes default"),
+        max_in_flight_response_bytes: setting(
+            args.max_in_flight_response_bytes,
+            "ROCKLAKE_MAX_IN_FLIGHT_RESPONSE_BYTES",
+            file_config.max_in_flight_response_bytes,
+            Some(64 * 1024 * 1024),
+            "max in-flight response bytes",
+        )?
+        .expect("in-flight response bytes default"),
         slow_operation_threshold_ms: setting(
             args.slow_operation_threshold_ms,
             "ROCKLAKE_SLOW_OPERATION_THRESHOLD_MS",
@@ -1522,6 +1532,7 @@ async fn cmd_serve(
         || config.stream_queue_depth == 0
         || config.max_buffered_rows == 0
         || config.max_response_bytes == 0
+        || config.max_in_flight_response_bytes == 0
         || config.slow_operation_threshold_ms == 0
     {
         return Err("resource limits must be greater than zero".into());
@@ -1649,6 +1660,7 @@ async fn cmd_serve(
         stream_queue_depth: config.stream_queue_depth,
         max_buffered_rows: config.max_buffered_rows,
         max_response_bytes: config.max_response_bytes,
+        max_in_flight_response_bytes: config.max_in_flight_response_bytes,
         slow_operation_threshold: std::time::Duration::from_millis(
             config.slow_operation_threshold_ms,
         ),
@@ -1858,7 +1870,10 @@ fn read_scram_verifier_file(path: &str) -> Result<(String, String), Box<dyn std:
 
 #[cfg(test)]
 mod tests {
-    use super::{read_scram_verifier_file, read_secret, redacted_config, setting, validate_config};
+    use super::{
+        classify_job_error, read_scram_verifier_file, read_secret, redacted_config, setting,
+        validate_config,
+    };
     use crate::config::ConfigFile;
 
     #[test]
@@ -1893,6 +1908,22 @@ mod tests {
             )
             .unwrap(),
             Some("cli".to_string())
+        );
+    }
+
+    #[test]
+    fn job_retry_policy_allows_only_known_transient_catalog_errors() {
+        assert_eq!(
+            classify_job_error(&rocklake_catalog::CatalogError::TransactionConflict(
+                "retry".to_string()
+            )),
+            ("operation_failed", true)
+        );
+        assert_eq!(
+            classify_job_error(&rocklake_catalog::CatalogError::InvalidInput(
+                "bad request".to_string()
+            )),
+            ("operation_rejected", false)
         );
     }
 
@@ -1984,6 +2015,7 @@ mod tests {
             stream_queue_depth: 0,
             max_buffered_rows: 0,
             max_response_bytes: 67108864,
+            max_in_flight_response_bytes: 67108864,
             slow_operation_threshold_ms: 1000,
         };
         assert_eq!(
@@ -2038,6 +2070,7 @@ struct ServeConfig {
     stream_queue_depth: usize,
     max_buffered_rows: usize,
     max_response_bytes: usize,
+    max_in_flight_response_bytes: usize,
     slow_operation_threshold_ms: u64,
 }
 
@@ -4158,6 +4191,7 @@ fn validate_config(config: &config::ConfigFile) -> Result<(), String> {
         || config.stream_queue_depth == Some(0)
         || config.max_buffered_rows == Some(0)
         || config.max_response_bytes == Some(0)
+        || config.max_in_flight_response_bytes == Some(0)
         || config.slow_operation_threshold_ms == Some(0)
     {
         return Err("numeric limits must be greater than zero".to_string());
@@ -4222,6 +4256,7 @@ fn redacted_config(config: &config::ConfigFile) -> serde_json::Value {
         "stream_queue_depth": config.stream_queue_depth,
         "max_buffered_rows": config.max_buffered_rows,
         "max_response_bytes": config.max_response_bytes,
+        "max_in_flight_response_bytes": config.max_in_flight_response_bytes,
         "slow_operation_threshold_ms": config.slow_operation_threshold_ms,
     })
 }

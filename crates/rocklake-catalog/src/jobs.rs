@@ -156,7 +156,7 @@ pub enum JobState {
     Cancelled,
     /// Completed and has an immutable terminal result.
     Completed,
-    /// Failed; an operator may explicitly resume it from its last checkpoint.
+    /// Failed; a worker may explicitly resume it from its last checkpoint.
     Failed,
 }
 
@@ -514,20 +514,41 @@ impl JobLedger {
 
     /// Explicitly requeue a failed, cancelled, or abandoned running job.
     pub async fn resume(&self, id: &JobId) -> CatalogResult<JobRecord> {
-        self.mutate(id, |record| match record.state {
-            JobState::Cancelled
-            | JobState::Failed
-            | JobState::Running
-            | JobState::CancellationRequested => {
-                record.state = JobState::Pending;
-                record.error = None;
-                record.terminal_result = None;
-                Ok(())
+        self.mutate(id, |record| {
+            if matches!(
+                record.state,
+                JobState::Cancelled
+                    | JobState::Failed
+                    | JobState::Running
+                    | JobState::CancellationRequested
+            ) && record.checkpoint.sequence == 0
+            {
+                return Err(CatalogError::InvalidInput(format!(
+                    "job {id} has no safe checkpoint; resume unsupported"
+                )));
             }
-            JobState::Pending => Ok(()),
-            JobState::Completed => Err(CatalogError::InvalidInput(
-                "completed jobs cannot be resumed".to_string(),
-            )),
+            if record.state == JobState::Failed
+                && record.error.as_ref().is_some_and(|error| !error.retryable)
+            {
+                return Err(CatalogError::InvalidInput(format!(
+                    "job {id} failed with a non-retryable error"
+                )));
+            }
+            match record.state {
+                JobState::Cancelled
+                | JobState::Failed
+                | JobState::Running
+                | JobState::CancellationRequested => {
+                    record.state = JobState::Pending;
+                    record.error = None;
+                    record.terminal_result = None;
+                    Ok(())
+                }
+                JobState::Pending => Ok(()),
+                JobState::Completed => Err(CatalogError::InvalidInput(
+                    "completed jobs cannot be resumed".to_string(),
+                )),
+            }
         })
         .await
     }
@@ -723,6 +744,12 @@ mod tests {
         let created = ledger.create(request.clone()).await.unwrap();
         assert_eq!(ledger.create(request).await.unwrap().id, created.id);
         ledger.start(&created.id).await.unwrap();
+        assert!(ledger
+            .resume(&created.id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("no safe checkpoint"));
         ledger
             .update_progress(
                 &created.id,

@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "io.trickle"
-version = "0.63.4"
+version = "0.63.5"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
