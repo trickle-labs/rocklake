@@ -245,52 +245,28 @@ async fn execute_sql_inner<'a>(
     extension_schemas: &Arc<Vec<String>>,
     mode: AccessMode,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
-    let has_delete = sql.to_lowercase().contains("delete");
-    let has_ducklake = sql.to_lowercase().contains("ducklake");
-
-    // Detect if this is a batch with DELETE statements
-    if has_delete && has_ducklake {
-        // Try to split and process manually
-        let parts: Vec<&str> = sql.split(';').collect();
-        if parts.len() > 1 {
-            let mut all_responses = Vec::new();
-            for part in parts.iter() {
-                let trimmed = part.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                // Try to classify - if it fails, include the error in the result
-                match classify_statement(trimmed) {
-                    Ok(kind) => {
-                        match execute_classified(
-                            kind,
-                            trimmed,
-                            params,
-                            store,
-                            session,
-                            notify_manager,
-                            extension_schemas,
-                            mode,
-                        )
-                        .await
-                        {
-                            Ok(mut responses) => all_responses.append(&mut responses),
-                            Err(e) => {
-                                return Err(RockLakeError::Unsupported(format!("EXEC_FAIL[{}]", e)))
-                            }
-                        }
-                    }
-                    Err(e) => return Err(RockLakeError::Unsupported(format!("CLASS_FAIL[{}]", e))),
-                }
-            }
-            return Ok(all_responses);
-        }
+    // Some protocol clients send the PostgreSQL catalog scan as one logical
+    // classifier input even though it contains several SQL statements.
+    if let Ok(kind @ StatementKind::PgCatalogScan) = classify_statement(sql) {
+        ensure_access(mode, &kind, sql)?;
+        return execute_classified(
+            kind,
+            sql,
+            params,
+            store,
+            session,
+            notify_manager,
+            extension_schemas,
+            mode,
+        )
+        .await;
     }
 
     if let Some(statements) = parse_multi_statement_batch(sql) {
         let mut all_responses = Vec::new();
         for statement_sql in statements {
             let kind = classify_statement(&statement_sql)?;
+            ensure_access(mode, &kind, &statement_sql)?;
             let mut responses = execute_classified(
                 kind,
                 &statement_sql,
@@ -327,43 +303,14 @@ fn parse_multi_statement_batch(sql: &str) -> Option<Vec<String>> {
         return None;
     }
 
-    let lower = sql.to_lowercase();
-    if lower.contains("copy ") || (lower.contains("pg_namespace") && lower.contains("pg_class")) {
-        return None;
-    }
-
     let dialect = PostgreSqlDialect {};
-    match Parser::parse_sql(&dialect, sql) {
-        Ok(statements) => {
-            if statements.len() <= 1 {
-                return None;
-            }
-
-            let result: Vec<String> = statements
-                .into_iter()
-                .map(|stmt| stmt.to_string())
-                .collect();
-
-            Some(result)
-        }
-        Err(_) => {
-            // Parser failed - if this contains DELETE or has multiple semicolons,
-            // try fallback splitting by semicolon
-            if lower.contains("delete") || sql.matches(';').count() > 1 {
-                // Manual split by semicolon as fallback
-                let parts: Vec<String> = sql
-                    .split(';')
-                    .map(|s| s.to_string())
-                    .filter(|s| !s.trim().is_empty())
-                    .collect();
-
-                if parts.len() > 1 {
-                    return Some(parts);
-                }
-            }
-            None
-        }
-    }
+    let statements = Parser::parse_sql(&dialect, sql).ok()?;
+    (statements.len() > 1).then(|| {
+        statements
+            .into_iter()
+            .map(|stmt| stmt.to_string())
+            .collect()
+    })
 }
 
 fn literal_insert_values(sql: &str) -> Vec<Option<String>> {
@@ -481,7 +428,9 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql};
+    use super::{
+        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_multi_statement_batch,
+    };
 
     #[test]
     fn parses_multiline_ducklake_gc_delete() {
@@ -501,6 +450,14 @@ mod tests {
             ),
             vec![(3, 3), (3, 4)]
         );
+    }
+
+    #[test]
+    fn parser_batch_keeps_quoted_semicolons_in_one_statement() {
+        let statements = parse_multi_statement_batch("SELECT 'delete; ducklake'; SELECT 1")
+            .expect("two SQL statements");
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].contains("delete; ducklake"));
     }
 }
 

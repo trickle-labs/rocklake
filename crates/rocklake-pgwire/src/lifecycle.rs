@@ -14,6 +14,7 @@ use pgwire::error::{ErrorInfo, PgWireError};
 use pgwire::messages::response::TransactionStatus;
 use rocklake_catalog::metrics::CatalogMetrics;
 use rocklake_router::{CatalogId, CatalogLimits, CatalogMode, PrincipalId, PrincipalLimits};
+use tokio::runtime::Handle;
 use tokio::sync::{watch, Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{info_span, warn, Span};
@@ -41,10 +42,37 @@ pub struct QuotaError;
 /// Per-catalog and per-principal admission limits layered over process limits.
 #[derive(Default)]
 pub struct CatalogQuotaManager {
-    catalog_sessions: Mutex<HashMap<CatalogId, Arc<Semaphore>>>,
-    catalog_scans: Mutex<HashMap<CatalogId, Arc<Semaphore>>>,
-    catalog_requests: Mutex<HashMap<CatalogId, Arc<Semaphore>>>,
-    principal_sessions: Mutex<HashMap<PrincipalId, Arc<Semaphore>>>,
+    catalog_sessions: Mutex<HashMap<CatalogId, Arc<QuotaSlot>>>,
+    catalog_scans: Mutex<HashMap<CatalogId, Arc<QuotaSlot>>>,
+    catalog_requests: Mutex<HashMap<CatalogId, Arc<QuotaSlot>>>,
+    principal_sessions: Mutex<HashMap<PrincipalId, Arc<QuotaSlot>>>,
+}
+
+struct QuotaSlot {
+    semaphore: Arc<Semaphore>,
+    configured: StdMutex<usize>,
+}
+
+impl QuotaSlot {
+    fn new(max: usize) -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(max)),
+            configured: StdMutex::new(max),
+        }
+    }
+
+    fn reconcile(&self, max: usize) {
+        let mut configured = self.configured.lock().expect("quota mutex poisoned");
+        let available = self.semaphore.available_permits();
+        let in_use = configured.saturating_sub(available);
+        let desired_available = max.saturating_sub(in_use);
+        if desired_available > available {
+            self.semaphore.add_permits(desired_available - available);
+        } else if desired_available < available {
+            self.semaphore.forget_permits(available - desired_available);
+        }
+        *configured = max;
+    }
 }
 
 impl CatalogQuotaManager {
@@ -67,9 +95,16 @@ impl CatalogQuotaManager {
                 .lock()
                 .await
                 .entry(catalog_id.clone())
-                .or_insert_with(|| Arc::new(Semaphore::new(max)))
+                .or_insert_with(|| Arc::new(QuotaSlot::new(max)))
                 .clone();
-            permits.push(semaphore.try_acquire_owned().map_err(|_| QuotaError)?);
+            semaphore.reconcile(max);
+            permits.push(
+                semaphore
+                    .semaphore
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| QuotaError)?,
+            );
         }
         if let (Some(principal_id), Some(max)) = (
             principal_id,
@@ -80,9 +115,10 @@ impl CatalogQuotaManager {
                 .lock()
                 .await
                 .entry(principal_id.clone())
-                .or_insert_with(|| Arc::new(Semaphore::new(max)))
+                .or_insert_with(|| Arc::new(QuotaSlot::new(max)))
                 .clone();
-            match semaphore.try_acquire_owned() {
+            semaphore.reconcile(max);
+            match semaphore.semaphore.clone().try_acquire_owned() {
                 Ok(permit) => permits.push(permit),
                 Err(_) => return Err(QuotaError),
             }
@@ -104,9 +140,12 @@ impl CatalogQuotaManager {
             .lock()
             .await
             .entry(catalog_id.clone())
-            .or_insert_with(|| Arc::new(Semaphore::new(max)))
+            .or_insert_with(|| Arc::new(QuotaSlot::new(max)))
             .clone();
+        semaphore.reconcile(max);
         semaphore
+            .semaphore
+            .clone()
             .try_acquire_owned()
             .map(Some)
             .map_err(|_| QuotaError)
@@ -126,9 +165,12 @@ impl CatalogQuotaManager {
             .lock()
             .await
             .entry(catalog_id.clone())
-            .or_insert_with(|| Arc::new(Semaphore::new(max)))
+            .or_insert_with(|| Arc::new(QuotaSlot::new(max)))
             .clone();
+        semaphore.reconcile(max);
         semaphore
+            .semaphore
+            .clone()
             .try_acquire_owned()
             .map(Some)
             .map_err(|_| QuotaError)
@@ -532,7 +574,21 @@ impl ConnectionContext {
     /// Cancel all request work owned by this connection.
     pub fn cancel(&self) {
         self.cancellation.cancel();
+        self.abort_transaction_in_background();
         self.activity.touch();
+    }
+
+    pub async fn abort_transaction(&self) {
+        self.session.lock().await.abort_transaction();
+    }
+
+    fn abort_transaction_in_background(&self) {
+        let session = self.session.clone();
+        if let Ok(handle) = Handle::try_current() {
+            handle.spawn(async move {
+                session.lock().await.abort_transaction();
+            });
+        }
     }
 
     pub fn cancellation_token(&self) -> CancellationToken {
@@ -722,6 +778,9 @@ impl RequestState {
         if self.finished.swap(true, Ordering::AcqRel) {
             return;
         }
+        if terminal != RequestTerminalState::Completed {
+            self.connection.abort_transaction_in_background();
+        }
         let elapsed = self.started.elapsed();
         if let Some(metrics) = &self.metrics {
             metrics.record_pgwire_query(elapsed.as_micros() as u64);
@@ -830,6 +889,11 @@ impl RequestContext {
 
     pub async fn cancelled(&self) {
         self.state.cancellation.cancelled().await;
+    }
+
+    /// Abort buffered transaction and COPY state owned by this request.
+    pub async fn abort_transaction(&self) {
+        self.state.connection.abort_transaction().await;
     }
 
     pub fn cancellation_error(&self) -> PgWireError {
@@ -1011,6 +1075,25 @@ mod tests {
         assert!(request.is_cancelled());
     }
 
+    #[tokio::test]
+    async fn terminal_request_aborts_buffered_session_state() {
+        let connection = ConnectionContext::standalone(None);
+        let session = connection.session();
+        session.lock().await.in_transaction = true;
+        let request = connection.begin_request(OperationClass::Interactive, Duration::from_secs(1));
+        request.finish(RequestTerminalState::Cancelled);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !session.lock().await.in_transaction {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("terminal cancellation should abort the session");
+    }
+
     #[test]
     fn admission_permits_are_typed_and_non_cloneable() {
         let semaphore = Arc::new(Semaphore::new(1));
@@ -1039,6 +1122,41 @@ mod tests {
         drop(first);
         assert!(manager
             .try_acquire_request(&catalog_id, &limits)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn catalog_quota_reload_reconciles_existing_permits() {
+        let manager = CatalogQuotaManager::new();
+        let catalog_id: CatalogId = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9".parse().unwrap();
+        let one = CatalogLimits {
+            max_queued_requests: Some(1),
+            ..CatalogLimits::default()
+        };
+        let two = CatalogLimits {
+            max_queued_requests: Some(2),
+            ..CatalogLimits::default()
+        };
+        let first = manager
+            .try_acquire_request(&catalog_id, &one)
+            .await
+            .unwrap()
+            .unwrap();
+        let second = manager
+            .try_acquire_request(&catalog_id, &two)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(manager
+            .try_acquire_request(&catalog_id, &one)
+            .await
+            .is_err());
+        drop(second);
+        drop(first);
+        assert!(manager
+            .try_acquire_request(&catalog_id, &one)
             .await
             .unwrap()
             .is_some());

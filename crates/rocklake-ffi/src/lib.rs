@@ -182,15 +182,8 @@ const CATALOG_MAGIC: u32 = 0x4455_434B;
 /// Opaque handle for a CatalogStore.
 ///
 /// The `store` and `runtime` fields are wrapped in `Option` to implement the
-/// tombstone pattern: `rocklake_close` takes the inner state (dropping it) but
-/// does **not** free the outer `Box`. This keeps the allocation live at magic=0
-/// so that post-close operations safely return `InvalidHandle` and double-close
-/// is a harmless no-op — both without reading freed memory.
-///
-/// The outer allocation (this struct) is intentionally not freed on close; it
-/// is freed only when the last language-binding caller drops its pointer
-/// (typically at process exit). The leaked size is `sizeof(RockLakeCatalog)`
-/// which is small and bounded by the number of catalog open/close cycles.
+/// tombstone pattern: `rocklake_close_ex` takes the inner state (dropping it)
+/// but keeps the outer allocation live at magic=0 until `rocklake_destroy`.
 pub struct RockLakeCatalog {
     magic: u32,
     store: Option<CatalogBackend>,
@@ -490,41 +483,63 @@ pub extern "C" fn rocklake_open_readonly(
     }
 }
 
-/// Close a catalog handle. Safe to call with null, already-closed, or double-closed handles.
-///
-/// This function uses the **tombstone pattern**: the inner `CatalogStore` and
-/// `Runtime` are dropped (closing the store and releasing resources), but the
-/// outer `Box<RockLakeCatalog>` allocation is intentionally not freed. The
-/// handle remains a live "tombstone" (magic = 0) so that:
-///
-/// * **Double-close** is a safe no-op (magic ≠ CATALOG_MAGIC → return early).
-/// * **Use-after-close** returns `InvalidHandle` instead of reading freed memory.
-///
-/// The tombstone allocation (`sizeof(RockLakeCatalog)`) is small (≈ 48 bytes)
-/// and bounded by the number of open/close cycles, making the intentional leak
-/// acceptable for a per-process database handle.
+/// Close a catalog handle and report any store-close error.
+#[no_mangle]
+pub extern "C" fn rocklake_close_ex(catalog: *mut RockLakeCatalog, err: *mut RockLakeError) -> i32 {
+    if catalog.is_null() {
+        let error = RockLakeError::invalid_handle();
+        let code = error.code;
+        write_error(err, error);
+        return code;
+    }
+    // SAFETY: the caller owns the handle and must serialize access to it.
+    let cat = unsafe { &mut *catalog };
+    if cat.magic != CATALOG_MAGIC {
+        let error = RockLakeError::invalid_handle();
+        let code = error.code;
+        write_error(err, error);
+        return code;
+    }
+    cat.magic = 0;
+    let store = cat.store.take();
+    let runtime = cat.runtime.take();
+    let result = match (store, runtime) {
+        (Some(store), Some(runtime)) => runtime.block_on(store.close()),
+        _ => Ok(()),
+    };
+    match result {
+        Ok(()) => {
+            write_error(err, RockLakeError::ok());
+            RockLakeErrorCode::Ok as i32
+        }
+        Err(error) => {
+            let error = RockLakeError::from_catalog_error(error);
+            let code = error.code;
+            write_error(err, error);
+            code
+        }
+    }
+}
+
+/// Close a catalog handle, discarding a possible close error for ABI compatibility.
 #[no_mangle]
 pub extern "C" fn rocklake_close(catalog: *mut RockLakeCatalog) {
+    let _ = rocklake_close_ex(catalog, ptr::null_mut());
+}
+
+/// Free a closed catalog tombstone. A live handle is left untouched.
+#[no_mangle]
+pub extern "C" fn rocklake_destroy(catalog: *mut RockLakeCatalog) {
     if catalog.is_null() {
         return;
     }
-    // SAFETY: `catalog` is non-null (checked above). We access the magic field
-    // through a mutable reference bounded to this function scope.
-    let cat = unsafe { &mut *catalog };
-    if cat.magic != CATALOG_MAGIC {
-        return;
+    // SAFETY: the caller must invoke this once after close and must not use the
+    // pointer afterward. Live handles are deliberately not freed.
+    unsafe {
+        if (*catalog).magic == 0 {
+            drop(Box::from_raw(catalog));
+        }
     }
-    // Zero magic BEFORE taking the inner state so that any concurrent caller
-    // (racing in the same thread or another) sees magic == 0 and returns early.
-    cat.magic = 0;
-    // Take the inner state out of the Options.  Dropping `store` closes the
-    // underlying SlateDB; dropping `runtime` shuts down the Tokio executor.
-    let store = cat.store.take();
-    let runtime = cat.runtime.take();
-    if let (Some(store), Some(runtime)) = (store, runtime) {
-        let _ = runtime.block_on(store.close());
-    }
-    // The outer Box is intentionally not freed here (tombstone pattern, see above).
 }
 
 // ─── Read Operations ───────────────────────────────────────────────────────
@@ -1204,6 +1219,21 @@ mod tests {
         rocklake_close(catalog);
         // Second close must not panic or segfault (magic is zeroed).
         rocklake_close(catalog);
+    }
+
+    #[test]
+    fn close_ex_and_destroy_release_handle() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let mut err = RockLakeError::ok();
+        let catalog = rocklake_open(path.as_ptr(), &mut err);
+        assert!(!catalog.is_null());
+        assert_eq!(
+            rocklake_close_ex(catalog, &mut err),
+            RockLakeErrorCode::Ok as i32
+        );
+        rocklake_error_free(&mut err);
+        rocklake_destroy(catalog);
     }
 
     #[test]

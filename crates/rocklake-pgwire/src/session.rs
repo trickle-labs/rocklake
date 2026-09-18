@@ -317,4 +317,13 @@ impl SessionState {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Abort all request-owned transactional state without changing session settings.
+    pub fn abort_transaction(&mut self) {
+        self.pending_txn.clear();
+        self.pending_copy = None;
+        self.bootstrap = BootstrapState::default();
+        self.transaction_snapshot_id = None;
+        self.in_transaction = false;
+    }
 }

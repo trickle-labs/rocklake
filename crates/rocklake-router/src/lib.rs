@@ -12,7 +12,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use object_store::path::Path as ObjectPath;
@@ -746,7 +747,7 @@ pub struct RouterOpenOptions {
 }
 
 /// Errors raised while validating or opening routed catalogs.
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum RouterError {
     /// Invalid static configuration.
     #[error("invalid router configuration: {0}")]
@@ -766,13 +767,109 @@ pub enum RouterError {
     /// The route table changed after a connection pinned its route.
     #[error("stale route generation: expected {expected}, found {actual}")]
     StaleRouteGeneration { expected: u64, actual: u64 },
+    /// A live catalog cannot change its storage identity in place.
+    #[error("catalog {0} has a live storage identity and cannot be reloaded")]
+    LiveCatalogChange(CatalogId),
+}
+
+enum OpenCompletion {
+    Pending,
+    Ready(Arc<Mutex<CatalogStore>>),
+    Failed(RouterError),
+    Cancelled,
+}
+
+struct OpenAttempt {
+    completion: StdMutex<OpenCompletion>,
+    notify: Notify,
+}
+
+impl OpenAttempt {
+    fn new() -> Self {
+        Self {
+            completion: StdMutex::new(OpenCompletion::Pending),
+            notify: Notify::new(),
+        }
+    }
+
+    fn result(&self) -> Option<Result<Arc<Mutex<CatalogStore>>, RouterError>> {
+        let completion = self.completion.lock().expect("open attempt mutex poisoned");
+        match &*completion {
+            OpenCompletion::Pending => None,
+            OpenCompletion::Ready(handle) => Some(Ok(handle.clone())),
+            OpenCompletion::Failed(error) => Some(Err(error.clone())),
+            OpenCompletion::Cancelled => {
+                Some(Err(RouterError::Open("catalog opener cancelled".into())))
+            }
+        }
+    }
+
+    async fn wait(&self) -> Result<Arc<Mutex<CatalogStore>>, RouterError> {
+        loop {
+            let notified = self.notify.notified();
+            if let Some(result) = self.result() {
+                return result;
+            }
+            notified.await;
+        }
+    }
+}
+
+struct OpeningGuard<'a> {
+    router: &'a CatalogRouter,
+    id: CatalogId,
+    attempt: Arc<OpenAttempt>,
+    reserved: bool,
+    completed: bool,
+}
+
+impl<'a> OpeningGuard<'a> {
+    fn complete(&mut self, result: &Result<Arc<Mutex<CatalogStore>>, RouterError>) {
+        let completion = match result {
+            Ok(handle) => OpenCompletion::Ready(handle.clone()),
+            Err(error) => {
+                if self.reserved {
+                    self.router.release_open_slot();
+                    self.reserved = false;
+                }
+                OpenCompletion::Failed(error.clone())
+            }
+        };
+        *self
+            .attempt
+            .completion
+            .lock()
+            .expect("open attempt mutex poisoned") = completion;
+        self.router.remove_opening(&self.id, &self.attempt);
+        self.attempt.notify.notify_waiters();
+        self.completed = true;
+    }
+}
+
+impl Drop for OpeningGuard<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        if self.reserved {
+            self.router.release_open_slot();
+        }
+        *self
+            .attempt
+            .completion
+            .lock()
+            .expect("open attempt mutex poisoned") = OpenCompletion::Cancelled;
+        self.router.remove_opening(&self.id, &self.attempt);
+        self.attempt.notify.notify_waiters();
+    }
 }
 
 /// Runtime router with immutable snapshots and a bounded on-demand handle cache.
 pub struct CatalogRouter {
     routes: std::sync::RwLock<Arc<RouteTable>>,
     handles: Mutex<HashMap<CatalogId, CachedHandle>>,
-    opening: Mutex<HashMap<CatalogId, Arc<Notify>>>,
+    opening: StdMutex<HashMap<CatalogId, Arc<OpenAttempt>>>,
+    open_slots: AtomicUsize,
     options: RouterOpenOptions,
 }
 
@@ -782,7 +879,8 @@ impl CatalogRouter {
         Arc::new(Self {
             routes: std::sync::RwLock::new(Arc::new(RouteTable::from_config(config))),
             handles: Mutex::new(HashMap::new()),
-            opening: Mutex::new(HashMap::new()),
+            opening: StdMutex::new(HashMap::new()),
+            open_slots: AtomicUsize::new(0),
             options,
         })
     }
@@ -915,12 +1013,41 @@ impl CatalogRouter {
     /// Atomically replace the route table after validating a new configuration.
     pub fn reload(&self, config: StaticConfig) -> Result<(), RouterError> {
         let mut table = RouteTable::from_config(config);
-        table.generation = self
+        let current = self
             .routes
             .read()
             .expect("router route lock poisoned")
-            .generation
-            .saturating_add(1);
+            .clone();
+        let mut mode_changes = Vec::new();
+        for (id, old) in &current.by_id {
+            let Some(updated) = table.by_id.get(id) else {
+                if self.is_live(id) {
+                    return Err(RouterError::LiveCatalogChange(id.clone()));
+                }
+                continue;
+            };
+            if (old.catalog != updated.catalog || old.data != updated.data) && self.is_live(id) {
+                return Err(RouterError::LiveCatalogChange(id.clone()));
+            }
+            if old.mode != updated.mode && self.is_opening(id) {
+                return Err(RouterError::LiveCatalogChange(id.clone()));
+            }
+            if old.mode != updated.mode {
+                mode_changes.push(id.clone());
+            }
+        }
+        table.generation = current.generation.saturating_add(1);
+        if !mode_changes.is_empty() {
+            let mut handles = self
+                .handles
+                .try_lock()
+                .map_err(|_| RouterError::LiveCatalogChange(mode_changes[0].clone()))?;
+            let removed = mode_changes
+                .into_iter()
+                .filter(|id| handles.remove(id).is_some())
+                .count();
+            self.open_slots.fetch_sub(removed, Ordering::AcqRel);
+        }
         let table = Arc::new(table);
         *self.routes.write().expect("router route lock poisoned") = table;
         Ok(())
@@ -940,13 +1067,10 @@ impl CatalogRouter {
         self.resolve_id(&id)?;
         self.evict_idle().await;
         let mut handles = self.handles.lock().await;
-        let max = self
-            .routes
-            .read()
-            .expect("router route lock poisoned")
-            .settings
-            .max_open_catalogs;
-        if handles.len() >= max && !handles.contains_key(&id) {
+        if self.is_opening(&id) {
+            return Err(RouterError::Open("catalog is already opening".into()));
+        }
+        if !handles.contains_key(&id) && !self.reserve_open_slot() {
             return Err(RouterError::Capacity);
         }
         handles.insert(
@@ -982,6 +1106,7 @@ impl CatalogRouter {
             .into_iter()
             .filter_map(|id| handles.remove(&id).map(|cached| cached.handle))
             .collect();
+        self.open_slots.fetch_sub(evicted.len(), Ordering::AcqRel);
         drop(handles);
         for handle in evicted {
             if let Ok(mutex) = Arc::try_unwrap(handle) {
@@ -1015,59 +1140,132 @@ impl CatalogRouter {
         &self,
         route: CatalogRoute,
     ) -> Result<Arc<Mutex<CatalogStore>>, RouterError> {
-        loop {
-            {
-                let mut handles = self.handles.lock().await;
-                if let Some(cached) = handles.get_mut(&route.id) {
-                    cached.last_used = Instant::now();
-                    return Ok(cached.handle.clone());
-                }
+        let actual = self.generation();
+        if actual != route.generation {
+            return Err(RouterError::StaleRouteGeneration {
+                expected: route.generation,
+                actual,
+            });
+        }
+        {
+            let mut handles = self.handles.lock().await;
+            if let Some(cached) = handles.get_mut(&route.id) {
+                cached.last_used = Instant::now();
+                return Ok(cached.handle.clone());
             }
-            let waiter = {
-                let mut opening = self.opening.lock().await;
-                if let Some(waiter) = opening.get(&route.id) {
-                    Some(waiter.clone())
-                } else {
-                    opening.insert(route.id.clone(), Arc::new(Notify::new()));
-                    None
-                }
-            };
-            if let Some(waiter) = waiter {
-                waiter.notified().await;
-                continue;
-            }
+        }
 
-            let result = self.open_store(&route.descriptor).await;
-            let waiter = self
-                .opening
-                .lock()
-                .await
-                .remove(&route.id)
-                .expect("single-flight opener missing");
-            if let Ok(handle) = &result {
-                self.evict_idle().await;
-                let mut handles = self.handles.lock().await;
-                let max = self
-                    .routes
-                    .read()
-                    .expect("router route lock poisoned")
-                    .settings
-                    .max_open_catalogs;
-                if handles.len() >= max {
-                    drop(handles);
-                    waiter.notify_waiters();
-                    return Err(RouterError::Capacity);
-                }
-                handles.insert(
-                    route.id.clone(),
-                    CachedHandle {
-                        handle: handle.clone(),
-                        last_used: Instant::now(),
-                    },
-                );
+        let (attempt, opener) = {
+            let mut opening = self.opening.lock().expect("router opening mutex poisoned");
+            if let Some(attempt) = opening.get(&route.id) {
+                (attempt.clone(), false)
+            } else {
+                let attempt = Arc::new(OpenAttempt::new());
+                opening.insert(route.id.clone(), attempt.clone());
+                (attempt, true)
             }
-            waiter.notify_waiters();
+        };
+        if !opener {
+            return attempt.wait().await;
+        }
+
+        let mut guard = OpeningGuard {
+            router: self,
+            id: route.id.clone(),
+            attempt,
+            reserved: false,
+            completed: false,
+        };
+        if !self.reserve_open_slot() {
+            let result = Err(RouterError::Capacity);
+            guard.complete(&result);
             return result;
+        }
+        guard.reserved = true;
+
+        let result = match self.open_store(&route.descriptor).await {
+            Ok(handle) => {
+                let actual = self.generation();
+                if actual != route.generation {
+                    if let Ok(mutex) = Arc::try_unwrap(handle) {
+                        let _ = mutex.into_inner().close().await;
+                    }
+                    Err(RouterError::StaleRouteGeneration {
+                        expected: route.generation,
+                        actual,
+                    })
+                } else {
+                    self.evict_idle().await;
+                    self.handles.lock().await.insert(
+                        route.id.clone(),
+                        CachedHandle {
+                            handle: handle.clone(),
+                            last_used: Instant::now(),
+                        },
+                    );
+                    Ok(handle)
+                }
+            }
+            Err(error) => Err(error),
+        };
+        guard.complete(&result);
+        result
+    }
+
+    fn max_open_catalogs(&self) -> usize {
+        self.routes
+            .read()
+            .expect("router route lock poisoned")
+            .settings
+            .max_open_catalogs
+    }
+
+    fn reserve_open_slot(&self) -> bool {
+        let max = self.max_open_catalogs();
+        let mut current = self.open_slots.load(Ordering::Acquire);
+        loop {
+            if current >= max {
+                return false;
+            }
+            match self.open_slots.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(updated) => current = updated,
+            }
+        }
+    }
+
+    fn release_open_slot(&self) {
+        self.open_slots.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    fn is_opening(&self, id: &CatalogId) -> bool {
+        self.opening
+            .lock()
+            .expect("router opening mutex poisoned")
+            .contains_key(id)
+    }
+
+    fn is_live(&self, id: &CatalogId) -> bool {
+        if self.is_opening(id) {
+            return true;
+        }
+        self.handles
+            .try_lock()
+            .map_or(true, |handles| handles.contains_key(id))
+    }
+
+    fn remove_opening(&self, id: &CatalogId, attempt: &Arc<OpenAttempt>) {
+        let mut opening = self.opening.lock().expect("router opening mutex poisoned");
+        if opening
+            .get(id)
+            .is_some_and(|current| Arc::ptr_eq(current, attempt))
+        {
+            opening.remove(id);
         }
     }
 
@@ -1250,5 +1448,82 @@ mod tests {
             router.writer_readiness(&id).await,
             Err(RouterError::ReadOnly)
         ));
+    }
+
+    #[tokio::test]
+    async fn reload_rejects_live_storage_identity_changes() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        let new_catalog_dir = tempfile::tempdir().unwrap();
+        let new_data_dir = tempfile::tempdir().unwrap();
+        let id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9";
+        let config = StaticConfig::new(
+            RouterSettings::default(),
+            vec![entry(
+                id,
+                "main",
+                catalog_dir.path().to_str().unwrap(),
+                data_dir.path().to_str().unwrap(),
+            )],
+        )
+        .unwrap();
+        let replacement = StaticConfig::new(
+            RouterSettings::default(),
+            vec![entry(
+                id,
+                "main",
+                new_catalog_dir.path().to_str().unwrap(),
+                new_data_dir.path().to_str().unwrap(),
+            )],
+        )
+        .unwrap();
+        let router = CatalogRouter::new(config, RouterOpenOptions::default());
+        router.open_alias(Some("main")).await.unwrap();
+
+        assert!(matches!(
+            router.reload(replacement),
+            Err(RouterError::LiveCatalogChange(_))
+        ));
+        assert_eq!(router.generation(), 0);
+        assert_eq!(router.open_handle_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn reload_mode_change_reopens_cached_handle() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        let id = "018f4f4d-6ca1-7f67-9c30-4bf2f4d116a9";
+        let config = StaticConfig::new(
+            RouterSettings::default(),
+            vec![entry(
+                id,
+                "main",
+                catalog_dir.path().to_str().unwrap(),
+                data_dir.path().to_str().unwrap(),
+            )],
+        )
+        .unwrap();
+        let replacement = StaticConfig::new(
+            RouterSettings::default(),
+            vec![CatalogConfig {
+                mode: CatalogMode::ReadOnly,
+                ..entry(
+                    id,
+                    "main",
+                    catalog_dir.path().to_str().unwrap(),
+                    data_dir.path().to_str().unwrap(),
+                )
+            }],
+        )
+        .unwrap();
+        let router = CatalogRouter::new(config, RouterOpenOptions::default());
+        router.open_alias(Some("main")).await.unwrap();
+
+        router.reload(replacement).unwrap();
+        assert_eq!(router.open_handle_count().await, 0);
+        assert_eq!(
+            router.mode_for_id(&id.parse().unwrap()),
+            Some(CatalogMode::ReadOnly)
+        );
     }
 }

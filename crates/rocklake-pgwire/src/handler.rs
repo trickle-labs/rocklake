@@ -160,6 +160,7 @@ impl CopyHandler for RockLakeCopyHandler {
             session = self.session.lock() => session,
             _ = query.cancelled() => {
                 let error = query.cancellation_error();
+                query.abort_transaction().await;
                 query.finish(RequestTerminalState::Cancelled);
                 return Err(error);
             }
@@ -206,6 +207,7 @@ impl CopyHandler for RockLakeCopyHandler {
                         Err(error) => {
                             observation.set_terminal(RequestTerminalState::ProtocolError);
                             query.record_error(error);
+                            query.abort_transaction().await;
                             query.finish(RequestTerminalState::ProtocolError);
                         }
                     }
@@ -234,6 +236,7 @@ impl CopyHandler for RockLakeCopyHandler {
                     msg,
                 )));
                 query.record_error(&error);
+                query.abort_transaction().await;
                 query.finish(RequestTerminalState::ProtocolError);
                 return Err(error);
             }
@@ -280,6 +283,7 @@ impl CopyHandler for RockLakeCopyHandler {
             Err(error) => {
                 observation.set_terminal(RequestTerminalState::ProtocolError);
                 query.record_error(error);
+                query.abort_transaction().await;
                 query.finish(RequestTerminalState::ProtocolError);
             }
         }
@@ -308,6 +312,7 @@ impl CopyHandler for RockLakeCopyHandler {
             .take();
         if let Some(query) = query {
             query.record_error(&error);
+            query.abort_transaction().await;
             query.finish(RequestTerminalState::Cancelled);
         }
         error
@@ -381,6 +386,7 @@ fn wrap_query_response<'a>(
         async move {
             if observation.request.is_cancelled() {
                 observation.set_terminal(RequestTerminalState::Cancelled);
+                observation.request.abort_transaction().await;
                 return Some((
                     Err(observation.request.cancellation_error()),
                     (rows, permit, bytes, observation),
@@ -390,6 +396,7 @@ fn wrap_query_response<'a>(
                 item = rows.next() => item,
                 _ = observation.request.cancelled() => {
                     observation.set_terminal(RequestTerminalState::Cancelled);
+                    observation.request.abort_transaction().await;
                     return Some((
                         Err(observation.request.cancellation_error()),
                         (rows, permit, bytes, observation),
@@ -962,7 +969,15 @@ impl RockLakeHandler {
         let params = ParamValues::default();
         let execution_started = Instant::now();
         let session_handle = self.connection.session();
-        let mut session = session_handle.lock().await;
+        let mut session = tokio::select! {
+            session = session_handle.lock() => session,
+            _ = query.cancelled() => {
+                let error = query.cancellation_error();
+                query.abort_transaction().await;
+                query.finish(RequestTerminalState::Cancelled);
+                return Err(error);
+            }
+        };
         let result = tokio::select! {
             result = executor::execute_sql_with_mode(
                 inner_sql,
@@ -975,10 +990,12 @@ impl RockLakeHandler {
             ) => result,
             _ = query.cancelled() => {
                 query.record_execution(execution_started);
+                session.abort_transaction();
                 return Err(query.cancellation_error());
             }
         };
         query.record_execution(execution_started);
+        drop(session);
         let mut responses = result.map_err(|e| -> PgWireError { e.into() })?;
 
         let response = responses.pop().ok_or_else(|| {
@@ -1018,6 +1035,7 @@ impl RockLakeHandler {
                 row = rows.next() => row,
                 _ = query.cancelled() => {
                     observation.set_terminal(RequestTerminalState::Cancelled);
+                    query.abort_transaction().await;
                     return Err(query.cancellation_error());
                 }
             }) else {
@@ -1099,6 +1117,7 @@ fn router_error(error: RouterError) -> PgWireError {
         RouterError::Open(_) => "08006",
         RouterError::ReadOnly => "25006",
         RouterError::StaleRouteGeneration { .. } => "40001",
+        RouterError::LiveCatalogChange(_) => "55006",
     };
     PgWireError::UserError(Box::new(ErrorInfo::new(
         "ERROR".to_string(),
@@ -1819,7 +1838,15 @@ impl RockLakeHandler {
         let params = ParamValues::default();
         let execution_started = Instant::now();
         let session_handle = self.connection.session();
-        let mut session = session_handle.lock().await;
+        let mut session = tokio::select! {
+            session = session_handle.lock() => session,
+            _ = query.cancelled() => {
+                let error = query.cancellation_error();
+                query.abort_transaction().await;
+                query.finish(RequestTerminalState::Cancelled);
+                return Err(error);
+            }
+        };
         let result = tokio::select! {
             result = executor::execute_sql_with_mode(
                 sql,
@@ -1832,6 +1859,7 @@ impl RockLakeHandler {
             ) => result,
             _ = query.cancelled() => {
                 query.record_execution(execution_started);
+                session.abort_transaction();
                 return Err(query.cancellation_error());
             }
         };
@@ -1922,7 +1950,15 @@ impl RockLakeHandler {
 
         let execution_started = Instant::now();
         let session_handle = self.connection.session();
-        let mut session = session_handle.lock().await;
+        let mut session = tokio::select! {
+            session = session_handle.lock() => session,
+            _ = query.cancelled() => {
+                let error = query.cancellation_error();
+                query.abort_transaction().await;
+                query.finish(RequestTerminalState::Cancelled);
+                return Err(error);
+            }
+        };
         let result = tokio::select! {
             result = executor::execute_sql_with_mode(
                 sql,
@@ -1935,6 +1971,7 @@ impl RockLakeHandler {
             ) => result,
             _ = query.cancelled() => {
                 query.record_execution(execution_started);
+                session.abort_transaction();
                 return Err(query.cancellation_error());
             }
         };
@@ -1972,6 +2009,7 @@ impl RockLakeHandler {
         while let Some(row_result) = rows.next().await {
             if query.is_cancelled() {
                 observation.set_terminal(RequestTerminalState::Cancelled);
+                query.abort_transaction().await;
                 return Err(query.cancellation_error());
             }
             let row = match row_result {

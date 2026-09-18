@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.63.4] — 2026-09-18
+
+### Fixed
+
+- Made catalog opens single-flight with completion state, pre-I/O capacity
+  reservations, and safe live-route reload transitions.
+- Reconciled live catalog quotas after reload and aborts buffered transaction and
+  COPY work when cancellation, timeout, or disconnect interrupts a request.
+- Parsed SQL batches with the installed PostgreSQL parser and added serialized
+  Go handle access with observable close errors and explicit destruction.
+
 ## [0.63.3] — 2026-09-18
 
 ### Fixed

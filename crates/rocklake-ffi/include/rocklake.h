@@ -120,7 +120,8 @@ void rocklake_error_free(rocklake_error_t *err);
  * Opaque handle representing an open RockLake catalog.
  *
  * Ownership: Created by `rocklake_open()`; must be closed with
- *   `rocklake_close()` exactly once.
+ *   `rocklake_close_ex()` or `rocklake_close()`, then freed with
+ *   `rocklake_destroy()` exactly once.
  * Thread-safety: A single handle must NOT be used from multiple threads
  *   simultaneously without external locking.
  * Nullability: Functions that accept this type treat NULL as an invalid
@@ -218,7 +219,8 @@ typedef struct {
  * Nullability: `uri` must be non-NULL. `err` may be NULL.
  * Ownership: on success returns a heap-allocated handle the caller must
  *   close with `rocklake_close()`. Returns NULL on failure.
- * Free: `rocklake_close()` for the handle; `rocklake_error_free(err)`.
+ * Free: `rocklake_close()` then `rocklake_destroy()` for the handle;
+ *   `rocklake_error_free(err)`.
  */
 rocklake_catalog_t *rocklake_open(const char *uri, rocklake_error_t *err);
 
@@ -235,18 +237,36 @@ rocklake_catalog_t *rocklake_open(const char *uri, rocklake_error_t *err);
  * Nullability: `uri` must be non-NULL. `err` may be NULL.
  * Ownership: on success returns a heap-allocated handle the caller must
  *   close with `rocklake_close()`. Returns NULL on failure.
- * Free: `rocklake_close()` for the handle; `rocklake_error_free(err)`.
+ * Free: `rocklake_close()` then `rocklake_destroy()` for the handle;
+ *   `rocklake_error_free(err)`.
  */
 rocklake_catalog_t *rocklake_open_readonly(const char *uri, rocklake_error_t *err);
 
 /**
- * Close and free a catalog handle.
+ * Close a catalog handle, discarding a possible close error for compatibility.
  *
  * Thread-safety: must not be called while any other thread uses this handle.
  * Nullability: `catalog` may be NULL or already-closed; safe no-op.
- * Ownership: releases all memory. Calling twice on the same pointer is safe.
+ * Ownership: releases the catalog resources but leaves a tombstone until
+ *   `rocklake_destroy()` is called.
  */
 void rocklake_close(rocklake_catalog_t *catalog);
+
+/**
+ * Close a catalog handle and return the store-close status.
+ *
+ * Returns ROCKLAKE_OK on success. On failure, writes `err` when non-NULL.
+ * The handle becomes a tombstone either way and must be freed with
+ * `rocklake_destroy()`.
+ */
+int32_t rocklake_close_ex(rocklake_catalog_t *catalog, rocklake_error_t *err);
+
+/**
+ * Free a closed catalog tombstone. A live handle is left untouched.
+ *
+ * The pointer must not be used after this call.
+ */
+void rocklake_destroy(rocklake_catalog_t *catalog);
 
 /**
  * Get the current (latest) snapshot.

@@ -1,6 +1,6 @@
 # Release process
 
-Releases are prepared from the tagged source commit. For v0.63.3, the
+Releases are prepared from the tagged source commit. For v0.63.4, the
 release-blocking `Release Certification` workflow retains the complete
 correctness matrix:
 formatting, clippy, workspace tests, DuckLake conformance, public-surface and
@@ -16,7 +16,7 @@ maintenance tests cover recovery metadata and bounded scheduling. v0.59.0
 encryption envelope, SCRAM verifier-file, and release-governance checks cover
 the supported security boundary. v0.60.0 version-domain, migration-plan,
 verified no-op, downgrade-rejection, status JSON, and v0.59.0 direct-upgrade
-checks cover the compatibility freeze. The v0.63.3 gate validates the public
+checks cover the compatibility freeze. The v0.63.4 gate validates the public
 surface manifest, beta support policy, evidence ledger, redacted support
 bundle, and release artifact contract.
 The publication stage also tests the built artifacts without rebuilding from
@@ -39,7 +39,7 @@ test -s docs/assessments/v1-readiness.md
 ```
 
 Update `CHANGELOG.md` and current version references. Keep claims tied to
-tests: v0.63.3 supports the binary, DuckLake 1.0 targets covered by CI, the
+tests: v0.63.4 supports the binary, DuckLake 1.0 targets covered by CI, the
 implemented local and cloud object-store paths, server-side TLS, password
 authentication, SCRAM-SHA-256 authentication, multi-principal grants, bounded
 quotas, and typed TOML configuration. Local and emulator checks do not certify
@@ -68,8 +68,8 @@ After the PR checks pass, merge the release PR. After manual Release
 Certification passes on the merge SHA, tag that commit:
 
 ```bash
-git tag v0.63.3
-git push origin v0.63.3
+git tag v0.63.4
+git push origin v0.63.4
 ```
 
 Release artifacts must be built from that tag. The release contains raw

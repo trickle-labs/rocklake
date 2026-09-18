@@ -26,6 +26,7 @@ package rocklake
 import "C"
 import (
 	"fmt"
+	"sync"
 	"unsafe"
 )
 
@@ -55,6 +56,7 @@ type DataFile struct {
 
 // Catalog is an open RockLake catalog handle.
 type Catalog struct {
+	mu  sync.Mutex
 	ptr *C.rocklake_catalog_t
 }
 
@@ -115,17 +117,29 @@ func OpenReadOnly(uri string) (*Catalog, error) {
 	return &Catalog{ptr: ptr}, nil
 }
 
-// Close frees the catalog handle.  Safe to call multiple times.
-func (c *Catalog) Close() {
+// Close frees the catalog handle and reports a native close error. Safe to call multiple times.
+func (c *Catalog) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.ptr != nil {
-		C.rocklake_close(c.ptr)
+		var err C.rocklake_error_t
+		code := C.rocklake_close_ex(c.ptr, &err)
+		message := goString(C.rocklake_error_message(&err))
+		C.rocklake_error_free(&err)
+		C.rocklake_destroy(c.ptr)
 		c.ptr = nil
+		if code != C.ROCKLAKE_OK {
+			return fmt.Errorf("Close: %s (code %d)", message, code)
+		}
 	}
+	return nil
 }
 
 // SnapshotID returns the current (latest committed) snapshot ID.
 // Returns 0 for a fresh catalog with no committed snapshots.
 func (c *Catalog) SnapshotID() (uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var err C.rocklake_error_t
 	snap := C.rocklake_get_current_snapshot(c.ptr, &err)
 	defer C.rocklake_error_free(&err)
@@ -137,6 +151,8 @@ func (c *Catalog) SnapshotID() (uint64, error) {
 
 // ListSchemas returns all schemas visible at snapshot.
 func (c *Catalog) ListSchemas(snapshot SnapshotRef) ([]Schema, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var err C.rocklake_error_t
 	var list C.rocklake_schema_list_t
 	if snapshot.latest {
@@ -179,6 +195,8 @@ func (c *Catalog) ListSchemasAt(snapshotID uint64) ([]Schema, error) {
 
 // ListTables returns all tables in schemaID visible at snapshot.
 func (c *Catalog) ListTables(schemaID uint64, snapshot SnapshotRef) ([]Table, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var err C.rocklake_error_t
 	var list C.rocklake_table_list_t
 	if snapshot.latest {
@@ -222,6 +240,8 @@ func (c *Catalog) ListTablesAt(schemaID, snapshotID uint64) ([]Table, error) {
 
 // ListDataFiles returns all data files for tableID visible at snapshot.
 func (c *Catalog) ListDataFiles(tableID uint64, snapshot SnapshotRef) ([]DataFile, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var err C.rocklake_error_t
 	var list C.rocklake_file_list_t
 	if snapshot.latest {
