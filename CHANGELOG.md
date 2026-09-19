@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.63.6] — 2026-09-20
+
+### Fixed
+
+- Removed fabricated cache hits, misses, evictions, and hit ratios from
+  inspection output; working-set values are now labeled estimates.
+- Distinguished measured catalog facts, operator inputs, projections, and
+  historical capacity assumptions in human and JSON reports.
+- Counted actual snapshot rows for capacity history and removed recommendations
+  for cache controls that are not applied by the serving configuration.
+
 ## [0.63.5] — 2026-09-18
 
 ### Fixed

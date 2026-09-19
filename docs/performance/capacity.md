@@ -1,9 +1,9 @@
 # Capacity report
 
-`rocklake capacity report` turns a catalog inspection and measured workload
-rates into a bounded capacity report. It reports catalog counts, snapshot
-history, request rates, byte rates, cache budget, configured limits, and the
-selected evidence envelope independently.
+`rocklake capacity report` turns catalog facts and operator-supplied workload
+rates into a bounded report. It labels catalog counts as measured, rates as
+inputs, monthly totals as projections, working-set values as estimates, and
+the selected evidence envelope as a historical assumption.
 
 The report does not claim that a catalog can sustain an unmeasured workload.
 The built-in profiles are historical v0.61 inputs based on the v0.52 LocalFS
@@ -34,8 +34,10 @@ rocklake capacity report --catalog ./lake \
 
 Request and byte projections are separate. Currency estimates are optional and
 only appear when `--pricing-file` supplies a dated JSON input. The report uses
-request rates for request fees and measured `--catalog-bytes` for storage fees;
-it never converts a guessed metadata size into a currency claim.
+request rates for request fees and supplied `--catalog-bytes` for storage fees;
+it never converts a guessed metadata size into a currency claim. The cache
+budget is an input to the report only; this command does not configure
+SlateDB's serving cache or recommend a cache size.
 
 Pricing files are inputs, not product defaults. Update them when a provider,
 region, or pricing date changes, and retain the file with the evidence result.

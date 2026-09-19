@@ -32,10 +32,9 @@ triggered.
 | 4     | Default; TPC-H SF10 benchmark operating point |
 | 8     | Conservative; fewer S3 PUTs, higher p99 read-amplification |
 
-Rule of thumb: increase if you are write-bound and the PUT cost in
-`rocklake inspect api-costs` is significant; decrease if
-`rocklake inspect cache-utilization` shows low hit ratios caused by too
-many small files.
+Rule of thumb: measure object-store and compaction behavior before changing
+these historical settings. `rocklake inspect cache-utilization` does not
+currently expose SlateDB hit ratios.
 
 ### `max_write_batch_bytes`
 
@@ -83,28 +82,20 @@ measure the trade-off in your environment.
 The block cache holds decompressed SST blocks in memory.  A well-sized cache
 eliminates the majority of S3 GETs for hot catalog data.
 
-Use `rocklake inspect cache-utilization` to see the current hit ratio and a
-recommended cache size:
+Use `rocklake inspect cache-utilization` to see the catalog's estimated
+working set. Cache occupancy, hit ratios, evictions, and capacity remain
+unknown because the inspection command does not attach SlateDB's cache
+metrics recorder:
 
 ```
 rocklake inspect cache-utilization \
     --catalog s3://bucket/catalog/
 ```
 
-General guidelines:
-
-- **Hit ratio ≥ 90%**: cache size is adequate.
-- **Hit ratio 70–90%**: increase cache by 2×.
-- **Hit ratio < 70%**: increase cache by 4× or investigate hot-key patterns.
-
-For a catalog with N tables and an average of C columns per table:
-
-```
-recommended_cache_mb ≈ N × C × 0.05   # 50 KiB per column
-```
-
-This approximation assumes one SST block per column bloom filter plus one
-block per active compaction level.
+The working-set calculation is a rough estimate based on catalog counts. This
+report does not configure SlateDB or recommend a cache size; use a serving
+configuration that explicitly owns the cache budget and collect real cache
+metrics before tuning it.
 
 ## See also
 

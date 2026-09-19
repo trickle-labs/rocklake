@@ -108,6 +108,7 @@ pub struct CatalogFacts {
     pub latest_snapshot_id: u64,
     pub snapshot_history: u64,
     pub catalog_bytes: Option<u64>,
+    pub catalog_bytes_source: &'static str,
     pub schema_count: u64,
     pub table_count: u64,
     pub column_count: u64,
@@ -125,6 +126,8 @@ pub struct WorkloadFacts {
     pub write_bytes_per_second: u64,
     pub projected_monthly_requests: RequestCounts,
     pub projected_monthly_bytes: ByteCounts,
+    pub input_source: &'static str,
+    pub projection_source: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,9 +154,11 @@ pub struct CapacityLimits {
 #[derive(Debug, Clone, Serialize)]
 pub struct CacheFacts {
     pub estimated_working_set_bytes: u64,
-    pub recommended_cache_size_mb: u64,
+    pub recommended_cache_size_mb: Option<u64>,
     pub global_budget_mb: u64,
     pub catalog_budget_mb: u64,
+    pub working_set_basis: &'static str,
+    pub budget_source: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -163,6 +168,8 @@ pub struct EvidenceEnvelope {
     pub max_read_ops_per_second: f64,
     pub max_write_ops_per_second: f64,
     pub within_envelope: bool,
+    pub status: &'static str,
+    pub basis: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,7 +242,6 @@ pub fn build_report(
     };
     let estimated_working_set_bytes =
         estimated_working_set_bytes(state.data_file_count, state.column_count);
-    let recommended_cache_size_mb = estimated_working_set_bytes.div_ceil(1024 * 1024).max(256);
     let within_envelope = state.data_file_count <= profile.max_data_files
         && input.read_ops_per_second <= profile.max_read_ops_per_second
         && input.write_ops_per_second <= profile.max_write_ops_per_second;
@@ -256,8 +262,13 @@ pub fn build_report(
 
     let catalog = CatalogFacts {
         latest_snapshot_id: state.latest_snapshot_id,
-        snapshot_history: state.latest_snapshot_id,
+        snapshot_history: state.snapshot_count,
         catalog_bytes: input.catalog_bytes,
+        catalog_bytes_source: if input.catalog_bytes.is_some() {
+            "operator input; not measured by catalog inspection"
+        } else {
+            "unknown"
+        },
         schema_count: state.schema_count,
         table_count: state.table_count,
         column_count: state.column_count,
@@ -273,12 +284,16 @@ pub fn build_report(
         write_bytes_per_second: input.write_bytes_per_second,
         projected_monthly_requests,
         projected_monthly_bytes,
+        input_source: "operator input",
+        projection_source: "projection from supplied rates over a 30-day month",
     };
     let cache = CacheFacts {
         estimated_working_set_bytes,
-        recommended_cache_size_mb,
+        recommended_cache_size_mb: None,
         global_budget_mb: input.cache_size_mb,
         catalog_budget_mb: input.cache_size_mb,
+        working_set_basis: crate::cache::WORKING_SET_ESTIMATE_BASIS,
+        budget_source: "operator input; not applied to the serving configuration",
     };
     let evidence = EvidenceEnvelope {
         profile: input.evidence_profile.clone(),
@@ -286,6 +301,8 @@ pub fn build_report(
         max_read_ops_per_second: profile.max_read_ops_per_second,
         max_write_ops_per_second: profile.max_write_ops_per_second,
         within_envelope,
+        status: "historical profile assumption, not measured capacity",
+        basis: "v0.52.0 LocalFS and MinIO scale classes",
     };
 
     let mut recommendations = Vec::new();
@@ -293,11 +310,6 @@ pub fn build_report(
         recommendations.push(
             "Workload or catalog size exceeds the selected evidence profile; split catalogs or service instances and re-measure.".into(),
         );
-    }
-    if input.cache_size_mb < recommended_cache_size_mb {
-        recommendations.push(format!(
-            "Increase the cache budget to at least {recommended_cache_size_mb} MiB or select a smaller catalog working set."
-        ));
     }
     if pricing.is_none() {
         recommendations.push(
@@ -348,21 +360,45 @@ impl CapacityReport {
     pub fn print(&self) {
         println!("RockLake Capacity Report");
         println!("========================");
-        println!("Catalog files: {}", self.catalog.data_file_count);
-        println!("Snapshot history: {}", self.catalog.snapshot_history);
-        println!("Evidence profile: {}", self.evidence.profile);
-        println!("Within envelope: {}", self.evidence.within_envelope);
+        println!("Catalog files (measured): {}", self.catalog.data_file_count);
         println!(
-            "Cache budget: {} MiB (recommended: {} MiB)",
-            self.cache.global_budget_mb, self.cache.recommended_cache_size_mb
+            "Snapshot history rows (measured): {}",
+            self.catalog.snapshot_history
         );
         println!(
-            "Projected monthly requests: GET {} / PUT {} / LIST {} / DELETE {}",
+            "Catalog metadata bytes ({}): {}",
+            self.catalog.catalog_bytes_source,
+            self.catalog
+                .catalog_bytes
+                .map_or_else(|| "unknown".to_string(), |bytes| bytes.to_string())
+        );
+        println!("Evidence profile (assumption): {}", self.evidence.profile);
+        println!("Evidence status: {}", self.evidence.status);
+        println!("Evidence basis: {}", self.evidence.basis);
+        println!("Within envelope: {}", self.evidence.within_envelope);
+        println!(
+            "Cache budget (input only): {} MiB",
+            self.cache.global_budget_mb
+        );
+        println!(
+            "Projected monthly requests (projection): GET {} / PUT {} / LIST {} / DELETE {}",
             self.workload.projected_monthly_requests.get,
             self.workload.projected_monthly_requests.put,
             self.workload.projected_monthly_requests.list,
             self.workload.projected_monthly_requests.delete
         );
+        println!(
+            "Working set (estimate): {} bytes",
+            self.cache.estimated_working_set_bytes
+        );
+        println!("Working-set basis: {}", self.cache.working_set_basis);
+        println!(
+            "Request rates (input): read {:.2}/s, write {:.2}/s",
+            self.workload.read_ops_per_second, self.workload.write_ops_per_second
+        );
+        println!("Request input source: {}", self.workload.input_source);
+        println!("Projection source: {}", self.workload.projection_source);
+        println!("Cache budget source: {}", self.cache.budget_source);
         if let Some(cost) = &self.cost {
             println!(
                 "Estimated monthly request cost: {} {:.4} ({}, {}, effective {})",
@@ -392,6 +428,7 @@ mod tests {
     fn state() -> InspectResult {
         InspectResult {
             latest_snapshot_id: 10,
+            snapshot_count: 7,
             schema_version: 1,
             snapshot_time: String::new(),
             next_snapshot_id: 11,
@@ -444,6 +481,12 @@ mod tests {
         assert_eq!(report.workload.projected_monthly_requests.put, 5_184_000);
         assert_eq!(report.cost.unwrap().storage_cost_usd_per_month, Some(1.0));
         assert!(report.evidence.within_envelope);
+        assert_eq!(report.catalog.snapshot_history, 7);
+        assert!(report.cache.recommended_cache_size_mb.is_none());
+        assert!(report
+            .recommendations
+            .iter()
+            .all(|recommendation| !recommendation.contains("cache-size")));
     }
 
     #[test]

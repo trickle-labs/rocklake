@@ -15,6 +15,7 @@ use crate::gc;
 #[derive(Debug, Clone)]
 pub struct InspectResult {
     pub latest_snapshot_id: u64,
+    pub snapshot_count: u64,
     pub schema_version: u64,
     pub snapshot_time: String,
     pub next_snapshot_id: u64,
@@ -59,6 +60,7 @@ pub async fn inspect_snapshot(db: &Db) -> CatalogResult<InspectResult> {
     let column_count = count_tag(db, TAG_COLUMN).await?;
     let data_file_count = count_tag(db, TAG_DATA_FILE).await?;
     let delete_file_count = count_tag(db, TAG_DELETE_FILE).await?;
+    let snapshot_count = count_tag(db, TAG_SNAPSHOT).await?;
 
     // Load system keys
     let retain_from = gc::read_retain_from(db).await?;
@@ -67,6 +69,7 @@ pub async fn inspect_snapshot(db: &Db) -> CatalogResult<InspectResult> {
 
     Ok(InspectResult {
         latest_snapshot_id,
+        snapshot_count,
         schema_version,
         snapshot_time,
         next_snapshot_id,

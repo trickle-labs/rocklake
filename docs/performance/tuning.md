@@ -59,44 +59,25 @@ After migration, restart RockLake pointing to the new location. No catalog modif
 
 ## Cache Sizing
 
-SlateDB's block cache keeps recently-accessed SST file blocks in memory. A larger cache means more operations are served directly from memory without any object storage I/O. For catalogs that fit entirely in cache, steady-state performance is effectively "in-memory database" speed (sub-millisecond reads).
+SlateDB owns the block cache. `rocklake inspect cache-utilization` reports the catalog working set as an estimate, but this command does not attach SlateDB cache metrics. Hits, misses, evictions, occupancy, and capacity are therefore unknown.
 
-### How the Cache Works
-
-SlateDB stores data in Sorted String Table (SST) files. Each SST file is divided into blocks (typically 4–16KB). When a read operation needs data from an SST block that is not in cache, it fetches the block from object storage and stores it in the cache for future use. The cache uses an LRU (Least Recently Used) eviction policy — when the cache is full, the least recently accessed block is evicted.
-
-### Sizing Guidelines
-
-The optimal cache size depends on your catalog's total size and access patterns:
-
-| Catalog Size (Rows) | Approximate Storage Size | Recommended Cache |
-|---------------------|------------------------|-------------------|
-| 1,000 rows | 1–5MB | 16MB (fits entirely) |
-| 10,000 rows | 10–50MB | 64MB (fits entirely) |
-| 100,000 rows | 100–500MB | 256MB (working set) |
-| 1,000,000 rows | 1–5GB | 1GB (working set) |
-
-**Rule of thumb:** If your catalog fits in cache with 50% headroom, set the cache to that size. If not, size the cache to hold your "working set" — the tables, schemas, and data files accessed in a typical 5-minute window.
+The report does not configure SlateDB or recommend a cache size. Tune the cache only through a serving configuration that owns that setting, then verify changes with real SlateDB metrics.
 
 ### Configuration
 
 ```bash
-# Start the server; cache sizing is managed by SlateDB in v0.51.3.
 rocklake serve --catalog s3://bucket/catalog/
-
-# Verify cache effectiveness via metrics
-# Look at cache_hit_ratio — should be > 0.9 in steady state
+# Collect cache metrics from the serving process before tuning.
 ```
 
 ### Cache Cold Start
 
-When RockLake starts, the cache is empty. The first operations (typically 10–50 depending on catalog size and access pattern) will be slow because they trigger block fetches. After warm-up, the cache contains the active working set and subsequent operations are fast.
+Cache cold-start behavior depends on SlateDB settings and workload. Use representative warm-up queries, then measure real metrics before treating the cache as warm.
 
 **Strategies to reduce cold-start impact:**
 
-1. **Sticky scheduling:** Deploy RockLake on the same node across restarts (preserves OS page cache, though not SlateDB's block cache)
-2. **Warm-up queries:** After startup, issue a few representative queries to prime the cache before directing production traffic
-3. **Large cache:** A cache that holds the entire catalog means warm-up completes after one full scan of the catalog (a few seconds)
+1. **Sticky scheduling:** Deploy RockLake on the same node across restarts when the serving environment benefits from a warm OS page cache.
+2. **Warm-up queries:** After startup, issue representative queries to prime the cache before directing production traffic.
 
 ## Garbage Collection
 
@@ -242,7 +223,7 @@ The key metrics to watch for performance health:
 
 | Metric | Healthy Range | Action if Outside |
 |--------|-------------|-------------------|
-| Cache hit ratio | > 0.9 | Increase cache size |
+| SlateDB cache metrics | Collect from the serving process | Tune the serving configuration |
 | Scan amplification | < 3x | Run GC |
 | Write batch size (avg) | > 10 keys | Review batching strategy |
 | p99 read latency | < 100ms (S3) | Check S3 health, cache |
@@ -253,11 +234,11 @@ The key metrics to watch for performance health:
 For a new deployment, walk through this checklist:
 
 - [ ] Storage backend appropriate for latency requirements?
-- [ ] Cache sized to hold working set (or full catalog if small)?
+- [ ] SlateDB cache metrics collected from the serving process?
 - [ ] DuckDB and RockLake in same availability zone?
 - [ ] VPC endpoint configured for object storage access?
 - [ ] GC scheduled to run periodically (daily or weekly)?
-- [ ] Monitoring alerts on cache hit ratio and latency percentiles?
+- [ ] Monitoring alerts on cache metrics and latency percentiles?
 
 ## Further Reading
 

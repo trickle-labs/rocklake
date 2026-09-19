@@ -2478,6 +2478,7 @@ async fn cmd_inspect(command: cli::InspectSubcommand) -> Result<(), Box<dyn std:
                         "latest_snapshot_id": result.latest_snapshot_id,
                         "schema_version_id": result.schema_version,
                         "snapshot_time": result.snapshot_time,
+                        "snapshot_count": result.snapshot_count,
                         "next_snapshot_id": result.next_snapshot_id,
                         "next_catalog_id": result.next_catalog_id,
                         "next_file_id": result.next_file_id,
@@ -2494,6 +2495,7 @@ async fn cmd_inspect(command: cli::InspectSubcommand) -> Result<(), Box<dyn std:
                 cli::OutputFormat::Human => {
                     println!("Catalog State:");
                     println!("  Latest snapshot ID: {}", result.latest_snapshot_id);
+                    println!("  Snapshot history rows: {}", result.snapshot_count);
                     println!("  Schema version: {}", result.schema_version);
                     println!("  Snapshot time: {}", result.snapshot_time);
                     println!("  Next snapshot ID: {}", result.next_snapshot_id);
@@ -2571,7 +2573,9 @@ async fn cmd_inspect(command: cli::InspectSubcommand) -> Result<(), Box<dyn std:
                         "evictions": stats.evictions,
                         "bytes_used": stats.bytes_used,
                         "capacity_bytes": stats.capacity_bytes,
-                        "recommended_cache_size_mb": stats.recommended_cache_size_mb
+                        "estimated_working_set_bytes": stats.estimated_working_set_bytes,
+                        "observation_status": stats.observation_status,
+                        "estimate_basis": rocklake_catalog::cache::WORKING_SET_ESTIMATE_BASIS
                     })
                 ),
                 cli::OutputFormat::Human => stats.print(),

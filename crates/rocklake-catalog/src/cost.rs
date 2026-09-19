@@ -213,7 +213,7 @@ impl ApiCostReport {
         if estimated_monthly_usd > RDS_T3_MEDIUM_MONTHLY {
             recommendations.push(format!(
                 "Estimated S3 API cost (${:.2}/month) exceeds RDS db.t3.medium (${:.2}/month). \
-                 Consider increasing --cache-size-mb to reduce GET calls.",
+                 this report does not apply serving configuration changes.",
                 estimated_monthly_usd, RDS_T3_MEDIUM_MONTHLY
             ));
         }
@@ -307,16 +307,10 @@ pub fn tune_for_cost_target(
         "Need to reduce API costs by {:.1}x to reach ${:.2}/month target.",
         reduction_needed, target_usd_per_month
     ));
-    recs.push("Recommended settings:".to_string());
-
-    if reduction_needed > 2.0 {
-        recs.push("  --cost-mode=conservative".to_string());
-        recs.push("  --cache-size-mb=4096  (reduce GET calls with larger cache)".to_string());
-        recs.push("  l0_sst_count_threshold=8  (fewer flushes = fewer PUT calls)".to_string());
-    } else {
-        recs.push("  --cost-mode=balanced".to_string());
-        recs.push("  --cache-size-mb=2048".to_string());
-    }
+    recs.push(
+        "No serving settings are emitted: this command does not apply cost or cache configuration."
+            .to_string(),
+    );
 
     recs
 }

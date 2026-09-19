@@ -209,8 +209,8 @@ remote-cloud program is scheduled.
 | **v0.63.2** | Honest baseline and evidence gate | Documentation agrees on the support boundary, and invalid or absent candidate measurements fail CI. **Done** |
 | **v0.63.3** | Safe readers and recovery | Independent readers preserve writer availability, and backup, checkpoint, retention, and retry regressions pass locally. **Done** |
 | **v0.63.4** | Predictable concurrency | Router opens, reloads, cancellation, SQL batches, and native handles obey bounded lifecycle contracts. **Done** |
-| **v0.63.5** | Local scaling obstacles | Cleanup avoids repeated full scans, response buffering has a measured bound, and job controls describe executable behavior. **Current** |
-| **v0.63.6** | Honest operator output | Cache and capacity reports distinguish observed values, user inputs, projections, and estimates. |
+| **v0.63.5** | Local scaling obstacles | Cleanup avoids repeated full scans, response buffering has a measured bound, and job controls describe executable behavior. Done |
+| **v0.63.6** | Honest operator output | Cache and capacity reports distinguish observed values, user inputs, projections, and estimates. **Current** |
 | **v0.63.7** | Local release certification | Candidate-specific local evidence, previous-release upgrade and restore, and artifact-only quickstart pass. |
 | **v0.64.0** | Quality baseline | The v0.63.2 through v0.63.7 work ships as one documented, locally certified baseline. |
 | **v0.80.0** | AWS S3 evidence | **Unscheduled.** Begin only after resources and a separate approval exist. |
@@ -2040,14 +2040,14 @@ from inputs, projections, and estimates.
 
 #### Implementation plan
 
-- [ ] T16: Remove synthetic cache hits, misses, evictions, and hit ratios from
+- [x] T16: Remove synthetic cache hits, misses, evictions, and hit ratios from
       observed-statistic fields, or replace them with real SlateDB observations.
-- [ ] T16: Label working-set calculations and capacity profiles as estimates,
+- [x] T16: Label working-set calculations and capacity profiles as estimates,
       including their assumptions and evidence status.
-- [ ] T16: Report unknown observations as unknown. Do not turn absent data into
+- [x] T16: Report unknown observations as unknown. Do not turn absent data into
       measured zero activity.
-- [ ] T16: Recommend only controls that reach the actual serving configuration.
-- [ ] T16: Correct `snapshot_history`, which currently repeats the latest
+- [x] T16: Recommend only controls that reach the actual serving configuration.
+- [x] T16: Correct `snapshot_history`, which currently repeats the latest
       snapshot ID, or rename it through the public-schema compatibility policy.
 
 #### Exit conditions
@@ -2515,8 +2515,8 @@ README or documentation:
 | v0.63.2 | Honest baseline and evidence gate | Done |
 | v0.63.3 | Safe readers and recovery | Done |
 | v0.63.4 | Predictable concurrency | Done |
-| v0.63.5 | Local scaling obstacles | Current |
-| v0.63.6 | Honest operator output | Planned |
+| v0.63.5 | Local scaling obstacles | Done |
+| v0.63.6 | Honest operator output | Current |
 | v0.63.7 | Local release certification | Planned |
 | v0.64.0 | Quality baseline | Planned |
 | v0.80.0–v0.80.2 | Remote-cloud and multi-node evidence | Unscheduled |

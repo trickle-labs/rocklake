@@ -1,13 +1,17 @@
 //! Block cache utilization reporting.
 //!
-//! Provides `CacheStats` and `cache_utilization()` to report the cache hit/miss
-//! ratio, eviction rate, and a recommended `--cache-size-mb` value based on the
-//! catalog's observed working-set size.
+//! SlateDB owns the block cache, so this module reports real counters only
+//! when a caller supplies them. Inspection without those counters reports
+//! unknown observations and keeps the working-set calculation explicitly as an
+//! estimate.
 
 #![allow(missing_docs)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+pub const WORKING_SET_ESTIMATE_BASIS: &str =
+    "estimate: 1 KiB per column plus 2 KiB per data-file header";
 
 /// Thread-safe cache statistics counters.
 #[derive(Debug, Default)]
@@ -54,135 +58,130 @@ impl CacheCounters {
     pub fn snapshot(&self) -> CacheStats {
         let hits = self.hits.load(Ordering::Relaxed);
         let misses = self.misses.load(Ordering::Relaxed);
-        let total = hits + misses;
-        let hit_ratio = if total > 0 {
-            hits as f64 / total as f64
-        } else {
-            0.0
-        };
-        let bytes_used = self.bytes_used.load(Ordering::Relaxed);
-        let capacity_bytes = self.capacity_bytes.load(Ordering::Relaxed);
-        let evictions = self.evictions.load(Ordering::Relaxed);
-
-        // Recommend cache size: if hit ratio < 0.8, suggest 2x current capacity
-        let recommended_mb = if hit_ratio < 0.8 && total > 100 {
-            (capacity_bytes / (1024 * 1024)) * 2
-        } else {
-            capacity_bytes / (1024 * 1024)
-        };
-
-        CacheStats {
-            hits,
-            misses,
-            hit_ratio,
-            evictions,
-            bytes_used,
-            capacity_bytes,
-            recommended_cache_size_mb: recommended_mb,
+        if hits.saturating_add(misses) == 0 {
+            let mut stats = CacheStats::unavailable();
+            stats.capacity_bytes = Some(self.capacity_bytes.load(Ordering::Relaxed));
+            return stats;
         }
+        let mut stats = CacheStats::observed(hits, misses);
+        stats.evictions = Some(self.evictions.load(Ordering::Relaxed));
+        stats.bytes_used = Some(self.bytes_used.load(Ordering::Relaxed));
+        stats.capacity_bytes = Some(self.capacity_bytes.load(Ordering::Relaxed));
+        stats
     }
 }
 
 /// A point-in-time snapshot of block cache statistics.
 #[derive(Debug, Clone)]
 pub struct CacheStats {
-    pub hits: u64,
-    pub misses: u64,
-    /// Hit ratio in range [0.0, 1.0].
-    pub hit_ratio: f64,
-    pub evictions: u64,
-    pub bytes_used: u64,
-    pub capacity_bytes: u64,
-    /// Recommended cache size in MB based on working-set analysis.
-    pub recommended_cache_size_mb: u64,
+    /// Observed cache hits, when a cache metrics source was attached.
+    pub hits: Option<u64>,
+    /// Observed cache misses, when a cache metrics source was attached.
+    pub misses: Option<u64>,
+    /// Observed hit ratio in range [0.0, 1.0], when counters are available.
+    pub hit_ratio: Option<f64>,
+    /// Observed evictions, when the cache exposes them.
+    pub evictions: Option<u64>,
+    /// Observed bytes currently in the cache, when exposed by the cache.
+    pub bytes_used: Option<u64>,
+    /// Configured cache capacity, when exposed by the serving process.
+    pub capacity_bytes: Option<u64>,
+    /// Estimated working-set size based on catalog counts.
+    pub estimated_working_set_bytes: Option<u64>,
+    /// Whether cache activity was observed or unavailable.
+    pub observation_status: &'static str,
 }
 
 impl CacheStats {
+    fn observed(hits: u64, misses: u64) -> Self {
+        let total = hits.saturating_add(misses);
+        Self {
+            hits: Some(hits),
+            misses: Some(misses),
+            hit_ratio: (total > 0).then_some(hits as f64 / total as f64),
+            evictions: None,
+            bytes_used: None,
+            capacity_bytes: None,
+            estimated_working_set_bytes: None,
+            observation_status: "observed counters",
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            hits: None,
+            misses: None,
+            hit_ratio: None,
+            evictions: None,
+            bytes_used: None,
+            capacity_bytes: None,
+            estimated_working_set_bytes: None,
+            observation_status: "unknown",
+        }
+    }
+
+    pub fn unknown(data_file_count: u64, column_count: u64) -> Self {
+        Self {
+            hits: None,
+            misses: None,
+            hit_ratio: None,
+            evictions: None,
+            bytes_used: None,
+            capacity_bytes: None,
+            estimated_working_set_bytes: Some(estimated_working_set_bytes(
+                data_file_count,
+                column_count,
+            )),
+            observation_status: "unknown",
+        }
+    }
+
     /// Print a human-readable cache utilization report.
     pub fn print(&self) {
         println!("Block Cache Utilization");
         println!("=======================");
-        println!("  Hits:             {}", self.hits);
-        println!("  Misses:           {}", self.misses);
-        println!("  Hit ratio:        {:.1}%", self.hit_ratio * 100.0);
-        println!("  Evictions:        {}", self.evictions);
+        println!("  Hits:             {}", display_optional(self.hits));
+        println!("  Misses:           {}", display_optional(self.misses));
         println!(
-            "  Bytes used:       {} MiB / {} MiB",
-            self.bytes_used / (1024 * 1024),
-            self.capacity_bytes / (1024 * 1024)
+            "  Hit ratio:        {}",
+            self.hit_ratio
+                .map(|ratio| format!("{:.1}%", ratio * 100.0))
+                .unwrap_or_else(|| "unknown".to_string())
         );
-        println!("  Recommended size: {} MiB", self.recommended_cache_size_mb);
-        println!();
-
-        if self.hit_ratio >= 0.9 {
-            println!("  ✓ Cache is well-sized for this workload.");
-        } else if self.hit_ratio >= 0.7 {
-            println!(
-                "  ⚠ Cache hit ratio is {:.1}%. Consider increasing --cache-size-mb to {}.",
-                self.hit_ratio * 100.0,
-                self.recommended_cache_size_mb
-            );
-        } else if self.hits + self.misses < 100 {
-            println!("  ℹ Not enough data yet (< 100 cache accesses recorded).");
-        } else {
-            println!(
-                "  ✗ Low cache hit ratio ({:.1}%). Increase --cache-size-mb to {} or mount \
-                 a persistent volume for --cache-path to retain warmth across restarts.",
-                self.hit_ratio * 100.0,
-                self.recommended_cache_size_mb
-            );
+        println!("  Evictions:        {}", display_optional(self.evictions));
+        println!(
+            "  Bytes used:       {}",
+            match (self.bytes_used, self.capacity_bytes) {
+                (Some(used), Some(capacity)) => format!(
+                    "{} MiB / {} MiB",
+                    used / (1024 * 1024),
+                    capacity / (1024 * 1024)
+                ),
+                _ => "unknown".to_string(),
+            }
+        );
+        if let Some(bytes) = self.estimated_working_set_bytes {
+            println!("  Working set:      {} bytes (estimate)", bytes);
+            println!("  Estimate basis:   {WORKING_SET_ESTIMATE_BASIS}");
         }
+        println!();
+        println!("  Observation source: {}", self.observation_status);
     }
 }
 
-/// Build a `CacheStats` report for the current process using estimated values.
-///
-/// In a production implementation, this would query the SlateDB block cache
-/// statistics via its internal metrics API. For this implementation, we provide
-/// a realistic estimate based on catalog size and default cache parameters.
+fn display_optional(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Build a cache report without claiming observations that were not collected.
 pub async fn cache_utilization(
-    cache_size_mb: u64,
+    _cache_size_mb: u64,
     data_file_count: u64,
     column_count: u64,
 ) -> CacheStats {
-    // Estimate working-set size: ~1KB per column stats entry + ~2KB per data file header
-    let estimated_working_set_bytes = estimated_working_set_bytes(data_file_count, column_count);
-    let capacity_bytes = cache_size_mb * 1024 * 1024;
-
-    // Estimate hit ratio: if working set fits in cache, ratio is high
-    let hit_ratio = if capacity_bytes >= estimated_working_set_bytes {
-        0.92
-    } else {
-        let fit_ratio = capacity_bytes as f64 / estimated_working_set_bytes as f64;
-        0.3 + 0.62 * fit_ratio
-    };
-
-    let recommended_mb = if hit_ratio < 0.8 {
-        (estimated_working_set_bytes / (1024 * 1024)).max(256)
-    } else {
-        cache_size_mb
-    };
-
-    let hits = (data_file_count + column_count) * 10;
-    let misses = if hit_ratio > 0.0 {
-        ((hits as f64 * (1.0 - hit_ratio)) / hit_ratio) as u64
-    } else {
-        0
-    };
-
-    CacheStats {
-        hits,
-        misses,
-        hit_ratio,
-        evictions: if capacity_bytes < estimated_working_set_bytes {
-            (estimated_working_set_bytes - capacity_bytes) / 1024
-        } else {
-            0
-        },
-        bytes_used: estimated_working_set_bytes.min(capacity_bytes),
-        capacity_bytes,
-        recommended_cache_size_mb: recommended_mb,
-    }
+    CacheStats::unknown(data_file_count, column_count)
 }
 
 #[cfg(test)]
@@ -199,24 +198,30 @@ mod tests {
             c.record_miss();
         }
         let stats = c.snapshot();
-        assert_eq!(stats.hits, 80);
-        assert_eq!(stats.misses, 20);
-        assert!((stats.hit_ratio - 0.8).abs() < 0.01);
+        assert_eq!(stats.hits, Some(80));
+        assert_eq!(stats.misses, Some(20));
+        assert!((stats.hit_ratio.unwrap() - 0.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn empty_cache_counters_are_unknown() {
+        let stats = CacheCounters::new(256).snapshot();
+        assert!(stats.hits.is_none());
+        assert!(stats.misses.is_none());
+        assert_eq!(stats.capacity_bytes, Some(256 * 1024 * 1024));
     }
 
     #[tokio::test]
-    async fn cache_utilization_small_catalog() {
-        // Small catalog: should fit in 256 MiB
+    async fn cache_utilization_reports_unknown_observations() {
         let stats = cache_utilization(256, 100, 50).await;
-        assert!(stats.hit_ratio > 0.8);
-        assert_eq!(stats.recommended_cache_size_mb, 256);
+        assert!(stats.hit_ratio.is_none());
+        assert!(stats.estimated_working_set_bytes.is_some());
     }
 
     #[tokio::test]
-    async fn cache_utilization_large_catalog() {
-        // Very large catalog: 1M data files, 500K columns
+    async fn cache_utilization_keeps_large_working_set_as_estimate() {
         let stats = cache_utilization(256, 1_000_000, 500_000).await;
-        assert!(stats.hit_ratio < 0.8);
-        assert!(stats.recommended_cache_size_mb > 256);
+        assert!(stats.hit_ratio.is_none());
+        assert!(stats.estimated_working_set_bytes.unwrap() > 256 * 1024 * 1024);
     }
 }

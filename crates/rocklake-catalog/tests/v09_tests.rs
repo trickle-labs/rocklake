@@ -233,7 +233,7 @@ fn api_cost_report_zero_calls() {
 }
 
 #[test]
-fn api_cost_report_high_put_rate_suggests_conservative() {
+fn api_cost_report_high_put_rate_has_no_unapplied_cache_control() {
     let snap = ApiCallSnapshot {
         put_count: 10_000,
         get_count: 50_000,
@@ -244,7 +244,10 @@ fn api_cost_report_high_put_rate_suggests_conservative() {
     let report = ApiCostReport::from_snapshot(&snap);
     assert!(report.put_per_minute > 100.0);
     assert!(!report.recommendations.is_empty());
-    assert!(report.recommendations[0].contains("conservative"));
+    assert!(report
+        .recommendations
+        .iter()
+        .all(|recommendation| !recommendation.contains("--cache-size-mb")));
 }
 
 #[test]
@@ -266,27 +269,18 @@ fn api_cost_report_cost_crossover_with_rds() {
 
 #[tokio::test]
 async fn cache_utilization_small_catalog_fits_in_256mb() {
-    // A small catalog (100 files, 50 columns) easily fits in 256 MiB
+    // Cache occupancy is not available from this inspection path.
     let stats = cache_utilization(256, 100, 50).await;
-    assert!(
-        stats.hit_ratio > 0.8,
-        "small catalog should have high cache hit ratio"
-    );
-    assert_eq!(stats.recommended_cache_size_mb, 256);
+    assert!(stats.hit_ratio.is_none());
+    assert!(stats.estimated_working_set_bytes.is_some());
 }
 
 #[tokio::test]
 async fn cache_utilization_large_catalog_recommends_larger_cache() {
-    // 1M data files + 500K columns won't fit in 256 MiB
+    // The working-set calculation is an estimate, not a cache observation.
     let stats = cache_utilization(256, 1_000_000, 500_000).await;
-    assert!(
-        stats.hit_ratio < 0.8,
-        "large catalog should have lower cache hit ratio"
-    );
-    assert!(
-        stats.recommended_cache_size_mb > 256,
-        "should recommend larger cache"
-    );
+    assert!(stats.hit_ratio.is_none());
+    assert!(stats.estimated_working_set_bytes.unwrap() > 256 * 1024 * 1024);
 }
 
 // ─── Catalog Migration ─────────────────────────────────────────────────────
