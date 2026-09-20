@@ -1,4 +1,4 @@
-//! Fresh-process scale evidence for the v0.52.0 LocalFS and MinIO matrix.
+//! Fresh-process scale evidence for the current LocalFS and MinIO matrix.
 //!
 //! This binary is internal tooling. It deliberately owns no benchmark data and
 //! writes only the requested report paths. A `run` command prepares each
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -27,12 +27,13 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-const RELEASE: &str = "v0.52.0";
+const RELEASE: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const SCHEMA_VERSION: u32 = rocklake_core::version::EVIDENCE_SCHEMA_VERSION;
-const DEFAULT_SEED: u64 = 520;
+const DEFAULT_SEED: u64 = 637;
 const DEFAULT_BATCH_SIZE: usize = 1_000;
 const DEFAULT_PAGE_SIZE: usize = 1_024;
-const DEFAULT_SIZES: &[usize] = &[10_000, 100_000, 1_000_000];
+const DEFAULT_SIZES: &[usize] = &[10_000, 100_000];
+const DEFAULT_REPETITIONS: usize = 3;
 const DEFAULT_OPERATIONS: &[&str] = &[
     "open",
     "schemas",
@@ -40,6 +41,9 @@ const DEFAULT_OPERATIONS: &[&str] = &[
     "data-file-page",
     "data-file-stream",
     "data-file-materialized",
+    "readers-1",
+    "readers-4",
+    "readers-16",
     "verify",
     "export",
 ];
@@ -56,6 +60,8 @@ struct Cli {
     seed: u64,
     batch_size: usize,
     page_size: usize,
+    repetitions: usize,
+    sample_index: usize,
     operation: Option<String>,
     operations: Vec<String>,
     table_id: Option<u64>,
@@ -106,6 +112,7 @@ struct Measurement {
     snapshot_id: u64,
     expected_digest: String,
     operation: String,
+    sample_index: usize,
     rows: u64,
     bytes: u64,
     observed_digest: Option<String>,
@@ -196,9 +203,10 @@ impl ObjectStore for CountingStore {
     ) -> object_store::Result<GetResult> {
         self.stats.operations.fetch_add(1, Ordering::Relaxed);
         let result = self.inner.get_opts(location, options).await?;
-        self.stats
-            .bytes
-            .fetch_add(result.meta.size, Ordering::Relaxed);
+        self.stats.bytes.fetch_add(
+            result.range.end.saturating_sub(result.range.start),
+            Ordering::Relaxed,
+        );
         Ok(result)
     }
 
@@ -284,12 +292,14 @@ fn parse_cli() -> AnyResult<Cli> {
     let mut cli = Cli {
         command,
         backend: "localfs".to_string(),
-        path: "benchmarks/evidence/v0.52.0/localfs".to_string(),
+        path: format!("benchmarks/evidence/{RELEASE}/localfs"),
         size: None,
         sizes: DEFAULT_SIZES.to_vec(),
         seed: DEFAULT_SEED,
         batch_size: DEFAULT_BATCH_SIZE,
         page_size: DEFAULT_PAGE_SIZE,
+        repetitions: DEFAULT_REPETITIONS,
+        sample_index: 0,
         operation: None,
         operations: DEFAULT_OPERATIONS
             .iter()
@@ -311,6 +321,8 @@ fn parse_cli() -> AnyResult<Cli> {
             "--seed" => cli.seed = next_value("--seed", &mut args)?.parse()?,
             "--batch-size" => cli.batch_size = next_value("--batch-size", &mut args)?.parse()?,
             "--page-size" => cli.page_size = next_value("--page-size", &mut args)?.parse()?,
+            "--repetitions" => cli.repetitions = next_value("--repetitions", &mut args)?.parse()?,
+            "--sample" => cli.sample_index = next_value("--sample", &mut args)?.parse()?,
             "--operation" => cli.operation = Some(next_value("--operation", &mut args)?),
             "--operations" => {
                 cli.operations = parse_operations(&next_value("--operations", &mut args)?)
@@ -336,10 +348,10 @@ fn parse_cli() -> AnyResult<Cli> {
             }
         }
     }
-    if cli.batch_size == 0 || cli.page_size == 0 {
+    if cli.batch_size == 0 || cli.page_size == 0 || cli.repetitions == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "batch and page sizes must be positive",
+            "batch size, page size, and repetitions must be positive",
         )
         .into());
     }
@@ -383,17 +395,43 @@ async fn prepare_dataset(cli: &Cli) -> AnyResult<()> {
         if created == 0 {
             let schema_id = writer.create_schema("evidence").await?;
             table_id = writer.create_table(schema_id, "files", None).await?;
+            for column_index in 0..32 {
+                writer
+                    .add_column(
+                        table_id,
+                        &format!("column_{column_index:02}"),
+                        "VARCHAR",
+                        column_index,
+                        true,
+                        None,
+                    )
+                    .await?;
+            }
         }
         let end = (created + cli.batch_size).min(size);
+        let mut first_file_id = None;
         for index in created..end {
             let path = format!("data/seed-{}/part-{index:08}.parquet", cli.seed);
             let file_id = writer
                 .register_data_file(table_id, &path, "parquet", 1, 4_096)
                 .await?;
+            first_file_id.get_or_insert(file_id);
             digest_file(&mut digest, file_id, &path, 1, 4_096);
         }
+        if let Some(data_file_id) = first_file_id {
+            writer
+                .register_delete_file_with_metadata(
+                    data_file_id,
+                    &format!("deletes/seed-{}/batch-{created:08}.parquet", cli.seed),
+                    1,
+                    1_024,
+                    Some(128),
+                    Some("wide-metadata"),
+                )
+                .await?;
+        }
         let commit = writer
-            .create_snapshot(Some("v0.52.0-evidence"), Some("deterministic dataset"))
+            .create_snapshot(Some(RELEASE), Some("deterministic dataset"))
             .await?;
         latest_snapshot = commit.snapshot_id.as_u64();
         catalog.commit_writer(commit);
@@ -436,12 +474,17 @@ async fn measure_operation(cli: &Cli) -> AnyResult<Measurement> {
     let mut read_only = None;
     let mut writerless = None;
     let open_us;
+    let independent_readers = operation
+        .strip_prefix("readers-")
+        .and_then(|value| value.parse::<usize>().ok());
     if operation == "verify" || operation == "export" {
         writerless = Some(CatalogStore::open_without_epoch(location.options()).await?);
         open_us = micros(open_start.elapsed());
-    } else {
+    } else if independent_readers.is_none() {
         read_only = Some(ReadOnlyCatalog::open(location.options()).await?);
         open_us = micros(open_start.elapsed());
+    } else {
+        open_us = 0;
     }
 
     let operation_start = Instant::now();
@@ -500,6 +543,50 @@ async fn measure_operation(cli: &Cli) -> AnyResult<Measurement> {
             }
             stats
         }
+        _operation if independent_readers.is_some() => {
+            let reader_count = independent_readers.unwrap_or_default();
+            if reader_count == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "reader count must be positive",
+                )
+                .into());
+            }
+            let mut readers = Vec::with_capacity(reader_count);
+            for _ in 0..reader_count {
+                readers.push(ReadOnlyCatalog::open(location.options()).await?);
+            }
+            let mut stats = OperationStats::default();
+            for (index, catalog) in readers.iter().enumerate() {
+                let reader = catalog.read_at(SnapshotId::new(snapshot_id))?;
+                let files = reader.list_data_files(table_id).await?;
+                if index == 0 {
+                    for file in files {
+                        stats.push_file(
+                            file.data_file_id,
+                            &file.path,
+                            file.record_count,
+                            file.file_size_bytes,
+                            operation_start,
+                        );
+                    }
+                } else if files.len() != stats.rows as usize {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "reader {index} saw {} files; first reader saw {}",
+                            files.len(),
+                            stats.rows
+                        ),
+                    )
+                    .into());
+                }
+            }
+            for catalog in readers {
+                catalog.close().await?;
+            }
+            stats
+        }
         "verify" => {
             let catalog = writerless.as_ref().expect("catalog for verify");
             let result = verify_catalog(catalog.db()).await?;
@@ -517,11 +604,11 @@ async fn measure_operation(cli: &Cli) -> AnyResult<Measurement> {
         }
         "export" => {
             let catalog = writerless.as_ref().expect("catalog for export");
-            let mut output = Vec::new();
+            let mut output = CountingWriter::default();
             let result = export_catalog(catalog.db(), Some(snapshot_id), &mut output).await?;
             OperationStats {
                 rows: result.rows_exported,
-                bytes: output.len() as u64,
+                bytes: output.bytes,
                 ..Default::default()
             }
         }
@@ -549,11 +636,18 @@ async fn measure_operation(cli: &Cli) -> AnyResult<Measurement> {
     let matches_expected_digest = observed_digest
         .as_ref()
         .map(|digest| digest == &expected_digest);
+    ensure_digest_match(
+        &operation,
+        &expected_digest,
+        observed_digest.as_deref(),
+        matches_expected_digest,
+    )?;
     let stats = location.stats;
 
     let mut configuration = BTreeMap::new();
     configuration.insert("batch_size".to_string(), cli.batch_size.to_string());
     configuration.insert("page_size".to_string(), cli.page_size.to_string());
+    configuration.insert("repetitions".to_string(), cli.repetitions.to_string());
     configuration.insert("seed".to_string(), cli.seed.to_string());
 
     Ok(Measurement {
@@ -568,6 +662,7 @@ async fn measure_operation(cli: &Cli) -> AnyResult<Measurement> {
         snapshot_id,
         expected_digest,
         operation,
+        sample_index: cli.sample_index,
         rows: operation_stats.rows,
         bytes: operation_stats.bytes,
         observed_digest,
@@ -594,6 +689,41 @@ struct OperationStats {
     bytes: u64,
     digest: Option<Sha256>,
     first_row_us: Option<u64>,
+}
+
+#[derive(Default)]
+struct CountingWriter {
+    bytes: u64,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len() as u64);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn ensure_digest_match(
+    operation: &str,
+    expected: &str,
+    observed: Option<&str>,
+    matches: Option<bool>,
+) -> AnyResult<()> {
+    if matches == Some(false) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{operation} digest mismatch: expected {expected}, observed {}",
+                observed.unwrap_or("missing")
+            ),
+        )
+        .into());
+    }
+    Ok(())
 }
 
 impl OperationStats {
@@ -683,39 +813,66 @@ async fn run_matrix(cli: &Cli) -> AnyResult<()> {
             ],
         )?;
         let metadata: DatasetMetadata = serde_json::from_str(&metadata)?;
+        if metadata.release != RELEASE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "dataset release {} does not match {RELEASE}",
+                    metadata.release
+                ),
+            )
+            .into());
+        }
         for operation in &cli.operations {
-            let measurement = run_child(
-                &executable,
-                [
-                    "measure".to_string(),
-                    "--backend".to_string(),
-                    cli.backend.clone(),
-                    "--path".to_string(),
-                    dataset_path.clone(),
-                    "--size".to_string(),
-                    size.to_string(),
-                    "--seed".to_string(),
-                    cli.seed.to_string(),
-                    "--batch-size".to_string(),
-                    cli.batch_size.to_string(),
-                    "--page-size".to_string(),
-                    cli.page_size.to_string(),
-                    "--operation".to_string(),
-                    operation.clone(),
-                    "--table-id".to_string(),
-                    metadata.table_id.to_string(),
-                    "--snapshot-id".to_string(),
-                    metadata.snapshot_id.to_string(),
-                    "--expected-digest".to_string(),
-                    metadata.expected_digest.clone(),
-                ],
-            )?;
-            results.push(serde_json::from_str::<Measurement>(&measurement)?);
+            for sample_index in 0..cli.repetitions {
+                let measurement = run_child(
+                    &executable,
+                    [
+                        "measure".to_string(),
+                        "--backend".to_string(),
+                        cli.backend.clone(),
+                        "--path".to_string(),
+                        dataset_path.clone(),
+                        "--size".to_string(),
+                        size.to_string(),
+                        "--seed".to_string(),
+                        cli.seed.to_string(),
+                        "--batch-size".to_string(),
+                        cli.batch_size.to_string(),
+                        "--page-size".to_string(),
+                        cli.page_size.to_string(),
+                        "--sample".to_string(),
+                        sample_index.to_string(),
+                        "--operation".to_string(),
+                        operation.clone(),
+                        "--table-id".to_string(),
+                        metadata.table_id.to_string(),
+                        "--snapshot-id".to_string(),
+                        metadata.snapshot_id.to_string(),
+                        "--expected-digest".to_string(),
+                        metadata.expected_digest.clone(),
+                    ],
+                )?;
+                let measurement = serde_json::from_str::<Measurement>(&measurement)?;
+                if measurement.release != RELEASE || measurement.sample_index != sample_index {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "measurement identity mismatch for {operation} sample {sample_index}"
+                        ),
+                    )
+                    .into());
+                }
+                results.push(measurement);
+            }
         }
     }
 
     let output = cli.output.clone().unwrap_or_else(|| {
-        PathBuf::from(format!("benchmarks/evidence/v0.52.0/{}.json", cli.backend))
+        PathBuf::from(format!(
+            "benchmarks/evidence/{RELEASE}/{}.json",
+            cli.backend
+        ))
     });
     let events = cli.events.clone().unwrap_or_else(|| {
         let mut path = output.clone();
@@ -1031,7 +1188,7 @@ fn memory_bytes() -> Option<u64> {
 
 fn print_usage() {
     println!(
-        "Usage:\n  rocklake-evidence prepare --backend localfs|minio --path PATH --size N\n  rocklake-evidence measure --backend ... --path PATH --size N --operation OP --table-id ID --snapshot-id ID --expected-digest HEX\n  rocklake-evidence run [--backend localfs|minio] [--path PATH] [--sizes 10000,100000,1000000] [--operations OP,...] [--output FILE] [--events FILE]\n\nOperations: open, schemas, describe, data-file-page, data-file-stream, data-file-materialized, verify, export\nMinIO uses ROCKLAKE_EVIDENCE_ENDPOINT plus the standard AWS credential environment variables."
+        "Usage:\n  rocklake-evidence prepare --backend localfs|minio --path PATH --size N\n  rocklake-evidence measure --backend ... --path PATH --size N --operation OP --table-id ID --snapshot-id ID --expected-digest HEX [--sample N]\n  rocklake-evidence run [--backend localfs|minio] [--path PATH] [--sizes 10000,100000] [--repetitions N] [--operations OP,...] [--output FILE] [--events FILE]\n\nOperations: open, schemas, describe, data-file-page, data-file-stream, data-file-materialized, readers-1, readers-4, readers-16, verify, export\nMinIO uses ROCKLAKE_EVIDENCE_ENDPOINT plus the standard AWS credential environment variables."
     );
 }
 
@@ -1049,5 +1206,19 @@ mod tests {
             digest_file(&mut second, id, &path, 1, 4_096);
         }
         assert_eq!(hex_digest(first), hex_digest(second));
+    }
+
+    #[test]
+    fn digest_mismatches_are_errors() {
+        let error = ensure_digest_match("read", "expected", Some("observed"), Some(false))
+            .expect_err("mismatch must fail");
+        assert!(error.to_string().contains("digest mismatch"));
+    }
+
+    #[test]
+    fn counting_writer_does_not_retain_export_bytes() {
+        let mut writer = CountingWriter::default();
+        writer.write_all(b"catalog row\n").unwrap();
+        assert_eq!(writer.bytes, 12);
     }
 }

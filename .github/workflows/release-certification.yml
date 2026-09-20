@@ -65,6 +65,20 @@ jobs:
           grep -q 'P0' docs/operations/beta-support.md
           grep -q 'P1' docs/operations/beta-support.md
           grep -q 'P2' docs/operations/beta-support.md
+      - name: v0.63.7 LocalFS evidence gate
+        run: |
+          cargo test -p rocklake-evidence
+          cargo run --release -p rocklake-evidence -- run \
+            --backend localfs \
+            --path "$RUNNER_TEMP/rocklake-evidence" \
+            --sizes 10000,100000 \
+            --repetitions 3 \
+            --output "$RUNNER_TEMP/rocklake-evidence.json" \
+            --events "$RUNNER_TEMP/rocklake-evidence.jsonl"
+          python3 scripts/validate_evidence.py \
+            "$RUNNER_TEMP/rocklake-evidence.json" \
+            --release "v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" \
+            --repetitions 3
 
   failure-certification:
     name: v0.47.17 Failure Certification

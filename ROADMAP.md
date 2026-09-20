@@ -210,8 +210,8 @@ remote-cloud program is scheduled.
 | **v0.63.3** | Safe readers and recovery | Independent readers preserve writer availability, and backup, checkpoint, retention, and retry regressions pass locally. **Done** |
 | **v0.63.4** | Predictable concurrency | Router opens, reloads, cancellation, SQL batches, and native handles obey bounded lifecycle contracts. **Done** |
 | **v0.63.5** | Local scaling obstacles | Cleanup avoids repeated full scans, response buffering has a measured bound, and job controls describe executable behavior. Done |
-| **v0.63.6** | Honest operator output | Cache and capacity reports distinguish observed values, user inputs, projections, and estimates. **Current** |
-| **v0.63.7** | Local release certification | Candidate-specific local evidence, previous-release upgrade and restore, and artifact-only quickstart pass. |
+| **v0.63.6** | Honest operator output | Cache and capacity reports distinguish observed values, user inputs, projections, and estimates. Done |
+| **v0.63.7** | Local release certification | Candidate-specific local evidence, previous-release upgrade and restore, and artifact-only quickstart pass. **Current** |
 | **v0.64.0** | Quality baseline | The v0.63.2 through v0.63.7 work ships as one documented, locally certified baseline. |
 | **v0.80.0** | AWS S3 evidence | **Unscheduled.** Begin only after resources and a separate approval exist. |
 | **v0.80.1** | Multi-node soak | **Unscheduled.** Begin only after its topology and operating budget exist. |
@@ -2516,8 +2516,8 @@ README or documentation:
 | v0.63.3 | Safe readers and recovery | Done |
 | v0.63.4 | Predictable concurrency | Done |
 | v0.63.5 | Local scaling obstacles | Done |
-| v0.63.6 | Honest operator output | Current |
-| v0.63.7 | Local release certification | Planned |
+| v0.63.6 | Honest operator output | Done |
+| v0.63.7 | Local release certification | Current |
 | v0.64.0 | Quality baseline | Planned |
 | v0.80.0–v0.80.2 | Remote-cloud and multi-node evidence | Unscheduled |
 | v1.0.0-rc.1–rc.2 | Release candidates | Postponed indefinitely |

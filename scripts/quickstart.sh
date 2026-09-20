@@ -6,10 +6,13 @@ command -v duckdb >/dev/null || { echo "duckdb is required" >&2; exit 1; }
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 catalog_dir=$(mktemp -d)
 data_dir=data
+binary=${ROCKLAKE_BINARY:-"$repo_dir/target/debug/rocklake"}
+if [[ -n "${ROCKLAKE_BINARY:-}" && "$binary" != /* ]]; then
+  binary="$repo_dir/$binary"
+fi
 mkdir -p "$catalog_dir/$data_dir"
 cd "$catalog_dir"
 port=${ROCKLAKE_QUICKSTART_PORT:-$((50000 + $$ % 10000))}
-binary=${ROCKLAKE_BINARY:-"$repo_dir/target/debug/rocklake"}
 
 cleanup() {
   if [[ -n "${server_pid:-}" ]]; then kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; fi
@@ -17,7 +20,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ ! -x "$binary" ]]; then
+if [[ -n "${ROCKLAKE_BINARY:-}" ]]; then
+  [[ -x "$binary" ]] || { echo "ROCKLAKE_BINARY is not executable: $binary" >&2; exit 1; }
+elif [[ ! -x "$binary" ]]; then
   cargo build --manifest-path "$repo_dir/Cargo.toml" -p rocklake-pgwire --bin rocklake
 fi
 

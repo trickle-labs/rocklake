@@ -1,4 +1,4 @@
 # Lambda and serverless functions
 
-Running RockLake as a serverless function is not a supported v0.63.6 release
+Running RockLake as a serverless function is not a supported v0.63.7 release
 integration. The supported runtime is the long-running `rocklake` binary.

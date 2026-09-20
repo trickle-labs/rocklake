@@ -1,6 +1,6 @@
 # Docker
 
-RockLake v0.63.6 does not publish or support a Docker image. The release and
+RockLake v0.63.7 does not publish or support a Docker image. The release and
 CI workflows build and test the `rocklake` binary directly.
 
 Use [Binary deployment](binary.md) for local and production deployments. A

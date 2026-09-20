@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.63.7] — 2026-09-20
+
+### Added
+
+- Added candidate-specific LocalFS evidence with repeated raw samples,
+  correctness validation, release identity, exact ranged-read accounting, and
+  streamed export measurement.
+- Added an artifact-only populated quickstart gate that refuses to rebuild a
+  supplied release binary.
+
+### Changed
+
+- Advanced the documented release and binding metadata to v0.63.7 without
+  changing persisted catalog formats or the stable public surface.
+
 ## [0.63.6] — 2026-09-20
 
 ### Fixed

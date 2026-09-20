@@ -6,6 +6,10 @@ and machine.
 
 ## Current evidence
 
+The v0.63.7 release gate records candidate-specific LocalFS samples at 10,000
+and 100,000 visible data-file records. See the [local release evidence](evidence-v0.63.7.md)
+for the raw-report contract and validation command.
+
 The CI gate runs one warm snapshot-read benchmark on a LocalFS catalog with 100
 data files. The candidate report records the source revision, machine,
 workload, value, and unit. CI archives the raw report and compares it with the

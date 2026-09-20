@@ -37,8 +37,8 @@ Because every row ever written to the catalog is preserved, time travel is not a
 ### Horizontal read scale-out
 
 The catalog format supports independent readers through SlateDB's reader API.
-v0.63.6 makes cache and capacity reports distinguish measured facts, operator
-inputs, projections, and estimates, and reports unknown cache activity honestly.
+v0.63.7 adds candidate-specific LocalFS evidence and artifact-only quickstart
+coverage to the release gate.
 
 ---
 
@@ -81,7 +81,7 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.63.6 is a production-beta evidence release distributed as a
+RockLake v0.63.7 is a production-beta evidence release distributed as a
 standalone binary. The supported path remains the binary, PostgreSQL wire
 protocol, and DuckLake 1.0. There is no published Docker image.
 
@@ -93,8 +93,8 @@ single `SHA256SUMS`, and `release-manifest.json`.
 
 ```bash
 # Download binary and checksum
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.6/rocklake-linux-x86_64
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.6/rocklake-linux-x86_64.sha256
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.7/rocklake-linux-x86_64
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.63.7/rocklake-linux-x86_64.sha256
 
 # Verify checksum
 sha256sum -c rocklake-linux-x86_64.sha256
@@ -219,8 +219,8 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | **v0.63.3** | Safe readers and recovery | Done |
 | **v0.63.4** | Predictable concurrency | Done |
 | **v0.63.5** | Local scaling obstacles | Done |
-| **v0.63.6** | Honest operator output | **Current** |
-| **v0.63.7** | Local release certification | Planned |
+| **v0.63.6** | Honest operator output | Done |
+| **v0.63.7** | Local release certification | **Current** |
 | **v0.64.0** | Quality baseline | Planned |
 | v0.80.x | Remote-cloud and multi-node evidence | Unscheduled |
 | v1.0.x | Release candidates and stable release | Postponed indefinitely |
