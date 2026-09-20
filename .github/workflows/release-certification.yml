@@ -65,7 +65,7 @@ jobs:
           grep -q 'P0' docs/operations/beta-support.md
           grep -q 'P1' docs/operations/beta-support.md
           grep -q 'P2' docs/operations/beta-support.md
-      - name: v0.63.7 LocalFS evidence gate
+      - name: v0.64.0 quality baseline and LocalFS evidence gate
         run: |
           cargo test -p rocklake-evidence
           cargo run --release -p rocklake-evidence -- run \

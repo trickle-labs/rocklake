@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.64.0] — 2026-09-20
+
+### Changed
+
+- Promoted the v0.63.2 through v0.63.7 repairs and certification work to the
+  current quality baseline.
+- Advanced workspace, binding, compatibility, support, deployment, and
+  operator metadata to v0.64.0 without changing persisted catalog formats or
+  the stable public surface.
+
+### Evidence
+
+- Retained candidate-specific LocalFS evidence at 10,000 and 100,000 visible
+  data-file records, independent-reader checks, and artifact-only quickstart
+  coverage as the release certification profile.
+
+### Unsupported
+
+- Local and emulator checks do not certify AWS S3, GCS, Azure, multi-node
+  field operation, or universal cloud scale.
+
+### Deferred
+
+- Remote-cloud evidence, multi-node field testing, and v1.0 release candidates
+  remain unscheduled.
+
 ## [0.63.7] — 2026-09-20
 
 ### Added
