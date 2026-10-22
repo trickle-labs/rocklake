@@ -2776,15 +2776,13 @@ pub(crate) fn validate_import_data(
             }
         }
     }
-    for field in ["footer_size"] {
-        if let Some(value) = object.get(field) {
-            if !value.is_null() && !value.is_i64() {
-                return Err(CatalogError::Import {
-                    line,
-                    table: table.to_string(),
-                    message: format!("field '{field}' must be an integer"),
-                });
-            }
+    if let Some(value) = object.get("footer_size") {
+        if !value.is_null() && !value.is_i64() {
+            return Err(CatalogError::Import {
+                line,
+                table: table.to_string(),
+                message: "field 'footer_size' must be an integer".to_string(),
+            });
         }
     }
 

@@ -35,7 +35,11 @@ fn duckdb_version() -> String {
 }
 
 fn ducklake_1_0_option(version: &str) -> &'static str {
-    if version.starts_with("2.") { ", DUCKLAKE_VERSION '1.0'" } else { "" }
+    if version.starts_with("2.") {
+        ", DUCKLAKE_VERSION '1.0'"
+    } else {
+        ""
+    }
 }
 
 #[test]
