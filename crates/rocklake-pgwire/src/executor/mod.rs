@@ -1050,8 +1050,17 @@ async fn execute_classified<'a>(
         }
         StatementKind::PgCatalogScan => {
             if _sql.to_ascii_lowercase().contains("pg_class.xmin") {
-                let snapshot_id = { store.lock().await.read_latest().snapshot_id().as_u64() };
-                return Ok(vec![make_pg_catalog_staleness_response(snapshot_id)]);
+                let reader = { store.lock().await.read_latest() };
+                let snapshot_id = reader.snapshot_id().as_u64();
+                let initialized = reader
+                    .get_snapshot()
+                    .await
+                    .map_err(RockLakeError::from)?
+                    .is_some();
+                return Ok(vec![make_pg_catalog_staleness_response(
+                    snapshot_id,
+                    initialized,
+                )]);
             }
             if let Some(table_name) = inlined_table_name_from_sql(_sql) {
                 if let Some((table_id, _)) = parse_inlined_table_ids(&table_name) {
@@ -1069,10 +1078,20 @@ async fn execute_classified<'a>(
                     }
                 }
             }
-            // Multi-statement pg_namespace / pg_class / pg_enum / pg_type /
-            // pg_indexes catalog scan sent by the DuckDB postgres scanner as a
-            // single PQsendQuery call. Return five result sets + ROLLBACK.
-            Ok(make_pg_catalog_scan_responses(_sql))
+            let reader = { store.lock().await.read_latest() };
+            let initialized = reader
+                .get_snapshot()
+                .await
+                .map_err(RockLakeError::from)?
+                .is_some();
+            let mut responses = make_pg_catalog_scan_responses(_sql, initialized);
+            // The postgres scanner also issues individual pg_class queries
+            // to discover a table after CREATE TABLE. Only the multi-statement
+            // catalog probe returns the five result sets plus ROLLBACK.
+            if _sql.trim_start().to_ascii_lowercase().starts_with("select") {
+                return Ok(vec![responses.remove(1)]);
+            }
+            Ok(responses)
         }
 
         // ─── Transaction Control ───────────────────────────────────────

@@ -617,7 +617,10 @@ fn make_pg_indexes_schema() -> Arc<Vec<FieldInfo>> {
 /// DuckDB's PostgreSQL catalog cache probes relation OIDs and xmin values to
 /// detect metadata changes. This is a single query, not the five-result scan
 /// batch, despite referencing both pg_class and pg_namespace.
-pub(super) fn make_pg_catalog_staleness_response<'a>(snapshot_id: u64) -> Response<'a> {
+pub(super) fn make_pg_catalog_staleness_response<'a>(
+    snapshot_id: u64,
+    initialized: bool,
+) -> Response<'a> {
     let schema = Arc::new(vec![
         FieldInfo::new("oid".to_string(), None, None, Type::INT8, FieldFormat::Text),
         FieldInfo::new(
@@ -629,22 +632,30 @@ pub(super) fn make_pg_catalog_staleness_response<'a>(snapshot_id: u64) -> Respon
         ),
         FieldInfo::new("xmin".to_string(), None, None, Type::INT8, FieldFormat::Text),
     ]);
-    let rows = crate::schema_registry::supported_tables()
-        .iter()
-        .enumerate()
-        .map(|(index, table)| {
-            let mut enc = DataRowEncoder::new(schema.clone());
-            for value in [
-                (index + 1).to_string(),
-                (*table).to_string(),
-                snapshot_id.to_string(),
-            ] {
-                enc.encode_field_with_type_and_format(&Some(value), &Type::TEXT, FieldFormat::Text)
+    let rows = if initialized {
+        crate::schema_registry::supported_tables()
+            .iter()
+            .enumerate()
+            .map(|(index, table)| {
+                let mut enc = DataRowEncoder::new(schema.clone());
+                for value in [
+                    (index + 1).to_string(),
+                    (*table).to_string(),
+                    snapshot_id.to_string(),
+                ] {
+                    enc.encode_field_with_type_and_format(
+                        &Some(value),
+                        &Type::TEXT,
+                        FieldFormat::Text,
+                    )
                     .expect("infallible");
-            }
-            enc.finish()
-        })
-        .collect::<Vec<_>>();
+                }
+                enc.finish()
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let count = rows.len();
     let mut response = QueryResponse::new(schema, futures::stream::iter(rows));
     response.set_command_tag(&format!("SELECT {count}"));
@@ -661,7 +672,10 @@ pub(super) fn make_pg_catalog_staleness_response<'a>(snapshot_id: u64) -> Respon
 ///   4. `pg_type` composites — empty
 ///   5. `pg_indexes` — empty
 ///   +  ROLLBACK command-complete tag
-pub(super) fn make_pg_catalog_scan_responses<'a>(sql: &str) -> Vec<Response<'a>> {
+pub(super) fn make_pg_catalog_scan_responses<'a>(
+    sql: &str,
+    initialized: bool,
+) -> Vec<Response<'a>> {
     // Result set 1: pg_namespace
     let ns_schema = make_pg_namespace_schema();
     let ns_rows = make_pg_namespace_rows(ns_schema.clone(), &[(1, "public"), (2, "main")]);
@@ -674,8 +688,20 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(sql: &str) -> Vec<Response<'a>>
     // DuckDB 2.0's extended pg_class query needs the relations advertised.
     let cls_schema = make_pg_class_schema(sql);
     let mut cls_rows = Vec::new();
-    if pg_class_column_count(sql) >= 15 {
+    // Do not advertise metadata tables before the first DuckLake snapshot:
+    // DuckLake probes their existence to decide whether to bootstrap.
+    if initialized && pg_class_column_count(sql) >= 15 {
+        let lower = sql.to_ascii_lowercase();
+        let requested_table = lower
+            .split("relname=")
+            .nth(1)
+            .or_else(|| lower.split("relname =").nth(1))
+            .and_then(|filter| filter.trim_start().strip_prefix('\''))
+            .and_then(|filter| filter.split('\'').next());
         for table in crate::schema_registry::supported_tables() {
+            if requested_table.is_some_and(|requested| requested != *table) {
+                continue;
+            }
             let fields = crate::schema_registry::fields_for_table(table)
                 .expect("supported DuckLake metadata table must have a schema");
             for (index, field) in fields.iter().enumerate() {
@@ -719,4 +745,39 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(sql: &str) -> Vec<Response<'a>>
         Response::Query(idx_resp),
         Response::TransactionEnd(Tag::new("ROLLBACK")),
     ]
+}
+
+
+#[cfg(test)]
+mod pg_catalog_tests {
+    use super::*;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn initialized_duckdb_2_catalog_exposes_registered_columns() {
+        let sql = "SELECT relname, type_schema FROM pg_class JOIN pg_namespace ON true";
+        let response = make_pg_catalog_scan_responses(sql, true)
+            .into_iter()
+            .nth(1)
+            .expect("pg_class response");
+        let Response::Query(query) = response else {
+            panic!("expected pg_class Query response");
+        };
+        let stream = query.data_rows();
+        futures::pin_mut!(stream);
+        let mut count = 0;
+        while let Some(row) = stream.next().await {
+            row.expect("valid pg_class metadata row");
+            count += 1;
+        }
+        let expected = crate::schema_registry::supported_tables()
+            .iter()
+            .map(|table| {
+                crate::schema_registry::fields_for_table(table)
+                    .expect("registered metadata schema")
+                    .len()
+            })
+            .sum::<usize>();
+        assert_eq!(count, expected);
+    }
 }

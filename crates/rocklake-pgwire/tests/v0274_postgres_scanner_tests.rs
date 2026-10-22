@@ -305,7 +305,7 @@ async fn duckdb_2_0_pg_catalog_scan_has_extended_columns() {
     let (columns, count) = query_names_and_count(results.next().unwrap()).await;
     assert_eq!(columns.len(), 15);
     assert_eq!(&columns[12..], &["type_schema", "column_comment", "table_comment"]);
-    assert!(count > 0, "DuckDB 2.0 must discover the catalog table columns");
+    assert_eq!(count, 0, "a fresh catalog must remain uninitialized");
 
     // Newer scanners optionally request a sixteenth column.
     let newer = "SELECT type_schema, column_default FROM pg_class JOIN pg_namespace ON true";
