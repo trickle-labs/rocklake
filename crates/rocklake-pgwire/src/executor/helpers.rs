@@ -280,8 +280,24 @@ fn make_pg_namespace_rows(
 /// Columns: `(namespace_id INT8, relname TEXT, relpages INT8, attname TEXT,
 ///  type_name TEXT, type_modifier INT8, ndim INT8, attnum INT8,
 ///  notnull BOOL, constraint_id INT8, constraint_type TEXT, constraint_key TEXT)`
-fn make_pg_class_schema() -> Arc<Vec<FieldInfo>> {
-    Arc::new(vec![
+// DuckDB 2.0's PostgreSQL scanner projects type_schema and column comments
+// in addition to the 12 fields requested by DuckDB 1.5.x. Select the wire
+// response shape from the query, preserving older client compatibility.
+fn pg_class_column_count(sql: &str) -> usize {
+    let lower = sql.to_ascii_lowercase();
+    if lower.contains("type_schema") {
+        if lower.contains("column_default") {
+            16
+        } else {
+            15
+        }
+    } else {
+        12
+    }
+}
+
+fn make_pg_class_schema(sql: &str) -> Arc<Vec<FieldInfo>> {
+    let mut fields = vec![
         FieldInfo::new(
             "namespace_id".to_string(),
             None,
@@ -366,14 +382,36 @@ fn make_pg_class_schema() -> Arc<Vec<FieldInfo>> {
             Type::TEXT,
             FieldFormat::Text,
         ),
-    ])
+    ];
+    if pg_class_column_count(sql) >= 15 {
+        for name in ["type_schema", "column_comment", "table_comment"] {
+            fields.push(FieldInfo::new(
+                name.to_string(),
+                None,
+                None,
+                Type::TEXT,
+                FieldFormat::Text,
+            ));
+        }
+    }
+    if pg_class_column_count(sql) >= 16 {
+        fields.push(FieldInfo::new(
+            "column_default".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ));
+    }
+    Arc::new(fields)
 }
 
 pub(super) fn make_pg_catalog_inlined_table_response<'a>(
     table_name: &str,
     columns: Vec<ColumnRow>,
+    sql: &str,
 ) -> Response<'a> {
-    let schema = make_pg_class_schema();
+    let schema = make_pg_class_schema(sql);
     let mut rows = Vec::new();
     let mut attnum = 1i64;
 
@@ -416,14 +454,15 @@ fn make_pg_class_attribute_row(
     type_name: &str,
     attnum: i64,
 ) -> pgwire::error::PgWireResult<pgwire::messages::data::DataRow> {
+    let column_count = schema.len();
     let mut enc = DataRowEncoder::new(schema);
-    let values = [
+    let mut values = vec![
         Some("1".to_string()),
         Some(table_name.to_string()),
-        None,
+        Some("0".to_string()),
         Some(attname.to_string()),
         Some(type_name.to_string()),
-        None,
+        Some("-1".to_string()),
         Some("0".to_string()),
         Some(attnum.to_string()),
         Some("false".to_string()),
@@ -431,6 +470,14 @@ fn make_pg_class_attribute_row(
         None,
         None,
     ];
+    if column_count >= 15 {
+        values.push(Some("pg_catalog".to_string()));
+        values.push(None);
+        values.push(None);
+    }
+    if column_count >= 16 {
+        values.push(None);
+    }
     for value in values {
         enc.encode_field_with_type_and_format(&value, &Type::TEXT, FieldFormat::Text)
             .expect("infallible");
@@ -577,7 +624,7 @@ fn make_pg_indexes_schema() -> Arc<Vec<FieldInfo>> {
 ///   4. `pg_type` composites — empty
 ///   5. `pg_indexes` — empty
 ///   +  ROLLBACK command-complete tag
-pub(super) fn make_pg_catalog_scan_responses<'a>() -> Vec<Response<'a>> {
+pub(super) fn make_pg_catalog_scan_responses<'a>(sql: &str) -> Vec<Response<'a>> {
     // Result set 1: pg_namespace
     let ns_schema = make_pg_namespace_schema();
     let ns_rows = make_pg_namespace_rows(ns_schema.clone(), &[(1, "public"), (2, "main")]);
@@ -588,7 +635,7 @@ pub(super) fn make_pg_catalog_scan_responses<'a>() -> Vec<Response<'a>> {
     // relations. DuckDB 2.0's postgres scanner resolves tables through this
     // catalog result and otherwise reports "ducklake_schema does not exist".
     // Use the registry so the catalog advertisement and SELECT schemas agree.
-    let cls_schema = make_pg_class_schema();
+    let cls_schema = make_pg_class_schema(sql);
     let mut cls_rows = Vec::new();
     for table in crate::schema_registry::supported_tables() {
         let fields = crate::schema_registry::fields_for_table(table)

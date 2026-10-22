@@ -1059,6 +1059,7 @@ async fn execute_classified<'a>(
                         return Ok(vec![make_pg_catalog_inlined_table_response(
                             &table_name,
                             columns,
+                            _sql,
                         )]);
                     }
                 }
@@ -1066,7 +1067,7 @@ async fn execute_classified<'a>(
             // Multi-statement pg_namespace / pg_class / pg_enum / pg_type /
             // pg_indexes catalog scan sent by the DuckDB postgres scanner as a
             // single PQsendQuery call. Return five result sets + ROLLBACK.
-            Ok(make_pg_catalog_scan_responses())
+            Ok(make_pg_catalog_scan_responses(_sql))
         }
 
         // ─── Transaction Control ───────────────────────────────────────

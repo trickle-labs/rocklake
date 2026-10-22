@@ -309,6 +309,37 @@ async fn pg_catalog_scan_advertises_ducklake_metadata_tables() {
 }
 
 #[tokio::test]
+async fn duckdb_2_0_pg_catalog_scan_has_extended_columns() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+
+    // DuckDB 2.0's postgres scanner requests three more metadata columns
+    // than the older 1.5.x pg_class query, including the type namespace.
+    let sql = "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ; \
+        SELECT oid, nspname FROM pg_namespace ORDER BY oid; \
+        SELECT pg_namespace.oid AS namespace_id, relname, relpages, attname, \
+               pg_type.typname AS type_name, atttypmod AS type_modifier, \
+               pg_attribute.attndims AS ndim, attnum, pg_attribute.attnotnull AS notnull, \
+               NULL AS constraint_id, NULL AS constraint_type, NULL AS constraint_key, \
+               type_ns.nspname AS type_schema, col_desc.description AS column_comment, \
+               tbl_desc.description AS table_comment FROM pg_class \
+        JOIN pg_namespace ON relnamespace = pg_namespace.oid; ROLLBACK;";
+    let mut results = exec_multi(sql, &store).await.into_iter();
+    assert!(matches!(results.next(), Some(Response::Query(_))));
+    let (columns, count) = query_names_and_count(results.next().unwrap()).await;
+    assert_eq!(columns.len(), 15);
+    assert_eq!(&columns[12..], &["type_schema", "column_comment", "table_comment"]);
+    assert!(count > 0, "DuckDB 2.0 must discover the catalog table columns");
+
+    // Newer scanners optionally request a sixteenth column.
+    let newer = "SELECT type_schema, column_default FROM pg_class JOIN pg_namespace ON true";
+    let mut newer_results = exec_multi(newer, &store).await.into_iter();
+    let _namespaces = newer_results.next();
+    let (columns, _) = query_names_and_count(newer_results.next().unwrap()).await;
+    assert_eq!(columns.last().map(String::as_str), Some("column_default"));
+}
+
+#[tokio::test]
 async fn ducklake_table_stats_preserves_requested_projection_order() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;
