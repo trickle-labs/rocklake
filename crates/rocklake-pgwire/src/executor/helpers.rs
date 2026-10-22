@@ -668,23 +668,25 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(sql: &str) -> Vec<Response<'a>>
     let mut ns_resp = QueryResponse::new(ns_schema, futures::stream::iter(ns_rows));
     ns_resp.set_command_tag("SELECT 2");
 
-    // Result set 2: pg_class UNION — advertise the actual DuckLake metadata
-    // relations. DuckDB 2.0's postgres scanner resolves tables through this
-    // catalog result and otherwise reports "ducklake_schema does not exist".
-    // Use the registry so the catalog advertisement and SELECT schemas agree.
+    // DuckDB 1.5.x expects an empty pg_class listing and initializes its
+    // DuckLake catalog over the PG wire protocol itself. Advertising virtual
+    // DuckLake relations there prevents initialization ("No snapshot found").
+    // DuckDB 2.0's extended pg_class query needs the relations advertised.
     let cls_schema = make_pg_class_schema(sql);
     let mut cls_rows = Vec::new();
-    for table in crate::schema_registry::supported_tables() {
-        let fields = crate::schema_registry::fields_for_table(table)
-            .expect("supported DuckLake metadata table must have a schema");
-        for (index, field) in fields.iter().enumerate() {
-            cls_rows.push(make_pg_class_attribute_row(
-                cls_schema.clone(),
-                table,
-                field.name(),
-                pg_type_name_for_catalog_field(field),
-                (index + 1) as i64,
-            ));
+    if pg_class_column_count(sql) >= 15 {
+        for table in crate::schema_registry::supported_tables() {
+            let fields = crate::schema_registry::fields_for_table(table)
+                .expect("supported DuckLake metadata table must have a schema");
+            for (index, field) in fields.iter().enumerate() {
+                cls_rows.push(make_pg_class_attribute_row(
+                    cls_schema.clone(),
+                    table,
+                    field.name(),
+                    pg_type_name_for_catalog_field(field),
+                    (index + 1) as i64,
+                ));
+            }
         }
     }
     let count = cls_rows.len();

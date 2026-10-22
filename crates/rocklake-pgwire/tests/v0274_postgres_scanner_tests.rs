@@ -257,7 +257,7 @@ async fn pg_catalog_scan_pg_namespace_has_two_rows() {
 }
 
 #[tokio::test]
-async fn pg_catalog_scan_advertises_ducklake_metadata_tables() {
+async fn duckdb_1_5_pg_catalog_scan_keeps_metadata_tables_virtual() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;
 
@@ -267,42 +267,12 @@ async fn pg_catalog_scan_advertises_ducklake_metadata_tables() {
     let mut iter = responses.into_iter();
     let _namespaces = iter.next().unwrap();
 
-    // DuckDB 2.0 resolves the DuckLake schema through pg_class. Advertise
-    // every column of every supported table, including ducklake_schema.
+    // The legacy DuckDB 1.5.x catalog scan has 12 columns and keeps the
+    // virtual DuckLake relations hidden. Otherwise bootstrap does not create
+    // the first snapshot, breaking the DuckLake 1.0 lifecycle.
     let (columns, catalog_rows) = query_names_and_count(iter.next().unwrap()).await;
-    assert_eq!(
-        columns,
-        vec![
-            "namespace_id",
-            "relname",
-            "relpages",
-            "attname",
-            "type_name",
-            "type_modifier",
-            "ndim",
-            "attnum",
-            "notnull",
-            "constraint_id",
-            "constraint_type",
-            "constraint_key",
-        ]
-    );
-    let expected = rocklake_pgwire::schema_registry::supported_tables()
-        .iter()
-        .map(|table| {
-            rocklake_pgwire::schema_registry::fields_for_table(table)
-                .expect("advertised metadata table has registered fields")
-                .len()
-        })
-        .sum::<usize>();
-    assert_eq!(
-        catalog_rows, expected,
-        "each catalog column must be discoverable"
-    );
-    assert!(
-        catalog_rows > 0,
-        "DuckDB's pg_class catalog must not be empty"
-    );
+    assert_eq!(columns.len(), 12);
+    assert_eq!(catalog_rows, 0, "DuckDB 1.5.x requires an empty pg_class");
 
     // Remaining catalog result sets are intentionally empty.
     for i in 2..5 {
