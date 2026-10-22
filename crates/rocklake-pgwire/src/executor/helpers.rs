@@ -614,6 +614,43 @@ fn make_pg_indexes_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+/// DuckDB's PostgreSQL catalog cache probes relation OIDs and xmin values to
+/// detect metadata changes. This is a single query, not the five-result scan
+/// batch, despite referencing both pg_class and pg_namespace.
+pub(super) fn make_pg_catalog_staleness_response<'a>(snapshot_id: u64) -> Response<'a> {
+    let schema = Arc::new(vec![
+        FieldInfo::new("oid".to_string(), None, None, Type::INT8, FieldFormat::Text),
+        FieldInfo::new(
+            "relname".to_string(),
+            None,
+            None,
+            Type::TEXT,
+            FieldFormat::Text,
+        ),
+        FieldInfo::new("xmin".to_string(), None, None, Type::INT8, FieldFormat::Text),
+    ]);
+    let rows = crate::schema_registry::supported_tables()
+        .iter()
+        .enumerate()
+        .map(|(index, table)| {
+            let mut enc = DataRowEncoder::new(schema.clone());
+            for value in [
+                (index + 1).to_string(),
+                (*table).to_string(),
+                snapshot_id.to_string(),
+            ] {
+                enc.encode_field_with_type_and_format(&Some(value), &Type::TEXT, FieldFormat::Text)
+                    .expect("infallible");
+            }
+            enc.finish()
+        })
+        .collect::<Vec<_>>();
+    let count = rows.len();
+    let mut response = QueryResponse::new(schema, futures::stream::iter(rows));
+    response.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(response)
+}
+
 /// Return the five result sets for the DuckDB postgres-scanner catalog scan,
 /// plus a ROLLBACK command-complete.
 ///

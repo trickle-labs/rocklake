@@ -346,6 +346,21 @@ async fn duckdb_2_0_pg_catalog_scan_has_extended_columns() {
 }
 
 #[tokio::test]
+async fn pg_catalog_staleness_query_has_one_three_column_result() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT pg_class.oid, relname, pg_class.xmin FROM pg_class \
+        JOIN pg_namespace ON relnamespace = pg_namespace.oid \
+        WHERE relkind IN ('r', 'v', 'm', 'f', 'p') \
+        AND pg_namespace.nspname = 'public' ORDER BY pg_class.oid";
+    let responses = exec_multi(sql, &store).await;
+    assert_eq!(responses.len(), 1, "staleness query is a single result set");
+    let (columns, count) = query_names_and_count(responses.into_iter().next().unwrap()).await;
+    assert_eq!(columns, vec!["oid", "relname", "xmin"]);
+    assert_eq!(count, rocklake_pgwire::schema_registry::supported_tables().len());
+}
+
+#[tokio::test]
 async fn ducklake_table_stats_preserves_requested_projection_order() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;

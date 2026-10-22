@@ -50,7 +50,8 @@ use extension::{
 };
 use helpers::{
     apply_set, get_show_value, get_snapshot_param, make_empty_response, make_false_bool_response,
-    make_pg_catalog_inlined_table_response, make_pg_catalog_scan_responses, make_pg_type_response,
+    make_pg_catalog_inlined_table_response, make_pg_catalog_scan_responses,
+    make_pg_catalog_staleness_response, make_pg_type_response,
     make_single_int_response, make_single_text_response, make_version_with_rds_check_response,
     require_param_u64, resolve_reader,
 };
@@ -1048,6 +1049,10 @@ async fn execute_classified<'a>(
             Ok(vec![make_single_int_response("pg_database_size", Some(0))])
         }
         StatementKind::PgCatalogScan => {
+            if _sql.to_ascii_lowercase().contains("pg_class.xmin") {
+                let snapshot_id = { store.lock().await.read_latest().snapshot_id().as_u64() };
+                return Ok(vec![make_pg_catalog_staleness_response(snapshot_id)]);
+            }
             if let Some(table_name) = inlined_table_name_from_sql(_sql) {
                 if let Some((table_id, _)) = parse_inlined_table_ids(&table_name) {
                     let reader = { store.lock().await.read_latest() };
