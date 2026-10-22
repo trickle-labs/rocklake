@@ -34,6 +34,16 @@ fn duckdb_version() -> String {
     std::env::var("ROCKLAKE_DUCKDB_VERSION").unwrap_or_else(|_| "1.5.3".to_string())
 }
 
+fn ducklake_1_0_option(version: &str) -> &'static str {
+    if version.starts_with("2.") { ", DUCKLAKE_VERSION '1.0'" } else { "" }
+}
+
+#[test]
+fn duckdb_2_0_pins_ducklake_1_0() {
+    assert_eq!(ducklake_1_0_option("1.5.6"), "");
+    assert_eq!(ducklake_1_0_option("2.0.0"), ", DUCKLAKE_VERSION '1.0'");
+}
+
 fn test_prefix(name: &str) -> String {
     format!("duckdb-container-loop/{name}")
 }
@@ -59,10 +69,11 @@ async fn start_duckdb(data_dir: &TempDir) -> DuckDbContainerHarness {
 fn attach_sql(pgwire: &PgWireHarness, data_path: &str, body: &str) -> String {
     format!(
         "LOAD ducklake; \
-         ATTACH 'ducklake:postgres:{dsn}' AS my_lake (DATA_PATH '{data_path}'); \
+         ATTACH 'ducklake:postgres:{dsn}' AS my_lake (DATA_PATH '{data_path}'{version_option}); \
          USE my_lake; \
          {body}",
         dsn = pgwire.container_connection_string(),
+        version_option = ducklake_1_0_option(&duckdb_version()),
     )
 }
 

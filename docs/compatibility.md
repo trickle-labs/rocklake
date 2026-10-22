@@ -15,7 +15,7 @@ root [`COMPATIBILITY.md`](https://github.com/trickle-labs/rocklake/blob/main/COM
 
 ## DuckLake v1.0 Compatibility Claim
 
-**RockLake is compatible with DuckLake 1.0 (Catalog Version 7 / `V1_0`) under DuckDB v1.5.3.**
+**RockLake targets DuckLake 1.0 (Catalog Version 7 / `V1_0`) with DuckDB 1.5.3–1.5.6 and 2.0.0.** DuckDB 2.0 defaults to DuckLake 1.1; explicitly pin `DUCKLAKE_VERSION '1.0'` on `ATTACH`.
 
 This claim is backed by the durable compatibility corpus and automated CI evidence:
 
@@ -67,7 +67,8 @@ and not applied.
 
 | DuckDB Version | Status | Notes |
 |---------------|--------|-------|
-| 1.5.x | ✅ Supported | Primary supported version (v0.27.4+). All postgres-scanner initialization queries handled. |
+| 1.5.3–1.5.6 | ✅ Supported | Live DuckLake 1.0 compatibility matrix. |
+| 2.0.0 | ✅ Supported with DuckLake 1.0 | Explicit `DUCKLAKE_VERSION '1.0'` on `ATTACH`. |
 | < 1.5.2 | ❌ Not supported | Older versions do not support DuckLake 1.0 |
 
 ## DuckLake Protocol
