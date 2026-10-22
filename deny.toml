@@ -43,6 +43,11 @@ ignore = [
     # not parse untrusted XML directly; upstream: object_store release tracker;
     # review/expiry: 2026-12-31
     { id = "RUSTSEC-2026-0195", reason = "Transitive quick-xml dependency from object_store 0.12.x. Revisit when object_store upgrades quick-xml to at least 0.41.0." },
+    # ID: RUSTSEC-2024-0449; dependency: unsafe-libyaml (transitive)
+    # reason: SlateDB 0.13 -> figment -> serde_yaml, which has no maintained
+    # safe upgrade. RockLake does not depend on this parser directly.
+    # review/expiry: 2026-12-31; remove if SlateDB drops serde_yaml.
+    { id = "RUSTSEC-2024-0449", reason = "Transitive unsafe-libyaml via SlateDB/figment; unmaintained advisory without a patched release. Review by 2026-12-31." },
 ]
 
 # ─── Licenses ─────────────────────────────────────────────────────────────────
