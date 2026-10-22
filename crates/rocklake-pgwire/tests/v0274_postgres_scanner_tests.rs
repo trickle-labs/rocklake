@@ -295,8 +295,14 @@ async fn pg_catalog_scan_advertises_ducklake_metadata_tables() {
                 .len()
         })
         .sum::<usize>();
-    assert_eq!(catalog_rows, expected, "each catalog column must be discoverable");
-    assert!(catalog_rows > 0, "DuckDB's pg_class catalog must not be empty");
+    assert_eq!(
+        catalog_rows, expected,
+        "each catalog column must be discoverable"
+    );
+    assert!(
+        catalog_rows > 0,
+        "DuckDB's pg_class catalog must not be empty"
+    );
 
     // Remaining catalog result sets are intentionally empty.
     for i in 2..5 {
