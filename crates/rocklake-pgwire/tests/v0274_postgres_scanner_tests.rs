@@ -257,24 +257,53 @@ async fn pg_catalog_scan_pg_namespace_has_two_rows() {
 }
 
 #[tokio::test]
-async fn pg_catalog_scan_empty_result_sets_have_correct_schema() {
+async fn pg_catalog_scan_advertises_ducklake_metadata_tables() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;
 
     let responses = exec_multi(PG_CATALOG_SCAN, &store).await;
     assert_eq!(responses.len(), 6, "expected 6 responses");
 
-    // Convert to an iterator and skip the first (pg_namespace).
     let mut iter = responses.into_iter();
-    let _ns = iter.next().unwrap(); // result set 0: pg_namespace (not empty)
+    let _namespaces = iter.next().unwrap();
 
-    // Result sets 1-4 (pg_class, pg_enum, pg_type, pg_indexes) must be empty.
-    for i in 1..5 {
-        let resp = iter.next().unwrap();
-        let count = row_count(resp).await;
+    // DuckDB 2.0 resolves the DuckLake schema through pg_class. Advertise
+    // every column of every supported table, including ducklake_schema.
+    let (columns, catalog_rows) = query_names_and_count(iter.next().unwrap()).await;
+    assert_eq!(
+        columns,
+        vec![
+            "namespace_id",
+            "relname",
+            "relpages",
+            "attname",
+            "type_name",
+            "type_modifier",
+            "ndim",
+            "attnum",
+            "notnull",
+            "constraint_id",
+            "constraint_type",
+            "constraint_key",
+        ]
+    );
+    let expected = rocklake_pgwire::schema_registry::supported_tables()
+        .iter()
+        .map(|table| {
+            rocklake_pgwire::schema_registry::fields_for_table(table)
+                .expect("advertised metadata table has registered fields")
+                .len()
+        })
+        .sum::<usize>();
+    assert_eq!(catalog_rows, expected, "each catalog column must be discoverable");
+    assert!(catalog_rows > 0, "DuckDB's pg_class catalog must not be empty");
+
+    // Remaining catalog result sets are intentionally empty.
+    for i in 2..5 {
         assert_eq!(
-            count, 0,
-            "result set {i} (pg_class/pg_enum/pg_type/pg_indexes) must be empty, got {count} rows"
+            row_count(iter.next().unwrap()).await,
+            0,
+            "result set {i} (pg_enum/pg_type/pg_indexes) must be empty"
         );
     }
 }

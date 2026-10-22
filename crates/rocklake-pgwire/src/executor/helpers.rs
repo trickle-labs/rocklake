@@ -438,6 +438,39 @@ fn make_pg_class_attribute_row(
     enc.finish()
 }
 
+/// PostgreSQL type names for the DuckDB scanner's pg_class catalog probe.
+///
+/// The scanner builds relation schemas from these names, so the advertised
+/// types must agree with the shared DuckLake metadata schema registry.
+fn pg_type_name_for_catalog_field(field: &FieldInfo) -> &'static str {
+    let datatype = field.datatype();
+    if datatype == &Type::INT8 {
+        "int8"
+    } else if datatype == &Type::INT4 {
+        "int4"
+    } else if datatype == &Type::INT2 {
+        "int2"
+    } else if datatype == &Type::BOOL {
+        "bool"
+    } else if datatype == &Type::UUID {
+        "uuid"
+    } else if datatype == &Type::TIMESTAMPTZ {
+        "timestamptz"
+    } else if datatype == &Type::TIMESTAMP {
+        "timestamp"
+    } else if datatype == &Type::DATE {
+        "date"
+    } else if datatype == &Type::BYTEA {
+        "bytea"
+    } else if datatype == &Type::FLOAT8 {
+        "float8"
+    } else if datatype == &Type::FLOAT4 {
+        "float4"
+    } else {
+        "text"
+    }
+}
+
 fn pg_type_name_for_inlined_column(logical_type: &str) -> String {
     match logical_type.to_ascii_lowercase().as_str() {
         "boolean" | "bool" => "bool".to_string(),
@@ -539,7 +572,7 @@ fn make_pg_indexes_schema() -> Arc<Vec<FieldInfo>> {
 ///
 /// The batch is:
 ///   1. `pg_namespace` — `(1, 'public')` and `(2, 'main')`
-///   2. `pg_class` UNION — empty (no tables to advertise over postgres wire)
+///   2. `pg_class` UNION — column metadata for supported DuckLake v1.0 tables
 ///   3. `pg_enum` — empty
 ///   4. `pg_type` composites — empty
 ///   5. `pg_indexes` — empty
@@ -551,11 +584,28 @@ pub(super) fn make_pg_catalog_scan_responses<'a>() -> Vec<Response<'a>> {
     let mut ns_resp = QueryResponse::new(ns_schema, futures::stream::iter(ns_rows));
     ns_resp.set_command_tag("SELECT 2");
 
-    // Result set 2: pg_class UNION — empty
+    // Result set 2: pg_class UNION — advertise the actual DuckLake metadata
+    // relations. DuckDB 2.0's postgres scanner resolves tables through this
+    // catalog result and otherwise reports "ducklake_schema does not exist".
+    // Use the registry so the catalog advertisement and SELECT schemas agree.
     let cls_schema = make_pg_class_schema();
-    let cls_rows: Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>> = Vec::new();
+    let mut cls_rows = Vec::new();
+    for table in crate::schema_registry::supported_tables() {
+        let fields = crate::schema_registry::fields_for_table(table)
+            .expect("supported DuckLake metadata table must have a schema");
+        for (index, field) in fields.iter().enumerate() {
+            cls_rows.push(make_pg_class_attribute_row(
+                cls_schema.clone(),
+                table,
+                field.name(),
+                pg_type_name_for_catalog_field(field),
+                (index + 1) as i64,
+            ));
+        }
+    }
+    let count = cls_rows.len();
     let mut cls_resp = QueryResponse::new(cls_schema, futures::stream::iter(cls_rows));
-    cls_resp.set_command_tag("SELECT 0");
+    cls_resp.set_command_tag(&format!("SELECT {count}"));
 
     // Result set 3: pg_enum — empty
     let enum_schema = make_pg_enum_schema();
