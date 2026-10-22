@@ -218,8 +218,15 @@ jobs:
         env:
           DUCKDB_VERSION: ${{ matrix.duckdb-version }}
         run: |
-          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o "$RUNNER_TEMP/duckdb.zip"
-          unzip -q "$RUNNER_TEMP/duckdb.zip" -d "$RUNNER_TEMP/duckdb"
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          if [[ "$DUCKDB_VERSION" == 2.* ]]; then
+            curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz" -o "$RUNNER_TEMP/duckdb.tar.gz"
+            tar -xzf "$RUNNER_TEMP/duckdb.tar.gz" -C "$RUNNER_TEMP/duckdb"
+          else
+            curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o "$RUNNER_TEMP/duckdb.zip"
+            unzip -q "$RUNNER_TEMP/duckdb.zip" -d "$RUNNER_TEMP/duckdb"
+          fi
+          test -x "$RUNNER_TEMP/duckdb/duckdb"
           echo "$RUNNER_TEMP/duckdb" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/duckdb/duckdb" --version
       - run: bash scripts/quickstart.sh
