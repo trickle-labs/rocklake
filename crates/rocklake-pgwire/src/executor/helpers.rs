@@ -681,6 +681,7 @@ pub(super) fn make_pg_catalog_staleness_response<'a>(
 pub(super) fn make_pg_catalog_scan_responses<'a>(
     sql: &str,
     initialized: bool,
+    bootstrap_relations: &std::collections::HashSet<String>,
 ) -> Vec<Response<'a>> {
     // Result set 1: pg_namespace
     let ns_schema = make_pg_namespace_schema();
@@ -696,7 +697,7 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
     let mut cls_rows = Vec::new();
     // Do not advertise metadata tables before the first DuckLake snapshot:
     // DuckLake probes their existence to decide whether to bootstrap.
-    if initialized && pg_class_column_count(sql) >= 15 {
+    if pg_class_column_count(sql) >= 15 {
         let lower = sql.to_ascii_lowercase();
         let requested_table = lower
             .split("relname=")
@@ -705,6 +706,9 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
             .and_then(|filter| filter.trim_start().strip_prefix('\''))
             .and_then(|filter| filter.split('\'').next());
         for table in crate::schema_registry::supported_tables() {
+            if !initialized && !bootstrap_relations.contains(*table) {
+                continue;
+            }
             if requested_table.is_some_and(|requested| requested != *table) {
                 continue;
             }
@@ -761,7 +765,11 @@ mod pg_catalog_tests {
     #[tokio::test]
     async fn initialized_duckdb_2_catalog_exposes_registered_columns() {
         let sql = "SELECT relname, type_schema FROM pg_class JOIN pg_namespace ON true";
-        let response = make_pg_catalog_scan_responses(sql, true)
+        let response = make_pg_catalog_scan_responses(
+            sql,
+            true,
+            &std::collections::HashSet::new(),
+        )
             .into_iter()
             .nth(1)
             .expect("pg_class response");

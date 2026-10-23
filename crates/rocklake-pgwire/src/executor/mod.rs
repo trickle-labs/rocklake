@@ -1078,13 +1078,17 @@ async fn execute_classified<'a>(
                     }
                 }
             }
-            let reader = { store.lock().await.read_latest() };
+            let (reader, bootstrap_relations) = {
+                let catalog = store.lock().await;
+                (catalog.read_latest(), catalog.bootstrap_relation_names())
+            };
             let initialized = reader
                 .get_snapshot()
                 .await
                 .map_err(RockLakeError::from)?
                 .is_some();
-            let mut responses = make_pg_catalog_scan_responses(_sql, initialized);
+            let mut responses =
+                make_pg_catalog_scan_responses(_sql, initialized, &bootstrap_relations);
             // The postgres scanner also issues individual pg_class queries
             // to discover a table after CREATE TABLE. Only the multi-statement
             // catalog probe returns the five result sets plus ROLLBACK.
@@ -2843,7 +2847,23 @@ async fn execute_classified<'a>(
 
         // ─── Inlined Data DDL/DML ──────────────────────────────────────
         StatementKind::CreateInlinedTable => {
-            // Accept CREATE TABLE for inlined tables (no-op, tracked in catalog)
+            // DuckDB 2.0's postgres scanner refreshes pg_class after CREATE
+            // TABLE, before DuckLake's first snapshot has been committed.
+            // Make only the relations already declared here discoverable.
+            if let Ok(statements) = Parser::parse_sql(&PostgreSqlDialect {}, _sql) {
+                if let Some(Statement::CreateTable(create)) = statements.first() {
+                    let qualified = create.name.to_string();
+                    let table = qualified
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(&qualified)
+                        .trim_matches('"')
+                        .to_ascii_lowercase();
+                    if crate::schema_registry::fields_for_table(&table).is_some() {
+                        store.lock().await.note_bootstrap_relation(&table);
+                    }
+                }
+            }
             Ok(vec![Response::Execution(Tag::new("CREATE TABLE"))])
         }
         StatementKind::InsertInlinedRow => {

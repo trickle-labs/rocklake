@@ -334,6 +334,28 @@ async fn duckdb_2_0_bulk_catalog_query_without_begin_has_five_results() {
 }
 
 #[tokio::test]
+async fn duckdb_2_0_discovers_declared_table_before_first_snapshot() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+
+    // The initial probe must find no relation before DuckLake creates it.
+    let sql = "SELECT type_ns.nspname AS type_schema, relname FROM pg_class \
+        JOIN pg_namespace ON true WHERE relname='ducklake_schema'";
+    let (_, before) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(before, 0);
+
+    let ddl = r#"CREATE TABLE IF NOT EXISTS "public"."ducklake_schema" (schema_id BIGINT)"#;
+    assert!(matches!(exec_one(ddl, &store).await, Response::Execution(_)));
+
+    // The relation is visible to the scanner, even without a snapshot.
+    let (columns, after) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(columns.len(), 15);
+    assert_eq!(after, rocklake_pgwire::schema_registry::schema_schema().len());
+    let reader = { store.lock().await.read_latest() };
+    assert!(reader.get_snapshot().await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn pg_catalog_staleness_query_has_one_three_column_result() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;

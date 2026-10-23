@@ -7,6 +7,7 @@ use rocklake_core::mvcc::SnapshotId;
 use rocklake_core::tags::*;
 use rocklake_core::values;
 use slatedb::{Db, IsolationLevel};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -46,6 +47,10 @@ pub struct CatalogStore {
     /// Exposed so callers (e.g. the PG-Wire executor) can read data files from
     /// the same storage root without requiring a separate configuration parameter.
     object_store: Arc<dyn object_store::ObjectStore>,
+    /// Metadata relations declared during a fresh DuckLake attach, before the
+    /// first snapshot exists. DuckDB 2.0 probes these through pg_class after
+    /// creating the tables. Kept per catalog, not global to the process.
+    bootstrap_relations: HashSet<String>,
 }
 
 impl CatalogStore {
@@ -166,6 +171,7 @@ impl CatalogStore {
             retain_from_cache,
             latest_snapshot_cache,
             object_store: object_store_ref,
+            bootstrap_relations: HashSet::new(),
         })
     }
 
@@ -312,6 +318,17 @@ impl CatalogStore {
         self.writer_epoch != 0
     }
 
+    /// Record a DuckLake metadata relation created during initial attach.
+    /// The SQL facade persists actual catalog contents only at commit.
+    pub fn note_bootstrap_relation(&mut self, table: &str) {
+        self.bootstrap_relations.insert(table.to_string());
+    }
+
+    /// Relations declared by CREATE TABLE but not yet committed as snapshots.
+    pub fn bootstrap_relation_names(&self) -> HashSet<String> {
+        self.bootstrap_relations.clone()
+    }
+
     /// Close the catalog store.
     pub async fn close(self) -> CatalogResult<()> {
         crate::fault_injection::trigger(
@@ -369,6 +386,7 @@ impl CatalogStore {
             retain_from_cache: Arc::new(AtomicU64::new(retain_from_initial)),
             latest_snapshot_cache: Arc::new(AtomicU64::new(latest_initial)),
             object_store: object_store_ref,
+            bootstrap_relations: HashSet::new(),
         })
     }
 
