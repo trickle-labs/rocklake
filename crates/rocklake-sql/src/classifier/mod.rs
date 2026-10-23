@@ -368,9 +368,7 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
 
     // DuckLake 1.0 on DuckDB 2.0 probes pg_tables before creating its
     // optional inlined-deletion table. This is a PostgreSQL system view.
-    if lower.trim_start().starts_with("select")
-        && lower.contains("pg_catalog.pg_tables")
-    {
+    if lower.trim_start().starts_with("select") && lower.contains("pg_catalog.pg_tables") {
         return Ok(StatementKind::SelectPgTables);
     }
 

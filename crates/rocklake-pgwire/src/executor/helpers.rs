@@ -781,11 +781,7 @@ mod pg_catalog_tests {
     #[tokio::test]
     async fn initialized_duckdb_2_catalog_exposes_registered_columns() {
         let sql = "SELECT relname, type_schema FROM pg_class JOIN pg_namespace ON true";
-        let response = make_pg_catalog_scan_responses(
-            sql,
-            true,
-            &std::collections::HashSet::new(),
-        )
+        let response = make_pg_catalog_scan_responses(sql, true, &std::collections::HashSet::new())
             .into_iter()
             .nth(1)
             .expect("pg_class response");

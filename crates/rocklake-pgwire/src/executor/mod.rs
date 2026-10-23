@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
 use pgwire::api::results::{CopyResponse, Response, Tag};
+use sqlparser::ast::Statement;
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 
@@ -52,9 +53,8 @@ use helpers::{
     apply_set, get_show_value, get_snapshot_param, make_empty_response, make_false_bool_response,
     make_pg_catalog_inlined_table_response, make_pg_catalog_scan_responses,
     make_pg_catalog_staleness_response, make_pg_tables_probe_response, make_pg_type_response,
-    make_single_int_response,
-    make_single_text_response, make_version_with_rds_check_response, require_param_u64,
-    resolve_reader,
+    make_single_int_response, make_single_text_response, make_version_with_rds_check_response,
+    require_param_u64, resolve_reader,
 };
 use meta::execute_virtual_catalog_scan;
 use session::{execute_hold_snapshot, execute_release_snapshot};
@@ -1097,7 +1097,10 @@ async fn execute_classified<'a>(
             // The multi-statement catalog discovery query may start with
             // SELECT (DuckDB 2.0), not only BEGIN (DuckDB 1.5.x).
             // Detect its statement count instead of relying on the first token.
-            let statement_count = _sql.split(';').filter(|part| !part.trim().is_empty()).count();
+            let statement_count = _sql
+                .split(';')
+                .filter(|part| !part.trim().is_empty())
+                .count();
             if statement_count == 1 {
                 return Ok(vec![responses.remove(1)]);
             }

@@ -340,8 +340,14 @@ async fn duckdb_2_0_bulk_catalog_query_without_begin_has_five_results() {
         SELECT n.oid, typname FROM pg_type t JOIN pg_namespace n ON true; \
         SELECT pg_namespace.oid, tablename FROM pg_indexes JOIN pg_namespace ON true;";
     let responses = exec_multi(sql, &store).await;
-    assert_eq!(responses.len(), 5, "new scanner expects five SELECT results");
-    assert!(responses.iter().all(|response| matches!(response, Response::Query(_))));
+    assert_eq!(
+        responses.len(),
+        5,
+        "new scanner expects five SELECT results"
+    );
+    assert!(responses
+        .iter()
+        .all(|response| matches!(response, Response::Query(_))));
 }
 
 #[tokio::test]
@@ -356,12 +362,18 @@ async fn duckdb_2_0_discovers_declared_table_before_first_snapshot() {
     assert_eq!(before, 0);
 
     let ddl = r#"CREATE TABLE IF NOT EXISTS "public"."ducklake_schema" (schema_id BIGINT)"#;
-    assert!(matches!(exec_one(ddl, &store).await, Response::Execution(_)));
+    assert!(matches!(
+        exec_one(ddl, &store).await,
+        Response::Execution(_)
+    ));
 
     // The relation is visible to the scanner, even without a snapshot.
     let (columns, after) = query_names_and_count(exec_one(sql, &store).await).await;
     assert_eq!(columns.len(), 15);
-    assert_eq!(after, rocklake_pgwire::schema_registry::schema_schema().len());
+    assert_eq!(
+        after,
+        rocklake_pgwire::schema_registry::schema_schema().len()
+    );
     let reader = { store.lock().await.read_latest() };
     assert!(reader.get_snapshot().await.unwrap().is_none());
 }
