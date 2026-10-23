@@ -51,9 +51,9 @@ use extension::{
 use helpers::{
     apply_set, get_show_value, get_snapshot_param, make_empty_response, make_false_bool_response,
     make_pg_catalog_inlined_table_response, make_pg_catalog_scan_responses,
-    make_pg_catalog_staleness_response, make_pg_type_response,
-    make_single_int_response, make_single_text_response, make_version_with_rds_check_response,
-    require_param_u64, resolve_reader,
+    make_pg_catalog_staleness_response, make_pg_type_response, make_single_int_response,
+    make_single_text_response, make_version_with_rds_check_response, require_param_u64,
+    resolve_reader,
 };
 use meta::execute_virtual_catalog_scan;
 use session::{execute_hold_snapshot, execute_release_snapshot};
@@ -1088,8 +1088,17 @@ async fn execute_classified<'a>(
             // The postgres scanner also issues individual pg_class queries
             // to discover a table after CREATE TABLE. Only the multi-statement
             // catalog probe returns the five result sets plus ROLLBACK.
-            if _sql.trim_start().to_ascii_lowercase().starts_with("select") {
+            // The multi-statement catalog discovery query may start with
+            // SELECT (DuckDB 2.0), not only BEGIN (DuckDB 1.5.x).
+            // Detect its statement count instead of relying on the first token.
+            let statement_count = _sql.split(';').filter(|part| !part.trim().is_empty()).count();
+            if statement_count == 1 {
                 return Ok(vec![responses.remove(1)]);
+            }
+            if !_sql.trim_start().to_ascii_lowercase().starts_with("begin") {
+                // The newer scanner emits five SELECT queries without an
+                // explicit ROLLBACK; do not invent a sixth result set.
+                responses.pop();
             }
             Ok(responses)
         }

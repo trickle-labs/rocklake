@@ -304,15 +304,33 @@ async fn duckdb_2_0_pg_catalog_scan_has_extended_columns() {
     assert!(matches!(results.next(), Some(Response::Query(_))));
     let (columns, count) = query_names_and_count(results.next().unwrap()).await;
     assert_eq!(columns.len(), 15);
-    assert_eq!(&columns[12..], &["type_schema", "column_comment", "table_comment"]);
+    assert_eq!(
+        &columns[12..],
+        &["type_schema", "column_comment", "table_comment"]
+    );
     assert_eq!(count, 0, "a fresh catalog must remain uninitialized");
 
     // Newer scanners optionally request a sixteenth column.
     let newer = "SELECT type_schema, column_default FROM pg_class JOIN pg_namespace ON true";
     let mut newer_results = exec_multi(newer, &store).await.into_iter();
-    let _namespaces = newer_results.next();
+    // Single-table probes return one pg_class result, not the
+    // five-result-set bulk catalog scan.
     let (columns, _) = query_names_and_count(newer_results.next().unwrap()).await;
     assert_eq!(columns.last().map(String::as_str), Some("column_default"));
+}
+
+#[tokio::test]
+async fn duckdb_2_0_bulk_catalog_query_without_begin_has_five_results() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT oid, nspname FROM pg_namespace ORDER BY oid; \
+        SELECT type_ns.nspname AS type_schema FROM pg_class JOIN pg_namespace ON true; \
+        SELECT n.oid, enumtypid FROM pg_enum e JOIN pg_namespace n ON true; \
+        SELECT n.oid, typname FROM pg_type t JOIN pg_namespace n ON true; \
+        SELECT pg_namespace.oid, tablename FROM pg_indexes JOIN pg_namespace ON true;";
+    let responses = exec_multi(sql, &store).await;
+    assert_eq!(responses.len(), 5, "new scanner expects five SELECT results");
+    assert!(responses.iter().all(|response| matches!(response, Response::Query(_))));
 }
 
 #[tokio::test]
@@ -327,7 +345,10 @@ async fn pg_catalog_staleness_query_has_one_three_column_result() {
     assert_eq!(responses.len(), 1, "staleness query is a single result set");
     let (columns, count) = query_names_and_count(responses.into_iter().next().unwrap()).await;
     assert_eq!(columns, vec!["oid", "relname", "xmin"]);
-    assert_eq!(count, rocklake_pgwire::schema_registry::supported_tables().len());
+    assert_eq!(
+        count, 0,
+        "an empty catalog must not advertise a snapshot as initialized"
+    );
 }
 
 #[tokio::test]

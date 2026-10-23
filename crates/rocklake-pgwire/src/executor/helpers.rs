@@ -630,7 +630,13 @@ pub(super) fn make_pg_catalog_staleness_response<'a>(
             Type::TEXT,
             FieldFormat::Text,
         ),
-        FieldInfo::new("xmin".to_string(), None, None, Type::INT8, FieldFormat::Text),
+        FieldInfo::new(
+            "xmin".to_string(),
+            None,
+            None,
+            Type::INT8,
+            FieldFormat::Text,
+        ),
     ]);
     let rows = if initialized {
         crate::schema_registry::supported_tables()
@@ -746,7 +752,6 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
         Response::TransactionEnd(Tag::new("ROLLBACK")),
     ]
 }
-
 
 #[cfg(test)]
 mod pg_catalog_tests {
