@@ -137,6 +137,22 @@ pub(super) fn make_single_int_response<'a>(col_name: &str, value: Option<i64>) -
     Response::Query(resp)
 }
 
+/// Zero-row result for DuckDB's pg_catalog.pg_tables inlined-delete-table probe.
+/// Optional per-table inlined deletes are not physical PostgreSQL relations.
+pub(super) fn make_pg_tables_probe_response<'a>() -> Response<'a> {
+    let schema = Arc::new(vec![FieldInfo::new(
+        "?column?".to_string(),
+        None,
+        None,
+        Type::INT8,
+        FieldFormat::Binary,
+    )]);
+    let rows: Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>> = Vec::new();
+    let mut response = QueryResponse::new(schema, futures::stream::iter(rows));
+    response.set_command_tag("SELECT 0");
+    Response::Query(response)
+}
+
 pub(super) fn make_pg_type_response<'a>() -> Response<'a> {
     let schema = Arc::new(vec![
         FieldInfo::new("oid".to_string(), None, None, Type::INT4, FieldFormat::Text),

@@ -285,6 +285,17 @@ async fn duckdb_1_5_pg_catalog_scan_keeps_metadata_tables_virtual() {
 }
 
 #[tokio::test]
+async fn duckdb_2_0_pg_tables_probe_returns_no_inlined_delete_table() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = 'public' \
+        AND tablename = 'ducklake_inlined_delete_3' LIMIT 1";
+    let (names, count) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(names, vec!["?column?"]);
+    assert_eq!(count, 0, "optional inlined-delete table is not yet present");
+}
+
+#[tokio::test]
 async fn duckdb_2_0_pg_catalog_scan_has_extended_columns() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;

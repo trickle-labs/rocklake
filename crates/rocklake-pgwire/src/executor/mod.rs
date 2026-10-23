@@ -51,7 +51,8 @@ use extension::{
 use helpers::{
     apply_set, get_show_value, get_snapshot_param, make_empty_response, make_false_bool_response,
     make_pg_catalog_inlined_table_response, make_pg_catalog_scan_responses,
-    make_pg_catalog_staleness_response, make_pg_type_response, make_single_int_response,
+    make_pg_catalog_staleness_response, make_pg_tables_probe_response, make_pg_type_response,
+    make_single_int_response,
     make_single_text_response, make_version_with_rds_check_response, require_param_u64,
     resolve_reader,
 };
@@ -1019,6 +1020,7 @@ async fn execute_classified<'a>(
             Some("ducklake"),
         )]),
         StatementKind::SelectPgType => Ok(vec![make_pg_type_response()]),
+        StatementKind::SelectPgTables => Ok(vec![make_pg_tables_probe_response()]),
         StatementKind::ShowVariable(ref var) => {
             let val = get_show_value(var, session);
             Ok(vec![make_single_text_response(var, Some(&val))])
