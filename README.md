@@ -146,7 +146,7 @@ rocklake serve --catalog /path/to/catalog --max-sessions 16
 INSTALL ducklake;
 LOAD ducklake;
 
--- Attach RockLake as your catalog backend
+-- Attach RockLake as your catalog backend (DuckDB 1.5.x)
 ATTACH 'ducklake:postgres:host=localhost port=5432 dbname=rocklake' AS my_lake (DATA_PATH '/tmp/ducklake');
 USE my_lake;
 
@@ -158,6 +158,10 @@ SELECT * FROM events;
 ```
 
 ---
+
+DuckDB 2.0.0 requires an explicit DuckLake 1.0 catalog pin on `ATTACH`:
+`(DATA_PATH '/tmp/ducklake', DUCKLAKE_VERSION '1.0')`.
+RockLake does not support DuckLake 1.1 catalogs.
 
 ## Workspace Layout
 

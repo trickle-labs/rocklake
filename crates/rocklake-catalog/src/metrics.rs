@@ -302,6 +302,8 @@ impl CatalogMetrics {
             .store(bytes, Ordering::Relaxed);
     }
 
+    // Preserve Rust 1.93 MSRV while stable Rust deprecates fetch_update.
+    #[allow(deprecated)]
     pub fn add_pgwire_in_flight_response_bytes(&self, bytes: u64) {
         let current = self
             .pgwire_in_flight_response_bytes
@@ -313,6 +315,7 @@ impl CatalogMetrics {
             .fetch_max(current.saturating_add(bytes), Ordering::Relaxed);
     }
 
+    #[allow(deprecated)]
     pub fn sub_pgwire_in_flight_response_bytes(&self, bytes: u64) {
         self.pgwire_in_flight_response_bytes
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {

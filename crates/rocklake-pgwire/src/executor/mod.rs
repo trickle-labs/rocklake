@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
 use pgwire::api::results::{CopyResponse, Response, Tag};
+use sqlparser::ast::Statement;
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 
@@ -50,7 +51,8 @@ use extension::{
 };
 use helpers::{
     apply_set, get_show_value, get_snapshot_param, make_empty_response, make_false_bool_response,
-    make_pg_catalog_inlined_table_response, make_pg_catalog_scan_responses, make_pg_type_response,
+    make_pg_catalog_inlined_table_response, make_pg_catalog_scan_responses,
+    make_pg_catalog_staleness_response, make_pg_tables_probe_response, make_pg_type_response,
     make_single_int_response, make_single_text_response, make_version_with_rds_check_response,
     require_param_u64, resolve_reader,
 };
@@ -1018,6 +1020,7 @@ async fn execute_classified<'a>(
             Some("ducklake"),
         )]),
         StatementKind::SelectPgType => Ok(vec![make_pg_type_response()]),
+        StatementKind::SelectPgTables => Ok(vec![make_pg_tables_probe_response()]),
         StatementKind::ShowVariable(ref var) => {
             let val = get_show_value(var, session);
             Ok(vec![make_single_text_response(var, Some(&val))])
@@ -1048,6 +1051,19 @@ async fn execute_classified<'a>(
             Ok(vec![make_single_int_response("pg_database_size", Some(0))])
         }
         StatementKind::PgCatalogScan => {
+            if _sql.to_ascii_lowercase().contains("pg_class.xmin") {
+                let reader = { store.lock().await.read_latest() };
+                let snapshot_id = reader.snapshot_id().as_u64();
+                let initialized = reader
+                    .get_snapshot()
+                    .await
+                    .map_err(RockLakeError::from)?
+                    .is_some();
+                return Ok(vec![make_pg_catalog_staleness_response(
+                    snapshot_id,
+                    initialized,
+                )]);
+            }
             if let Some(table_name) = inlined_table_name_from_sql(_sql) {
                 if let Some((table_id, _)) = parse_inlined_table_ids(&table_name) {
                     let reader = { store.lock().await.read_latest() };
@@ -1059,14 +1075,41 @@ async fn execute_classified<'a>(
                         return Ok(vec![make_pg_catalog_inlined_table_response(
                             &table_name,
                             columns,
+                            _sql,
                         )]);
                     }
                 }
             }
-            // Multi-statement pg_namespace / pg_class / pg_enum / pg_type /
-            // pg_indexes catalog scan sent by the DuckDB postgres scanner as a
-            // single PQsendQuery call. Return five result sets + ROLLBACK.
-            Ok(make_pg_catalog_scan_responses())
+            let (reader, bootstrap_relations) = {
+                let catalog = store.lock().await;
+                (catalog.read_latest(), catalog.bootstrap_relation_names())
+            };
+            let initialized = reader
+                .get_snapshot()
+                .await
+                .map_err(RockLakeError::from)?
+                .is_some();
+            let mut responses =
+                make_pg_catalog_scan_responses(_sql, initialized, &bootstrap_relations);
+            // The postgres scanner also issues individual pg_class queries
+            // to discover a table after CREATE TABLE. Only the multi-statement
+            // catalog probe returns the five result sets plus ROLLBACK.
+            // The multi-statement catalog discovery query may start with
+            // SELECT (DuckDB 2.0), not only BEGIN (DuckDB 1.5.x).
+            // Detect its statement count instead of relying on the first token.
+            let statement_count = _sql
+                .split(';')
+                .filter(|part| !part.trim().is_empty())
+                .count();
+            if statement_count == 1 {
+                return Ok(vec![responses.remove(1)]);
+            }
+            if !_sql.trim_start().to_ascii_lowercase().starts_with("begin") {
+                // The newer scanner emits five SELECT queries without an
+                // explicit ROLLBACK; do not invent a sixth result set.
+                responses.pop();
+            }
+            Ok(responses)
         }
 
         // ─── Transaction Control ───────────────────────────────────────
@@ -2809,7 +2852,23 @@ async fn execute_classified<'a>(
 
         // ─── Inlined Data DDL/DML ──────────────────────────────────────
         StatementKind::CreateInlinedTable => {
-            // Accept CREATE TABLE for inlined tables (no-op, tracked in catalog)
+            // DuckDB 2.0's postgres scanner refreshes pg_class after CREATE
+            // TABLE, before DuckLake's first snapshot has been committed.
+            // Make only the relations already declared here discoverable.
+            if let Ok(statements) = Parser::parse_sql(&PostgreSqlDialect {}, _sql) {
+                if let Some(Statement::CreateTable(create)) = statements.first() {
+                    let qualified = create.name.to_string();
+                    let table = qualified
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(&qualified)
+                        .trim_matches('"')
+                        .to_ascii_lowercase();
+                    if crate::schema_registry::fields_for_table(&table).is_some() {
+                        store.lock().await.note_bootstrap_relation(&table);
+                    }
+                }
+            }
             Ok(vec![Response::Execution(Tag::new("CREATE TABLE"))])
         }
         StatementKind::InsertInlinedRow => {

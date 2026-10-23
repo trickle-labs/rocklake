@@ -1287,6 +1287,7 @@ fn required_permission(kind: &StatementKind) -> Option<Permission> {
         | StatementKind::SelectCurrentSchema
         | StatementKind::SelectCurrentDatabase
         | StatementKind::SelectPgType
+        | StatementKind::SelectPgTables
         | StatementKind::SelectToRegclass
         | StatementKind::SelectExistsInfoSchema => None,
         StatementKind::InsertSnapshot
@@ -2892,9 +2893,13 @@ fn count_sql_params(sql: &str) -> usize {
 /// even when the client sends no type hints in the Parse message.
 fn describe_params_for_sql(sql: &str) -> Vec<Type> {
     use rocklake_sql::StatementKind;
+    let count = count_sql_params(sql);
+    if count == 0 {
+        return Vec::new();
+    }
     let kind =
         rocklake_sql::classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
-    match kind {
+    let mut types = match kind {
         // Snapshot-scoped catalog selects: $1 = snapshot_id (INT8)
         StatementKind::SelectSchemas
         | StatementKind::SelectTables
@@ -2912,11 +2917,11 @@ fn describe_params_for_sql(sql: &str) -> Vec<Type> {
         // table_changes(table_name TEXT, from_snapshot INT8, to_snapshot INT8)
         StatementKind::TableChanges { .. } => vec![Type::TEXT, Type::INT8, Type::INT8],
         // Everything else: fall back to UNKNOWN (works for &str / String)
-        _ => {
-            let count = count_sql_params(sql);
-            vec![Type::UNKNOWN; count]
-        }
-    }
+        _ => vec![Type::UNKNOWN; count],
+    };
+    types.resize(count, Type::UNKNOWN);
+    types.truncate(count);
+    types
 }
 
 /// Return the result-set field descriptions for a SQL statement.
@@ -2972,6 +2977,7 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             FieldInfo::new("oid".to_string(), None, None, Type::INT4, FieldFormat::Text),
             text_col!("typname"),
         ],
+        rocklake_sql::StatementKind::SelectPgTables => vec![int8_col!("?column?")],
         rocklake_sql::StatementKind::SelectMaxSnapshot
         | rocklake_sql::StatementKind::SelectMaxSnapshotAfter => {
             vec![int8_col!("max")]
@@ -3205,4 +3211,27 @@ fn project_described_fields(
     // ensures the RowDescription from Describe matches the DataRow from
     // Execute, so clients can resolve columns by name rather than by position.
     schema
+}
+
+#[cfg(test)]
+mod pg_parameter_tests {
+    use super::describe_params_for_sql;
+    use pgwire::api::Type;
+
+    #[test]
+    fn literal_data_file_queries_require_no_bound_parameters() {
+        let sql = "SELECT data.data_file_id, del.delete_file_id \
+            FROM ducklake_data_file data LEFT JOIN ducklake_delete_file del \
+            ON del.data_file_id = data.data_file_id WHERE data.table_id=3";
+        assert!(describe_params_for_sql(sql).is_empty());
+    }
+
+    #[test]
+    fn snapshot_placeholders_are_typed_only_when_present() {
+        assert_eq!(
+            describe_params_for_sql("SELECT * FROM ducklake_schema WHERE begin_snapshot <= $1"),
+            vec![Type::INT8]
+        );
+        assert!(describe_params_for_sql("SELECT * FROM ducklake_schema").is_empty());
+    }
 }

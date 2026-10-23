@@ -257,26 +257,143 @@ async fn pg_catalog_scan_pg_namespace_has_two_rows() {
 }
 
 #[tokio::test]
-async fn pg_catalog_scan_empty_result_sets_have_correct_schema() {
+async fn duckdb_1_5_pg_catalog_scan_keeps_metadata_tables_virtual() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;
 
     let responses = exec_multi(PG_CATALOG_SCAN, &store).await;
     assert_eq!(responses.len(), 6, "expected 6 responses");
 
-    // Convert to an iterator and skip the first (pg_namespace).
     let mut iter = responses.into_iter();
-    let _ns = iter.next().unwrap(); // result set 0: pg_namespace (not empty)
+    let _namespaces = iter.next().unwrap();
 
-    // Result sets 1-4 (pg_class, pg_enum, pg_type, pg_indexes) must be empty.
-    for i in 1..5 {
-        let resp = iter.next().unwrap();
-        let count = row_count(resp).await;
+    // The legacy DuckDB 1.5.x catalog scan has 12 columns and keeps the
+    // virtual DuckLake relations hidden. Otherwise bootstrap does not create
+    // the first snapshot, breaking the DuckLake 1.0 lifecycle.
+    let (columns, catalog_rows) = query_names_and_count(iter.next().unwrap()).await;
+    assert_eq!(columns.len(), 12);
+    assert_eq!(catalog_rows, 0, "DuckDB 1.5.x requires an empty pg_class");
+
+    // Remaining catalog result sets are intentionally empty.
+    for i in 2..5 {
         assert_eq!(
-            count, 0,
-            "result set {i} (pg_class/pg_enum/pg_type/pg_indexes) must be empty, got {count} rows"
+            row_count(iter.next().unwrap()).await,
+            0,
+            "result set {i} (pg_enum/pg_type/pg_indexes) must be empty"
         );
     }
+}
+
+#[tokio::test]
+async fn duckdb_2_0_pg_tables_probe_returns_no_inlined_delete_table() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = 'public' \
+        AND tablename = 'ducklake_inlined_delete_3' LIMIT 1";
+    let (names, count) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(names, vec!["?column?"]);
+    assert_eq!(count, 0, "optional inlined-delete table is not yet present");
+}
+
+#[tokio::test]
+async fn duckdb_2_0_pg_catalog_scan_has_extended_columns() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+
+    // DuckDB 2.0's postgres scanner requests three more metadata columns
+    // than the older 1.5.x pg_class query, including the type namespace.
+    let sql = "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ; \
+        SELECT oid, nspname FROM pg_namespace ORDER BY oid; \
+        SELECT pg_namespace.oid AS namespace_id, relname, relpages, attname, \
+               pg_type.typname AS type_name, atttypmod AS type_modifier, \
+               pg_attribute.attndims AS ndim, attnum, pg_attribute.attnotnull AS notnull, \
+               NULL AS constraint_id, NULL AS constraint_type, NULL AS constraint_key, \
+               type_ns.nspname AS type_schema, col_desc.description AS column_comment, \
+               tbl_desc.description AS table_comment FROM pg_class \
+        JOIN pg_namespace ON relnamespace = pg_namespace.oid; ROLLBACK;";
+    let mut results = exec_multi(sql, &store).await.into_iter();
+    assert!(matches!(results.next(), Some(Response::Query(_))));
+    let (columns, count) = query_names_and_count(results.next().unwrap()).await;
+    assert_eq!(columns.len(), 15);
+    assert_eq!(
+        &columns[12..],
+        &["type_schema", "column_comment", "table_comment"]
+    );
+    assert_eq!(count, 0, "a fresh catalog must remain uninitialized");
+
+    // Newer scanners optionally request a sixteenth column.
+    let newer = "SELECT type_schema, column_default FROM pg_class JOIN pg_namespace ON true";
+    let mut newer_results = exec_multi(newer, &store).await.into_iter();
+    // Single-table probes return one pg_class result, not the
+    // five-result-set bulk catalog scan.
+    let (columns, _) = query_names_and_count(newer_results.next().unwrap()).await;
+    assert_eq!(columns.last().map(String::as_str), Some("column_default"));
+}
+
+#[tokio::test]
+async fn duckdb_2_0_bulk_catalog_query_without_begin_has_five_results() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT oid, nspname FROM pg_namespace ORDER BY oid; \
+        SELECT type_ns.nspname AS type_schema FROM pg_class JOIN pg_namespace ON true; \
+        SELECT n.oid, enumtypid FROM pg_enum e JOIN pg_namespace n ON true; \
+        SELECT n.oid, typname FROM pg_type t JOIN pg_namespace n ON true; \
+        SELECT pg_namespace.oid, tablename FROM pg_indexes JOIN pg_namespace ON true;";
+    let responses = exec_multi(sql, &store).await;
+    assert_eq!(
+        responses.len(),
+        5,
+        "new scanner expects five SELECT results"
+    );
+    assert!(responses
+        .iter()
+        .all(|response| matches!(response, Response::Query(_))));
+}
+
+#[tokio::test]
+async fn duckdb_2_0_discovers_declared_table_before_first_snapshot() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+
+    // The initial probe must find no relation before DuckLake creates it.
+    let sql = "SELECT type_ns.nspname AS type_schema, relname FROM pg_class \
+        JOIN pg_namespace ON true WHERE relname='ducklake_schema'";
+    let (_, before) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(before, 0);
+
+    let ddl = r#"CREATE TABLE IF NOT EXISTS "public"."ducklake_schema" (schema_id BIGINT)"#;
+    assert!(matches!(
+        exec_one(ddl, &store).await,
+        Response::Execution(_)
+    ));
+
+    // The relation is visible to the scanner, even without a snapshot.
+    let (columns, after) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(columns.len(), 15);
+    assert_eq!(
+        after,
+        rocklake_pgwire::schema_registry::schema_schema().len()
+    );
+    let reader = { store.lock().await.read_latest() };
+    assert!(reader.get_snapshot().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn pg_catalog_staleness_query_has_one_three_column_result() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT pg_class.oid, relname, pg_class.xmin FROM pg_class \
+        JOIN pg_namespace ON relnamespace = pg_namespace.oid \
+        WHERE relkind IN ('r', 'v', 'm', 'f', 'p') \
+        AND pg_namespace.nspname = 'public' ORDER BY pg_class.oid";
+    let responses = exec_multi(sql, &store).await;
+    assert_eq!(responses.len(), 1, "staleness query is a single result set");
+    let (columns, count) = query_names_and_count(responses.into_iter().next().unwrap()).await;
+    assert_eq!(columns, vec!["oid", "relname", "xmin"]);
+    assert_eq!(
+        count, 0,
+        "an empty catalog must not advertise a snapshot as initialized"
+    );
 }
 
 #[tokio::test]
