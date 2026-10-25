@@ -1088,7 +1088,6 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
         .list_all_metadata()
         .await
         .expect("list_all_metadata should work");
-    let latest_snapshot_id = reader.snapshot_id().as_u64() as i64;
     let _table_stats = reader
         .get_table_stats(table_id)
         .await
