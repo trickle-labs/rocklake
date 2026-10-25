@@ -1121,8 +1121,10 @@ pub(super) fn make_extended_data_file_response(
             .collect::<Vec<_>>();
         // Preserve data files without any associated position-delete file.
         for delete in deletes.into_iter().chain(
-            (!delete_files.iter().any(|d| d.data_file_id == file.data_file_id))
-                .then_some(None),
+            (!delete_files
+                .iter()
+                .any(|d| d.data_file_id == file.data_file_id))
+            .then_some(None),
         ) {
             let values = vec![
                 MetadataValue::text(file.data_file_id.to_string()),
@@ -1140,7 +1142,9 @@ pub(super) fn make_extended_data_file_response(
                 MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
                 MetadataValue::optional_text(delete.map(|d| d.path.clone())),
                 MetadataValue::optional_text(
-                    delete.and_then(|d| d.path_is_relative).map(|v| v.to_string()),
+                    delete
+                        .and_then(|d| d.path_is_relative)
+                        .map(|v| v.to_string()),
                 ),
                 MetadataValue::optional_text(delete.map(|d| d.file_size_bytes.to_string())),
                 MetadataValue::optional_text(

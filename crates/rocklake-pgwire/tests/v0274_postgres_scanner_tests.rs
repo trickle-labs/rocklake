@@ -302,7 +302,12 @@ async fn duckdb_2_extended_file_listing_has_binary_copy_columns() {
     assert_eq!(columns.len(), 16);
     assert_eq!(
         &columns[..4],
-        &["data_file_id", "delete_file_id", "record_count", "data_path"]
+        &[
+            "data_file_id",
+            "delete_file_id",
+            "record_count",
+            "data_path"
+        ]
     );
     assert_eq!(count, 0);
 }
