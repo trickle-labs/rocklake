@@ -1135,7 +1135,10 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
             );
             // These metadata-surface probes contain no $N placeholders. The
             // extended protocol must not supply unrelated snapshot/table IDs.
-            assert!(statement.params().is_empty(), "literal metadata query must have no parameters");
+            assert!(
+                statement.params().is_empty(),
+                "literal metadata query must have no parameters"
+            );
             client
                 .query(&statement, &[])
                 .await
