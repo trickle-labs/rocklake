@@ -1180,12 +1180,67 @@ pub(super) fn make_extended_data_file_response(
 
 /// DuckLake's ordinary file scanner uses a different wire projection from
 /// UPDATE/DELETE's extended file list. Keep nulls and field order intact.
+/// The DuckLake file scanner may append runtime-filter columns to its
+/// SELECT. Extract the actual projection even when sqlparser rejects one of
+/// DuckDB's generated expressions. CTEs are ignored by starting at the main
+/// SELECT immediately preceding FROM ...ducklake_data_file data.
+fn scan_file_projection_names(sql: &str) -> Option<Vec<String>> {
+    let lower = sql.to_ascii_lowercase();
+    let table_at = lower.find("ducklake_data_file data")?;
+    let from_at = lower[..table_at].rfind("from ")?;
+    let select_at = lower[..from_at].rfind("select ")?;
+    let projection = &sql[select_at + "select ".len()..from_at];
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut start = 0usize;
+    for (index, ch) in projection.char_indices() {
+        if let Some(delimiter) = quote {
+            if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(projection[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(projection[start..].trim());
+    if parts.iter().any(|item| item.is_empty() || *item == "*") {
+        return None;
+    }
+    Some(
+        parts
+            .into_iter()
+            .map(|item| {
+                let lower = item.to_ascii_lowercase();
+                let name = if let Some(as_at) = lower.rfind(" as ") {
+                    &item[as_at + 4..]
+                } else {
+                    item.rsplit('.').next().unwrap_or(item)
+                };
+                name.trim().trim_matches('"').to_ascii_lowercase()
+            })
+            .collect(),
+    )
+}
+
+/// Ordinary file scans use a variable result projection: DuckDB can append
+/// runtime filter statistics. The binary COPY response must match the exact
+/// number and order of requested fields, not a hardcoded 15-column schema.
 pub(super) fn make_scan_data_file_response(
     files: Vec<rocklake_core::rows::DataFileRow>,
     delete_files: Vec<rocklake_core::rows::DeleteFileRow>,
     sql: &str,
 ) -> Response<'static> {
-    let columns: &[(&str, Type)] = &[
+    let base_columns: &[(&str, Type)] = &[
         ("data_file_id", Type::INT8),
         ("data_path", Type::TEXT),
         ("data_path_is_relative", Type::BOOL),
@@ -1202,45 +1257,32 @@ pub(super) fn make_scan_data_file_response(
         ("del_footer_size", Type::INT8),
         ("del_format", Type::TEXT),
     ];
-    let mut fields = columns
-        .iter()
-        .map(|(name, datatype)| {
-            FieldInfo::new(
-                (*name).to_string(),
-                None,
-                None,
-                datatype.clone(),
-                FieldFormat::Text,
-            )
-        })
-        .collect::<Vec<_>>();
+    let projected_names = scan_file_projection_names(sql).unwrap_or_else(|| {
+        base_columns
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect()
+    });
+    let schema = Arc::new(
+        projected_names
+            .iter()
+            .map(|name| {
+                let datatype = base_columns
+                    .iter()
+                    .find(|(base_name, _)| *base_name == name.as_str())
+                    .map(|(_, datatype)| datatype.clone())
+                    .unwrap_or_else(|| {
+                        if name.ends_with("_contains_nan") {
+                            Type::BOOL
+                        } else {
+                            Type::TEXT
+                        }
+                    });
+                FieldInfo::new(name.clone(), None, None, datatype, FieldFormat::Text)
+            })
+            .collect::<Vec<_>>(),
+    );
 
-    // When DuckDB pushes dynamic filters, optional zone-map columns follow
-    // the fifteen file fields. Unknown statistics are NULL, not zero: the
-    // engine must read such files rather than incorrectly pruning them.
-    if let Some(projections) = select_projection_items(sql) {
-        for item in projections.into_iter().skip(columns.len()) {
-            let name = match item {
-                SelectItem::ExprWithAlias { alias, .. } => alias.value,
-                SelectItem::UnnamedExpr(expr) => expr_last_identifier(&expr),
-                SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => continue,
-            };
-            let datatype = if name.ends_with("_contains_nan") {
-                Type::BOOL
-            } else {
-                Type::TEXT
-            };
-            fields.push(FieldInfo::new(
-                name,
-                None,
-                None,
-                datatype,
-                FieldFormat::Text,
-            ));
-        }
-    }
-
-    let schema = Arc::new(fields);
     let mut rows = Vec::new();
     for file in &files {
         let matching_deletes = delete_files
@@ -1253,7 +1295,7 @@ pub(super) fn make_scan_data_file_response(
             .map(Some)
             .chain((!has_deletes).then_some(None))
         {
-            let mut values = vec![
+            let base_values = vec![
                 MetadataValue::text(file.data_file_id.to_string()),
                 MetadataValue::text(file.path.clone()),
                 MetadataValue::optional_text(file.path_is_relative.map(|v| v.to_string())),
@@ -1277,14 +1319,23 @@ pub(super) fn make_scan_data_file_response(
                 nonnegative_footer_size(delete.and_then(|d| d.footer_size)),
                 MetadataValue::optional_text(delete.and_then(|d| d.format.clone())),
             ];
-            values.extend(
-                std::iter::repeat_with(|| MetadataValue::optional_text(None))
-                    .take(schema.len() - columns.len()),
-            );
+            let available = base_columns
+                .iter()
+                .zip(base_values)
+                .map(|((name, _), value)| (*name, value))
+                .collect::<std::collections::HashMap<_, _>>();
+            let values = projected_names
+                .iter()
+                .map(|name| {
+                    available
+                        .get(name.as_str())
+                        .cloned()
+                        .unwrap_or(MetadataValue::Null)
+                })
+                .collect();
             rows.push(encode_metadata_row(schema.clone(), values));
         }
     }
-
     let count = rows.len();
     let mut resp = QueryResponse::new(schema, futures::stream::iter(rows));
     resp.set_command_tag(&format!("SELECT {count}"));
@@ -3222,5 +3273,45 @@ mod duckdb_2_unsigned_catalog_tests {
             .unwrap();
         assert_eq!(row.field_count, 15);
         assert!(rows.next().await.is_none());
+    }
+}
+
+#[cfg(test)]
+mod duckdb_file_projection_tests {
+    use super::scan_file_projection_names;
+
+    #[test]
+    fn ordinary_scan_uses_exact_projection_count() {
+        let base = "SELECT data.data_file_id, data.path AS data_path, \
+            data.path_is_relative AS data_path_is_relative, \
+            data.file_size_bytes AS data_file_size_bytes, \
+            data.footer_size AS data_footer_size, \
+            CASE WHEN data.file_format = 'parquet' THEN NULL ELSE data.file_format END \
+                AS data_unsupported_format, \
+            data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, \
+            del.path AS del_path, del.path_is_relative AS del_path_is_relative, \
+            del.file_size_bytes AS del_file_size_bytes, del.footer_size AS del_footer_size, \
+            del.format AS del_format";
+        let from = " FROM \"public\".ducklake_data_file data \
+            LEFT JOIN \"public\".ducklake_delete_file del ON del.data_file_id = data.data_file_id";
+        let fields = scan_file_projection_names(&format!("{base}{from}")).unwrap();
+        assert_eq!(fields.len(), 15);
+        assert_eq!(fields[5], "data_unsupported_format");
+
+        let with_one = base.to_string() + ", col_1_stats.min_value AS col_1_stats_min_value";
+        let fields = scan_file_projection_names(&format!("{with_one}{from}")).unwrap();
+        assert_eq!(fields.len(), 16);
+        assert_eq!(fields[15], "col_1_stats_min_value");
+
+        let with_three = with_one
+            + ", col_1_stats.max_value AS col_1_stats_max_value, \
+               col_1_stats.contains_nan AS col_1_stats_contains_nan";
+        let fields = scan_file_projection_names(&format!(
+            "WITH col_1_stats AS (SELECT data_file_id FROM ducklake_file_column_stats) \
+             {with_three}{from}"
+        ))
+        .unwrap();
+        assert_eq!(fields.len(), 18);
+        assert_eq!(fields[17], "col_1_stats_contains_nan");
     }
 }

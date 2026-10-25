@@ -12,7 +12,7 @@ use crate::error::RockLakeError;
 use crate::lifecycle::OperationClass;
 
 /// A value supplied to the one metadata row encoder.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MetadataValue {
     Null,
     Text(Option<String>),
