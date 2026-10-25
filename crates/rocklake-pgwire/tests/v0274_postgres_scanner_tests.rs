@@ -444,7 +444,6 @@ async fn ducklake_table_stats_preserves_requested_projection_order() {
     assert_eq!(count, 0, "fresh catalog should not have table stats rows");
 }
 
-
 #[tokio::test]
 async fn duckdb_2_regular_and_extended_file_queries_keep_distinct_wire_shapes() {
     let dir = TempDir::new().unwrap();
@@ -468,11 +467,21 @@ async fn duckdb_2_regular_and_extended_file_queries_keep_distinct_wire_shapes() 
     assert_eq!(
         scan_fields,
         vec![
-            "data_file_id", "data_path", "data_path_is_relative",
-            "data_file_size_bytes", "data_footer_size", "data_unsupported_format",
-            "row_id_start", "begin_snapshot", "partial_max", "mapping_id",
-            "del_path", "del_path_is_relative", "del_file_size_bytes",
-            "del_footer_size", "del_format",
+            "data_file_id",
+            "data_path",
+            "data_path_is_relative",
+            "data_file_size_bytes",
+            "data_footer_size",
+            "data_unsupported_format",
+            "row_id_start",
+            "begin_snapshot",
+            "partial_max",
+            "mapping_id",
+            "del_path",
+            "del_path_is_relative",
+            "del_file_size_bytes",
+            "del_footer_size",
+            "del_format",
         ]
     );
     assert_eq!(count, 0);
@@ -499,11 +508,22 @@ async fn duckdb_2_regular_and_extended_file_queries_keep_distinct_wire_shapes() 
     assert_eq!(
         extended_fields,
         vec![
-            "data_file_id", "delete_file_id", "record_count", "data_path",
-            "data_path_is_relative", "data_file_size_bytes", "data_footer_size",
-            "data_unsupported_format", "row_id_start", "mapping_id", "del_path",
-            "del_path_is_relative", "del_file_size_bytes", "del_footer_size",
-            "del_format", "begin_snapshot",
+            "data_file_id",
+            "delete_file_id",
+            "record_count",
+            "data_path",
+            "data_path_is_relative",
+            "data_file_size_bytes",
+            "data_footer_size",
+            "data_unsupported_format",
+            "row_id_start",
+            "mapping_id",
+            "del_path",
+            "del_path_is_relative",
+            "del_file_size_bytes",
+            "del_footer_size",
+            "del_format",
+            "begin_snapshot",
         ]
     );
     assert_eq!(count, 0);

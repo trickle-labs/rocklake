@@ -396,11 +396,13 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
         && lower.contains("ducklake_data_file")
         && lower.contains("ducklake_delete_file")
     {
-        return Ok(if lower.contains("del.delete_file_id") && lower.contains("data.record_count") {
-            StatementKind::SelectExtendedDataFiles
-        } else {
-            StatementKind::SelectDataFiles
-        });
+        return Ok(
+            if lower.contains("del.delete_file_id") && lower.contains("data.record_count") {
+                StatementKind::SelectExtendedDataFiles
+            } else {
+                StatementKind::SelectDataFiles
+            },
+        );
     }
 
     if lower.contains("update") && lower.contains("ducklake_table_column_stats") {

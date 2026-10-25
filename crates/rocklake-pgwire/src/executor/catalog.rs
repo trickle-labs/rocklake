@@ -3152,12 +3152,23 @@ mod duckdb_2_unsigned_catalog_tests {
         assert_eq!(
             names,
             vec![
-                "data_file_id", "data_path", "data_path_is_relative",
-                "data_file_size_bytes", "data_footer_size",
-                "data_unsupported_format", "row_id_start", "begin_snapshot",
-                "partial_max", "mapping_id", "del_path", "del_path_is_relative",
-                "del_file_size_bytes", "del_footer_size", "del_format",
-                "col_1_stats_min_value", "col_1_stats_max_value",
+                "data_file_id",
+                "data_path",
+                "data_path_is_relative",
+                "data_file_size_bytes",
+                "data_footer_size",
+                "data_unsupported_format",
+                "row_id_start",
+                "begin_snapshot",
+                "partial_max",
+                "mapping_id",
+                "del_path",
+                "del_path_is_relative",
+                "del_file_size_bytes",
+                "del_footer_size",
+                "del_format",
+                "col_1_stats_min_value",
+                "col_1_stats_max_value",
                 "col_1_stats_contains_nan",
             ]
         );
@@ -3185,7 +3196,10 @@ mod duckdb_2_unsigned_catalog_tests {
         assert_eq!(values[0].as_deref(), Some("7"));
         assert_eq!(values[1].as_deref(), Some("part-7.parquet"));
         assert_eq!(values[3].as_deref(), Some("1314"));
-        assert_eq!(values[4], None, "negative footer size must not reach UINT64");
+        assert_eq!(
+            values[4], None,
+            "negative footer size must not reach UINT64"
+        );
         assert_eq!(values[8], None, "negative partial_max must be SQL NULL");
         assert_eq!(values[9].as_deref(), Some("9"));
         assert_eq!(values[10].as_deref(), Some("delete-8.parquet"));
@@ -3201,9 +3215,12 @@ mod duckdb_2_unsigned_catalog_tests {
         assert_eq!(query.row_schema().len(), 15);
         let rows = query.data_rows();
         futures::pin_mut!(rows);
-        let row = rows.next().await.expect("live file must not disappear").unwrap();
+        let row = rows
+            .next()
+            .await
+            .expect("live file must not disappear")
+            .unwrap();
         assert_eq!(row.field_count, 15);
         assert!(rows.next().await.is_none());
     }
-
 }
