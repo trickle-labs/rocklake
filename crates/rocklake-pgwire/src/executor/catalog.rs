@@ -1072,6 +1072,23 @@ pub(super) fn make_columns_response(
     )
 }
 
+/// The footer size and partial snapshot boundary are optional unsigned
+/// metadata values to DuckLake. Legacy clients can send -1 as an "unknown"
+/// sentinel, which DuckDB 2.0 cannot cast from INT64 to UINT64. Preserve
+/// unknown values as SQL NULL rather than exposing a negative count.
+fn nonnegative_footer_size(value: Option<i64>) -> MetadataValue {
+    MetadataValue::optional_text(value.filter(|n| *n >= 0).map(|n| n.to_string()))
+}
+
+fn nonnegative_partial_max(value: Option<&str>) -> MetadataValue {
+    MetadataValue::optional_text(
+        value
+            .and_then(|n| n.parse::<i64>().ok())
+            .filter(|n| *n >= 0)
+            .map(|n| n.to_string()),
+    )
+}
+
 /// DuckDB 2.0's COPY (WITH col_*_stats ... JOIN ducklake_delete_file)
 /// requests the extended data-file shape for UPDATE/DELETE scans. Return
 /// visible data files (including ones with no usable zone-map bounds); pruning
@@ -1133,7 +1150,7 @@ pub(super) fn make_extended_data_file_response(
                 MetadataValue::text(file.path.clone()),
                 MetadataValue::optional_text(file.path_is_relative.map(|v| v.to_string())),
                 MetadataValue::text(file.file_size_bytes.to_string()),
-                MetadataValue::optional_text(file.footer_size.map(|v| v.to_string())),
+                nonnegative_footer_size(file.footer_size),
                 MetadataValue::optional_text(
                     (!file.file_format.eq_ignore_ascii_case("parquet"))
                         .then(|| file.file_format.clone()),
@@ -1147,9 +1164,7 @@ pub(super) fn make_extended_data_file_response(
                         .map(|v| v.to_string()),
                 ),
                 MetadataValue::optional_text(delete.map(|d| d.file_size_bytes.to_string())),
-                MetadataValue::optional_text(
-                    delete.and_then(|d| d.footer_size).map(|v| v.to_string()),
-                ),
+                nonnegative_footer_size(delete.and_then(|d| d.footer_size)),
                 MetadataValue::optional_text(delete.and_then(|d| d.format.clone())),
                 MetadataValue::optional_text(
                     delete.and_then(|d| d.begin_snapshot).map(|v| v.to_string()),
@@ -1180,12 +1195,12 @@ fn encode_data_file_row(
             MetadataValue::text(f.file_format.clone()),
             MetadataValue::text(f.record_count.to_string()),
             MetadataValue::text(f.file_size_bytes.to_string()),
-            MetadataValue::optional_text(f.footer_size.map(|value| value.to_string())),
+            nonnegative_footer_size(f.footer_size),
             MetadataValue::optional_text(f.row_id_start.map(|value| value.to_string())),
             MetadataValue::optional_text(f.partition_id.map(|value| value.to_string())),
             MetadataValue::optional_text(f.encryption_key.clone()),
             MetadataValue::optional_text(f.mapping_id.map(|value| value.to_string())),
-            MetadataValue::optional_text(f.partial_max.clone()),
+            nonnegative_partial_max(f.partial_max.as_deref()),
         ],
     )
 }
@@ -2189,9 +2204,9 @@ fn encode_delete_file_row(
             MetadataValue::optional_text(file.format.clone()),
             MetadataValue::text(file.delete_count.to_string()),
             MetadataValue::text(file.file_size_bytes.to_string()),
-            MetadataValue::optional_text(file.footer_size.map(|value| value.to_string())),
+            nonnegative_footer_size(file.footer_size),
             MetadataValue::optional_text(file.encryption_key.clone()),
-            MetadataValue::optional_text(file.partial_max.clone()),
+            nonnegative_partial_max(file.partial_max.as_deref()),
         ],
     )
 }
@@ -2931,4 +2946,34 @@ pub(super) fn make_name_mapping_response(
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "mapping_id ASC, column_id ASC")
+}
+
+#[cfg(test)]
+mod duckdb_2_unsigned_catalog_tests {
+    use super::{nonnegative_footer_size, nonnegative_partial_max};
+    use crate::metadata_stream::MetadataValue;
+
+    #[test]
+    fn negative_footer_size_is_sql_null_not_signed_sentinel() {
+        assert!(matches!(
+            nonnegative_footer_size(Some(-1)),
+            MetadataValue::Text(None)
+        ));
+        assert!(matches!(
+            nonnegative_footer_size(Some(25)),
+            MetadataValue::Text(Some(value)) if value == "25"
+        ));
+    }
+
+    #[test]
+    fn partial_max_must_be_nonnegative_or_sql_null() {
+        assert!(matches!(
+            nonnegative_partial_max(Some("-1")),
+            MetadataValue::Text(None)
+        ));
+        assert!(matches!(
+            nonnegative_partial_max(Some("42")),
+            MetadataValue::Text(Some(value)) if value == "42"
+        ));
+    }
 }
