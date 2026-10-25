@@ -444,6 +444,71 @@ async fn ducklake_table_stats_preserves_requested_projection_order() {
     assert_eq!(count, 0, "fresh catalog should not have table stats rows");
 }
 
+
+#[tokio::test]
+async fn duckdb_2_regular_and_extended_file_queries_keep_distinct_wire_shapes() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+
+    let scan_sql = r#"SELECT data.data_file_id,
+        data.path AS data_path,
+        data.path_is_relative AS data_path_is_relative,
+        data.file_size_bytes AS data_file_size_bytes,
+        data.footer_size AS data_footer_size,
+        CASE WHEN data.file_format = 'parquet' THEN NULL
+             ELSE data.file_format END AS data_unsupported_format,
+        data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id,
+        del.path AS del_path, del.path_is_relative AS del_path_is_relative,
+        del.file_size_bytes AS del_file_size_bytes,
+        del.footer_size AS del_footer_size, del.format AS del_format
+    FROM "public".ducklake_data_file data
+    LEFT JOIN "public".ducklake_delete_file del ON del.data_file_id = data.data_file_id
+    WHERE data.table_id = 3"#;
+    let (scan_fields, count) = query_names_and_count(exec_one(scan_sql, &store).await).await;
+    assert_eq!(
+        scan_fields,
+        vec![
+            "data_file_id", "data_path", "data_path_is_relative",
+            "data_file_size_bytes", "data_footer_size", "data_unsupported_format",
+            "row_id_start", "begin_snapshot", "partial_max", "mapping_id",
+            "del_path", "del_path_is_relative", "del_file_size_bytes",
+            "del_footer_size", "del_format",
+        ]
+    );
+    assert_eq!(count, 0);
+
+    let extended_sql = r#"WITH col_1_stats AS (
+        SELECT data_file_id FROM "public".ducklake_file_column_stats
+        WHERE column_id = 1 AND table_id = 3
+    ) SELECT data.data_file_id, del.delete_file_id, data.record_count,
+        data.path AS data_path, data.path_is_relative AS data_path_is_relative,
+        data.file_size_bytes AS data_file_size_bytes,
+        data.footer_size AS data_footer_size,
+        CASE WHEN data.file_format = 'parquet' THEN NULL
+             ELSE data.file_format END AS data_unsupported_format,
+        data.row_id_start, data.mapping_id, del.path AS del_path,
+        del.path_is_relative AS del_path_is_relative,
+        del.file_size_bytes AS del_file_size_bytes,
+        del.footer_size AS del_footer_size,
+        del.format AS del_format, del.begin_snapshot
+    FROM "public".ducklake_data_file data
+    LEFT JOIN "public".ducklake_delete_file del ON del.data_file_id = data.data_file_id
+    WHERE data.table_id = 3"#;
+    let (extended_fields, count) =
+        query_names_and_count(exec_one(extended_sql, &store).await).await;
+    assert_eq!(
+        extended_fields,
+        vec![
+            "data_file_id", "delete_file_id", "record_count", "data_path",
+            "data_path_is_relative", "data_file_size_bytes", "data_footer_size",
+            "data_unsupported_format", "row_id_start", "mapping_id", "del_path",
+            "del_path_is_relative", "del_file_size_bytes", "del_footer_size",
+            "del_format", "begin_snapshot",
+        ]
+    );
+    assert_eq!(count, 0);
+}
+
 #[tokio::test]
 async fn ducklake_snapshot_stats_changes_union_has_expected_shape() {
     let dir = TempDir::new().unwrap();

@@ -39,7 +39,8 @@ use catalog::{
     make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
     make_macros_response, make_metadata_response, make_metadata_table_empty_response,
     make_name_mapping_response, make_partition_columns_response, make_partition_info_response,
-    make_schema_version_response, make_schema_versions_response, make_schemas_response,
+    make_scan_data_file_response, make_schema_version_response, make_schema_versions_response,
+    make_schemas_response,
     make_snapshot_changes_response, make_snapshot_row_response,
     make_snapshot_stats_changes_response, make_sort_expressions_response, make_sort_info_response,
     make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
@@ -1317,6 +1318,32 @@ async fn execute_classified<'a>(
             let snap_id =
                 resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snap_id).await?;
+
+            // DuckLake's JOIN-based file scanner expects data_path/del_path
+            // aliases, not the raw ducklake_data_file metadata table schema.
+            // Preserve the simple metadata scans used by older clients.
+            let lower = _sql.to_ascii_lowercase();
+            if lower.contains("ducklake_data_file")
+                && lower.contains("ducklake_delete_file")
+                && lower.contains("data_unsupported_format")
+                && lower.contains("del_path")
+            {
+                let table_id = table_id
+                    .or_else(|| literal_assignment_u64(_sql, "table_id"))
+                    .ok_or_else(|| RockLakeError::MissingParam {
+                        name: "table_id".to_string(),
+                    })?;
+                let files = reader
+                    .list_data_files(table_id)
+                    .await
+                    .map_err(RockLakeError::from)?;
+                let deletes = reader
+                    .list_delete_files(table_id)
+                    .await
+                    .map_err(RockLakeError::from)?;
+                return Ok(vec![make_scan_data_file_response(files, deletes, _sql)]);
+            }
+
             if let Some(table_id) = table_id {
                 return Ok(vec![
                     make_data_files_stream_response(reader, table_id, None).await?,

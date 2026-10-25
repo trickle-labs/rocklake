@@ -389,12 +389,18 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
         return Ok(kind);
     }
 
+    // DuckDB 2.0 uses CTEs for both ordinary scans and UPDATE/DELETE.
+    // Only the extended file projection includes a delete ID and row count.
     if lower.trim_start().starts_with("with ")
         && lower.contains("ducklake_file_column_stats")
         && lower.contains("ducklake_data_file")
         && lower.contains("ducklake_delete_file")
     {
-        return Ok(StatementKind::SelectExtendedDataFiles);
+        return Ok(if lower.contains("del.delete_file_id") && lower.contains("data.record_count") {
+            StatementKind::SelectExtendedDataFiles
+        } else {
+            StatementKind::SelectDataFiles
+        });
     }
 
     if lower.contains("update") && lower.contains("ducklake_table_column_stats") {
@@ -531,7 +537,9 @@ mod duckdb_2_copy_tests {
         let sql = r#"COPY (WITH col_1_stats AS (
             SELECT data_file_id FROM "public".ducklake_file_column_stats
             WHERE column_id = 1
-        ) SELECT data.data_file_id FROM "public".ducklake_data_file data
+        ) SELECT data.data_file_id, del.delete_file_id, data.record_count,
+                 data.path AS data_path, del.path AS del_path
+          FROM "public".ducklake_data_file data
         LEFT JOIN "public".ducklake_delete_file del
         ON data.data_file_id = del.data_file_id
         ) TO STDOUT (FORMAT "binary");"#;
@@ -542,6 +550,27 @@ mod duckdb_2_copy_tests {
         assert!(matches!(
             classify_statement(&query).unwrap(),
             StatementKind::SelectExtendedDataFiles
+        ));
+    }
+
+    #[test]
+    fn cte_copy_without_extended_columns_uses_regular_scan() {
+        let sql = r#"COPY (WITH col_1_stats AS (
+            SELECT data_file_id FROM "public".ducklake_file_column_stats
+            WHERE column_id = 1
+        ) SELECT data.data_file_id, data.path AS data_path,
+                 del.path AS del_path
+          FROM "public".ducklake_data_file data
+          LEFT JOIN "public".ducklake_delete_file del
+          ON data.data_file_id = del.data_file_id
+        ) TO STDOUT (FORMAT "binary");"#;
+        let kind = classify_statement(sql).expect("valid DuckDB 2.0 COPY");
+        let StatementKind::CopyToStdout { query } = kind else {
+            panic!("expected COPY TO STDOUT, got {kind:?}");
+        };
+        assert!(matches!(
+            classify_statement(&query).unwrap(),
+            StatementKind::SelectDataFiles
         ));
     }
 }

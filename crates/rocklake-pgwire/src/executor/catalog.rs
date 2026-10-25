@@ -1178,6 +1178,119 @@ pub(super) fn make_extended_data_file_response(
     Response::Query(result)
 }
 
+/// DuckLake's ordinary file scanner uses a different wire projection from
+/// UPDATE/DELETE's extended file list. Keep nulls and field order intact.
+pub(super) fn make_scan_data_file_response(
+    files: Vec<rocklake_core::rows::DataFileRow>,
+    delete_files: Vec<rocklake_core::rows::DeleteFileRow>,
+    sql: &str,
+) -> Response<'static> {
+    let columns: &[(&str, Type)] = &[
+        ("data_file_id", Type::INT8),
+        ("data_path", Type::TEXT),
+        ("data_path_is_relative", Type::BOOL),
+        ("data_file_size_bytes", Type::INT8),
+        ("data_footer_size", Type::INT8),
+        ("data_unsupported_format", Type::TEXT),
+        ("row_id_start", Type::INT8),
+        ("begin_snapshot", Type::INT8),
+        ("partial_max", Type::INT8),
+        ("mapping_id", Type::INT8),
+        ("del_path", Type::TEXT),
+        ("del_path_is_relative", Type::BOOL),
+        ("del_file_size_bytes", Type::INT8),
+        ("del_footer_size", Type::INT8),
+        ("del_format", Type::TEXT),
+    ];
+    let mut fields = columns
+        .iter()
+        .map(|(name, datatype)| {
+            FieldInfo::new(
+                (*name).to_string(),
+                None,
+                None,
+                datatype.clone(),
+                FieldFormat::Text,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // When DuckDB pushes dynamic filters, optional zone-map columns follow
+    // the fifteen file fields. Unknown statistics are NULL, not zero: the
+    // engine must read such files rather than incorrectly pruning them.
+    if let Some(projections) = select_projection_items(sql) {
+        for item in projections.into_iter().skip(columns.len()) {
+            let name = match item {
+                SelectItem::ExprWithAlias { alias, .. } => alias.value,
+                SelectItem::UnnamedExpr(expr) => expr_last_identifier(&expr),
+                SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => continue,
+            };
+            let datatype = if name.ends_with("_contains_nan") {
+                Type::BOOL
+            } else {
+                Type::TEXT
+            };
+            fields.push(FieldInfo::new(
+                name,
+                None,
+                None,
+                datatype,
+                FieldFormat::Text,
+            ));
+        }
+    }
+
+    let schema = Arc::new(fields);
+    let mut rows = Vec::new();
+    for file in &files {
+        let matching_deletes = delete_files
+            .iter()
+            .filter(|del| del.data_file_id == file.data_file_id)
+            .collect::<Vec<_>>();
+        let has_deletes = !matching_deletes.is_empty();
+        for delete in matching_deletes
+            .into_iter()
+            .map(Some)
+            .chain((!has_deletes).then_some(None))
+        {
+            let mut values = vec![
+                MetadataValue::text(file.data_file_id.to_string()),
+                MetadataValue::text(file.path.clone()),
+                MetadataValue::optional_text(file.path_is_relative.map(|v| v.to_string())),
+                MetadataValue::text(file.file_size_bytes.to_string()),
+                nonnegative_footer_size(file.footer_size),
+                MetadataValue::optional_text(
+                    (!file.file_format.eq_ignore_ascii_case("parquet"))
+                        .then(|| file.file_format.clone()),
+                ),
+                MetadataValue::optional_text(file.row_id_start.map(|v| v.to_string())),
+                MetadataValue::optional_text(file.begin_snapshot.map(|v| v.to_string())),
+                nonnegative_partial_max(file.partial_max.as_deref()),
+                MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
+                MetadataValue::optional_text(delete.map(|d| d.path.clone())),
+                MetadataValue::optional_text(
+                    delete
+                        .and_then(|d| d.path_is_relative)
+                        .map(|v| v.to_string()),
+                ),
+                MetadataValue::optional_text(delete.map(|d| d.file_size_bytes.to_string())),
+                nonnegative_footer_size(delete.and_then(|d| d.footer_size)),
+                MetadataValue::optional_text(delete.and_then(|d| d.format.clone())),
+            ];
+            values.extend(
+                std::iter::repeat_with(|| MetadataValue::optional_text(None))
+                    .take(schema.len() - columns.len()),
+            );
+            rows.push(encode_metadata_row(schema.clone(), values));
+        }
+    }
+
+    let count = rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
 fn encode_data_file_row(
     schema: Arc<Vec<FieldInfo>>,
     f: &rocklake_core::rows::DataFileRow,
@@ -2976,4 +3089,121 @@ mod duckdb_2_unsigned_catalog_tests {
             MetadataValue::Text(Some(value)) if value == "42"
         ));
     }
+
+    #[tokio::test]
+    async fn duckdb_2_scan_projection_retains_file_values_and_nullable_delete_metadata() {
+        use futures::StreamExt;
+        use pgwire::api::results::Response;
+        use rocklake_core::rows::{DataFileRow, DeleteFileRow};
+
+        let file = DataFileRow {
+            data_file_id: 7,
+            table_id: 3,
+            path: "part-7.parquet".to_string(),
+            file_format: "parquet".to_string(),
+            record_count: 12,
+            file_size_bytes: 1314,
+            footer_size: Some(-1),
+            begin_snapshot: Some(4),
+            row_id_start: Some(12),
+            mapping_id: Some(9),
+            partial_max: Some("-1".to_string()),
+            ..Default::default()
+        };
+        let delete = DeleteFileRow {
+            delete_file_id: 8,
+            table_id: Some(3),
+            data_file_id: 7,
+            path: "delete-8.parquet".to_string(),
+            file_size_bytes: 123,
+            footer_size: Some(-1),
+            format: Some("parquet".to_string()),
+            ..Default::default()
+        };
+
+        // CTE-driven runtime filters append three statistics projections.
+        let sql = r#"WITH col_1_stats AS (
+            SELECT data_file_id FROM ducklake_file_column_stats WHERE column_id = 1
+        ) SELECT data.data_file_id, data.path AS data_path,
+                 data.path_is_relative AS data_path_is_relative,
+                 data.file_size_bytes AS data_file_size_bytes,
+                 data.footer_size AS data_footer_size,
+                 data.file_format AS data_unsupported_format,
+                 data.row_id_start, data.begin_snapshot, data.partial_max,
+                 data.mapping_id, del.path AS del_path,
+                 del.path_is_relative AS del_path_is_relative,
+                 del.file_size_bytes AS del_file_size_bytes,
+                 del.footer_size AS del_footer_size, del.format AS del_format,
+                 col_1_stats.min_value AS col_1_stats_min_value,
+                 col_1_stats.max_value AS col_1_stats_max_value,
+                 col_1_stats.contains_nan AS col_1_stats_contains_nan
+        FROM ducklake_data_file data
+        LEFT JOIN ducklake_delete_file del ON del.data_file_id = data.data_file_id"#;
+
+        let response = super::make_scan_data_file_response(vec![file.clone()], vec![delete], sql);
+        let Response::Query(query) = response else {
+            panic!("expected scanner row response");
+        };
+        let names = query
+            .row_schema()
+            .iter()
+            .map(|field| field.name().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "data_file_id", "data_path", "data_path_is_relative",
+                "data_file_size_bytes", "data_footer_size",
+                "data_unsupported_format", "row_id_start", "begin_snapshot",
+                "partial_max", "mapping_id", "del_path", "del_path_is_relative",
+                "del_file_size_bytes", "del_footer_size", "del_format",
+                "col_1_stats_min_value", "col_1_stats_max_value",
+                "col_1_stats_contains_nan",
+            ]
+        );
+        let rows = query.data_rows();
+        futures::pin_mut!(rows);
+        let row = rows.next().await.expect("scan row").expect("encoded row");
+        assert_eq!(row.field_count as usize, names.len());
+        let mut bytes = row.data.as_ref();
+        let values = (0..names.len())
+            .map(|_| {
+                let len = i32::from_be_bytes(bytes[..4].try_into().unwrap());
+                bytes = &bytes[4..];
+                if len == -1 {
+                    None
+                } else {
+                    assert!(len >= 0);
+                    let len = len as usize;
+                    let value = String::from_utf8(bytes[..len].to_vec()).unwrap();
+                    bytes = &bytes[len..];
+                    Some(value)
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(bytes.is_empty());
+        assert_eq!(values[0].as_deref(), Some("7"));
+        assert_eq!(values[1].as_deref(), Some("part-7.parquet"));
+        assert_eq!(values[3].as_deref(), Some("1314"));
+        assert_eq!(values[4], None, "negative footer size must not reach UINT64");
+        assert_eq!(values[8], None, "negative partial_max must be SQL NULL");
+        assert_eq!(values[9].as_deref(), Some("9"));
+        assert_eq!(values[10].as_deref(), Some("delete-8.parquet"));
+        assert_eq!(values[12].as_deref(), Some("123"));
+        assert_eq!(values[13], None, "delete footer sentinel must be NULL");
+        assert!(values[15..].iter().all(Option::is_none));
+
+        // Files with no delete vectors still appear once in the scan.
+        let response = super::make_scan_data_file_response(vec![file], vec![], "");
+        let Response::Query(query) = response else {
+            panic!("expected scanner row response");
+        };
+        assert_eq!(query.row_schema().len(), 15);
+        let rows = query.data_rows();
+        futures::pin_mut!(rows);
+        let row = rows.next().await.expect("live file must not disappear").unwrap();
+        assert_eq!(row.field_count, 15);
+        assert!(rows.next().await.is_none());
+    }
+
 }
