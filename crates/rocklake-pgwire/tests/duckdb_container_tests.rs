@@ -1133,22 +1133,13 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
                 registry_column_names(table_name),
                 "row description mismatch for `{query}`"
             );
-            let live_table_id = table_id as i64;
-            match table_name {
-                "ducklake_schema" | "ducklake_table" => {
-                    client
-                        .query(&statement, &[&latest_snapshot_id])
-                        .await
-                        .unwrap_or_else(|e| panic!("query execution failed for `{query}`: {e}"));
-                }
-                "ducklake_data_file" => {
-                    client
-                        .query(&statement, &[&live_table_id])
-                        .await
-                        .unwrap_or_else(|e| panic!("query execution failed for `{query}`: {e}"));
-                }
-                _ => unreachable!(),
-            }
+            // These metadata-surface probes contain no $N placeholders. The
+            // extended protocol must not supply unrelated snapshot/table IDs.
+            assert!(statement.params().is_empty(), "literal metadata query must have no parameters");
+            client
+                .query(&statement, &[])
+                .await
+                .unwrap_or_else(|e| panic!("query execution failed for `{query}`: {e}"));
             continue;
         }
         let _ = assert_registry_query_columns(&client, &query, table_name).await;
