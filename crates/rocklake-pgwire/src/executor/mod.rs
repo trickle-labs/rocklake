@@ -1392,8 +1392,8 @@ async fn execute_classified<'a>(
             // DuckDB postgres_query() sends literal WHERE table_id predicates,
             // not bind parameters. Honor those predicates before falling back
             // to the legacy positional client parameters.
-            let table_id = resolve_comparison_u64(_sql, "table_id", params)
-                .or_else(|| params.get_u64(0).ok());
+            let table_id =
+                resolve_comparison_u64(_sql, "table_id", params).or_else(|| params.get_u64(0).ok());
             let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snap_id).await?;
             if _sql
@@ -1455,8 +1455,8 @@ async fn execute_classified<'a>(
             // Do not return other tables' delete files for a literal filter.
             // Incorrect cross-table deletion counts can produce a negative net
             // row count, which DuckDB 2.0 rejects as an unsigned value.
-            let table_id = resolve_comparison_u64(_sql, "table_id", params)
-                .or_else(|| params.get_u64(0).ok());
+            let table_id =
+                resolve_comparison_u64(_sql, "table_id", params).or_else(|| params.get_u64(0).ok());
             let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snap_id).await?;
             if let Some(table_id) = table_id {
