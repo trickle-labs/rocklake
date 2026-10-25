@@ -432,7 +432,9 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
 mod tests {
     use super::{
         file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_multi_statement_batch,
+        resolve_comparison_u64,
     };
+    use rocklake_sql::ParamValues;
 
     #[test]
     fn parses_multiline_ducklake_gc_delete() {
@@ -452,6 +454,21 @@ mod tests {
             ),
             vec![(3, 3), (3, 4)]
         );
+    }
+
+    #[test]
+    fn catalog_literal_table_filters_are_not_ignored() {
+        let params = ParamValues::default();
+        for relation in ["ducklake_delete_file", "ducklake_table_stats"] {
+            let sql = format!(
+                "SELECT * FROM \"public\".{relation} WHERE table_id=3 AND begin_snapshot <= 4"
+            );
+            assert_eq!(resolve_comparison_u64(&sql, "table_id", &params), Some(3));
+            assert_eq!(
+                resolve_comparison_u64(&sql, "begin_snapshot", &params),
+                Some(4)
+            );
+        }
     }
 
     #[test]
@@ -1372,7 +1389,11 @@ async fn execute_classified<'a>(
             Ok(vec![make_file_ids_response(file_ids)])
         }
         StatementKind::SelectTableStats => {
-            let table_id = params.get_u64(0).ok();
+            // DuckDB postgres_query() sends literal WHERE table_id predicates,
+            // not bind parameters. Honor those predicates before falling back
+            // to the legacy positional client parameters.
+            let table_id = resolve_comparison_u64(_sql, "table_id", params)
+                .or_else(|| params.get_u64(0).ok());
             let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snap_id).await?;
             if _sql
@@ -1431,7 +1452,11 @@ async fn execute_classified<'a>(
             Ok(vec![make_table_column_stats_response(rows)])
         }
         StatementKind::SelectDeleteFiles => {
-            let table_id = params.get_u64(0).ok();
+            // Do not return other tables' delete files for a literal filter.
+            // Incorrect cross-table deletion counts can produce a negative net
+            // row count, which DuckDB 2.0 rejects as an unsigned value.
+            let table_id = resolve_comparison_u64(_sql, "table_id", params)
+                .or_else(|| params.get_u64(0).ok());
             let snap_id = params.get_u64(1).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snap_id).await?;
             if let Some(table_id) = table_id {
