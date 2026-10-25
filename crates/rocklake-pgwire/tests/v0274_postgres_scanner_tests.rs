@@ -285,6 +285,29 @@ async fn duckdb_1_5_pg_catalog_scan_keeps_metadata_tables_virtual() {
 }
 
 #[tokio::test]
+async fn duckdb_2_extended_file_listing_has_binary_copy_columns() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = r#"WITH col_1_stats AS (
+        SELECT data_file_id FROM "public".ducklake_file_column_stats
+        WHERE column_id = 1 AND table_id = 3
+    )
+    SELECT data.data_file_id, del.delete_file_id,
+        data.record_count, data.path AS data_path
+    FROM "public".ducklake_data_file data
+    LEFT JOIN "public".ducklake_delete_file del
+        ON del.data_file_id = data.data_file_id
+    WHERE data.table_id=3"#;
+    let (columns, count) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(columns.len(), 16);
+    assert_eq!(
+        &columns[..4],
+        &["data_file_id", "delete_file_id", "record_count", "data_path"]
+    );
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn duckdb_2_0_pg_tables_probe_returns_no_inlined_delete_table() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;

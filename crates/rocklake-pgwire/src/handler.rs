@@ -1332,6 +1332,7 @@ fn required_permission(kind: &StatementKind) -> Option<Permission> {
         | StatementKind::SelectTables
         | StatementKind::SelectColumns
         | StatementKind::SelectDataFiles
+        | StatementKind::SelectExtendedDataFiles
         | StatementKind::SelectDataFilesWithLimit
         | StatementKind::SelectDeleteFiles
         | StatementKind::SelectFileColumnStats

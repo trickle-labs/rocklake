@@ -1072,6 +1072,93 @@ pub(super) fn make_columns_response(
     )
 }
 
+/// DuckDB 2.0's COPY (WITH col_*_stats ... JOIN ducklake_delete_file)
+/// requests the extended data-file shape for UPDATE/DELETE scans. Return
+/// visible data files (including ones with no usable zone-map bounds); pruning
+/// is an optimization, so omitting it must not hide matching rows.
+pub(super) fn make_extended_data_file_response(
+    files: Vec<rocklake_core::rows::DataFileRow>,
+    delete_files: Vec<rocklake_core::rows::DeleteFileRow>,
+) -> Response<'static> {
+    let columns: &[(&str, Type)] = &[
+        ("data_file_id", Type::INT8),
+        ("delete_file_id", Type::INT8),
+        ("record_count", Type::INT8),
+        ("data_path", Type::TEXT),
+        ("data_path_is_relative", Type::BOOL),
+        ("data_file_size_bytes", Type::INT8),
+        ("data_footer_size", Type::INT8),
+        ("data_unsupported_format", Type::TEXT),
+        ("row_id_start", Type::INT8),
+        ("mapping_id", Type::INT8),
+        ("del_path", Type::TEXT),
+        ("del_path_is_relative", Type::BOOL),
+        ("del_file_size_bytes", Type::INT8),
+        ("del_footer_size", Type::INT8),
+        ("del_format", Type::TEXT),
+        ("begin_snapshot", Type::INT8),
+    ];
+    let schema = Arc::new(
+        columns
+            .iter()
+            .map(|(name, datatype)| {
+                FieldInfo::new(
+                    (*name).to_string(),
+                    None,
+                    None,
+                    datatype.clone(),
+                    FieldFormat::Text,
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+    let mut rows = Vec::new();
+    for file in &files {
+        let deletes = delete_files
+            .iter()
+            .filter(|del| del.data_file_id == file.data_file_id)
+            .map(Some)
+            .collect::<Vec<_>>();
+        // Preserve data files without any associated position-delete file.
+        for delete in deletes.into_iter().chain(
+            (!delete_files.iter().any(|d| d.data_file_id == file.data_file_id))
+                .then_some(None),
+        ) {
+            let values = vec![
+                MetadataValue::text(file.data_file_id.to_string()),
+                MetadataValue::optional_text(delete.map(|d| d.delete_file_id.to_string())),
+                MetadataValue::text(file.record_count.to_string()),
+                MetadataValue::text(file.path.clone()),
+                MetadataValue::optional_text(file.path_is_relative.map(|v| v.to_string())),
+                MetadataValue::text(file.file_size_bytes.to_string()),
+                MetadataValue::optional_text(file.footer_size.map(|v| v.to_string())),
+                MetadataValue::optional_text(
+                    (!file.file_format.eq_ignore_ascii_case("parquet"))
+                        .then(|| file.file_format.clone()),
+                ),
+                MetadataValue::optional_text(file.row_id_start.map(|v| v.to_string())),
+                MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
+                MetadataValue::optional_text(delete.map(|d| d.path.clone())),
+                MetadataValue::optional_text(
+                    delete.and_then(|d| d.path_is_relative).map(|v| v.to_string()),
+                ),
+                MetadataValue::optional_text(delete.map(|d| d.file_size_bytes.to_string())),
+                MetadataValue::optional_text(
+                    delete.and_then(|d| d.footer_size).map(|v| v.to_string()),
+                ),
+                MetadataValue::optional_text(delete.and_then(|d| d.format.clone())),
+                MetadataValue::optional_text(
+                    delete.and_then(|d| d.begin_snapshot).map(|v| v.to_string()),
+                ),
+            ];
+            rows.push(encode_metadata_row(schema.clone(), values));
+        }
+    }
+    let mut result = QueryResponse::new(schema, futures::stream::iter(rows));
+    result.set_command_tag(&format!("SELECT {}", files.len()));
+    Response::Query(result)
+}
+
 fn encode_data_file_row(
     schema: Arc<Vec<FieldInfo>>,
     f: &rocklake_core::rows::DataFileRow,

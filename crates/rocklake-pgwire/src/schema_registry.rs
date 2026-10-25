@@ -175,7 +175,7 @@ pub fn data_file_schema() -> Arc<Vec<FieldInfo>> {
         int8t!("partition_id"),
         text_col!("encryption_key"),
         int8t!("mapping_id"),
-        text_col!("partial_max"),
+        int8t!("partial_max"),
     ])
 }
 
@@ -198,7 +198,7 @@ pub fn delete_file_schema() -> Arc<Vec<FieldInfo>> {
         int8t!("file_size_bytes"),
         int8t!("footer_size"),
         text_col!("encryption_key"),
-        text_col!("partial_max"),
+        int8t!("partial_max"),
     ])
 }
 

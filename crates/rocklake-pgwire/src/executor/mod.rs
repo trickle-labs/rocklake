@@ -30,6 +30,7 @@ use crate::session::{BufferedOp, CopyAccumulator, SessionState};
 
 use catalog::{
     execute_commit, execute_next_rowid_range, execute_table_changes, make_column_mapping_response,
+    make_extended_data_file_response,
     make_column_tags_response, make_columns_response, make_data_files_stream_response,
     make_data_files_stream_response_from_rows, make_delete_files_stream_response,
     make_file_column_stats_stream_response, make_file_ids_response,
@@ -1274,6 +1275,26 @@ async fn execute_classified<'a>(
                 columns
             };
             Ok(vec![make_columns_response(columns)])
+        }
+        StatementKind::SelectExtendedDataFiles => {
+            // DuckDB's extended COPY query filters data files by snapshot and
+            // optionally by column statistics. A superset of live files is
+            // correct: zone-map pruning affects performance, not results.
+            let table_id = resolve_comparison_u64(_sql, "table_id", params)
+                .or_else(|| literal_assignment_u64(_sql, "table_id"))
+                .ok_or_else(|| RockLakeError::MissingParam {
+                    name: "table_id".to_string(),
+                })?;
+            let reader = resolve_reader(store, session, u64::MAX).await?;
+            let files = reader
+                .list_data_files(table_id)
+                .await
+                .map_err(RockLakeError::from)?;
+            let deletes = reader
+                .list_delete_files(table_id)
+                .await
+                .map_err(RockLakeError::from)?;
+            Ok(vec![make_extended_data_file_response(files, deletes)])
         }
         StatementKind::SelectDataFiles => {
             let table_id = resolve_comparison_u64(_sql, "table_id", params);

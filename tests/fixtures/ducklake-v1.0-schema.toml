@@ -311,7 +311,7 @@ nullable = true
 spec = true
 [[table.column]]
 name = "partial_max"
-type = "VARCHAR"
+type = "BIGINT"
 nullable = true
 spec = true
 
@@ -381,7 +381,7 @@ nullable = true
 spec = true
 [[table.column]]
 name = "partial_max"
-type = "VARCHAR"
+type = "BIGINT"
 nullable = true
 spec = true
 
