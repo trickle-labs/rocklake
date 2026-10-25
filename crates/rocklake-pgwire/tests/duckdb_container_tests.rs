@@ -911,6 +911,48 @@ async fn duckdb_container_commit_boundaries_match_catalog_state() {
         "bootstrap should not hide existing catalog objects"
     );
 
+    // Keep the live DuckDB 2.0 failure attributable: distinguish persisted
+    // negative row counts from SQL scanner projection/casting failures.
+    if duckdb_version().starts_with("2.") {
+        let reader = catalog.reader_latest().await;
+        let snapshot = reader
+            .get_snapshot()
+            .await
+            .expect("snapshot metadata readable")
+            .expect("bootstrap snapshot present");
+        let stats = reader
+            .get_table_stats(bootstrap_table_id)
+            .await
+            .expect("table stats readable");
+        let deletes = reader
+            .list_delete_files(bootstrap_table_id)
+            .await
+            .expect("delete file metadata readable");
+        let data_rows = bootstrap_files
+            .iter()
+            .map(|file| file.record_count as i64)
+            .sum::<i64>();
+        let deleted_rows = deletes
+            .iter()
+            .map(|file| file.delete_count as i64)
+            .sum::<i64>();
+        eprintln!(
+            "DuckDB 2 pre-mutation metadata: table_id={} snapshot={} next_file_id={:?}              data_files={} delete_files={} data_rows={} deleted_rows={} stats={:?}",
+            bootstrap_table_id,
+            bootstrap_snapshot.as_u64(),
+            snapshot.next_file_id,
+            bootstrap_files.len(),
+            deletes.len(),
+            data_rows,
+            deleted_rows,
+            stats.map(|row| (row.record_count, row.next_row_id, row.file_size_bytes)),
+        );
+        assert!(
+            data_rows >= deleted_rows,
+            "persisted catalog must not have a negative net file row count"
+        );
+    }
+
     let mutation_sql = attach_sql(
         &pgwire,
         duckdb.data_path(),
