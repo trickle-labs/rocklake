@@ -1155,7 +1155,7 @@ pub(super) fn make_extended_data_file_response(
                     (!file.file_format.eq_ignore_ascii_case("parquet"))
                         .then(|| file.file_format.clone()),
                 ),
-                MetadataValue::optional_text(file.row_id_start.map(|v| v.to_string())),
+                nonnegative_footer_size(file.row_id_start),
                 MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
                 MetadataValue::optional_text(delete.map(|d| d.path.clone())),
                 MetadataValue::optional_text(
@@ -1235,6 +1235,36 @@ fn scan_file_projection_names(sql: &str) -> Option<Vec<String>> {
 /// Ordinary file scans use a variable result projection: DuckDB can append
 /// runtime filter statistics. The binary COPY response must match the exact
 /// number and order of requested fields, not a hardcoded 15-column schema.
+pub(super) fn scan_data_file_fields(sql: &str) -> Vec<FieldInfo> {
+    let base_columns: &[(&str, Type)] = &[
+        ("data_file_id", Type::INT8),
+        ("data_path", Type::TEXT),
+        ("data_path_is_relative", Type::BOOL),
+        ("data_file_size_bytes", Type::INT8),
+        ("data_footer_size", Type::INT8),
+        ("data_unsupported_format", Type::TEXT),
+        ("row_id_start", Type::INT8),
+        ("begin_snapshot", Type::INT8),
+        ("partial_max", Type::INT8),
+        ("mapping_id", Type::INT8),
+        ("del_path", Type::TEXT),
+        ("del_path_is_relative", Type::BOOL),
+        ("del_file_size_bytes", Type::INT8),
+        ("del_footer_size", Type::INT8),
+        ("del_format", Type::TEXT),
+    ];
+    let projected_names = scan_file_projection_names(sql).unwrap_or_else(|| {
+        base_columns.iter().map(|(name, _)| (*name).to_string()).collect()
+    });
+    projected_names.iter().map(|name| {
+        let datatype = base_columns.iter().find(|(base_name, _)| *base_name == name.as_str())
+            .map(|(_, datatype)| datatype.clone()).unwrap_or_else(|| {
+                if name.ends_with("_contains_nan") { Type::BOOL } else { Type::TEXT }
+            });
+        FieldInfo::new(name.clone(), None, None, datatype, FieldFormat::Text)
+    }).collect()
+}
+
 pub(super) fn make_scan_data_file_response(
     files: Vec<rocklake_core::rows::DataFileRow>,
     delete_files: Vec<rocklake_core::rows::DeleteFileRow>,
@@ -1257,31 +1287,8 @@ pub(super) fn make_scan_data_file_response(
         ("del_footer_size", Type::INT8),
         ("del_format", Type::TEXT),
     ];
-    let projected_names = scan_file_projection_names(sql).unwrap_or_else(|| {
-        base_columns
-            .iter()
-            .map(|(name, _)| (*name).to_string())
-            .collect()
-    });
-    let schema = Arc::new(
-        projected_names
-            .iter()
-            .map(|name| {
-                let datatype = base_columns
-                    .iter()
-                    .find(|(base_name, _)| *base_name == name.as_str())
-                    .map(|(_, datatype)| datatype.clone())
-                    .unwrap_or_else(|| {
-                        if name.ends_with("_contains_nan") {
-                            Type::BOOL
-                        } else {
-                            Type::TEXT
-                        }
-                    });
-                FieldInfo::new(name.clone(), None, None, datatype, FieldFormat::Text)
-            })
-            .collect::<Vec<_>>(),
-    );
+    let schema = Arc::new(scan_data_file_fields(sql));
+    let projected_names = schema.iter().map(|field| field.name().to_string()).collect::<Vec<_>>();
 
     let mut rows = Vec::new();
     for file in &files {
@@ -1305,7 +1312,7 @@ pub(super) fn make_scan_data_file_response(
                     (!file.file_format.eq_ignore_ascii_case("parquet"))
                         .then(|| file.file_format.clone()),
                 ),
-                MetadataValue::optional_text(file.row_id_start.map(|v| v.to_string())),
+                nonnegative_footer_size(file.row_id_start),
                 MetadataValue::optional_text(file.begin_snapshot.map(|v| v.to_string())),
                 nonnegative_partial_max(file.partial_max.as_deref()),
                 MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
@@ -1360,7 +1367,7 @@ fn encode_data_file_row(
             MetadataValue::text(f.record_count.to_string()),
             MetadataValue::text(f.file_size_bytes.to_string()),
             nonnegative_footer_size(f.footer_size),
-            MetadataValue::optional_text(f.row_id_start.map(|value| value.to_string())),
+            nonnegative_footer_size(f.row_id_start),
             MetadataValue::optional_text(f.partition_id.map(|value| value.to_string())),
             MetadataValue::optional_text(f.encryption_key.clone()),
             MetadataValue::optional_text(f.mapping_id.map(|value| value.to_string())),

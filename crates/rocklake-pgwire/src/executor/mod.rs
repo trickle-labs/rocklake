@@ -13,6 +13,10 @@ mod helpers;
 mod meta;
 mod session;
 
+pub(crate) fn scan_data_file_fields(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
+    catalog::scan_data_file_fields(sql)
+}
+
 use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};

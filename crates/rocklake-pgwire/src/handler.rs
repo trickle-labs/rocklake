@@ -3004,7 +3004,16 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             project_described_fields(sql, (*crate::schema_registry::column_schema()).clone())
         }
         rocklake_sql::StatementKind::SelectDataFiles => {
-            project_described_fields(sql, (*crate::schema_registry::data_file_schema()).clone())
+            let lower = sql.to_ascii_lowercase();
+            if lower.contains("ducklake_data_file")
+                && lower.contains("ducklake_delete_file")
+                && lower.contains("data_unsupported_format")
+                && lower.contains("del_path")
+            {
+                crate::executor::scan_data_file_fields(sql)
+            } else {
+                project_described_fields(sql, (*crate::schema_registry::data_file_schema()).clone())
+            }
         }
         rocklake_sql::StatementKind::SelectFileColumnStats => project_described_fields(
             sql,
