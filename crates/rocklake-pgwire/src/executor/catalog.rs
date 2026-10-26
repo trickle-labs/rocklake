@@ -1254,15 +1254,28 @@ pub(super) fn scan_data_file_fields(sql: &str) -> Vec<FieldInfo> {
         ("del_format", Type::TEXT),
     ];
     let projected_names = scan_file_projection_names(sql).unwrap_or_else(|| {
-        base_columns.iter().map(|(name, _)| (*name).to_string()).collect()
+        base_columns
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect()
     });
-    projected_names.iter().map(|name| {
-        let datatype = base_columns.iter().find(|(base_name, _)| *base_name == name.as_str())
-            .map(|(_, datatype)| datatype.clone()).unwrap_or_else(|| {
-                if name.ends_with("_contains_nan") { Type::BOOL } else { Type::TEXT }
-            });
-        FieldInfo::new(name.clone(), None, None, datatype, FieldFormat::Text)
-    }).collect()
+    projected_names
+        .iter()
+        .map(|name| {
+            let datatype = base_columns
+                .iter()
+                .find(|(base_name, _)| *base_name == name.as_str())
+                .map(|(_, datatype)| datatype.clone())
+                .unwrap_or_else(|| {
+                    if name.ends_with("_contains_nan") {
+                        Type::BOOL
+                    } else {
+                        Type::TEXT
+                    }
+                });
+            FieldInfo::new(name.clone(), None, None, datatype, FieldFormat::Text)
+        })
+        .collect()
 }
 
 pub(super) fn make_scan_data_file_response(
@@ -1288,7 +1301,10 @@ pub(super) fn make_scan_data_file_response(
         ("del_format", Type::TEXT),
     ];
     let schema = Arc::new(scan_data_file_fields(sql));
-    let projected_names = schema.iter().map(|field| field.name().to_string()).collect::<Vec<_>>();
+    let projected_names = schema
+        .iter()
+        .map(|field| field.name().to_string())
+        .collect::<Vec<_>>();
 
     let mut rows = Vec::new();
     for file in &files {
