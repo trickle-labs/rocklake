@@ -1155,7 +1155,7 @@ pub(super) fn make_extended_data_file_response(
                     (!file.file_format.eq_ignore_ascii_case("parquet"))
                         .then(|| file.file_format.clone()),
                 ),
-                nonnegative_footer_size(file.row_id_start),
+                MetadataValue::optional_text(file.row_id_start.map(|v| v.to_string())),
                 MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
                 MetadataValue::optional_text(delete.map(|d| d.path.clone())),
                 MetadataValue::optional_text(
@@ -1328,7 +1328,7 @@ pub(super) fn make_scan_data_file_response(
                     (!file.file_format.eq_ignore_ascii_case("parquet"))
                         .then(|| file.file_format.clone()),
                 ),
-                nonnegative_footer_size(file.row_id_start),
+                MetadataValue::optional_text(file.row_id_start.map(|v| v.to_string())),
                 MetadataValue::optional_text(file.begin_snapshot.map(|v| v.to_string())),
                 nonnegative_partial_max(file.partial_max.as_deref()),
                 MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
@@ -1383,7 +1383,7 @@ fn encode_data_file_row(
             MetadataValue::text(f.record_count.to_string()),
             MetadataValue::text(f.file_size_bytes.to_string()),
             nonnegative_footer_size(f.footer_size),
-            nonnegative_footer_size(f.row_id_start),
+            MetadataValue::optional_text(f.row_id_start.map(|value| value.to_string())),
             MetadataValue::optional_text(f.partition_id.map(|value| value.to_string())),
             MetadataValue::optional_text(f.encryption_key.clone()),
             MetadataValue::optional_text(f.mapping_id.map(|value| value.to_string())),
