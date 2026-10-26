@@ -949,6 +949,11 @@ impl RockLakeHandler {
     fn classify_sql(&self, sql: &str, query: &RequestContext) -> StatementKind {
         let classification_started = Instant::now();
         let kind = classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
+        // Opt-in SQL diagnostics for failing live compatibility runs. Keep this
+        // disabled in production: statements can contain sensitive literals.
+        if std::env::var("ROCKLAKE_TRACE_DUCKLAKE_SQL").as_deref() == Ok("1") {
+            eprintln!("ducklake-compat-sql [{kind:?}]: {sql}");
+        }
         query.record_classification(classification_started);
         query.set_operation_class(match kind {
             StatementKind::CopyToStdout { .. } => OperationClass::Copy,
