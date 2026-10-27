@@ -2837,7 +2837,10 @@ async fn execute_classified<'a>(
             // DROP COLUMN uses a dropped_cols(tid, cid) CTE for both the
             // column and its tags. Neither WHERE clause contains a literal
             // column_id, so resolve cid from the CTE in both cases.
-            if matches!(table_name.as_str(), "ducklake_column" | "ducklake_column_tag") {
+            if matches!(
+                table_name.as_str(),
+                "ducklake_column" | "ducklake_column_tag"
+            ) {
                 if let Some(dropped_column_id) = ducklake_column_rename_entity_id(_sql) {
                     entity_id = dropped_column_id;
                     where_column = Some("column_id".to_string());

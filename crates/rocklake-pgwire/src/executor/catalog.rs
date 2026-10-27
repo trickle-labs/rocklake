@@ -1170,6 +1170,17 @@ pub(super) fn make_extended_data_file_response(
                     delete.and_then(|d| d.begin_snapshot).map(|v| v.to_string()),
                 ),
             ];
+            if std::env::var("ROCKLAKE_TRACE_DUCKLAKE_SQL").as_deref() == Ok("1") {
+                eprintln!(
+                    "ducklake-extended-data-file: file_id={} row_id_start={:?} footer_size={:?} partial_max={:?} delete_file_id={:?} delete_footer_size={:?}",
+                    file.data_file_id,
+                    file.row_id_start,
+                    file.footer_size,
+                    file.partial_max,
+                    delete.map(|d| d.delete_file_id),
+                    delete.and_then(|d| d.footer_size),
+                );
+            }
             rows.push(encode_metadata_row(schema.clone(), values));
         }
     }
