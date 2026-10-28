@@ -949,6 +949,11 @@ impl RockLakeHandler {
     fn classify_sql(&self, sql: &str, query: &RequestContext) -> StatementKind {
         let classification_started = Instant::now();
         let kind = classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
+        // Opt-in SQL diagnostics for failing live compatibility runs. Keep this
+        // disabled in production: statements can contain sensitive literals.
+        if std::env::var("ROCKLAKE_TRACE_DUCKLAKE_SQL").as_deref() == Ok("1") {
+            eprintln!("ducklake-compat-sql [{kind:?}]: {sql}");
+        }
         query.record_classification(classification_started);
         query.set_operation_class(match kind {
             StatementKind::CopyToStdout { .. } => OperationClass::Copy,
@@ -1287,6 +1292,7 @@ fn required_permission(kind: &StatementKind) -> Option<Permission> {
         | StatementKind::SelectCurrentSchema
         | StatementKind::SelectCurrentDatabase
         | StatementKind::SelectPgType
+        | StatementKind::SelectPgTables
         | StatementKind::SelectToRegclass
         | StatementKind::SelectExistsInfoSchema => None,
         StatementKind::InsertSnapshot
@@ -1331,6 +1337,7 @@ fn required_permission(kind: &StatementKind) -> Option<Permission> {
         | StatementKind::SelectTables
         | StatementKind::SelectColumns
         | StatementKind::SelectDataFiles
+        | StatementKind::SelectExtendedDataFiles
         | StatementKind::SelectDataFilesWithLimit
         | StatementKind::SelectDeleteFiles
         | StatementKind::SelectFileColumnStats
@@ -2892,9 +2899,13 @@ fn count_sql_params(sql: &str) -> usize {
 /// even when the client sends no type hints in the Parse message.
 fn describe_params_for_sql(sql: &str) -> Vec<Type> {
     use rocklake_sql::StatementKind;
+    let count = count_sql_params(sql);
+    if count == 0 {
+        return Vec::new();
+    }
     let kind =
         rocklake_sql::classify_statement(sql).unwrap_or(StatementKind::Unsupported(String::new()));
-    match kind {
+    let mut types = match kind {
         // Snapshot-scoped catalog selects: $1 = snapshot_id (INT8)
         StatementKind::SelectSchemas
         | StatementKind::SelectTables
@@ -2912,11 +2923,11 @@ fn describe_params_for_sql(sql: &str) -> Vec<Type> {
         // table_changes(table_name TEXT, from_snapshot INT8, to_snapshot INT8)
         StatementKind::TableChanges { .. } => vec![Type::TEXT, Type::INT8, Type::INT8],
         // Everything else: fall back to UNKNOWN (works for &str / String)
-        _ => {
-            let count = count_sql_params(sql);
-            vec![Type::UNKNOWN; count]
-        }
-    }
+        _ => vec![Type::UNKNOWN; count],
+    };
+    types.resize(count, Type::UNKNOWN);
+    types.truncate(count);
+    types
 }
 
 /// Return the result-set field descriptions for a SQL statement.
@@ -2972,6 +2983,7 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             FieldInfo::new("oid".to_string(), None, None, Type::INT4, FieldFormat::Text),
             text_col!("typname"),
         ],
+        rocklake_sql::StatementKind::SelectPgTables => vec![int8_col!("?column?")],
         rocklake_sql::StatementKind::SelectMaxSnapshot
         | rocklake_sql::StatementKind::SelectMaxSnapshotAfter => {
             vec![int8_col!("max")]
@@ -2996,8 +3008,20 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
         rocklake_sql::StatementKind::SelectColumns => {
             project_described_fields(sql, (*crate::schema_registry::column_schema()).clone())
         }
+        rocklake_sql::StatementKind::SelectExtendedDataFiles => {
+            crate::executor::extended_data_file_fields()
+        }
         rocklake_sql::StatementKind::SelectDataFiles => {
-            project_described_fields(sql, (*crate::schema_registry::data_file_schema()).clone())
+            let lower = sql.to_ascii_lowercase();
+            if lower.contains("ducklake_data_file")
+                && lower.contains("ducklake_delete_file")
+                && lower.contains("data_unsupported_format")
+                && lower.contains("del_path")
+            {
+                crate::executor::scan_data_file_fields(sql)
+            } else {
+                project_described_fields(sql, (*crate::schema_registry::data_file_schema()).clone())
+            }
         }
         rocklake_sql::StatementKind::SelectFileColumnStats => project_described_fields(
             sql,
@@ -3076,7 +3100,19 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
         ),
         rocklake_sql::StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
             if let Some(schema) = crate::schema_registry::fields_for_table(table_name) {
-                project_described_fields(sql, (*schema).clone())
+                let mut fields = (*schema).clone();
+                if table_name == "ducklake_files_scheduled_for_deletion"
+                    && sql.to_ascii_lowercase().contains("ctid")
+                {
+                    fields.push(FieldInfo::new(
+                        "ctid".into(),
+                        None,
+                        None,
+                        Type::TID,
+                        FieldFormat::Binary,
+                    ));
+                }
+                project_described_fields(sql, fields)
             } else {
                 vec![]
             }
@@ -3205,4 +3241,43 @@ fn project_described_fields(
     // ensures the RowDescription from Describe matches the DataRow from
     // Execute, so clients can resolve columns by name rather than by position.
     schema
+}
+
+#[cfg(test)]
+mod pg_parameter_tests {
+    use super::{describe_fields_for_sql, describe_params_for_sql};
+    use pgwire::api::Type;
+
+    #[test]
+    fn literal_data_file_queries_require_no_bound_parameters() {
+        let sql = "SELECT data.data_file_id, del.delete_file_id \
+            FROM ducklake_data_file data LEFT JOIN ducklake_delete_file del \
+            ON del.data_file_id = data.data_file_id WHERE data.table_id=3";
+        assert!(describe_params_for_sql(sql).is_empty());
+    }
+
+    #[test]
+    fn snapshot_placeholders_are_typed_only_when_present() {
+        assert_eq!(
+            describe_params_for_sql("SELECT * FROM ducklake_schema WHERE begin_snapshot <= $1"),
+            vec![Type::INT8]
+        );
+        assert!(describe_params_for_sql("SELECT * FROM ducklake_schema").is_empty());
+    }
+
+    #[test]
+    fn extended_file_query_describes_all_result_columns() {
+        let sql = "WITH stats AS (SELECT data_file_id FROM ducklake_file_column_stats) \
+            SELECT data.data_file_id, del.delete_file_id, data.record_count \
+            FROM ducklake_data_file data LEFT JOIN ducklake_delete_file del \
+            ON del.data_file_id = data.data_file_id";
+        let fields = describe_fields_for_sql(sql);
+        assert_eq!(fields.len(), 16);
+        assert_eq!(fields[0].name(), "data_file_id");
+        assert_eq!(fields[1].name(), "delete_file_id");
+        assert_eq!(fields[2].name(), "record_count");
+        assert_eq!(fields[8].name(), "row_id_start");
+        assert_eq!(fields[15].name(), "begin_snapshot");
+        assert_eq!(fields[8].datatype(), &Type::INT8);
+    }
 }

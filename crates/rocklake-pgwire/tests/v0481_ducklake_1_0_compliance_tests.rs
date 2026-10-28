@@ -136,7 +136,7 @@ fn schema_registry_matches_ducklake_1_0_manifest() {
                 ("partition_id", "int8"),
                 ("encryption_key", "text"),
                 ("mapping_id", "int8"),
-                ("partial_max", "text"),
+                ("partial_max", "int8"),
             ],
         ),
         (
@@ -154,7 +154,7 @@ fn schema_registry_matches_ducklake_1_0_manifest() {
                 ("file_size_bytes", "int8"),
                 ("footer_size", "int8"),
                 ("encryption_key", "text"),
-                ("partial_max", "text"),
+                ("partial_max", "int8"),
             ],
         ),
         (

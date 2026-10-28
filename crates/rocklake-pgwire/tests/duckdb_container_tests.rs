@@ -34,6 +34,20 @@ fn duckdb_version() -> String {
     std::env::var("ROCKLAKE_DUCKDB_VERSION").unwrap_or_else(|_| "1.5.3".to_string())
 }
 
+fn ducklake_1_0_option(version: &str) -> &'static str {
+    if version.starts_with("2.") {
+        ", DUCKLAKE_VERSION '1.0'"
+    } else {
+        ""
+    }
+}
+
+#[test]
+fn duckdb_2_0_pins_ducklake_1_0() {
+    assert_eq!(ducklake_1_0_option("1.5.6"), "");
+    assert_eq!(ducklake_1_0_option("2.0.0"), ", DUCKLAKE_VERSION '1.0'");
+}
+
 fn test_prefix(name: &str) -> String {
     format!("duckdb-container-loop/{name}")
 }
@@ -59,10 +73,11 @@ async fn start_duckdb(data_dir: &TempDir) -> DuckDbContainerHarness {
 fn attach_sql(pgwire: &PgWireHarness, data_path: &str, body: &str) -> String {
     format!(
         "LOAD ducklake; \
-         ATTACH 'ducklake:postgres:{dsn}' AS my_lake (DATA_PATH '{data_path}'); \
+         ATTACH 'ducklake:postgres:{dsn}' AS my_lake (DATA_PATH '{data_path}'{version_option}); \
          USE my_lake; \
          {body}",
         dsn = pgwire.container_connection_string(),
+        version_option = ducklake_1_0_option(&duckdb_version()),
     )
 }
 
@@ -540,8 +555,29 @@ async fn assert_disk_files_are_accounted_for(
         .await
         .expect("list_files_scheduled_for_deletion should work");
 
-    let catalog_files = catalog_parquet_base_names(&data_files, &delete_files, &scheduled_files);
+    let mut catalog_files =
+        catalog_parquet_base_names(&data_files, &delete_files, &scheduled_files);
     let disk_files = parquet_base_names(data_dir);
+
+    // Retired files remain on disk while older snapshots can still reference them.
+    for snapshot in (0..reader.snapshot_id().as_u64()).rev() {
+        if disk_files.is_subset(&catalog_files) {
+            break;
+        }
+        let historical = catalog
+            .reader_at(rocklake_core::mvcc::SnapshotId::new(snapshot))
+            .await
+            .expect("historical snapshot should remain available");
+        let data = historical
+            .list_data_files(table_id)
+            .await
+            .expect("historical data files");
+        let deletes = historical
+            .list_delete_files(table_id)
+            .await
+            .expect("historical delete files");
+        catalog_files.extend(catalog_parquet_base_names(&data, &deletes, &[]));
+    }
 
     assert!(
         disk_files.is_subset(&catalog_files),
@@ -549,6 +585,40 @@ async fn assert_disk_files_are_accounted_for(
         disk_files,
         catalog_files
     );
+}
+
+#[tokio::test]
+async fn disk_accounting_includes_retired_snapshot_files() {
+    let catalog = CatalogHarness::local().await.unwrap();
+    let data_dir = TempDir::new().unwrap();
+    fs::write(data_dir.path().join("data.parquet"), b"").unwrap();
+    fs::write(data_dir.path().join("delete.parquet"), b"").unwrap();
+    let mut writer = catalog.writer().await;
+    let schema_id = writer.create_schema("analytics").await.unwrap();
+    let table_id = writer
+        .create_table(schema_id, "events", None)
+        .await
+        .unwrap();
+    let file_id = writer
+        .register_data_file(table_id, "data.parquet", "parquet", 1, 1)
+        .await
+        .unwrap();
+    let delete_id = writer
+        .register_delete_file_with_metadata(file_id, "delete.parquet", 1, 1, None, None)
+        .await
+        .unwrap();
+    let snapshot = writer.create_snapshot(None, None).await.unwrap();
+    catalog.commit_writer(snapshot).await;
+
+    let mut writer = catalog.writer().await;
+    writer.mark_delete_file_deleted(delete_id).await.unwrap();
+    writer.mark_data_file_deleted(file_id).await.unwrap();
+    let snapshot = writer.create_snapshot(None, None).await.unwrap();
+    catalog.commit_writer(snapshot).await;
+    let latest = catalog.reader_latest().await;
+    assert!(latest.list_data_files(table_id).await.unwrap().is_empty());
+    assert!(latest.list_delete_files(table_id).await.unwrap().is_empty());
+    assert_disk_files_are_accounted_for(&catalog, table_id, data_dir.path()).await;
 }
 
 async fn bootstrap_analytics_events(
@@ -896,6 +966,44 @@ async fn duckdb_container_commit_boundaries_match_catalog_state() {
         "bootstrap should not hide existing catalog objects"
     );
 
+    // Preserve the pre-mutation file-count invariant while testing a real
+    // Parquet read before UPDATE; metadata counts alone cannot prove the
+    // DuckDB 2.0 file scanner accepts the PG-wire projection.
+    if duckdb_version().starts_with("2.") {
+        let deletes = catalog
+            .reader_latest()
+            .await
+            .list_delete_files(bootstrap_table_id)
+            .await
+            .expect("delete metadata readable");
+        let data_rows = bootstrap_files
+            .iter()
+            .map(|file| file.record_count as u128)
+            .sum::<u128>();
+        let deleted_rows = deletes
+            .iter()
+            .map(|file| file.delete_count as u128)
+            .sum::<u128>();
+        assert!(
+            data_rows >= deleted_rows,
+            "persisted catalog must not have a negative net file row count"
+        );
+    }
+    let pre_mutation_read = duckdb
+        .run_sql(&attach_sql(
+            &pgwire,
+            duckdb.data_path(),
+            "SELECT payload FROM analytics.events WHERE id = 2;",
+        ))
+        .await
+        .expect("bootstrap Parquet read must work before UPDATE");
+    assert!(
+        pre_mutation_read.stdout.contains("row-2"),
+        "bootstrap Parquet read must expose the persisted row\nstdout: {}\nstderr: {}",
+        pre_mutation_read.stdout,
+        pre_mutation_read.stderr
+    );
+
     let mutation_sql = attach_sql(
         &pgwire,
         duckdb.data_path(),
@@ -1073,7 +1181,6 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
         .list_all_metadata()
         .await
         .expect("list_all_metadata should work");
-    let latest_snapshot_id = reader.snapshot_id().as_u64() as i64;
     let _table_stats = reader
         .get_table_stats(table_id)
         .await
@@ -1118,22 +1225,16 @@ async fn duckdb_container_live_surface_matches_registry_and_transcript() {
                 registry_column_names(table_name),
                 "row description mismatch for `{query}`"
             );
-            let live_table_id = table_id as i64;
-            match table_name {
-                "ducklake_schema" | "ducklake_table" => {
-                    client
-                        .query(&statement, &[&latest_snapshot_id])
-                        .await
-                        .unwrap_or_else(|e| panic!("query execution failed for `{query}`: {e}"));
-                }
-                "ducklake_data_file" => {
-                    client
-                        .query(&statement, &[&live_table_id])
-                        .await
-                        .unwrap_or_else(|e| panic!("query execution failed for `{query}`: {e}"));
-                }
-                _ => unreachable!(),
-            }
+            // These metadata-surface probes contain no $N placeholders. The
+            // extended protocol must not supply unrelated snapshot/table IDs.
+            assert!(
+                statement.params().is_empty(),
+                "literal metadata query must have no parameters"
+            );
+            client
+                .query(&statement, &[])
+                .await
+                .unwrap_or_else(|e| panic!("query execution failed for `{query}`: {e}"));
             continue;
         }
         let _ = assert_registry_query_columns(&client, &query, table_name).await;

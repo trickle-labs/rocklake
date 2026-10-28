@@ -45,7 +45,7 @@ fn ext() -> Arc<Vec<String>> {
     Arc::new(vec![])
 }
 
-async fn exec_multi(sql: &'static str, store: &Arc<Mutex<CatalogStore>>) -> Vec<Response<'static>> {
+async fn exec_multi<'a>(sql: &'a str, store: &Arc<Mutex<CatalogStore>>) -> Vec<Response<'a>> {
     let params = ParamValues::default();
     let mut session = SessionState::new();
     executor::execute_sql(sql, &params, store, &mut session, &nm(), &ext())
@@ -53,7 +53,7 @@ async fn exec_multi(sql: &'static str, store: &Arc<Mutex<CatalogStore>>) -> Vec<
         .unwrap()
 }
 
-async fn exec_one(sql: &'static str, store: &Arc<Mutex<CatalogStore>>) -> Response<'static> {
+async fn exec_one<'a>(sql: &'a str, store: &Arc<Mutex<CatalogStore>>) -> Response<'a> {
     let mut responses = exec_multi(sql, store).await;
     assert!(
         !responses.is_empty(),
@@ -80,7 +80,7 @@ async fn row_count(resp: Response<'static>) -> usize {
     }
 }
 
-async fn query_names_and_count(resp: Response<'static>) -> (Vec<String>, usize) {
+async fn query_names_and_count(resp: Response<'_>) -> (Vec<String>, usize) {
     match resp {
         Response::Query(qr) => {
             let names = qr
@@ -99,6 +99,106 @@ async fn query_names_and_count(resp: Response<'static>) -> (Vec<String>, usize) 
         }
         _ => panic!("expected Query response"),
     }
+}
+
+#[tokio::test]
+async fn cleanup_scans_honor_cutoff_and_expose_ctid() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("public").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let first = writer
+            .register_data_file(table_id, "old.parquet", "parquet", 1, 10)
+            .await
+            .unwrap();
+        let second = writer
+            .register_data_file(table_id, "new.parquet", "parquet", 1, 10)
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        let mut writer = catalog.begin_write();
+        writer
+            .schedule_file_deletion_with_opts(first, "old.parquet", None, Some(true), 1)
+            .await
+            .unwrap();
+        writer
+            .schedule_file_deletion_with_opts(
+                second,
+                "new.parquet",
+                None,
+                Some(true),
+                2_000_000_000,
+            )
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+    }
+    let (_, count) = query_names_and_count(exec_one("SELECT schedule_start, data_file_id, path, path_is_relative FROM ducklake_files_scheduled_for_deletion WHERE schedule_start < '2026-10-26 08:43:05.349701+00'", &store).await).await;
+    assert_eq!(count, 1);
+    let (names, count) = query_names_and_count(exec_one("SELECT data_file_id, ctid FROM ducklake_files_scheduled_for_deletion WHERE data_file_id >= 1 AND data_file_id <= 2", &store).await).await;
+    assert_eq!(names, ["data_file_id", "ctid"]);
+    assert_eq!(count, 2);
+    exec_one(
+        "DELETE FROM ducklake_files_scheduled_for_deletion WHERE ctid IN ('(1,0)')",
+        &store,
+    )
+    .await;
+    let (_, count) = query_names_and_count(exec_one("SELECT schedule_start, data_file_id, path, path_is_relative FROM ducklake_files_scheduled_for_deletion WHERE schedule_start < '2026-10-26 08:43:05.349701+00'", &store).await).await;
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn positional_delete_file_insert_preserves_metadata() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let (table_id, file_id) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("public").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let file_id = writer
+            .register_data_file(table_id, "data.parquet", "parquet", 2, 100)
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        (table_id, file_id)
+    };
+    let sql = format!("INSERT INTO ducklake_delete_file VALUES (2, {table_id}, 2, NULL, {file_id}, 'delete.parquet', true, 'parquet', 1, 935, 770, NULL, NULL)");
+    exec_one(&sql, &store).await;
+    let reader = store.lock().await.read_latest();
+    let files = reader.list_delete_files(table_id).await.unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].data_file_id, file_id);
+    assert_eq!(files[0].file_size_bytes, 935);
+    assert_eq!(files[0].footer_size, Some(770));
+    let delete_id = files[0].delete_file_id;
+    exec_one(
+        &format!(
+            "UPDATE ducklake_delete_file SET end_snapshot = 3 WHERE delete_file_id = {delete_id}"
+        ),
+        &store,
+    )
+    .await;
+    exec_one(
+        &format!("UPDATE ducklake_data_file SET end_snapshot = 4 WHERE data_file_id = {file_id}"),
+        &store,
+    )
+    .await;
+    let reader = store.lock().await.read_latest();
+    assert!(reader.list_delete_files(table_id).await.unwrap().is_empty());
+    assert!(reader.list_data_files(table_id).await.unwrap().is_empty());
 }
 
 // ─── Step 1: DISCARD ALL ─────────────────────────────────────────────────────
@@ -257,26 +357,171 @@ async fn pg_catalog_scan_pg_namespace_has_two_rows() {
 }
 
 #[tokio::test]
-async fn pg_catalog_scan_empty_result_sets_have_correct_schema() {
+async fn duckdb_1_5_pg_catalog_scan_keeps_metadata_tables_virtual() {
     let dir = TempDir::new().unwrap();
     let store = setup_store(&dir).await;
 
     let responses = exec_multi(PG_CATALOG_SCAN, &store).await;
     assert_eq!(responses.len(), 6, "expected 6 responses");
 
-    // Convert to an iterator and skip the first (pg_namespace).
     let mut iter = responses.into_iter();
-    let _ns = iter.next().unwrap(); // result set 0: pg_namespace (not empty)
+    let _namespaces = iter.next().unwrap();
 
-    // Result sets 1-4 (pg_class, pg_enum, pg_type, pg_indexes) must be empty.
-    for i in 1..5 {
-        let resp = iter.next().unwrap();
-        let count = row_count(resp).await;
+    // The legacy DuckDB 1.5.x catalog scan has 12 columns and keeps the
+    // virtual DuckLake relations hidden. Otherwise bootstrap does not create
+    // the first snapshot, breaking the DuckLake 1.0 lifecycle.
+    let (columns, catalog_rows) = query_names_and_count(iter.next().unwrap()).await;
+    assert_eq!(columns.len(), 12);
+    assert_eq!(catalog_rows, 0, "DuckDB 1.5.x requires an empty pg_class");
+
+    // Remaining catalog result sets are intentionally empty.
+    for i in 2..5 {
         assert_eq!(
-            count, 0,
-            "result set {i} (pg_class/pg_enum/pg_type/pg_indexes) must be empty, got {count} rows"
+            row_count(iter.next().unwrap()).await,
+            0,
+            "result set {i} (pg_enum/pg_type/pg_indexes) must be empty"
         );
     }
+}
+
+#[tokio::test]
+async fn duckdb_2_extended_file_listing_has_binary_copy_columns() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = r#"WITH col_1_stats AS (
+        SELECT data_file_id FROM "public".ducklake_file_column_stats
+        WHERE column_id = 1 AND table_id = 3
+    )
+    SELECT data.data_file_id, del.delete_file_id,
+        data.record_count, data.path AS data_path
+    FROM "public".ducklake_data_file data
+    LEFT JOIN "public".ducklake_delete_file del
+        ON del.data_file_id = data.data_file_id
+    WHERE data.table_id=3"#;
+    let (columns, count) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(columns.len(), 16);
+    assert_eq!(
+        &columns[..4],
+        &[
+            "data_file_id",
+            "delete_file_id",
+            "record_count",
+            "data_path"
+        ]
+    );
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn duckdb_2_0_pg_tables_probe_returns_no_inlined_delete_table() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = 'public' \
+        AND tablename = 'ducklake_inlined_delete_3' LIMIT 1";
+    let (names, count) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(names, vec!["?column?"]);
+    assert_eq!(count, 0, "optional inlined-delete table is not yet present");
+}
+
+#[tokio::test]
+async fn duckdb_2_0_pg_catalog_scan_has_extended_columns() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+
+    // DuckDB 2.0's postgres scanner requests three more metadata columns
+    // than the older 1.5.x pg_class query, including the type namespace.
+    let sql = "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ; \
+        SELECT oid, nspname FROM pg_namespace ORDER BY oid; \
+        SELECT pg_namespace.oid AS namespace_id, relname, relpages, attname, \
+               pg_type.typname AS type_name, atttypmod AS type_modifier, \
+               pg_attribute.attndims AS ndim, attnum, pg_attribute.attnotnull AS notnull, \
+               NULL AS constraint_id, NULL AS constraint_type, NULL AS constraint_key, \
+               type_ns.nspname AS type_schema, col_desc.description AS column_comment, \
+               tbl_desc.description AS table_comment FROM pg_class \
+        JOIN pg_namespace ON relnamespace = pg_namespace.oid; ROLLBACK;";
+    let mut results = exec_multi(sql, &store).await.into_iter();
+    assert!(matches!(results.next(), Some(Response::Query(_))));
+    let (columns, count) = query_names_and_count(results.next().unwrap()).await;
+    assert_eq!(columns.len(), 15);
+    assert_eq!(
+        &columns[12..],
+        &["type_schema", "column_comment", "table_comment"]
+    );
+    assert_eq!(count, 0, "a fresh catalog must remain uninitialized");
+
+    // Newer scanners optionally request a sixteenth column.
+    let newer = "SELECT type_schema, column_default FROM pg_class JOIN pg_namespace ON true";
+    let mut newer_results = exec_multi(newer, &store).await.into_iter();
+    // Single-table probes return one pg_class result, not the
+    // five-result-set bulk catalog scan.
+    let (columns, _) = query_names_and_count(newer_results.next().unwrap()).await;
+    assert_eq!(columns.last().map(String::as_str), Some("column_default"));
+}
+
+#[tokio::test]
+async fn duckdb_2_0_bulk_catalog_query_without_begin_has_five_results() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT oid, nspname FROM pg_namespace ORDER BY oid; \
+        SELECT type_ns.nspname AS type_schema FROM pg_class JOIN pg_namespace ON true; \
+        SELECT n.oid, enumtypid FROM pg_enum e JOIN pg_namespace n ON true; \
+        SELECT n.oid, typname FROM pg_type t JOIN pg_namespace n ON true; \
+        SELECT pg_namespace.oid, tablename FROM pg_indexes JOIN pg_namespace ON true;";
+    let responses = exec_multi(sql, &store).await;
+    assert_eq!(
+        responses.len(),
+        5,
+        "new scanner expects five SELECT results"
+    );
+    assert!(responses
+        .iter()
+        .all(|response| matches!(response, Response::Query(_))));
+}
+
+#[tokio::test]
+async fn duckdb_2_0_discovers_declared_table_before_first_snapshot() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+
+    // The initial probe must find no relation before DuckLake creates it.
+    let sql = "SELECT type_ns.nspname AS type_schema, relname FROM pg_class \
+        JOIN pg_namespace ON true WHERE relname='ducklake_schema'";
+    let (_, before) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(before, 0);
+
+    let ddl = r#"CREATE TABLE IF NOT EXISTS "public"."ducklake_schema" (schema_id BIGINT)"#;
+    assert!(matches!(
+        exec_one(ddl, &store).await,
+        Response::Execution(_)
+    ));
+
+    // The relation is visible to the scanner, even without a snapshot.
+    let (columns, after) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(columns.len(), 15);
+    assert_eq!(
+        after,
+        rocklake_pgwire::schema_registry::schema_schema().len()
+    );
+    let reader = { store.lock().await.read_latest() };
+    assert!(reader.get_snapshot().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn pg_catalog_staleness_query_has_one_three_column_result() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let sql = "SELECT pg_class.oid, relname, pg_class.xmin FROM pg_class \
+        JOIN pg_namespace ON relnamespace = pg_namespace.oid \
+        WHERE relkind IN ('r', 'v', 'm', 'f', 'p') \
+        AND pg_namespace.nspname = 'public' ORDER BY pg_class.oid";
+    let responses = exec_multi(sql, &store).await;
+    assert_eq!(responses.len(), 1, "staleness query is a single result set");
+    let (columns, count) = query_names_and_count(responses.into_iter().next().unwrap()).await;
+    assert_eq!(columns, vec!["oid", "relname", "xmin"]);
+    assert_eq!(
+        count, 0,
+        "an empty catalog must not advertise a snapshot as initialized"
+    );
 }
 
 #[tokio::test]
@@ -297,6 +542,91 @@ async fn ducklake_table_stats_preserves_requested_projection_order() {
         "DuckLake v1.0 table_stats scans must keep DuckDB's requested column order"
     );
     assert_eq!(count, 0, "fresh catalog should not have table stats rows");
+}
+
+#[tokio::test]
+async fn duckdb_2_regular_and_extended_file_queries_keep_distinct_wire_shapes() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+
+    let scan_sql = r#"SELECT data.data_file_id,
+        data.path AS data_path,
+        data.path_is_relative AS data_path_is_relative,
+        data.file_size_bytes AS data_file_size_bytes,
+        data.footer_size AS data_footer_size,
+        CASE WHEN data.file_format = 'parquet' THEN NULL
+             ELSE data.file_format END AS data_unsupported_format,
+        data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id,
+        del.path AS del_path, del.path_is_relative AS del_path_is_relative,
+        del.file_size_bytes AS del_file_size_bytes,
+        del.footer_size AS del_footer_size, del.format AS del_format
+    FROM "public".ducklake_data_file data
+    LEFT JOIN "public".ducklake_delete_file del ON del.data_file_id = data.data_file_id
+    WHERE data.table_id = 3"#;
+    let (scan_fields, count) = query_names_and_count(exec_one(scan_sql, &store).await).await;
+    assert_eq!(
+        scan_fields,
+        vec![
+            "data_file_id",
+            "data_path",
+            "data_path_is_relative",
+            "data_file_size_bytes",
+            "data_footer_size",
+            "data_unsupported_format",
+            "row_id_start",
+            "begin_snapshot",
+            "partial_max",
+            "mapping_id",
+            "del_path",
+            "del_path_is_relative",
+            "del_file_size_bytes",
+            "del_footer_size",
+            "del_format",
+        ]
+    );
+    assert_eq!(count, 0);
+
+    let extended_sql = r#"WITH col_1_stats AS (
+        SELECT data_file_id FROM "public".ducklake_file_column_stats
+        WHERE column_id = 1 AND table_id = 3
+    ) SELECT data.data_file_id, del.delete_file_id, data.record_count,
+        data.path AS data_path, data.path_is_relative AS data_path_is_relative,
+        data.file_size_bytes AS data_file_size_bytes,
+        data.footer_size AS data_footer_size,
+        CASE WHEN data.file_format = 'parquet' THEN NULL
+             ELSE data.file_format END AS data_unsupported_format,
+        data.row_id_start, data.mapping_id, del.path AS del_path,
+        del.path_is_relative AS del_path_is_relative,
+        del.file_size_bytes AS del_file_size_bytes,
+        del.footer_size AS del_footer_size,
+        del.format AS del_format, del.begin_snapshot
+    FROM "public".ducklake_data_file data
+    LEFT JOIN "public".ducklake_delete_file del ON del.data_file_id = data.data_file_id
+    WHERE data.table_id = 3"#;
+    let (extended_fields, count) =
+        query_names_and_count(exec_one(extended_sql, &store).await).await;
+    assert_eq!(
+        extended_fields,
+        vec![
+            "data_file_id",
+            "delete_file_id",
+            "record_count",
+            "data_path",
+            "data_path_is_relative",
+            "data_file_size_bytes",
+            "data_footer_size",
+            "data_unsupported_format",
+            "row_id_start",
+            "mapping_id",
+            "del_path",
+            "del_path_is_relative",
+            "del_file_size_bytes",
+            "del_footer_size",
+            "del_format",
+            "begin_snapshot",
+        ]
+    );
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]
@@ -405,6 +735,67 @@ async fn inlined_append_with_stale_row_id_is_remapped_to_free_key() {
     let appended = rows.iter().find(|row| row.row_id == 3).unwrap();
     let values = serde_json::from_slice::<Vec<Option<String>>>(&appended.payload).unwrap();
     assert_eq!(values.first().and_then(|value| value.as_deref()), Some("4"));
+}
+
+#[tokio::test]
+async fn inlined_checkpoint_queries_include_retired_versions() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let (table_id, first, second) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        writer
+            .register_inlined_insert(table_id, 1, 0, b"[]".to_vec())
+            .await
+            .unwrap();
+        writer
+            .register_inlined_insert(table_id, 1, 1, b"[]".to_vec())
+            .await
+            .unwrap();
+        let first = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(first);
+        let mut writer = catalog.begin_write();
+        writer
+            .mark_inlined_insert_deleted(table_id, 1, 0)
+            .await
+            .unwrap();
+        let second = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(second);
+        (table_id, first.as_u64(), second.as_u64())
+    };
+    let table = format!("ducklake_inlined_data_{table_id}_1");
+    let all =
+        format!("SELECT row_id, begin_snapshot FROM {table} WHERE begin_snapshot <= {second}");
+    let ended = format!("SELECT row_id, begin_snapshot, end_snapshot FROM {table} WHERE begin_snapshot <= {second} AND end_snapshot IS NOT NULL");
+    let visible = format!("SELECT row_id FROM {table} WHERE begin_snapshot <= {second} AND (end_snapshot > {second} OR end_snapshot IS NULL)");
+    let previously_visible = format!("SELECT row_id FROM {table} WHERE begin_snapshot <= {first} AND (end_snapshot > {first} OR end_snapshot IS NULL)");
+    assert_eq!(
+        query_names_and_count(exec_one(&all, &store).await).await.1,
+        2
+    );
+    assert_eq!(
+        query_names_and_count(exec_one(&ended, &store).await)
+            .await
+            .1,
+        1
+    );
+    assert_eq!(
+        query_names_and_count(exec_one(&visible, &store).await)
+            .await
+            .1,
+        1
+    );
+    assert_eq!(
+        query_names_and_count(exec_one(&previously_visible, &store).await)
+            .await
+            .1,
+        2
+    );
 }
 
 #[tokio::test]

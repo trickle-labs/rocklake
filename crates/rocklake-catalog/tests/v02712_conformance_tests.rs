@@ -78,6 +78,68 @@ async fn data_file_extended_fields_round_trip() {
     );
 }
 
+#[tokio::test]
+async fn data_file_preserves_ducklake_row_id_start_after_stats_advance() {
+    let (_, opts) = make_opts();
+    let mut cat = CatalogStore::open(opts).await.unwrap();
+
+    let mut writer = cat.begin_write();
+    let schema_id = writer.create_schema("public").await.unwrap();
+    let table_id = writer
+        .create_table(schema_id, "fact_table", None)
+        .await
+        .unwrap();
+    writer
+        .set_table_stats(table_id, 12, 65_536, 12)
+        .await
+        .unwrap();
+    writer
+        .register_data_file_with_metadata_and_row_id_start(
+            table_id,
+            "data/fact_table/part-0001.parquet",
+            "parquet",
+            12,
+            65_536,
+            Some(4096),
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .await
+        .unwrap();
+    writer
+        .register_data_file_with_metadata_and_row_id_start(
+            table_id,
+            "data/fact_table/compacted.parquet",
+            "parquet",
+            12,
+            1024,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let snap = writer
+        .create_snapshot(Some("v02712-test"), Some("preserve_row_id_start"))
+        .await
+        .unwrap();
+    cat.commit_writer(snap);
+
+    let reader = cat.read_latest();
+    let files = reader.list_data_files(table_id).await.unwrap();
+    let stats = reader.get_table_stats(table_id).await.unwrap().unwrap();
+    assert_eq!(files[0].row_id_start, Some(0));
+    assert_eq!(files[1].row_id_start, None);
+    assert_eq!(stats.next_row_id, Some(12));
+}
+
 // ─── Test 2: delete file with extended fields round-trips correctly ─────────
 
 #[tokio::test]

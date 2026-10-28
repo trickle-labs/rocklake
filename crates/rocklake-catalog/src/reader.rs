@@ -1493,6 +1493,22 @@ impl CatalogReader {
         &self,
         table_id: u64,
     ) -> CatalogResult<Vec<InlinedInsertRow>> {
+        let mut rows = self.list_inlined_insert_versions(table_id).await?;
+        rows.retain(|row| {
+            mvcc::is_inlined_insert_visible(
+                row.begin_snapshot,
+                row.end_snapshot,
+                self.dl_snapshot_id,
+            )
+        });
+        Ok(rows)
+    }
+
+    /// List inlined row versions created by the current snapshot, including retired rows.
+    pub async fn list_inlined_insert_versions(
+        &self,
+        table_id: u64,
+    ) -> CatalogResult<Vec<InlinedInsertRow>> {
         let prefix = keys::prefix_inlined_inserts_for_table(table_id);
         let mut rows = Vec::new();
         let mut iter = self.db.scan_prefix(&prefix).await?;
@@ -1502,11 +1518,7 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: InlinedInsertRow = values::decode_value(&kv.value)?;
-            if mvcc::is_inlined_insert_visible(
-                row.begin_snapshot,
-                row.end_snapshot,
-                self.dl_snapshot_id,
-            ) {
+            if row.begin_snapshot <= self.dl_snapshot_id.as_u64() {
                 rows.push(row);
             }
         }

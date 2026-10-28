@@ -40,6 +40,8 @@ pub enum BufferedOp {
         file_format: String,
         row_count: u64,
         file_size_bytes: u64,
+        row_id_start: Option<u64>,
+        row_id_start_supplied: bool,
         footer_size: Option<i64>,
         encryption_key: Option<String>,
         partition_id: Option<u64>,
@@ -79,6 +81,13 @@ pub enum BufferedOp {
     UpdateTableStats {
         table_id: u64,
         row_count_delta: i64,
+    },
+    RecomputeTableFileSize {
+        table_id: u64,
+    },
+    DeleteScheduledFile {
+        schedule_start: u64,
+        data_file_id: u64,
     },
     SetTableStats {
         table_id: u64,

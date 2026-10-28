@@ -208,6 +208,8 @@ pub(super) async fn execute_commit(
                 file_format,
                 row_count,
                 file_size_bytes,
+                row_id_start,
+                row_id_start_supplied,
                 footer_size,
                 encryption_key,
                 partition_id,
@@ -215,21 +217,40 @@ pub(super) async fn execute_commit(
                 partial_max,
             } => {
                 needs_snapshot = true;
-                writer
-                    .register_data_file_with_metadata(
-                        table_id,
-                        &path,
-                        &file_format,
-                        row_count,
-                        file_size_bytes,
-                        footer_size,
-                        encryption_key.as_deref(),
-                        partition_id,
-                        mapping_id,
-                        partial_max.as_deref(),
-                    )
-                    .await
-                    .map_err(RockLakeError::from)?;
+                if row_id_start_supplied {
+                    writer
+                        .register_data_file_with_metadata_and_row_id_start(
+                            table_id,
+                            &path,
+                            &file_format,
+                            row_count,
+                            file_size_bytes,
+                            footer_size,
+                            encryption_key.as_deref(),
+                            partition_id,
+                            mapping_id,
+                            partial_max.as_deref(),
+                            row_id_start,
+                        )
+                        .await
+                        .map_err(RockLakeError::from)?;
+                } else {
+                    writer
+                        .register_data_file_with_metadata(
+                            table_id,
+                            &path,
+                            &file_format,
+                            row_count,
+                            file_size_bytes,
+                            footer_size,
+                            encryption_key.as_deref(),
+                            partition_id,
+                            mapping_id,
+                            partial_max.as_deref(),
+                        )
+                        .await
+                        .map_err(RockLakeError::from)?;
+                }
             }
             BufferedOp::InsertDeleteFile {
                 data_file_id,
@@ -288,6 +309,18 @@ pub(super) async fn execute_commit(
             } => {
                 needs_snapshot = true;
                 match table_name.as_str() {
+                    "ducklake_data_file" => {
+                        writer
+                            .mark_data_file_deleted(entity_id)
+                            .await
+                            .map_err(RockLakeError::from)?;
+                    }
+                    "ducklake_delete_file" => {
+                        writer
+                            .mark_delete_file_deleted(entity_id)
+                            .await
+                            .map_err(RockLakeError::from)?;
+                    }
                     "ducklake_schema" => {
                         writer
                             .drop_schema(entity_id)
@@ -374,6 +407,23 @@ pub(super) async fn execute_commit(
                 // v0.24: apply the incoming row-count delta to existing stats.
                 writer
                     .apply_table_stats_delta(table_id, row_count_delta)
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
+            BufferedOp::RecomputeTableFileSize { table_id } => {
+                needs_snapshot = true;
+                writer
+                    .recompute_table_file_size(table_id)
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
+            BufferedOp::DeleteScheduledFile {
+                schedule_start,
+                data_file_id,
+            } => {
+                needs_snapshot = true;
+                writer
+                    .remove_scheduled_deletion(schedule_start, data_file_id)
                     .await
                     .map_err(RockLakeError::from)?;
             }
@@ -1072,6 +1122,312 @@ pub(super) fn make_columns_response(
     )
 }
 
+/// The footer size and partial snapshot boundary are optional unsigned
+/// metadata values to DuckLake. Legacy clients can send -1 as an "unknown"
+/// sentinel, which DuckDB 2.0 cannot cast from INT64 to UINT64. Preserve
+/// unknown values as SQL NULL rather than exposing a negative count.
+fn nonnegative_footer_size(value: Option<i64>) -> MetadataValue {
+    MetadataValue::optional_text(value.filter(|n| *n >= 0).map(|n| n.to_string()))
+}
+
+fn nonnegative_partial_max(value: Option<&str>) -> MetadataValue {
+    MetadataValue::optional_text(
+        value
+            .and_then(|n| n.parse::<i64>().ok())
+            .filter(|n| *n >= 0)
+            .map(|n| n.to_string()),
+    )
+}
+
+/// DuckDB 2.0's COPY (WITH col_*_stats ... JOIN ducklake_delete_file)
+/// requests the extended data-file shape for UPDATE/DELETE scans. Return
+/// visible data files (including ones with no usable zone-map bounds); pruning
+/// is an optimization, so omitting it must not hide matching rows.
+pub(super) fn extended_data_file_fields() -> Vec<FieldInfo> {
+    let columns: &[(&str, Type)] = &[
+        ("data_file_id", Type::INT8),
+        ("delete_file_id", Type::INT8),
+        ("record_count", Type::INT8),
+        ("data_path", Type::TEXT),
+        ("data_path_is_relative", Type::BOOL),
+        ("data_file_size_bytes", Type::INT8),
+        ("data_footer_size", Type::INT8),
+        ("data_unsupported_format", Type::TEXT),
+        ("row_id_start", Type::INT8),
+        ("mapping_id", Type::INT8),
+        ("del_path", Type::TEXT),
+        ("del_path_is_relative", Type::BOOL),
+        ("del_file_size_bytes", Type::INT8),
+        ("del_footer_size", Type::INT8),
+        ("del_format", Type::TEXT),
+        ("begin_snapshot", Type::INT8),
+    ];
+    columns
+        .iter()
+        .map(|(name, datatype)| {
+            FieldInfo::new(
+                (*name).to_string(),
+                None,
+                None,
+                datatype.clone(),
+                FieldFormat::Text,
+            )
+        })
+        .collect()
+}
+
+pub(super) fn make_extended_data_file_response(
+    files: Vec<rocklake_core::rows::DataFileRow>,
+    delete_files: Vec<rocklake_core::rows::DeleteFileRow>,
+) -> Response<'static> {
+    let schema = Arc::new(extended_data_file_fields());
+    let mut rows = Vec::new();
+    for file in &files {
+        let deletes = delete_files
+            .iter()
+            .filter(|del| del.data_file_id == file.data_file_id)
+            .map(Some)
+            .collect::<Vec<_>>();
+        // Preserve data files without any associated position-delete file.
+        for delete in deletes.into_iter().chain(
+            (!delete_files
+                .iter()
+                .any(|d| d.data_file_id == file.data_file_id))
+            .then_some(None),
+        ) {
+            let values = vec![
+                MetadataValue::text(file.data_file_id.to_string()),
+                MetadataValue::optional_text(delete.map(|d| d.delete_file_id.to_string())),
+                MetadataValue::text(file.record_count.to_string()),
+                MetadataValue::text(file.path.clone()),
+                MetadataValue::optional_text(file.path_is_relative.map(|v| v.to_string())),
+                MetadataValue::text(file.file_size_bytes.to_string()),
+                nonnegative_footer_size(file.footer_size),
+                MetadataValue::optional_text(
+                    (!file.file_format.eq_ignore_ascii_case("parquet"))
+                        .then(|| file.file_format.clone()),
+                ),
+                MetadataValue::optional_text(file.row_id_start.map(|v| v.to_string())),
+                MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
+                MetadataValue::optional_text(delete.map(|d| d.path.clone())),
+                MetadataValue::optional_text(
+                    delete
+                        .and_then(|d| d.path_is_relative)
+                        .map(|v| v.to_string()),
+                ),
+                MetadataValue::optional_text(delete.map(|d| d.file_size_bytes.to_string())),
+                nonnegative_footer_size(delete.and_then(|d| d.footer_size)),
+                MetadataValue::optional_text(delete.and_then(|d| d.format.clone())),
+                MetadataValue::optional_text(
+                    delete.and_then(|d| d.begin_snapshot).map(|v| v.to_string()),
+                ),
+            ];
+            if std::env::var("ROCKLAKE_TRACE_DUCKLAKE_SQL").as_deref() == Ok("1") {
+                eprintln!(
+                    "ducklake-extended-data-file: file_id={} row_id_start={:?} footer_size={:?} partial_max={:?} delete_file_id={:?} delete_footer_size={:?}",
+                    file.data_file_id,
+                    file.row_id_start,
+                    file.footer_size,
+                    file.partial_max,
+                    delete.map(|d| d.delete_file_id),
+                    delete.and_then(|d| d.footer_size),
+                );
+            }
+            rows.push(encode_metadata_row(schema.clone(), values));
+        }
+    }
+    let mut result = QueryResponse::new(schema, futures::stream::iter(rows));
+    result.set_command_tag(&format!("SELECT {}", files.len()));
+    Response::Query(result)
+}
+
+/// DuckLake's ordinary file scanner uses a different wire projection from
+/// UPDATE/DELETE's extended file list. Keep nulls and field order intact.
+/// The DuckLake file scanner may append runtime-filter columns to its
+/// SELECT. Extract the actual projection even when sqlparser rejects one of
+/// DuckDB's generated expressions. CTEs are ignored by starting at the main
+/// SELECT immediately preceding FROM ...ducklake_data_file data.
+fn scan_file_projection_names(sql: &str) -> Option<Vec<String>> {
+    let lower = sql.to_ascii_lowercase();
+    let table_at = lower.find("ducklake_data_file data")?;
+    let from_at = lower[..table_at].rfind("from ")?;
+    let select_at = lower[..from_at].rfind("select ")?;
+    let projection = &sql[select_at + "select ".len()..from_at];
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut start = 0usize;
+    for (index, ch) in projection.char_indices() {
+        if let Some(delimiter) = quote {
+            if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(projection[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(projection[start..].trim());
+    if parts.iter().any(|item| item.is_empty() || *item == "*") {
+        return None;
+    }
+    Some(
+        parts
+            .into_iter()
+            .map(|item| {
+                let lower = item.to_ascii_lowercase();
+                let name = if let Some(as_at) = lower.rfind(" as ") {
+                    &item[as_at + 4..]
+                } else {
+                    item.rsplit('.').next().unwrap_or(item)
+                };
+                name.trim().trim_matches('"').to_ascii_lowercase()
+            })
+            .collect(),
+    )
+}
+
+/// Ordinary file scans use a variable result projection: DuckDB can append
+/// runtime filter statistics. The binary COPY response must match the exact
+/// number and order of requested fields, not a hardcoded 15-column schema.
+pub(super) fn scan_data_file_fields(sql: &str) -> Vec<FieldInfo> {
+    let base_columns: &[(&str, Type)] = &[
+        ("data_file_id", Type::INT8),
+        ("data_path", Type::TEXT),
+        ("data_path_is_relative", Type::BOOL),
+        ("data_file_size_bytes", Type::INT8),
+        ("data_footer_size", Type::INT8),
+        ("data_unsupported_format", Type::TEXT),
+        ("row_id_start", Type::INT8),
+        ("begin_snapshot", Type::INT8),
+        ("partial_max", Type::INT8),
+        ("mapping_id", Type::INT8),
+        ("del_path", Type::TEXT),
+        ("del_path_is_relative", Type::BOOL),
+        ("del_file_size_bytes", Type::INT8),
+        ("del_footer_size", Type::INT8),
+        ("del_format", Type::TEXT),
+    ];
+    let projected_names = scan_file_projection_names(sql).unwrap_or_else(|| {
+        base_columns
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect()
+    });
+    projected_names
+        .iter()
+        .map(|name| {
+            let datatype = base_columns
+                .iter()
+                .find(|(base_name, _)| *base_name == name.as_str())
+                .map(|(_, datatype)| datatype.clone())
+                .unwrap_or_else(|| {
+                    if name.ends_with("_contains_nan") {
+                        Type::BOOL
+                    } else {
+                        Type::TEXT
+                    }
+                });
+            FieldInfo::new(name.clone(), None, None, datatype, FieldFormat::Text)
+        })
+        .collect()
+}
+
+pub(super) fn make_scan_data_file_response(
+    files: Vec<rocklake_core::rows::DataFileRow>,
+    delete_files: Vec<rocklake_core::rows::DeleteFileRow>,
+    sql: &str,
+) -> Response<'static> {
+    let base_columns: &[(&str, Type)] = &[
+        ("data_file_id", Type::INT8),
+        ("data_path", Type::TEXT),
+        ("data_path_is_relative", Type::BOOL),
+        ("data_file_size_bytes", Type::INT8),
+        ("data_footer_size", Type::INT8),
+        ("data_unsupported_format", Type::TEXT),
+        ("row_id_start", Type::INT8),
+        ("begin_snapshot", Type::INT8),
+        ("partial_max", Type::INT8),
+        ("mapping_id", Type::INT8),
+        ("del_path", Type::TEXT),
+        ("del_path_is_relative", Type::BOOL),
+        ("del_file_size_bytes", Type::INT8),
+        ("del_footer_size", Type::INT8),
+        ("del_format", Type::TEXT),
+    ];
+    let schema = Arc::new(scan_data_file_fields(sql));
+    let projected_names = schema
+        .iter()
+        .map(|field| field.name().to_string())
+        .collect::<Vec<_>>();
+
+    let mut rows = Vec::new();
+    for file in &files {
+        let matching_deletes = delete_files
+            .iter()
+            .filter(|del| del.data_file_id == file.data_file_id)
+            .collect::<Vec<_>>();
+        let has_deletes = !matching_deletes.is_empty();
+        for delete in matching_deletes
+            .into_iter()
+            .map(Some)
+            .chain((!has_deletes).then_some(None))
+        {
+            let base_values = vec![
+                MetadataValue::text(file.data_file_id.to_string()),
+                MetadataValue::text(file.path.clone()),
+                MetadataValue::optional_text(file.path_is_relative.map(|v| v.to_string())),
+                MetadataValue::text(file.file_size_bytes.to_string()),
+                nonnegative_footer_size(file.footer_size),
+                MetadataValue::optional_text(
+                    (!file.file_format.eq_ignore_ascii_case("parquet"))
+                        .then(|| file.file_format.clone()),
+                ),
+                MetadataValue::optional_text(file.row_id_start.map(|v| v.to_string())),
+                MetadataValue::optional_text(file.begin_snapshot.map(|v| v.to_string())),
+                nonnegative_partial_max(file.partial_max.as_deref()),
+                MetadataValue::optional_text(file.mapping_id.map(|v| v.to_string())),
+                MetadataValue::optional_text(delete.map(|d| d.path.clone())),
+                MetadataValue::optional_text(
+                    delete
+                        .and_then(|d| d.path_is_relative)
+                        .map(|v| v.to_string()),
+                ),
+                MetadataValue::optional_text(delete.map(|d| d.file_size_bytes.to_string())),
+                nonnegative_footer_size(delete.and_then(|d| d.footer_size)),
+                MetadataValue::optional_text(delete.and_then(|d| d.format.clone())),
+            ];
+            let available = base_columns
+                .iter()
+                .zip(base_values)
+                .map(|((name, _), value)| (*name, value))
+                .collect::<std::collections::HashMap<_, _>>();
+            let values = projected_names
+                .iter()
+                .map(|name| {
+                    available
+                        .get(name.as_str())
+                        .cloned()
+                        .unwrap_or(MetadataValue::Null)
+                })
+                .collect();
+            rows.push(encode_metadata_row(schema.clone(), values));
+        }
+    }
+    let count = rows.len();
+    let mut resp = QueryResponse::new(schema, futures::stream::iter(rows));
+    resp.set_command_tag(&format!("SELECT {count}"));
+    Response::Query(resp)
+}
+
 fn encode_data_file_row(
     schema: Arc<Vec<FieldInfo>>,
     f: &rocklake_core::rows::DataFileRow,
@@ -1089,12 +1445,12 @@ fn encode_data_file_row(
             MetadataValue::text(f.file_format.clone()),
             MetadataValue::text(f.record_count.to_string()),
             MetadataValue::text(f.file_size_bytes.to_string()),
-            MetadataValue::optional_text(f.footer_size.map(|value| value.to_string())),
+            nonnegative_footer_size(f.footer_size),
             MetadataValue::optional_text(f.row_id_start.map(|value| value.to_string())),
             MetadataValue::optional_text(f.partition_id.map(|value| value.to_string())),
             MetadataValue::optional_text(f.encryption_key.clone()),
             MetadataValue::optional_text(f.mapping_id.map(|value| value.to_string())),
-            MetadataValue::optional_text(f.partial_max.clone()),
+            nonnegative_partial_max(f.partial_max.as_deref()),
         ],
     )
 }
@@ -2098,21 +2454,48 @@ fn encode_delete_file_row(
             MetadataValue::optional_text(file.format.clone()),
             MetadataValue::text(file.delete_count.to_string()),
             MetadataValue::text(file.file_size_bytes.to_string()),
-            MetadataValue::optional_text(file.footer_size.map(|value| value.to_string())),
+            nonnegative_footer_size(file.footer_size),
             MetadataValue::optional_text(file.encryption_key.clone()),
-            MetadataValue::optional_text(file.partial_max.clone()),
+            nonnegative_partial_max(file.partial_max.as_deref()),
         ],
     )
 }
 
 pub(super) fn make_files_scheduled_for_deletion_response(
     rows: Vec<rocklake_core::rows::FilesScheduledForDeletionRow>,
+    has_ctid: bool,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::files_scheduled_for_deletion_schema();
+    let schema = if has_ctid {
+        Arc::new(vec![
+            FieldInfo::new(
+                "data_file_id".into(),
+                None,
+                None,
+                Type::INT8,
+                FieldFormat::Text,
+            ),
+            FieldInfo::new("ctid".into(), None, None, Type::TID, FieldFormat::Binary),
+        ])
+    } else {
+        crate::schema_registry::files_scheduled_for_deletion_schema()
+    };
     let mut data_rows = Vec::new();
     for row in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
         encode_text_value(&mut encoder, &Some(row.data_file_id.to_string()));
+        if has_ctid {
+            let mut tid = [0u8; 6];
+            tid[..4].copy_from_slice(&(row.data_file_id as u32).to_be_bytes());
+            encoder
+                .encode_field_with_type_and_format(
+                    &tid.as_slice(),
+                    &Type::BYTEA,
+                    FieldFormat::Binary,
+                )
+                .expect("pgwire field encoding is infallible");
+            data_rows.push(encoder.finish());
+            continue;
+        }
         encode_text_value(&mut encoder, &Some(row.path.clone()));
         let path_is_relative = row.path_is_relative.map(|value| value.to_string());
         encode_text_value(&mut encoder, &path_is_relative);
@@ -2840,4 +3223,208 @@ pub(super) fn make_name_mapping_response(
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "mapping_id ASC, column_id ASC")
+}
+
+#[cfg(test)]
+mod duckdb_2_unsigned_catalog_tests {
+    use super::{nonnegative_footer_size, nonnegative_partial_max};
+    use crate::metadata_stream::MetadataValue;
+
+    #[test]
+    fn negative_footer_size_is_sql_null_not_signed_sentinel() {
+        assert!(matches!(
+            nonnegative_footer_size(Some(-1)),
+            MetadataValue::Text(None)
+        ));
+        assert!(matches!(
+            nonnegative_footer_size(Some(25)),
+            MetadataValue::Text(Some(value)) if value == "25"
+        ));
+    }
+
+    #[test]
+    fn partial_max_must_be_nonnegative_or_sql_null() {
+        assert!(matches!(
+            nonnegative_partial_max(Some("-1")),
+            MetadataValue::Text(None)
+        ));
+        assert!(matches!(
+            nonnegative_partial_max(Some("42")),
+            MetadataValue::Text(Some(value)) if value == "42"
+        ));
+    }
+
+    #[tokio::test]
+    async fn duckdb_2_scan_projection_retains_file_values_and_nullable_delete_metadata() {
+        use futures::StreamExt;
+        use pgwire::api::results::Response;
+        use rocklake_core::rows::{DataFileRow, DeleteFileRow};
+
+        let file = DataFileRow {
+            data_file_id: 7,
+            table_id: 3,
+            path: "part-7.parquet".to_string(),
+            file_format: "parquet".to_string(),
+            record_count: 12,
+            file_size_bytes: 1314,
+            footer_size: Some(-1),
+            begin_snapshot: Some(4),
+            row_id_start: Some(12),
+            mapping_id: Some(9),
+            partial_max: Some("-1".to_string()),
+            ..Default::default()
+        };
+        let delete = DeleteFileRow {
+            delete_file_id: 8,
+            table_id: Some(3),
+            data_file_id: 7,
+            path: "delete-8.parquet".to_string(),
+            file_size_bytes: 123,
+            footer_size: Some(-1),
+            format: Some("parquet".to_string()),
+            ..Default::default()
+        };
+
+        // CTE-driven runtime filters append three statistics projections.
+        let sql = r#"WITH col_1_stats AS (
+            SELECT data_file_id FROM ducklake_file_column_stats WHERE column_id = 1
+        ) SELECT data.data_file_id, data.path AS data_path,
+                 data.path_is_relative AS data_path_is_relative,
+                 data.file_size_bytes AS data_file_size_bytes,
+                 data.footer_size AS data_footer_size,
+                 data.file_format AS data_unsupported_format,
+                 data.row_id_start, data.begin_snapshot, data.partial_max,
+                 data.mapping_id, del.path AS del_path,
+                 del.path_is_relative AS del_path_is_relative,
+                 del.file_size_bytes AS del_file_size_bytes,
+                 del.footer_size AS del_footer_size, del.format AS del_format,
+                 col_1_stats.min_value AS col_1_stats_min_value,
+                 col_1_stats.max_value AS col_1_stats_max_value,
+                 col_1_stats.contains_nan AS col_1_stats_contains_nan
+        FROM ducklake_data_file data
+        LEFT JOIN ducklake_delete_file del ON del.data_file_id = data.data_file_id"#;
+
+        let response = super::make_scan_data_file_response(vec![file.clone()], vec![delete], sql);
+        let Response::Query(query) = response else {
+            panic!("expected scanner row response");
+        };
+        let names = query
+            .row_schema()
+            .iter()
+            .map(|field| field.name().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "data_file_id",
+                "data_path",
+                "data_path_is_relative",
+                "data_file_size_bytes",
+                "data_footer_size",
+                "data_unsupported_format",
+                "row_id_start",
+                "begin_snapshot",
+                "partial_max",
+                "mapping_id",
+                "del_path",
+                "del_path_is_relative",
+                "del_file_size_bytes",
+                "del_footer_size",
+                "del_format",
+                "col_1_stats_min_value",
+                "col_1_stats_max_value",
+                "col_1_stats_contains_nan",
+            ]
+        );
+        let rows = query.data_rows();
+        futures::pin_mut!(rows);
+        let row = rows.next().await.expect("scan row").expect("encoded row");
+        assert_eq!(row.field_count as usize, names.len());
+        let mut bytes = row.data.as_ref();
+        let values = (0..names.len())
+            .map(|_| {
+                let len = i32::from_be_bytes(bytes[..4].try_into().unwrap());
+                bytes = &bytes[4..];
+                if len == -1 {
+                    None
+                } else {
+                    assert!(len >= 0);
+                    let len = len as usize;
+                    let value = String::from_utf8(bytes[..len].to_vec()).unwrap();
+                    bytes = &bytes[len..];
+                    Some(value)
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(bytes.is_empty());
+        assert_eq!(values[0].as_deref(), Some("7"));
+        assert_eq!(values[1].as_deref(), Some("part-7.parquet"));
+        assert_eq!(values[3].as_deref(), Some("1314"));
+        assert_eq!(
+            values[4], None,
+            "negative footer size must not reach UINT64"
+        );
+        assert_eq!(values[8], None, "negative partial_max must be SQL NULL");
+        assert_eq!(values[9].as_deref(), Some("9"));
+        assert_eq!(values[10].as_deref(), Some("delete-8.parquet"));
+        assert_eq!(values[12].as_deref(), Some("123"));
+        assert_eq!(values[13], None, "delete footer sentinel must be NULL");
+        assert!(values[15..].iter().all(Option::is_none));
+
+        // Files with no delete vectors still appear once in the scan.
+        let response = super::make_scan_data_file_response(vec![file], vec![], "");
+        let Response::Query(query) = response else {
+            panic!("expected scanner row response");
+        };
+        assert_eq!(query.row_schema().len(), 15);
+        let rows = query.data_rows();
+        futures::pin_mut!(rows);
+        let row = rows
+            .next()
+            .await
+            .expect("live file must not disappear")
+            .unwrap();
+        assert_eq!(row.field_count, 15);
+        assert!(rows.next().await.is_none());
+    }
+}
+
+#[cfg(test)]
+mod duckdb_file_projection_tests {
+    use super::scan_file_projection_names;
+
+    #[test]
+    fn ordinary_scan_uses_exact_projection_count() {
+        let base = "SELECT data.data_file_id, data.path AS data_path, \
+            data.path_is_relative AS data_path_is_relative, \
+            data.file_size_bytes AS data_file_size_bytes, \
+            data.footer_size AS data_footer_size, \
+            CASE WHEN data.file_format = 'parquet' THEN NULL ELSE data.file_format END \
+                AS data_unsupported_format, \
+            data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, \
+            del.path AS del_path, del.path_is_relative AS del_path_is_relative, \
+            del.file_size_bytes AS del_file_size_bytes, del.footer_size AS del_footer_size, \
+            del.format AS del_format";
+        let from = " FROM \"public\".ducklake_data_file data \
+            LEFT JOIN \"public\".ducklake_delete_file del ON del.data_file_id = data.data_file_id";
+        let fields = scan_file_projection_names(&format!("{base}{from}")).unwrap();
+        assert_eq!(fields.len(), 15);
+        assert_eq!(fields[5], "data_unsupported_format");
+
+        let with_one = base.to_string() + ", col_1_stats.min_value AS col_1_stats_min_value";
+        let fields = scan_file_projection_names(&format!("{with_one}{from}")).unwrap();
+        assert_eq!(fields.len(), 16);
+        assert_eq!(fields[15], "col_1_stats_min_value");
+
+        let with_three = with_one
+            + ", col_1_stats.max_value AS col_1_stats_max_value, \
+               col_1_stats.contains_nan AS col_1_stats_contains_nan";
+        let fields = scan_file_projection_names(&format!(
+            "WITH col_1_stats AS (SELECT data_file_id FROM ducklake_file_column_stats) \
+             {with_three}{from}"
+        ))
+        .unwrap();
+        assert_eq!(fields.len(), 18);
+        assert_eq!(fields[17], "col_1_stats_contains_nan");
+    }
 }
