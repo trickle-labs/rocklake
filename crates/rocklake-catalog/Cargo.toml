@@ -41,7 +41,7 @@ rocklake-datafusion = { path = "../rocklake-datafusion" }
 rocklake-sql = { path = "../rocklake-sql" }
 rocklake-testkit = { path = "../rocklake-testkit" }
 serde_json = { workspace = true }
-datafusion = "45"
+datafusion = { workspace = true }
 
 [[bench]]
 name = "catalog_bench"

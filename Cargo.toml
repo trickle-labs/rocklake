@@ -16,13 +16,13 @@ resolver = "2"
 [workspace.package]
 version = "0.64.0"
 edition = "2021"
-rust-version = "1.93"
+rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/trickle-labs/rocklake"
 
 [workspace.dependencies]
 # Storage
-slatedb = "0.13"
+slatedb = { version = "0.13", default-features = false, features = ["aws", "moka"] }
 object_store = { version = "0.12" }
 bytes = "1"
 
@@ -61,7 +61,7 @@ tokio-postgres = "0.7"
 rusqlite = { version = "0.31", features = ["bundled"] }
 
 # DataFusion
-datafusion = "45"
+datafusion = { version = "=55.1.0", git = "https://github.com/apache/datafusion.git", rev = "8f77b417a9b4fe0f143f50519db499b9de3f7a97" }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -69,6 +69,3 @@ clap_complete = "4"
 toml = "0.8"
 sha2 = "0.11"
 libc = "0.2"
-
-[patch.crates-io]
-fastant = { path = "vendor/fastant" }

@@ -302,6 +302,7 @@ impl CatalogMetrics {
             .store(bytes, Ordering::Relaxed);
     }
 
+    #[allow(deprecated)]
     pub fn add_pgwire_in_flight_response_bytes(&self, bytes: u64) {
         let current = self
             .pgwire_in_flight_response_bytes
@@ -313,6 +314,7 @@ impl CatalogMetrics {
             .fetch_max(current.saturating_add(bytes), Ordering::Relaxed);
     }
 
+    #[allow(deprecated)]
     pub fn sub_pgwire_in_flight_response_bytes(&self, bytes: u64) {
         self.pgwire_in_flight_response_bytes
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {

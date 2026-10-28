@@ -7,20 +7,19 @@ license.workspace = true
 [dependencies]
 rocklake-core = { path = "../rocklake-core" }
 rocklake-catalog = { path = "../rocklake-catalog" }
-datafusion = "45"
+datafusion = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 object_store = { workspace = true }
-# DataFusion 45 uses object_store 0.11 while SlateDB uses 0.12.
-datafusion_object_store = { package = "object_store", version = "0.11.2" }
+datafusion_object_store = { package = "object_store", version = "0.14.2" }
 futures = "0.3"
 tracing = { workspace = true }
 
 [dev-dependencies]
 rocklake-client = { path = "../rocklake-client" }
 tempfile = { workspace = true }
-parquet = { version = "54", features = ["arrow"] }
-arrow = { version = "54", features = ["ipc"] }
+parquet = { version = "60", features = ["arrow"] }
+arrow = { version = "60", features = ["ipc"] }
 criterion = { workspace = true }
 serde_json = { workspace = true }
 

@@ -8,7 +8,7 @@
 # release workflow.
 
 # ─── Build stage ─────────────────────────────────────────────────────────────
-FROM rust:1.93-slim-bookworm AS builder
+FROM rust:1.95-slim-bookworm AS builder
 
 # Install C build tools required by some crate build scripts.
 RUN apt-get update && apt-get install -y --no-install-recommends \

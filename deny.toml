@@ -18,16 +18,6 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # These advisories are from transitive dependencies we cannot directly control.
 # They are tracked; we will update when upstream provides a fix.
 ignore = [
-    # ID: RUSTSEC-2025-0141; dependency: bincode (transitive)
-    # reason: upstream migration is not yet available; mitigation: no direct
-    # bincode API is used by RockLake; upstream: bincode release tracker;
-    # review/expiry: 2026-12-31
-    { id = "RUSTSEC-2025-0141", reason = "Transitive bincode dependency. Revisit when upstream migrates to bincode 2.x." },
-    # ID: RUSTSEC-2024-0436; dependency: paste (transitive)
-    # reason: affected upstream crates have not removed it; mitigation: no
-    # RockLake code depends on paste directly; upstream: paste dependents'
-    # release trackers; review/expiry: 2026-12-31
-    { id = "RUSTSEC-2024-0436", reason = "Transitive paste dependency. Revisit when affected upstream crates remove it." },
     # ID: RUSTSEC-2025-0134; dependency: rustls-pemfile (transitive)
     # reason: current tokio-rustls compatibility still selects this API;
     # mitigation: TLS parsing is isolated to startup; upstream: tokio-rustls
@@ -79,6 +69,10 @@ crate = "webpki"
 # fxhash uses Apache-2.0/MIT with no issues (unlicense-compatible).
 allow = ["MIT", "Apache-2.0"]
 crate = "fxhash"
+[[licenses.exceptions]]
+# bzip2 permits redistribution with attribution and source-change notices.
+allow = ["bzip2-1.0.6"]
+crate = "libbz2-rs-sys"
 
 # ─── Bans ─────────────────────────────────────────────────────────────────────
 [bans]
@@ -93,3 +87,4 @@ wildcards = "warn"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/apache/datafusion"]
