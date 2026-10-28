@@ -34,8 +34,10 @@ pub struct MinioHarness {
 /// Default MinIO credentials used in the test container.
 const MINIO_ACCESS_KEY: &str = "minioadmin";
 const MINIO_SECRET_KEY: &str = "minioadmin";
-const MINIO_IMAGE_NAME: &str = "quay.io/minio/minio";
-const MINIO_IMAGE_TAG: &str = "RELEASE.2025-06-13T11-33-47Z";
+// Upstream MinIO images are no longer anonymously pullable from Quay or Docker Hub.
+// Silo is a maintained MinIO-compatible fork with a published Docker Hub image.
+const MINIO_IMAGE_NAME: &str = "pgsty/silo";
+const MINIO_IMAGE_TAG: &str = "RELEASE.2026-10-18T00-00-00Z";
 
 impl MinioHarness {
     /// Start a MinIO container and create the test bucket.
@@ -44,6 +46,8 @@ impl MinioHarness {
             .with_exposed_port(9000.tcp())
             .with_exposed_port(9001.tcp())
             .with_wait_for(WaitFor::message_on_stderr("API:"))
+            .with_env_var("MINIO_ROOT_USER", MINIO_ACCESS_KEY)
+            .with_env_var("MINIO_ROOT_PASSWORD", MINIO_SECRET_KEY)
             .with_env_var("MINIO_CONSOLE_ADDRESS", ":9001")
             .with_cmd(["server", "/data"])
             .start()

@@ -10,11 +10,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 object_store = { workspace = true }
-parquet = { version = "54", features = ["arrow"] }
-arrow = { version = "54" }
+parquet = { version = "60", features = ["arrow"] }
+arrow = { version = "60" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
-parquet = { version = "54", features = ["arrow"] }
-arrow = { version = "54", features = ["ipc"] }
+parquet = { version = "60", features = ["arrow"] }
+arrow = { version = "60", features = ["ipc"] }

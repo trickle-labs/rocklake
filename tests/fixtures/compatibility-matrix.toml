@@ -215,27 +215,27 @@ notes = "May work; contributions welcome."
 
 [[entry]]
 component = "datafusion"
-name = "DataFusion 45.0.0"
-version = "45.0.0"
+name = "DataFusion git 8f77b417"
+version = "55.1.0+git.8f77b417"
 platform = "all"
 status = "supported"
 ci_job = "engine-compat"
 test_command = "cargo test -p rocklake-datafusion --test v037_datafusion_tests"
 fixture_path = ""
 last_reviewed = "2026-05-29"
-notes = "Default version; Parquet scan validated."
+notes = "Pinned unreleased revision; Parquet scan validated."
 
 [[entry]]
 component = "datafusion"
-name = "DataFusion < 45"
-version = "< 45"
+name = "DataFusion crates.io releases"
+version = "crates.io"
 platform = "all"
 status = "unsupported"
 ci_job = ""
 test_command = ""
 fixture_path = ""
 last_reviewed = "2026-05-29"
-notes = "API breaking changes in v45."
+notes = "Different source identity; use the pinned Git revision."
 
 # ────────────────────────────────────────────────────────────────────────────
 # Object Storage Backends
@@ -387,8 +387,8 @@ notes = "Recommended. CI runs with stable on Linux and macOS."
 
 [[entry]]
 component = "rust"
-name = "Rust 1.93 (MSRV)"
-version = "1.93"
+name = "Rust 1.95 (MSRV)"
+version = "1.95"
 platform = "linux,macos"
 status = "supported"
 ci_job = "msrv"
@@ -399,8 +399,8 @@ notes = "Minimum supported Rust version. CI verifies on Linux and macOS."
 
 [[entry]]
 component = "rust"
-name = "Rust < 1.93"
-version = "< 1.93"
+name = "Rust < 1.95"
+version = "< 1.95"
 platform = "all"
 status = "unsupported"
 ci_job = ""

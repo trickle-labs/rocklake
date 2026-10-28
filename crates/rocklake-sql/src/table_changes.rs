@@ -159,7 +159,7 @@ pub async fn extract_rows_from_parquet(
 
     // Fetch all bytes from object storage.  Using the bytes-based path avoids
     // the object_store version conflict that arises with parquet's async reader
-    // (parquet 54 depends on object_store 0.11, workspace uses 0.12).
+    // (Parquet and the catalog use different object_store versions).
     let bytes = object_store
         .get(&path)
         .await
