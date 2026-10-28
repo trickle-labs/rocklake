@@ -13,13 +13,10 @@ use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_core::keys::MetadataScope;
 use rocklake_core::mvcc::SnapshotId;
 use rocklake_core::rows::{DataFileRow, DeleteFileRow, InlinedDeleteRow, InlinedInsertRow};
-use std::any::Any;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Read-only adapter for the object_store version used by DataFusion 45.
-/// SlateDB and RockLake use object_store 0.12, while DataFusion 45 still uses
-/// 0.11; keeping the adapter here avoids silently switching storage clients.
+/// Read-only adapter between SlateDB's object_store and DataFusion's version.
 #[derive(Debug)]
 struct DataFusionObjectStore {
     inner: Arc<dyn object_store::ObjectStore>,
@@ -48,11 +45,10 @@ fn unsupported_adapter_operation(name: &str) -> datafusion_object_store::Error {
 fn adapter_meta(
     meta: object_store::ObjectMeta,
 ) -> Result<datafusion_object_store::ObjectMeta, datafusion_object_store::Error> {
-    let size = usize::try_from(meta.size).map_err(adapter_error)?;
     Ok(datafusion_object_store::ObjectMeta {
         location: datafusion_object_store::path::Path::from(meta.location.to_string()),
         last_modified: meta.last_modified,
-        size,
+        size: meta.size,
         e_tag: meta.e_tag,
         version: meta.version,
     })
@@ -72,7 +68,7 @@ impl datafusion_object_store::ObjectStore for DataFusionObjectStore {
     async fn put_multipart_opts(
         &self,
         _location: &datafusion_object_store::path::Path,
-        _options: datafusion_object_store::PutMultipartOpts,
+        _options: datafusion_object_store::PutMultipartOptions,
     ) -> Result<Box<dyn datafusion_object_store::MultipartUpload>, datafusion_object_store::Error>
     {
         Err(unsupported_adapter_operation("multipart upload"))
@@ -85,13 +81,13 @@ impl datafusion_object_store::ObjectStore for DataFusionObjectStore {
     ) -> Result<datafusion_object_store::GetResult, datafusion_object_store::Error> {
         let range = options.range.map(|range| match range {
             datafusion_object_store::GetRange::Bounded(range) => {
-                object_store::GetRange::Bounded(range.start as u64..range.end as u64)
+                object_store::GetRange::Bounded(range)
             }
             datafusion_object_store::GetRange::Offset(offset) => {
-                object_store::GetRange::Offset(offset as u64)
+                object_store::GetRange::Offset(offset)
             }
             datafusion_object_store::GetRange::Suffix(length) => {
-                object_store::GetRange::Suffix(length as u64)
+                object_store::GetRange::Suffix(length)
             }
         });
         let result = self
@@ -120,9 +116,9 @@ impl datafusion_object_store::ObjectStore for DataFusionObjectStore {
         Ok(datafusion_object_store::GetResult {
             payload: datafusion_object_store::GetResultPayload::Stream(payload),
             meta,
-            range: usize::try_from(range.start).map_err(adapter_error)?
-                ..usize::try_from(range.end).map_err(adapter_error)?,
+            range,
             attributes: Default::default(),
+            extensions: Default::default(),
         })
     }
 
@@ -161,28 +157,30 @@ impl datafusion_object_store::ObjectStore for DataFusionObjectStore {
                 .into_iter()
                 .map(adapter_meta)
                 .collect::<Result<_, _>>()?,
+            extensions: Default::default(),
         })
     }
 
-    async fn delete(
+    fn delete_stream(
         &self,
-        _location: &datafusion_object_store::path::Path,
-    ) -> Result<(), datafusion_object_store::Error> {
-        Err(unsupported_adapter_operation("delete"))
+        locations: BoxStream<
+            'static,
+            Result<datafusion_object_store::path::Path, datafusion_object_store::Error>,
+        >,
+    ) -> BoxStream<
+        'static,
+        Result<datafusion_object_store::path::Path, datafusion_object_store::Error>,
+    > {
+        locations
+            .map(|location| location.and_then(|_| Err(unsupported_adapter_operation("delete"))))
+            .boxed()
     }
 
-    async fn copy(
+    async fn copy_opts(
         &self,
         _from: &datafusion_object_store::path::Path,
         _to: &datafusion_object_store::path::Path,
-    ) -> Result<(), datafusion_object_store::Error> {
-        Err(unsupported_adapter_operation("copy"))
-    }
-
-    async fn copy_if_not_exists(
-        &self,
-        _from: &datafusion_object_store::path::Path,
-        _to: &datafusion_object_store::path::Path,
+        _options: datafusion_object_store::CopyOptions,
     ) -> Result<(), datafusion_object_store::Error> {
         Err(unsupported_adapter_operation("copy"))
     }
@@ -470,10 +468,6 @@ impl RockLakeCatalogProvider {
 }
 
 impl CatalogProvider for RockLakeCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         let store = self.store.clone();
         let snapshot_id = self.snapshot_id;
@@ -548,10 +542,6 @@ impl std::fmt::Debug for RockLakeSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for RockLakeSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         let store = self.store.clone();
         let snapshot_id = self.snapshot_id;
@@ -841,10 +831,6 @@ impl RockLakeTableProvider {
 
 #[async_trait]
 impl TableProvider for RockLakeTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> datafusion::arrow::datatypes::SchemaRef {
         self.schema.clone()
     }
@@ -856,7 +842,7 @@ impl TableProvider for RockLakeTableProvider {
     async fn scan(
         &self,
         state: &dyn datafusion::catalog::Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {

@@ -116,8 +116,8 @@ and not applied.
 
 | DataFusion Version | Status | Notes |
 |-------------------|--------|-------|
-| 45.0.0 | ⚠️ Preview | Preview integration; Parquet scan validated |
-| < 45 | ❌ Not supported | API breaking changes in v45 |
+| Git revision `8f77b417` (55.1.0 development) | ⚠️ Preview | Parquet scan validated; use the same Git revision in downstream Rust applications |
+| crates.io releases | ⚠️ Untested | Git and crates.io builds have distinct Rust trait identities |
 
 ## Object Storage Backends
 
@@ -149,8 +149,8 @@ and not applied.
 | Rust Version | Status | Notes |
 |-------------|--------|-------|
 | Stable latest | ✅ Supported | Recommended |
-| 1.93.0 (MSRV) | ✅ Supported | Minimum supported Rust version |
-| < 1.93 | ❌ Not supported | |
+| 1.95.0 (MSRV) | ✅ Supported | Minimum supported Rust version |
+| < 1.95 | ❌ Not supported | |
 
 ## Platform
 

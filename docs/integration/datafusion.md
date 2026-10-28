@@ -67,7 +67,7 @@ the default queue depth is 256 and can be changed with
 
 ## Scope
 
-- DataFusion 45 is the tested DataFusion version.
+- The tested DataFusion version is the unreleased Git revision `8f77b417a9b4fe0f143f50519db499b9de3f7a97` (55.1.0 development). Rust applications must use the same Git revision for compatible trait types; crates.io releases have a different source identity. This pin can be replaced when a suitable release is available.
 - The integration provides catalog metadata and Parquet scan planning; it is
   not a general SQL server.
 - Register the matching data object store with DataFusion when data files use a

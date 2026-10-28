@@ -1,81 +1,23 @@
-//! v0.37.0 — DataFusion Matrix Integration tests.
-//!
-//! These tests serve as the formal evidence that DataFusion 45 is the supported
-//! version range for `rocklake-datafusion` and that DataFusion < 45 is
-//! explicitly outside the supported range.
-//!
-//! # Requirements addressed
-//!
-//! - Promote `cargo test -p rocklake-datafusion` as the compatibility evidence
-//!   for DataFusion 45 support.
-//! - Include the Parquet scan test as the primary supported-row evidence.
-//! - Add a version-policy check proving DataFusion `< 45` is outside the
-//!   supported range.
-//! - Add DataFusion row to compatibility-matrix evidence (CI job: engine-compat).
+//! DataFusion compatibility tests for the pinned upstream revision.
 
 use rocklake_datafusion::virtual_catalog::{DUCKLAKE_SPEC_TABLES, ROCKLAKE_EXTENSION_TABLES};
 
-// ─── DataFusion version policy ────────────────────────────────────────────────
-
-/// The declared DataFusion dependency is exactly version 45.
-///
-/// DataFusion < 45 is outside the supported range because:
-///   - The `TableProvider` async trait stabilised with breaking changes in v45.
-///   - `CatalogProvider` and `SchemaProvider` required API changes.
-///   - `SessionContext::register_catalog` changed signature.
-///
-/// If this test fails, either the dependency was accidentally downgraded or
-/// the compatibility matrix must be updated.
 #[test]
-fn datafusion_version_policy_is_45() {
-    // The DataFusion version is declared in rocklake-datafusion/Cargo.toml as:
-    //   datafusion = "45"
-    //
-    // We verify the declared major version by reading the manifest metadata
-    // compiled into the binary at build time.
-    let version = datafusion::DATAFUSION_VERSION;
-    let major: u64 = version
-        .split('.')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    assert_eq!(
-        major, 45,
-        "DataFusion major version must be 45 (the supported version);\n\
-         got: {version}\n\
-         DataFusion < 45 is explicitly outside the supported range for rocklake-datafusion."
-    );
-}
-
-/// DataFusion < 45 is outside the supported range — version-policy boundary check.
-///
-/// This test formalises the lower bound: any DataFusion version with major < 45
-/// must be treated as unsupported. The check is structural: we assert the
-/// currently linked version is not below 45.
-#[test]
-fn datafusion_below_45_is_unsupported() {
-    let version = datafusion::DATAFUSION_VERSION;
-    let major: u64 = version
-        .split('.')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+fn datafusion_version_and_revision_are_pinned() {
+    assert_eq!(datafusion::DATAFUSION_VERSION, "55.1.0");
     assert!(
-        major >= 45,
-        "DataFusion major version {major} (full: {version}) is below 45 — \
-         this version is outside the supported range for rocklake-datafusion.\n\
-         Update the dependency to datafusion = \"45\" in Cargo.toml."
+        include_str!("../../../Cargo.toml").contains("8f77b417a9b4fe0f143f50519db499b9de3f7a97")
     );
 }
 
 // ─── RockLakeCatalogProvider smoke test ──────────────────────────────────────
 
-/// DataFusion 45: `RockLakeCatalogProvider` constructs and provides schema names.
+/// DataFusion 55.1 development: `RockLakeCatalogProvider` constructs and provides schema names.
 ///
-/// This is the primary evidence for DataFusion 45 compatibility support.
+/// This is the primary evidence for DataFusion 55.1 development compatibility support.
 /// A passing test means: the trait object compiles and the API contract holds.
 #[tokio::test]
-async fn datafusion_45_catalog_provider_constructs() {
+async fn datafusion_55_catalog_provider_constructs() {
     use object_store::path::Path as ObjectPath;
     use rocklake_catalog::{CatalogStore, OpenOptions};
     use rocklake_core::mvcc::SnapshotId;
@@ -94,7 +36,7 @@ async fn datafusion_45_catalog_provider_constructs() {
     let catalog = CatalogStore::open(opts).await.unwrap();
     let provider = RockLakeCatalogProvider::new(catalog, Some(SnapshotId::new(0))).unwrap();
 
-    // DataFusion 45 CatalogProvider::schema_names() must work.
+    // DataFusion 55.1 development CatalogProvider::schema_names() must work.
     use datafusion::catalog::CatalogProvider;
     let names = provider.schema_names();
     // Empty catalog — no schemas yet.
@@ -104,13 +46,13 @@ async fn datafusion_45_catalog_provider_constructs() {
     );
 }
 
-/// DataFusion 45: Parquet scan test (primary supported-row evidence).
+/// DataFusion 55.1 development: Parquet scan test (primary supported-row evidence).
 ///
 /// Creates a catalog with a registered Parquet file, opens it via
 /// `RockLakeCatalogProvider`, and executes a `SELECT COUNT(*)` query via
 /// DataFusion. A non-zero row count confirms the full scan pipeline works.
 #[tokio::test]
-async fn datafusion_45_parquet_scan_primary_evidence() {
+async fn datafusion_55_parquet_scan_primary_evidence() {
     use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -218,31 +160,31 @@ async fn datafusion_45_parquet_scan_primary_evidence() {
     assert_eq!(
         count_col.value(0),
         5,
-        "DataFusion 45 Parquet scan must return 5 rows (primary supported-row evidence)"
+        "DataFusion 55.1 development Parquet scan must return 5 rows (primary supported-row evidence)"
     );
 }
 
 // ─── compatibility matrix row registration ────────────────────────────────────
 
-/// DataFusion compatibility matrix row: engine=DataFusion, version=45, status=supported.
+/// DataFusion compatibility matrix row: engine=DataFusion, version=55.1.0+git.8f77b417, status=supported.
 ///
 /// This test documents the entry that appears in the compatibility matrix CI job.
 /// It is a self-describing assertion: if this test passes, the matrix row is valid.
 #[test]
 fn datafusion_compatibility_matrix_row() {
-    // Compatibility matrix entry for DataFusion 45.
+    // Compatibility matrix entry for DataFusion 55.1 development.
     // This mirrors what would appear in a `docs/compatibility.md` table row.
     let matrix_row = serde_json::json!({
         "engine": "DataFusion",
-        "version": "45",
+        "version": "55.1.0+git.8f77b417",
         "status": "supported",
-        "primary_evidence": "datafusion_45_parquet_scan_primary_evidence",
+        "primary_evidence": "datafusion_55_parquet_scan_primary_evidence",
         "ci_job": "engine-compat",
         "notes": "Full scan pipeline; all DuckLake scalar types mapped"
     });
 
     assert_eq!(matrix_row["engine"], "DataFusion");
-    assert_eq!(matrix_row["version"], "45");
+    assert_eq!(matrix_row["version"], "55.1.0+git.8f77b417");
     assert_eq!(matrix_row["status"], "supported");
     assert_eq!(matrix_row["ci_job"], "engine-compat");
 }
@@ -251,18 +193,18 @@ fn datafusion_compatibility_matrix_row() {
 
 /// DataFusion table registry: 28 spec tables + 4 extension tables = 32 total.
 ///
-/// Re-validated here as part of the DataFusion 45 integration — ensures the
+/// Re-validated here as part of the DataFusion 55.1 development integration — ensures the
 /// virtual catalog table count is stable across the DataFusion upgrade.
 #[test]
-fn datafusion_45_table_registry_counts_stable() {
+fn datafusion_55_table_registry_counts_stable() {
     assert_eq!(
         DUCKLAKE_SPEC_TABLES.len(),
         28,
-        "DataFusion 45: must expose exactly 28 DuckLake spec tables"
+        "DataFusion 55.1 development: must expose exactly 28 DuckLake spec tables"
     );
     assert_eq!(
         ROCKLAKE_EXTENSION_TABLES.len(),
         4,
-        "DataFusion 45: must expose exactly 4 RockLake extension tables"
+        "DataFusion 55.1 development: must expose exactly 4 RockLake extension tables"
     );
 }

@@ -48,8 +48,8 @@ rustls = "0.23"
 rustls-pemfile = "2"
 serde_json = { workspace = true }
 object_store = { workspace = true }
-parquet = { version = "54", features = ["arrow"] }
-arrow = { version = "54" }
+parquet = { version = "60", features = ["arrow"] }
+arrow = { version = "60" }
 rocklake-testkit = { path = "../rocklake-testkit" }
 futures = { workspace = true }
 
