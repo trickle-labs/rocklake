@@ -209,6 +209,28 @@ async fn register_data_files() {
     store.close().await.unwrap();
 }
 
+#[test]
+fn slatedb_yaml_configuration_uses_safe_parser() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("config.yaml");
+    std::fs::write(
+        &path,
+        "flush_interval: 1s\nobject_store_cache_options:\n  root_folder: /tmp/rocklake-cache\n",
+    )
+    .unwrap();
+    let options = slatedb::config::Settings::from_file(&path).unwrap();
+    assert_eq!(
+        options.flush_interval,
+        Some(std::time::Duration::from_secs(1))
+    );
+    assert_eq!(
+        options.object_store_cache_options.root_folder.as_deref(),
+        Some(std::path::Path::new("/tmp/rocklake-cache"))
+    );
+    std::fs::write(&path, "flush_interval: [\n").unwrap();
+    assert!(slatedb::config::Settings::from_file(&path).is_err());
+}
+
 #[tokio::test]
 async fn inlined_insert_and_delete() {
     let dir = TempDir::new().unwrap();

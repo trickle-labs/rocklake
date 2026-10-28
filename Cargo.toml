@@ -11,6 +11,7 @@ members = [
     "crates/rocklake-testkit",
     "tools/rocklake-evidence",
 ]
+exclude = ["vendor/figment"]
 resolver = "2"
 
 [workspace.package]
@@ -69,3 +70,7 @@ clap_complete = "4"
 toml = "0.8"
 sha2 = "0.11"
 libc = "0.2"
+
+[patch.crates-io]
+# Keep SlateDB YAML configuration working until Figment uses a maintained parser.
+figment = { path = "vendor/figment" }
