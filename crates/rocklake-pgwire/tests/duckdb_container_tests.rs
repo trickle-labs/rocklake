@@ -555,8 +555,29 @@ async fn assert_disk_files_are_accounted_for(
         .await
         .expect("list_files_scheduled_for_deletion should work");
 
-    let catalog_files = catalog_parquet_base_names(&data_files, &delete_files, &scheduled_files);
+    let mut catalog_files =
+        catalog_parquet_base_names(&data_files, &delete_files, &scheduled_files);
     let disk_files = parquet_base_names(data_dir);
+
+    // Retired files remain on disk while older snapshots can still reference them.
+    for snapshot in (0..reader.snapshot_id().as_u64()).rev() {
+        if disk_files.is_subset(&catalog_files) {
+            break;
+        }
+        let historical = catalog
+            .reader_at(rocklake_core::mvcc::SnapshotId::new(snapshot))
+            .await
+            .expect("historical snapshot should remain available");
+        let data = historical
+            .list_data_files(table_id)
+            .await
+            .expect("historical data files");
+        let deletes = historical
+            .list_delete_files(table_id)
+            .await
+            .expect("historical delete files");
+        catalog_files.extend(catalog_parquet_base_names(&data, &deletes, &[]));
+    }
 
     assert!(
         disk_files.is_subset(&catalog_files),
