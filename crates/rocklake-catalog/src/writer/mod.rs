@@ -1845,6 +1845,37 @@ impl CatalogWriter {
         mapping_id: Option<u64>,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.register_data_file_with_metadata_and_row_id_start(
+            table_id,
+            path,
+            file_format,
+            record_count,
+            file_size_bytes,
+            footer_size,
+            encryption_key,
+            partition_id,
+            mapping_id,
+            partial_max,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_data_file_with_metadata_and_row_id_start(
+        &mut self,
+        table_id: u64,
+        path: &str,
+        file_format: &str,
+        record_count: u64,
+        file_size_bytes: u64,
+        footer_size: Option<i64>,
+        encryption_key: Option<&str>,
+        partition_id: Option<u64>,
+        mapping_id: Option<u64>,
+        partial_max: Option<&str>,
+        row_id_start: Option<u64>,
+    ) -> CatalogResult<u64> {
         crate::fault_injection::trigger(
             crate::fault_injection::WriteFaultPoint::AfterParquetWriteBeforeRegisterDataFile,
         )
@@ -1860,9 +1891,14 @@ impl CatalogWriter {
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         let file_order = data_file_id;
-        let row_id_start = self
-            .allocate_row_id_start(table_id, record_count, file_size_bytes)
-            .await?;
+        // DuckDB sends this value with table_stats; allocating again shifts Parquet row IDs.
+        let row_id_start = match row_id_start {
+            Some(row_id_start) => row_id_start,
+            None => {
+                self.allocate_row_id_start(table_id, record_count, file_size_bytes)
+                    .await?
+            }
+        };
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = validate_registered_path(path, None)?;

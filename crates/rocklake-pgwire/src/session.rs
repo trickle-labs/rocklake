@@ -40,6 +40,7 @@ pub enum BufferedOp {
         file_format: String,
         row_count: u64,
         file_size_bytes: u64,
+        row_id_start: Option<u64>,
         footer_size: Option<i64>,
         encryption_key: Option<String>,
         partition_id: Option<u64>,

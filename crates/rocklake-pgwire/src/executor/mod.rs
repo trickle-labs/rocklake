@@ -2181,6 +2181,7 @@ async fn execute_classified<'a>(
                                 &["record_count", "row_count"],
                             )?,
                             file_size_bytes: required_row_u64_value(&row, &["file_size_bytes"])?,
+                            row_id_start: row_map_u64(&row, "row_id_start"),
                             footer_size: optional_row_i64_value(&row, "footer_size")?,
                             encryption_key: row_map_string(&row, "encryption_key"),
                             partition_id: row_map_u64(&row, "partition_id"),
@@ -2232,7 +2233,13 @@ async fn execute_classified<'a>(
                         name: "file_size_bytes".into(),
                     })?
                 },
-                footer_size: None,
+                row_id_start: if parameterized {
+                    None
+                } else {
+                    literal_u64(&literals, 11)
+                },
+                footer_size: literal_string(&literals, 10)
+                    .and_then(|value| value.parse::<i64>().ok()),
                 encryption_key: None,
                 partition_id: None,
                 mapping_id: None,

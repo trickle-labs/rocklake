@@ -208,6 +208,7 @@ pub(super) async fn execute_commit(
                 file_format,
                 row_count,
                 file_size_bytes,
+                row_id_start,
                 footer_size,
                 encryption_key,
                 partition_id,
@@ -216,7 +217,7 @@ pub(super) async fn execute_commit(
             } => {
                 needs_snapshot = true;
                 writer
-                    .register_data_file_with_metadata(
+                    .register_data_file_with_metadata_and_row_id_start(
                         table_id,
                         &path,
                         &file_format,
@@ -227,6 +228,7 @@ pub(super) async fn execute_commit(
                         partition_id,
                         mapping_id,
                         partial_max.as_deref(),
+                        row_id_start,
                     )
                     .await
                     .map_err(RockLakeError::from)?;
