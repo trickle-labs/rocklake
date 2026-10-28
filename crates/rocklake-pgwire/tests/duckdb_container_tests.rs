@@ -587,6 +587,40 @@ async fn assert_disk_files_are_accounted_for(
     );
 }
 
+#[tokio::test]
+async fn disk_accounting_includes_retired_snapshot_files() {
+    let catalog = CatalogHarness::local().await.unwrap();
+    let data_dir = TempDir::new().unwrap();
+    fs::write(data_dir.path().join("data.parquet"), b"").unwrap();
+    fs::write(data_dir.path().join("delete.parquet"), b"").unwrap();
+    let mut writer = catalog.writer().await;
+    let schema_id = writer.create_schema("analytics").await.unwrap();
+    let table_id = writer
+        .create_table(schema_id, "events", None)
+        .await
+        .unwrap();
+    let file_id = writer
+        .register_data_file(table_id, "data.parquet", "parquet", 1, 1)
+        .await
+        .unwrap();
+    let delete_id = writer
+        .register_delete_file_with_metadata(file_id, "delete.parquet", 1, 1, None, None)
+        .await
+        .unwrap();
+    let snapshot = writer.create_snapshot(None, None).await.unwrap();
+    catalog.commit_writer(snapshot).await;
+
+    let mut writer = catalog.writer().await;
+    writer.mark_delete_file_deleted(delete_id).await.unwrap();
+    writer.mark_data_file_deleted(file_id).await.unwrap();
+    let snapshot = writer.create_snapshot(None, None).await.unwrap();
+    catalog.commit_writer(snapshot).await;
+    let latest = catalog.reader_latest().await;
+    assert!(latest.list_data_files(table_id).await.unwrap().is_empty());
+    assert!(latest.list_delete_files(table_id).await.unwrap().is_empty());
+    assert_disk_files_are_accounted_for(&catalog, table_id, data_dir.path()).await;
+}
+
 async fn bootstrap_analytics_events(
     catalog: &CatalogHarness,
     pgwire: &PgWireHarness,
