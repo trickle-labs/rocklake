@@ -309,6 +309,18 @@ pub(super) async fn execute_commit(
             } => {
                 needs_snapshot = true;
                 match table_name.as_str() {
+                    "ducklake_data_file" => {
+                        writer
+                            .mark_data_file_deleted(entity_id)
+                            .await
+                            .map_err(RockLakeError::from)?;
+                    }
+                    "ducklake_delete_file" => {
+                        writer
+                            .mark_delete_file_deleted(entity_id)
+                            .await
+                            .map_err(RockLakeError::from)?;
+                    }
                     "ducklake_schema" => {
                         writer
                             .drop_schema(entity_id)

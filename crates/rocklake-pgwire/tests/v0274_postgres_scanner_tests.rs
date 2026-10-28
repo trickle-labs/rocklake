@@ -183,6 +183,22 @@ async fn positional_delete_file_insert_preserves_metadata() {
     assert_eq!(files[0].data_file_id, file_id);
     assert_eq!(files[0].file_size_bytes, 935);
     assert_eq!(files[0].footer_size, Some(770));
+    let delete_id = files[0].delete_file_id;
+    exec_one(
+        &format!(
+            "UPDATE ducklake_delete_file SET end_snapshot = 3 WHERE delete_file_id = {delete_id}"
+        ),
+        &store,
+    )
+    .await;
+    exec_one(
+        &format!("UPDATE ducklake_data_file SET end_snapshot = 4 WHERE data_file_id = {file_id}"),
+        &store,
+    )
+    .await;
+    let reader = store.lock().await.read_latest();
+    assert!(reader.list_delete_files(table_id).await.unwrap().is_empty());
+    assert!(reader.list_data_files(table_id).await.unwrap().is_empty());
 }
 
 // ─── Step 1: DISCARD ALL ─────────────────────────────────────────────────────

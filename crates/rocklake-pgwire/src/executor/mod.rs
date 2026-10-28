@@ -866,6 +866,8 @@ fn extract_id_from_where_clause(sql: &str) -> Option<WhereClauseId> {
 
     // Look for identifiers: table_id, column_id, object_id, view_id, macro_id, schema_id
     for ident in &[
+        "data_file_id",
+        "delete_file_id",
         "table_id",
         "column_id",
         "object_id",
