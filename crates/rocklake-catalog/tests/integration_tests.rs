@@ -182,6 +182,30 @@ async fn register_data_files() {
     assert_eq!(files[0].data_file_id, file1);
     assert_eq!(files[1].data_file_id, file2);
 
+    let mut writer = store.begin_write();
+    writer.mark_data_file_deleted(file1).await.unwrap();
+    writer
+        .register_data_file(
+            table_id,
+            "data/events/compacted.parquet",
+            "parquet",
+            10,
+            700,
+        )
+        .await
+        .unwrap();
+    writer.recompute_table_file_size(table_id).await.unwrap();
+    let snap = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snap);
+    let stats = store
+        .read_at(snap)
+        .unwrap()
+        .get_table_stats(table_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stats.file_size_bytes, 100700);
+
     store.close().await.unwrap();
 }
 
@@ -227,6 +251,28 @@ async fn inlined_insert_and_delete() {
     let rows2 = reader2.list_inlined_inserts(table_id).await.unwrap();
     assert_eq!(rows2.len(), 1);
     assert_eq!(rows2[0].row_id, 1);
+
+    let versions = reader2
+        .list_inlined_insert_versions(table_id)
+        .await
+        .unwrap();
+    assert_eq!(versions.len(), 2);
+    assert_eq!(
+        versions
+            .iter()
+            .find(|row| row.row_id == 0)
+            .unwrap()
+            .end_snapshot,
+        Some(snap2.as_u64())
+    );
+    assert_eq!(
+        versions
+            .iter()
+            .find(|row| row.row_id == 1)
+            .unwrap()
+            .end_snapshot,
+        None
+    );
 
     store.close().await.unwrap();
 }

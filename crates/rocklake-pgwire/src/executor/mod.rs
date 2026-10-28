@@ -13,6 +13,10 @@ mod helpers;
 mod meta;
 mod session;
 
+pub(crate) fn extended_data_file_fields() -> Vec<pgwire::api::results::FieldInfo> {
+    catalog::extended_data_file_fields()
+}
+
 pub(crate) fn scan_data_file_fields(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
     catalog::scan_data_file_fields(sql)
 }
@@ -21,7 +25,7 @@ use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
 use pgwire::api::results::{CopyResponse, Response, Tag};
-use sqlparser::ast::Statement;
+use sqlparser::ast::{visit_expressions, BinaryOperator, Expr, SetExpr, Statement};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 
@@ -958,6 +962,71 @@ fn resolve_comparison_u64(sql: &str, column: &str, params: &ParamValues) -> Opti
     literal_comparison_u64(sql, column)
 }
 
+#[derive(Clone, Copy)]
+enum InlinedRowSelection {
+    All,
+    Visible,
+    Open,
+    Ended,
+}
+
+fn is_end_snapshot_column(expr: &Expr) -> bool {
+    match expr {
+        Expr::Identifier(id) => id.value.eq_ignore_ascii_case("end_snapshot"),
+        Expr::CompoundIdentifier(ids) => ids
+            .last()
+            .is_some_and(|id| id.value.eq_ignore_ascii_case("end_snapshot")),
+        Expr::Nested(expr) => is_end_snapshot_column(expr),
+        _ => false,
+    }
+}
+
+fn required_end_snapshot_nullness(expr: &Expr) -> Option<bool> {
+    match expr {
+        Expr::Nested(expr) => required_end_snapshot_nullness(expr),
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => required_end_snapshot_nullness(left).or_else(|| required_end_snapshot_nullness(right)),
+        Expr::IsNull(expr) if is_end_snapshot_column(expr) => Some(false),
+        Expr::IsNotNull(expr) if is_end_snapshot_column(expr) => Some(true),
+        _ => None,
+    }
+}
+
+fn inlined_row_selection(sql: &str) -> InlinedRowSelection {
+    let Ok(statements) = Parser::parse_sql(&PostgreSqlDialect {}, sql) else {
+        return InlinedRowSelection::Visible;
+    };
+    let Some(Statement::Query(query)) = statements.first() else {
+        return InlinedRowSelection::Visible;
+    };
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return InlinedRowSelection::Visible;
+    };
+    let Some(selection) = &select.selection else {
+        return InlinedRowSelection::All;
+    };
+    if let Some(is_ended) = required_end_snapshot_nullness(selection) {
+        return if is_ended {
+            InlinedRowSelection::Ended
+        } else {
+            InlinedRowSelection::Open
+        };
+    }
+    let mut references_end_snapshot = false;
+    let _: std::ops::ControlFlow<()> = visit_expressions(selection, |expr| {
+        references_end_snapshot |= is_end_snapshot_column(expr);
+        std::ops::ControlFlow::Continue(())
+    });
+    if references_end_snapshot {
+        InlinedRowSelection::Visible
+    } else {
+        InlinedRowSelection::All
+    }
+}
+
 fn parse_leading_u64(input: &str) -> Option<u64> {
     let trimmed = input.trim_start();
     let digits: String = trimmed
@@ -1760,11 +1829,71 @@ async fn execute_classified<'a>(
             if table_name == "ducklake_files_scheduled_for_deletion" =>
         {
             let reader = { store.lock().await.read_latest() };
-            let rows = reader
+            let mut rows = reader
                 .list_files_scheduled_for_deletion()
                 .await
                 .map_err(RockLakeError::from)?;
-            Ok(vec![make_files_scheduled_for_deletion_response(rows)])
+            let lower = _sql.to_ascii_lowercase();
+            if let Some(pos) = lower
+                .find("schedule_start\"")
+                .or_else(|| lower.find("schedule_start"))
+            {
+                if let Some(after) = _sql[pos..].split_once('<').map(|(_, s)| s) {
+                    let timestamp = after.split('\'').nth(1).ok_or_else(|| {
+                        RockLakeError::ValueDecode("missing cleanup cutoff".into())
+                    })?;
+                    let cutoff = chrono::DateTime::parse_from_rfc3339(timestamp)
+                        .or_else(|_| {
+                            chrono::DateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.f%#z")
+                        })
+                        .map_err(|_| RockLakeError::ValueDecode("invalid cleanup cutoff".into()))?
+                        .timestamp_micros();
+                    rows.retain(|row| {
+                        i128::from(row.schedule_start) * 1_000_000 < i128::from(cutoff)
+                    });
+                }
+            }
+            let has_ctid = lower.contains("ctid");
+            if has_ctid {
+                if let Some((_, predicates)) = lower.split_once("where") {
+                    for predicate in predicates.split("and") {
+                        let predicate = predicate
+                            .trim()
+                            .trim_matches(|c| c == '(' || c == ')')
+                            .trim();
+                        let predicate = predicate
+                            .strip_prefix("\"data_file_id\"")
+                            .or_else(|| predicate.strip_prefix("data_file_id"))
+                            .ok_or_else(|| {
+                                RockLakeError::Unsupported(
+                                    "unsupported cleanup file predicate".into(),
+                                )
+                            })?
+                            .trim();
+                        if let Some(value) =
+                            predicate.strip_prefix(">=").and_then(parse_leading_u64)
+                        {
+                            rows.retain(|row| row.data_file_id >= value);
+                        } else if let Some(value) =
+                            predicate.strip_prefix("<=").and_then(parse_leading_u64)
+                        {
+                            rows.retain(|row| row.data_file_id <= value);
+                        } else {
+                            return Err(RockLakeError::Unsupported(
+                                "unsupported cleanup file predicate".into(),
+                            ));
+                        }
+                    }
+                }
+            }
+            if has_ctid && rows.iter().any(|row| row.data_file_id > u32::MAX as u64) {
+                return Err(RockLakeError::Unsupported(
+                    "cleanup file ID exceeds ctid range".into(),
+                ));
+            }
+            Ok(vec![make_files_scheduled_for_deletion_response(
+                rows, has_ctid,
+            )])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
@@ -1791,7 +1920,9 @@ async fn execute_classified<'a>(
             let Some((table_id, schema_version)) = parse_inlined_table_ids(&table_name) else {
                 return Ok(vec![make_empty_response()]);
             };
-            let reader = { store.lock().await.read_latest() };
+            let snap_id =
+                resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
+            let reader = resolve_reader(store, session, snap_id).await?;
             let Some((_, columns)) = reader
                 .describe_table(table_id)
                 .await
@@ -1799,13 +1930,22 @@ async fn execute_classified<'a>(
             else {
                 return Ok(vec![make_empty_response()]);
             };
-            let raw_inserts = reader
-                .list_inlined_inserts(table_id)
-                .await
-                .map_err(RockLakeError::from)?;
+            let selection = inlined_row_selection(_sql);
+            let raw_inserts = match selection {
+                InlinedRowSelection::Visible => reader.list_inlined_inserts(table_id).await,
+                _ => reader.list_inlined_insert_versions(table_id).await,
+            }
+            .map_err(RockLakeError::from)?;
             let rows = raw_inserts
                 .into_iter()
-                .filter(|row| row.schema_version == schema_version)
+                .filter(|row| {
+                    row.schema_version == schema_version
+                        && match selection {
+                            InlinedRowSelection::Open => row.end_snapshot.is_none(),
+                            InlinedRowSelection::Ended => row.end_snapshot.is_some(),
+                            _ => true,
+                        }
+                })
                 .collect::<Vec<_>>();
             Ok(vec![make_inlined_rows_response(_sql, columns, rows)])
         }
@@ -2182,6 +2322,7 @@ async fn execute_classified<'a>(
                             )?,
                             file_size_bytes: required_row_u64_value(&row, &["file_size_bytes"])?,
                             row_id_start: row_map_u64(&row, "row_id_start"),
+                            row_id_start_supplied: row.contains_key("row_id_start"),
                             footer_size: optional_row_i64_value(&row, "footer_size")?,
                             encryption_key: row_map_string(&row, "encryption_key"),
                             partition_id: row_map_u64(&row, "partition_id"),
@@ -2238,6 +2379,7 @@ async fn execute_classified<'a>(
                 } else {
                     literal_u64(&literals, 11)
                 },
+                row_id_start_supplied: !parameterized && literals.len() > 11,
                 footer_size: literal_string(&literals, 10)
                     .and_then(|value| value.parse::<i64>().ok()),
                 encryption_key: None,
@@ -2924,6 +3066,19 @@ async fn execute_classified<'a>(
                     file_size_bytes,
                     next_row_id,
                 }
+            } else if _sql
+                .to_ascii_lowercase()
+                .contains("sum(data.file_size_bytes)")
+            {
+                let inner = literal_comparison_u64(_sql, "table_id");
+                let outer = _sql
+                    .to_ascii_lowercase()
+                    .rfind("where")
+                    .and_then(|idx| literal_comparison_u64(&_sql[idx..], "table_id"));
+                let table_id = inner.filter(|id| Some(*id) == outer).ok_or_else(|| {
+                    RockLakeError::ValueDecode("mismatched table IDs in file size update".into())
+                })?;
+                BufferedOp::RecomputeTableFileSize { table_id }
             } else {
                 BufferedOp::UpdateTableStats {
                     table_id: required_param_u64(params, 1, "table_id")?,
@@ -3096,6 +3251,28 @@ async fn execute_classified<'a>(
                 }
                 return Ok(vec![Response::Execution(Tag::new(&format!(
                     "DELETE {row_count}"
+                )))]);
+            }
+            if table_name == "ducklake_files_scheduled_for_deletion"
+                && _sql.to_ascii_lowercase().contains("ctid")
+            {
+                let file_ids = row_ids_from_ctid_sql(_sql);
+                let reader = { store.lock().await.read_latest() };
+                let rows = reader
+                    .list_files_scheduled_for_deletion()
+                    .await
+                    .map_err(RockLakeError::from)?;
+                let ops: Vec<_> = rows
+                    .into_iter()
+                    .filter(|row| file_ids.contains(&row.data_file_id))
+                    .map(|row| BufferedOp::DeleteScheduledFile {
+                        schedule_start: row.schedule_start,
+                        data_file_id: row.data_file_id,
+                    })
+                    .collect();
+                let count = submit_ops(ops, session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "DELETE {count}"
                 )))]);
             }
             let file_ids = file_ids_from_where_sql(_sql);

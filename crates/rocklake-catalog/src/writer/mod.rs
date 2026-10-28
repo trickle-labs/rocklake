@@ -1845,6 +1845,18 @@ impl CatalogWriter {
         mapping_id: Option<u64>,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.ensure_table_exists(table_id).await?;
+        validate_registered_path(path, None)?;
+        if let Some(partition_id) = partition_id {
+            self.ensure_partition_belongs(partition_id, Some(table_id))
+                .await?;
+        }
+        if let Some(mapping_id) = mapping_id {
+            self.ensure_mapping_belongs(mapping_id, table_id).await?;
+        }
+        let row_id_start = self
+            .allocate_row_id_start(table_id, record_count, file_size_bytes)
+            .await?;
         self.register_data_file_with_metadata_and_row_id_start(
             table_id,
             path,
@@ -1856,7 +1868,7 @@ impl CatalogWriter {
             partition_id,
             mapping_id,
             partial_max,
-            None,
+            Some(row_id_start),
         )
         .await
     }
@@ -1891,14 +1903,7 @@ impl CatalogWriter {
         let data_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
         let file_order = data_file_id;
-        // DuckDB sends this value with table_stats; allocating again shifts Parquet row IDs.
-        let row_id_start = match row_id_start {
-            Some(row_id_start) => row_id_start,
-            None => {
-                self.allocate_row_id_start(table_id, record_count, file_size_bytes)
-                    .await?
-            }
-        };
+        // A null start means the Parquet file contains explicit row IDs.
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = validate_registered_path(path, None)?;
@@ -1916,7 +1921,7 @@ impl CatalogWriter {
             end_snapshot: None,
             file_order: Some(file_order),
             path_is_relative: Some(path_is_relative),
-            row_id_start: Some(row_id_start),
+            row_id_start,
             partition_id,
             mapping_id,
             partial_max: partial_max.map(|s| s.to_string()),

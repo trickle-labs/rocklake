@@ -45,7 +45,7 @@ fn ext() -> Arc<Vec<String>> {
     Arc::new(vec![])
 }
 
-async fn exec_multi(sql: &'static str, store: &Arc<Mutex<CatalogStore>>) -> Vec<Response<'static>> {
+async fn exec_multi<'a>(sql: &'a str, store: &Arc<Mutex<CatalogStore>>) -> Vec<Response<'a>> {
     let params = ParamValues::default();
     let mut session = SessionState::new();
     executor::execute_sql(sql, &params, store, &mut session, &nm(), &ext())
@@ -53,7 +53,7 @@ async fn exec_multi(sql: &'static str, store: &Arc<Mutex<CatalogStore>>) -> Vec<
         .unwrap()
 }
 
-async fn exec_one(sql: &'static str, store: &Arc<Mutex<CatalogStore>>) -> Response<'static> {
+async fn exec_one<'a>(sql: &'a str, store: &Arc<Mutex<CatalogStore>>) -> Response<'a> {
     let mut responses = exec_multi(sql, store).await;
     assert!(
         !responses.is_empty(),
@@ -80,7 +80,7 @@ async fn row_count(resp: Response<'static>) -> usize {
     }
 }
 
-async fn query_names_and_count(resp: Response<'static>) -> (Vec<String>, usize) {
+async fn query_names_and_count(resp: Response<'_>) -> (Vec<String>, usize) {
     match resp {
         Response::Query(qr) => {
             let names = qr
@@ -99,6 +99,60 @@ async fn query_names_and_count(resp: Response<'static>) -> (Vec<String>, usize) 
         }
         _ => panic!("expected Query response"),
     }
+}
+
+#[tokio::test]
+async fn cleanup_scans_honor_cutoff_and_expose_ctid() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("public").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let first = writer
+            .register_data_file(table_id, "old.parquet", "parquet", 1, 10)
+            .await
+            .unwrap();
+        let second = writer
+            .register_data_file(table_id, "new.parquet", "parquet", 1, 10)
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        let mut writer = catalog.begin_write();
+        writer
+            .schedule_file_deletion_with_opts(first, "old.parquet", None, Some(true), 1)
+            .await
+            .unwrap();
+        writer
+            .schedule_file_deletion_with_opts(
+                second,
+                "new.parquet",
+                None,
+                Some(true),
+                2_000_000_000,
+            )
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+    }
+    let (_, count) = query_names_and_count(exec_one("SELECT schedule_start, data_file_id, path, path_is_relative FROM ducklake_files_scheduled_for_deletion WHERE schedule_start < '2026-10-26 08:43:05.349701+00'", &store).await).await;
+    assert_eq!(count, 1);
+    let (names, count) = query_names_and_count(exec_one("SELECT data_file_id, ctid FROM ducklake_files_scheduled_for_deletion WHERE data_file_id >= 1 AND data_file_id <= 2", &store).await).await;
+    assert_eq!(names, ["data_file_id", "ctid"]);
+    assert_eq!(count, 2);
+    exec_one(
+        "DELETE FROM ducklake_files_scheduled_for_deletion WHERE ctid IN ('(1,0)')",
+        &store,
+    )
+    .await;
+    let (_, count) = query_names_and_count(exec_one("SELECT schedule_start, data_file_id, path, path_is_relative FROM ducklake_files_scheduled_for_deletion WHERE schedule_start < '2026-10-26 08:43:05.349701+00'", &store).await).await;
+    assert_eq!(count, 0);
 }
 
 // ─── Step 1: DISCARD ALL ─────────────────────────────────────────────────────
@@ -635,6 +689,67 @@ async fn inlined_append_with_stale_row_id_is_remapped_to_free_key() {
     let appended = rows.iter().find(|row| row.row_id == 3).unwrap();
     let values = serde_json::from_slice::<Vec<Option<String>>>(&appended.payload).unwrap();
     assert_eq!(values.first().and_then(|value| value.as_deref()), Some("4"));
+}
+
+#[tokio::test]
+async fn inlined_checkpoint_queries_include_retired_versions() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let (table_id, first, second) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        writer
+            .register_inlined_insert(table_id, 1, 0, b"[]".to_vec())
+            .await
+            .unwrap();
+        writer
+            .register_inlined_insert(table_id, 1, 1, b"[]".to_vec())
+            .await
+            .unwrap();
+        let first = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(first);
+        let mut writer = catalog.begin_write();
+        writer
+            .mark_inlined_insert_deleted(table_id, 1, 0)
+            .await
+            .unwrap();
+        let second = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(second);
+        (table_id, first.as_u64(), second.as_u64())
+    };
+    let table = format!("ducklake_inlined_data_{table_id}_1");
+    let all =
+        format!("SELECT row_id, begin_snapshot FROM {table} WHERE begin_snapshot <= {second}");
+    let ended = format!("SELECT row_id, begin_snapshot, end_snapshot FROM {table} WHERE begin_snapshot <= {second} AND end_snapshot IS NOT NULL");
+    let visible = format!("SELECT row_id FROM {table} WHERE begin_snapshot <= {second} AND (end_snapshot > {second} OR end_snapshot IS NULL)");
+    let previously_visible = format!("SELECT row_id FROM {table} WHERE begin_snapshot <= {first} AND (end_snapshot > {first} OR end_snapshot IS NULL)");
+    assert_eq!(
+        query_names_and_count(exec_one(&all, &store).await).await.1,
+        2
+    );
+    assert_eq!(
+        query_names_and_count(exec_one(&ended, &store).await)
+            .await
+            .1,
+        1
+    );
+    assert_eq!(
+        query_names_and_count(exec_one(&visible, &store).await)
+            .await
+            .1,
+        1
+    );
+    assert_eq!(
+        query_names_and_count(exec_one(&previously_visible, &store).await)
+            .await
+            .1,
+        2
+    );
 }
 
 #[tokio::test]

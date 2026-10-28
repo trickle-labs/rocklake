@@ -209,6 +209,7 @@ pub(super) async fn execute_commit(
                 row_count,
                 file_size_bytes,
                 row_id_start,
+                row_id_start_supplied,
                 footer_size,
                 encryption_key,
                 partition_id,
@@ -216,22 +217,40 @@ pub(super) async fn execute_commit(
                 partial_max,
             } => {
                 needs_snapshot = true;
-                writer
-                    .register_data_file_with_metadata_and_row_id_start(
-                        table_id,
-                        &path,
-                        &file_format,
-                        row_count,
-                        file_size_bytes,
-                        footer_size,
-                        encryption_key.as_deref(),
-                        partition_id,
-                        mapping_id,
-                        partial_max.as_deref(),
-                        row_id_start,
-                    )
-                    .await
-                    .map_err(RockLakeError::from)?;
+                if row_id_start_supplied {
+                    writer
+                        .register_data_file_with_metadata_and_row_id_start(
+                            table_id,
+                            &path,
+                            &file_format,
+                            row_count,
+                            file_size_bytes,
+                            footer_size,
+                            encryption_key.as_deref(),
+                            partition_id,
+                            mapping_id,
+                            partial_max.as_deref(),
+                            row_id_start,
+                        )
+                        .await
+                        .map_err(RockLakeError::from)?;
+                } else {
+                    writer
+                        .register_data_file_with_metadata(
+                            table_id,
+                            &path,
+                            &file_format,
+                            row_count,
+                            file_size_bytes,
+                            footer_size,
+                            encryption_key.as_deref(),
+                            partition_id,
+                            mapping_id,
+                            partial_max.as_deref(),
+                        )
+                        .await
+                        .map_err(RockLakeError::from)?;
+                }
             }
             BufferedOp::InsertDeleteFile {
                 data_file_id,
@@ -376,6 +395,23 @@ pub(super) async fn execute_commit(
                 // v0.24: apply the incoming row-count delta to existing stats.
                 writer
                     .apply_table_stats_delta(table_id, row_count_delta)
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
+            BufferedOp::RecomputeTableFileSize { table_id } => {
+                needs_snapshot = true;
+                writer
+                    .recompute_table_file_size(table_id)
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
+            BufferedOp::DeleteScheduledFile {
+                schedule_start,
+                data_file_id,
+            } => {
+                needs_snapshot = true;
+                writer
+                    .remove_scheduled_deletion(schedule_start, data_file_id)
                     .await
                     .map_err(RockLakeError::from)?;
             }
@@ -1095,10 +1131,7 @@ fn nonnegative_partial_max(value: Option<&str>) -> MetadataValue {
 /// requests the extended data-file shape for UPDATE/DELETE scans. Return
 /// visible data files (including ones with no usable zone-map bounds); pruning
 /// is an optimization, so omitting it must not hide matching rows.
-pub(super) fn make_extended_data_file_response(
-    files: Vec<rocklake_core::rows::DataFileRow>,
-    delete_files: Vec<rocklake_core::rows::DeleteFileRow>,
-) -> Response<'static> {
+pub(super) fn extended_data_file_fields() -> Vec<FieldInfo> {
     let columns: &[(&str, Type)] = &[
         ("data_file_id", Type::INT8),
         ("delete_file_id", Type::INT8),
@@ -1117,20 +1150,25 @@ pub(super) fn make_extended_data_file_response(
         ("del_format", Type::TEXT),
         ("begin_snapshot", Type::INT8),
     ];
-    let schema = Arc::new(
-        columns
-            .iter()
-            .map(|(name, datatype)| {
-                FieldInfo::new(
-                    (*name).to_string(),
-                    None,
-                    None,
-                    datatype.clone(),
-                    FieldFormat::Text,
-                )
-            })
-            .collect::<Vec<_>>(),
-    );
+    columns
+        .iter()
+        .map(|(name, datatype)| {
+            FieldInfo::new(
+                (*name).to_string(),
+                None,
+                None,
+                datatype.clone(),
+                FieldFormat::Text,
+            )
+        })
+        .collect()
+}
+
+pub(super) fn make_extended_data_file_response(
+    files: Vec<rocklake_core::rows::DataFileRow>,
+    delete_files: Vec<rocklake_core::rows::DeleteFileRow>,
+) -> Response<'static> {
+    let schema = Arc::new(extended_data_file_fields());
     let mut rows = Vec::new();
     for file in &files {
         let deletes = delete_files
@@ -2413,12 +2451,39 @@ fn encode_delete_file_row(
 
 pub(super) fn make_files_scheduled_for_deletion_response(
     rows: Vec<rocklake_core::rows::FilesScheduledForDeletionRow>,
+    has_ctid: bool,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::files_scheduled_for_deletion_schema();
+    let schema = if has_ctid {
+        Arc::new(vec![
+            FieldInfo::new(
+                "data_file_id".into(),
+                None,
+                None,
+                Type::INT8,
+                FieldFormat::Text,
+            ),
+            FieldInfo::new("ctid".into(), None, None, Type::TID, FieldFormat::Binary),
+        ])
+    } else {
+        crate::schema_registry::files_scheduled_for_deletion_schema()
+    };
     let mut data_rows = Vec::new();
     for row in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
         encode_text_value(&mut encoder, &Some(row.data_file_id.to_string()));
+        if has_ctid {
+            let mut tid = [0u8; 6];
+            tid[..4].copy_from_slice(&(row.data_file_id as u32).to_be_bytes());
+            encoder
+                .encode_field_with_type_and_format(
+                    &tid.as_slice(),
+                    &Type::BYTEA,
+                    FieldFormat::Binary,
+                )
+                .expect("pgwire field encoding is infallible");
+            data_rows.push(encoder.finish());
+            continue;
+        }
         encode_text_value(&mut encoder, &Some(row.path.clone()));
         let path_is_relative = row.path_is_relative.map(|value| value.to_string());
         encode_text_value(&mut encoder, &path_is_relative);

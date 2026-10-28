@@ -3008,6 +3008,9 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
         rocklake_sql::StatementKind::SelectColumns => {
             project_described_fields(sql, (*crate::schema_registry::column_schema()).clone())
         }
+        rocklake_sql::StatementKind::SelectExtendedDataFiles => {
+            crate::executor::extended_data_file_fields()
+        }
         rocklake_sql::StatementKind::SelectDataFiles => {
             let lower = sql.to_ascii_lowercase();
             if lower.contains("ducklake_data_file")
@@ -3097,7 +3100,19 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
         ),
         rocklake_sql::StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
             if let Some(schema) = crate::schema_registry::fields_for_table(table_name) {
-                project_described_fields(sql, (*schema).clone())
+                let mut fields = (*schema).clone();
+                if table_name == "ducklake_files_scheduled_for_deletion"
+                    && sql.to_ascii_lowercase().contains("ctid")
+                {
+                    fields.push(FieldInfo::new(
+                        "ctid".into(),
+                        None,
+                        None,
+                        Type::TID,
+                        FieldFormat::Binary,
+                    ));
+                }
+                project_described_fields(sql, fields)
             } else {
                 vec![]
             }
@@ -3230,7 +3245,7 @@ fn project_described_fields(
 
 #[cfg(test)]
 mod pg_parameter_tests {
-    use super::describe_params_for_sql;
+    use super::{describe_fields_for_sql, describe_params_for_sql};
     use pgwire::api::Type;
 
     #[test]
@@ -3248,5 +3263,21 @@ mod pg_parameter_tests {
             vec![Type::INT8]
         );
         assert!(describe_params_for_sql("SELECT * FROM ducklake_schema").is_empty());
+    }
+
+    #[test]
+    fn extended_file_query_describes_all_result_columns() {
+        let sql = "WITH stats AS (SELECT data_file_id FROM ducklake_file_column_stats) \
+            SELECT data.data_file_id, del.delete_file_id, data.record_count \
+            FROM ducklake_data_file data LEFT JOIN ducklake_delete_file del \
+            ON del.data_file_id = data.data_file_id";
+        let fields = describe_fields_for_sql(sql);
+        assert_eq!(fields.len(), 16);
+        assert_eq!(fields[0].name(), "data_file_id");
+        assert_eq!(fields[1].name(), "delete_file_id");
+        assert_eq!(fields[2].name(), "record_count");
+        assert_eq!(fields[8].name(), "row_id_start");
+        assert_eq!(fields[15].name(), "begin_snapshot");
+        assert_eq!(fields[8].datatype(), &Type::INT8);
     }
 }

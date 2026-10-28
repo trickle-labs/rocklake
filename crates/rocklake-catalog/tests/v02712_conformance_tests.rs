@@ -109,6 +109,22 @@ async fn data_file_preserves_ducklake_row_id_start_after_stats_advance() {
         )
         .await
         .unwrap();
+    writer
+        .register_data_file_with_metadata_and_row_id_start(
+            table_id,
+            "data/fact_table/compacted.parquet",
+            "parquet",
+            12,
+            1024,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
     let snap = writer
         .create_snapshot(Some("v02712-test"), Some("preserve_row_id_start"))
@@ -117,9 +133,10 @@ async fn data_file_preserves_ducklake_row_id_start_after_stats_advance() {
     cat.commit_writer(snap);
 
     let reader = cat.read_latest();
-    let file = reader.list_data_files(table_id).await.unwrap().remove(0);
+    let files = reader.list_data_files(table_id).await.unwrap();
     let stats = reader.get_table_stats(table_id).await.unwrap().unwrap();
-    assert_eq!(file.row_id_start, Some(0));
+    assert_eq!(files[0].row_id_start, Some(0));
+    assert_eq!(files[1].row_id_start, None);
     assert_eq!(stats.next_row_id, Some(12));
 }
 

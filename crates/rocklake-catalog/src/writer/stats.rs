@@ -4,11 +4,11 @@
 
 use rocklake_core::keys;
 use rocklake_core::rows::{
-    FileColumnStatsRow, FileVariantStatsRow, TableColumnStatsRow, TableStatsRow,
+    DataFileRow, FileColumnStatsRow, FileVariantStatsRow, TableColumnStatsRow, TableStatsRow,
 };
 use rocklake_core::values;
 
-use crate::error::CatalogResult;
+use crate::error::{CatalogError, CatalogResult};
 
 use super::hash_tag_key;
 use super::CatalogWriter;
@@ -250,6 +250,40 @@ pub struct FileVariantStatsInput<'a> {
 }
 
 impl CatalogWriter {
+    pub async fn recompute_table_file_size(&mut self, table_id: u64) -> CatalogResult<()> {
+        self.ensure_table_exists(table_id).await?;
+        let prefix = keys::prefix_data_files_for_table(table_id);
+        let mut files = std::collections::HashMap::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter.next().await? {
+            files.insert(kv.key.to_vec(), kv.value.to_vec());
+        }
+        for key in &self.staged_deletes {
+            files.remove(key);
+        }
+        for (key, value) in &self.staged {
+            if key.starts_with(&prefix) {
+                files.insert(key.clone(), value.clone());
+            }
+        }
+        let mut size = 0u64;
+        for value in files.values() {
+            let file: DataFileRow = values::decode_value(value)?;
+            if file.end_snapshot.is_none() {
+                size = size
+                    .checked_add(file.file_size_bytes)
+                    .ok_or_else(|| CatalogError::InvalidInput("table file size overflow".into()))?;
+            }
+        }
+        let mut stats = self.read_table_stats_or_default(table_id).await?;
+        stats.file_size_bytes = size;
+        self.stage(
+            keys::key_table_stats(table_id),
+            values::encode_value(&stats),
+        );
+        Ok(())
+    }
+
     /// Update table stats from a DuckLake v1.0 `INSERT INTO ducklake_table_stats` statement.
     /// Parameters match the DuckLake v1.0 column order: table_id, record_count,
     /// next_row_id (position 2 — NOT file_count), file_size_bytes.
