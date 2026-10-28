@@ -155,6 +155,36 @@ async fn cleanup_scans_honor_cutoff_and_expose_ctid() {
     assert_eq!(count, 0);
 }
 
+#[tokio::test]
+async fn positional_delete_file_insert_preserves_metadata() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let (table_id, file_id) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("public").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let file_id = writer
+            .register_data_file(table_id, "data.parquet", "parquet", 2, 100)
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        (table_id, file_id)
+    };
+    let sql = format!("INSERT INTO ducklake_delete_file VALUES (2, {table_id}, 2, NULL, {file_id}, 'delete.parquet', true, 'parquet', 1, 935, 770, NULL, NULL)");
+    exec_one(&sql, &store).await;
+    let reader = store.lock().await.read_latest();
+    let files = reader.list_delete_files(table_id).await.unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].data_file_id, file_id);
+    assert_eq!(files[0].file_size_bytes, 935);
+    assert_eq!(files[0].footer_size, Some(770));
+}
+
 // ─── Step 1: DISCARD ALL ─────────────────────────────────────────────────────
 
 #[tokio::test]

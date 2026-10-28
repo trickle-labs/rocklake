@@ -606,7 +606,12 @@ fn parse_insert_rows_map(
         .collect();
 
     if cols.is_empty() {
-        if table_name_normalized == "ducklake_column_mapping" {
+        if table_name_normalized == "ducklake_delete_file"
+            && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 13)))
+        {
+            cols = crate::schema_registry::delete_file_schema().iter()
+                .map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_column_mapping" {
             cols = vec!["table_id".to_string(), "mapping_type".to_string()];
         } else if table_name_normalized == "ducklake_name_mapping" {
             cols = vec!["column_id".to_string(), "name".to_string()];
