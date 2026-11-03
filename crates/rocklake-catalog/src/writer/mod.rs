@@ -689,7 +689,11 @@ impl CatalogWriter {
             end_snapshot: None,
             path: data_path.map(|s| s.to_string()),
             table_uuid: Some(uuid::Uuid::new_v4().to_string()),
-            path_is_relative: Some(true),
+            path_is_relative: Some(
+                data_path
+                    .map(rocklake_core::path::is_path_relative)
+                    .unwrap_or(true),
+            ),
         };
 
         let key = keys::key_table(schema_id, table_id, snapshot_id);
@@ -722,7 +726,11 @@ impl CatalogWriter {
             end_snapshot: None,
             path: data_path.map(|s| s.to_string()),
             table_uuid: Some(uuid::Uuid::new_v4().to_string()),
-            path_is_relative: Some(true),
+            path_is_relative: Some(
+                data_path
+                    .map(rocklake_core::path::is_path_relative)
+                    .unwrap_or(true),
+            ),
         };
 
         let key = keys::key_table(schema_id, table_id, snapshot_id);

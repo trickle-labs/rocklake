@@ -71,7 +71,41 @@ async fn create_schema_and_table() {
     assert_eq!(tables.len(), 1);
     assert_eq!(tables[0].table_name, "users");
     assert_eq!(tables[0].table_id, table_id);
+    assert_eq!(tables[0].path_is_relative, Some(false));
 
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn table_path_relative_flag_matches_path_for_explicit_ids() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+    let mut writer = store.begin_write();
+    let schema = writer.create_schema("main").await.unwrap();
+    for (id, path) in [(100, "s3://bucket/data/"), (101, "/data/"), (102, "data/")] {
+        writer
+            .create_table_with_id(schema, id, &format!("table_{id}"), Some(path))
+            .await
+            .unwrap();
+    }
+    let snapshot = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(snapshot);
+    let tables = store
+        .read_at(SnapshotId::new(1))
+        .unwrap()
+        .list_tables(schema)
+        .await
+        .unwrap();
+    for (id, expected) in [(100, false), (101, false), (102, true)] {
+        assert_eq!(
+            tables
+                .iter()
+                .find(|row| row.table_id == id)
+                .unwrap()
+                .path_is_relative,
+            Some(expected)
+        );
+    }
     store.close().await.unwrap();
 }
 
