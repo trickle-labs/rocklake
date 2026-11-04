@@ -794,6 +794,105 @@ async fn duckdb_full_ducklake_tutorial_against_minio_container() {
 }
 
 #[tokio::test]
+async fn duckdb_parquet_and_catalog_share_s3_store() {
+    let (catalog, pgwire) = setup_catalog("s3_parquet").await;
+    let data_dir = TempDir::new().expect("duckdb data dir should be created");
+    let storage = minio().await;
+    let suffix = data_dir.path().file_name().unwrap().to_string_lossy();
+    let data_prefix = format!("duckdb-container-loop/s3-parquet-data/{suffix}");
+    let data_path = format!("s3://{}/{data_prefix}/", storage.bucket);
+    assert!(storage.list_objects(&data_prefix).await.unwrap().is_empty());
+
+    let port = storage
+        .endpoint
+        .rsplit(':')
+        .next()
+        .expect("S3 endpoint port");
+    let secret = format!(
+        "CREATE SECRET s3_test (TYPE S3, KEY_ID '{}', SECRET '{}', \
+         REGION 'us-east-1', ENDPOINT 'host.docker.internal:{port}', \
+         URL_STYLE 'path', USE_SSL false)",
+        storage.access_key, storage.secret_key
+    );
+
+    let duckdb = start_duckdb(&data_dir).await;
+    duckdb
+        .execute_raw("INSTALL httpfs")
+        .await
+        .expect("install httpfs");
+    duckdb
+        .execute_raw("LOAD httpfs")
+        .await
+        .expect("load httpfs");
+    duckdb.execute_raw(&secret).await.expect("configure S3");
+    duckdb
+        .run_sql(&attach_sql(
+            &pgwire,
+            &data_path,
+            "CREATE SCHEMA analytics; \
+             CREATE TABLE analytics.events (id INTEGER, payload VARCHAR); \
+             INSERT INTO analytics.events SELECT range, 'value-' || range::VARCHAR FROM range(1, 13);",
+        ))
+        .await
+        .expect("write DuckLake data to S3");
+
+    commit_visibility_barrier(&catalog, "duckdb-container", "S3 data visibility").await;
+    let schema = schema_id(&catalog, "analytics").await;
+    let table = table_id(&catalog, schema, "events").await;
+    let files = catalog
+        .reader_latest()
+        .await
+        .list_data_files(table)
+        .await
+        .expect("catalog data files");
+    let objects = storage
+        .list_objects(&data_prefix)
+        .await
+        .expect("S3 data objects");
+    assert!(
+        !files.is_empty(),
+        "inserted rows must be stored in Parquet files"
+    );
+    assert!(files.iter().any(|file| file.record_count == 12 && objects.iter().any(|object| {
+        object.ends_with(".parquet") && object.ends_with(&file.path)
+    })), "catalog must reference the newly created Parquet object with all inserted rows: files={files:?}, objects={objects:?}");
+
+    let query = "SELECT CASE WHEN COUNT(*) = 12 AND COUNT(DISTINCT id) = 12 \
+                 AND COUNT(*) FILTER (WHERE id BETWEEN 1 AND 12 \
+                 AND payload = 'value-' || id::VARCHAR) = 12 \
+                 THEN 's3_' || 'rows_' || 'match' ELSE 'incorrect' END FROM analytics.events";
+    let output = duckdb.run_sql(query).await.expect("read file-backed rows");
+    assert!(
+        output_after_statement(&output.stdout, query).contains("s3_rows_match"),
+        "unexpected first read: {}",
+        output.stdout
+    );
+    duckdb.stop().await;
+
+    let duckdb = start_duckdb(&data_dir).await;
+    duckdb
+        .execute_raw("INSTALL httpfs")
+        .await
+        .expect("install httpfs");
+    duckdb
+        .execute_raw("LOAD httpfs")
+        .await
+        .expect("load httpfs");
+    duckdb.execute_raw(&secret).await.expect("configure S3");
+    let output = duckdb
+        .run_sql(&attach_sql(&pgwire, &data_path, query))
+        .await
+        .expect("read after reconnect");
+    assert!(
+        output_after_statement(&output.stdout, query).contains("s3_rows_match"),
+        "unexpected read after reconnect: {}",
+        output.stdout
+    );
+    duckdb.stop().await;
+    pgwire.stop().await;
+}
+
+#[tokio::test]
 async fn duckdb_container_restart_and_reconnect_preserves_state() {
     let prefix = test_prefix("restart_reconnect");
     let (catalog, pgwire) = setup_catalog("restart_reconnect").await;
