@@ -880,7 +880,7 @@ impl TableProvider for RockLakeTableProvider {
             )));
         }
 
-        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::arrow::datatypes::{DataType, Schema};
         use datafusion::datasource::file_format::parquet::ParquetFormat;
         use datafusion::datasource::listing::{
             ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -945,11 +945,7 @@ impl TableProvider for RockLakeTableProvider {
                     .iter()
                     .map(|field| {
                         if field.data_type() == &DataType::Null {
-                            Arc::new(Field::new(
-                                field.name(),
-                                DataType::Int64,
-                                field.is_nullable(),
-                            ))
+                            Arc::new(field.as_ref().clone().with_data_type(DataType::Int64))
                         } else {
                             field.clone()
                         }
