@@ -2946,10 +2946,23 @@ async fn describe_fields_for_sql_with_catalog(
             }
         }
     }
-    describe_fields_for_sql(sql)
+    let stable_1_1 = {
+        let catalog = catalog.lock().await;
+        crate::schema_registry::is_ducklake_v11(&catalog)
+            .await
+            .unwrap_or(false)
+    };
+    describe_fields_for_sql_version(sql, stable_1_1)
 }
 
 fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
+    describe_fields_for_sql_version(sql, false)
+}
+
+fn describe_fields_for_sql_version(
+    sql: &str,
+    stable_1_1: bool,
+) -> Vec<pgwire::api::results::FieldInfo> {
     use pgwire::api::results::{FieldFormat, FieldInfo};
 
     let kind = rocklake_sql::classify_statement(sql)
@@ -3020,7 +3033,15 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             {
                 crate::executor::scan_data_file_fields(sql)
             } else {
-                project_described_fields(sql, (*crate::schema_registry::data_file_schema()).clone())
+                project_described_fields(
+                    sql,
+                    (*if stable_1_1 {
+                        crate::schema_registry::data_file_schema_v11()
+                    } else {
+                        crate::schema_registry::data_file_schema()
+                    })
+                    .clone(),
+                )
             }
         }
         rocklake_sql::StatementKind::SelectFileColumnStats => project_described_fields(
@@ -3066,9 +3087,15 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             sql,
             (*crate::schema_registry::snapshot_changes_schema()).clone(),
         ),
-        rocklake_sql::StatementKind::SelectDeleteFiles => {
-            project_described_fields(sql, (*crate::schema_registry::delete_file_schema()).clone())
-        }
+        rocklake_sql::StatementKind::SelectDeleteFiles => project_described_fields(
+            sql,
+            (*if stable_1_1 {
+                crate::schema_registry::delete_file_schema_v11()
+            } else {
+                crate::schema_registry::delete_file_schema()
+            })
+            .clone(),
+        ),
         rocklake_sql::StatementKind::SelectViews => {
             project_described_fields(sql, (*crate::schema_registry::view_schema()).clone())
         }
@@ -3099,7 +3126,9 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             (*crate::schema_registry::schema_version_schema()).clone(),
         ),
         rocklake_sql::StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
-            if let Some(schema) = crate::schema_registry::fields_for_table(table_name) {
+            if let Some(schema) =
+                crate::schema_registry::fields_for_table_version(table_name, stable_1_1)
+            {
                 let mut fields = (*schema).clone();
                 if table_name == "ducklake_files_scheduled_for_deletion"
                     && sql.to_ascii_lowercase().contains("ctid")
@@ -3118,7 +3147,9 @@ fn describe_fields_for_sql(sql: &str) -> Vec<pgwire::api::results::FieldInfo> {
             }
         }
         rocklake_sql::StatementKind::VirtualCatalogScan { ref table_name } => {
-            if let Some(schema) = crate::schema_registry::fields_for_table(table_name) {
+            if let Some(schema) =
+                crate::schema_registry::fields_for_table_version(table_name, stable_1_1)
+            {
                 project_described_fields(sql, (*schema).clone())
             } else {
                 vec![]

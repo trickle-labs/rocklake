@@ -113,6 +113,79 @@ async fn import_list_data_files_round_trip() {
     imported_store.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn data_and_delete_row_group_counts_survive_export_import() {
+    let src = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&src)).await.unwrap();
+    let (table_id, data_file_id, snapshot_id) = {
+        let mut writer = store.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let data_file_id = writer
+            .register_data_file_with_metadata_and_row_group_count(
+                table_id,
+                "events/part.parquet",
+                "parquet",
+                10,
+                100,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(2),
+            )
+            .await
+            .unwrap();
+        writer
+            .register_delete_file_with_opts_and_row_group_count(
+                data_file_id,
+                "events/delete.parquet",
+                1,
+                20,
+                Some(table_id),
+                Some("parquet"),
+                Some(true),
+                None,
+                None,
+                None,
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        store.commit_writer(commit);
+        (table_id, data_file_id, commit.snapshot_id)
+    };
+    store.close().await.unwrap();
+
+    let db = open_db(&src).await;
+    let mut export_buf = Vec::new();
+    rocklake_catalog::export::export_catalog(&db, None, &mut export_buf)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+
+    let dst = TempDir::new().unwrap();
+    let db = open_db(&dst).await;
+    rocklake_catalog::export::import_catalog(&db, std::io::BufReader::new(export_buf.as_slice()))
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+
+    let imported = CatalogStore::open(test_opts(&dst)).await.unwrap();
+    let reader = imported.read_at(snapshot_id).unwrap();
+    let data_files = reader.list_data_files(table_id).await.unwrap();
+    let delete_files = reader.list_delete_files(table_id).await.unwrap();
+    assert_eq!(data_files[0].data_file_id, data_file_id);
+    assert_eq!(data_files[0].row_group_count, Some(2));
+    assert_eq!(delete_files[0].row_group_count, Some(1));
+    imported.close().await.unwrap();
+}
+
 // ─── 2. Retired Data File Excluded from Export ────────────────────────────
 
 /// A data file that is retired (end_snapshot set) before the export snapshot
