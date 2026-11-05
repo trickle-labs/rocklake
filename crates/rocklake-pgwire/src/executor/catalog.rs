@@ -1028,115 +1028,32 @@ pub(super) fn make_latest_snapshot_info_response(
 
 pub(super) fn make_schemas_response(
     schemas: Vec<rocklake_core::rows::SchemaRow>,
-    sql: &str,
     stable_1_1: bool,
 ) -> Response<'static> {
-    let source_schema = if stable_1_1 {
+    let schema = if stable_1_1 {
         crate::schema_registry::schema_schema_v11()
     } else {
         crate::schema_registry::schema_schema()
     };
-    let projections = schema_column_projections(sql, &source_schema);
-    let schema: Arc<Vec<FieldInfo>> = Arc::new(
-        projections
-            .iter()
-            .map(|projection| {
-                let source = &source_schema[projection.index];
-                FieldInfo::new(
-                    projection.name.clone(),
-                    None,
-                    None,
-                    source.datatype().clone(),
-                    source.format(),
-                )
-            })
-            .collect(),
-    );
     let mut data_rows = Vec::new();
     for s in &schemas {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        for projection in &projections {
-            match projection.index {
-                0 => encode_schema_int8(&mut encoder, Some(s.schema_id)),
-                1 => encode_text_value(&mut encoder, &s.schema_uuid),
-                2 => encode_schema_int8(&mut encoder, Some(s.begin_snapshot)),
-                3 => encode_schema_int8(&mut encoder, s.end_snapshot),
-                4 => encode_text_value(&mut encoder, &Some(s.schema_name.clone())),
-                5 => encode_text_value(&mut encoder, &s.path),
-                6 => encode_text_value(
-                    &mut encoder,
-                    &s.path_is_relative.map(|value| value.to_string()),
-                ),
-                7 => encode_schema_int8(&mut encoder, s.parent_schema_id),
-                _ => unreachable!("schema registry projection index"),
-            }
+        encode_schema_int8(&mut encoder, Some(s.schema_id));
+        encode_text_value(&mut encoder, &s.schema_uuid);
+        encode_schema_int8(&mut encoder, Some(s.begin_snapshot));
+        encode_schema_int8(&mut encoder, s.end_snapshot);
+        encode_text_value(&mut encoder, &Some(s.schema_name.clone()));
+        encode_text_value(&mut encoder, &s.path);
+        encode_text_value(
+            &mut encoder,
+            &s.path_is_relative.map(|value| value.to_string()),
+        );
+        if stable_1_1 {
+            encode_schema_int8(&mut encoder, s.parent_schema_id);
         }
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "schema_id ASC")
-}
-
-#[derive(Clone)]
-struct SchemaColumnProjection {
-    name: String,
-    index: usize,
-}
-
-fn schema_column_projections(
-    sql: &str,
-    source_schema: &[FieldInfo],
-) -> Vec<SchemaColumnProjection> {
-    let mut projections = Vec::new();
-    for item in select_projection_items(sql).unwrap_or_default() {
-        match item {
-            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
-                projections.extend(source_schema.iter().enumerate().map(|(index, field)| {
-                    SchemaColumnProjection {
-                        name: field.name().to_string(),
-                        index,
-                    }
-                }));
-            }
-            SelectItem::UnnamedExpr(expr) => {
-                let source_name = expr_last_identifier(&expr);
-                if let Some((index, field)) = source_schema.iter().enumerate().find(|(_, field)| {
-                    field
-                        .name()
-                        .eq_ignore_ascii_case(source_name.trim_matches('"'))
-                }) {
-                    projections.push(SchemaColumnProjection {
-                        name: field.name().to_string(),
-                        index,
-                    });
-                }
-            }
-            SelectItem::ExprWithAlias { expr, alias } => {
-                let source_name = expr_last_identifier(&expr);
-                if let Some((index, _)) = source_schema.iter().enumerate().find(|(_, field)| {
-                    field
-                        .name()
-                        .eq_ignore_ascii_case(source_name.trim_matches('"'))
-                }) {
-                    projections.push(SchemaColumnProjection {
-                        name: alias.value,
-                        index,
-                    });
-                }
-            }
-        }
-    }
-    if projections.is_empty() {
-        source_schema
-            .iter()
-            .enumerate()
-            .map(|(index, field)| SchemaColumnProjection {
-                name: field.name().to_string(),
-                index,
-            })
-            .collect()
-    } else {
-        projections
-    }
 }
 
 fn encode_schema_int8(encoder: &mut DataRowEncoder, value: Option<u64>) {

@@ -1337,7 +1337,6 @@ async fn execute_classified<'a>(
             let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
             Ok(vec![make_schemas_response(
                 schemas,
-                _sql,
                 stable_ducklake_v11(store).await?,
             )])
         }
@@ -3261,7 +3260,7 @@ async fn execute_classified<'a>(
         // SELECT * FROM rocklake_catalog.{table_name}: read-only introspection.
         // Mutations are rejected with SQLSTATE 25006.
         StatementKind::VirtualCatalogScan { ref table_name } => {
-            execute_virtual_catalog_scan(table_name, _sql, store).await
+            execute_virtual_catalog_scan(table_name, store).await
         }
 
         // DELETE FROM "public".ducklake_inlined_data_<tid>_<sv> WHERE ctid IN (...)
