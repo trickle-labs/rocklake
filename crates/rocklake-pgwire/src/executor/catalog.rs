@@ -127,10 +127,22 @@ pub(super) async fn execute_commit(
 
     for op in ops {
         match op {
-            BufferedOp::InsertSchema { schema_name } => {
+            BufferedOp::InsertSchema {
+                schema_name,
+                schema_uuid,
+                path,
+                path_is_relative,
+                parent_schema_id,
+            } => {
                 needs_snapshot = true;
                 writer
-                    .create_schema(&schema_name)
+                    .create_schema_with_metadata(
+                        &schema_name,
+                        schema_uuid.as_deref(),
+                        path.as_deref(),
+                        path_is_relative,
+                        parent_schema_id,
+                    )
                     .await
                     .map_err(RockLakeError::from)?;
             }
@@ -1016,37 +1028,125 @@ pub(super) fn make_latest_snapshot_info_response(
 
 pub(super) fn make_schemas_response(
     schemas: Vec<rocklake_core::rows::SchemaRow>,
+    sql: &str,
+    stable_1_1: bool,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::schema_schema();
+    let source_schema = if stable_1_1 {
+        crate::schema_registry::schema_schema_v11()
+    } else {
+        crate::schema_registry::schema_schema()
+    };
+    let projections = schema_column_projections(sql, &source_schema);
+    let schema: Arc<Vec<FieldInfo>> = Arc::new(
+        projections
+            .iter()
+            .map(|projection| {
+                let source = &source_schema[projection.index];
+                FieldInfo::new(
+                    projection.name.clone(),
+                    None,
+                    None,
+                    source.datatype().clone(),
+                    source.format(),
+                )
+            })
+            .collect(),
+    );
     let mut data_rows = Vec::new();
     for s in &schemas {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(s.schema_id as i64),
-                &Type::INT8,
-                FieldFormat::Binary,
-            )
-            .expect("pgwire field encoding is infallible");
-        encode_text_value(&mut encoder, &s.schema_uuid);
-        encoder
-            .encode_field_with_type_and_format(
-                &Some(s.begin_snapshot as i64),
-                &Type::INT8,
-                FieldFormat::Binary,
-            )
-            .expect("pgwire field encoding is infallible");
-        let end = s.end_snapshot.map(|e| e as i64);
-        encoder
-            .encode_field_with_type_and_format(&end, &Type::INT8, FieldFormat::Binary)
-            .expect("pgwire field encoding is infallible");
-        encode_text_value(&mut encoder, &Some(s.schema_name.clone()));
-        encode_text_value(&mut encoder, &s.path);
-        let pir = s.path_is_relative.map(|b| b.to_string());
-        encode_text_value(&mut encoder, &pir);
+        for projection in &projections {
+            match projection.index {
+                0 => encode_schema_int8(&mut encoder, Some(s.schema_id)),
+                1 => encode_text_value(&mut encoder, &s.schema_uuid),
+                2 => encode_schema_int8(&mut encoder, Some(s.begin_snapshot)),
+                3 => encode_schema_int8(&mut encoder, s.end_snapshot),
+                4 => encode_text_value(&mut encoder, &Some(s.schema_name.clone())),
+                5 => encode_text_value(&mut encoder, &s.path),
+                6 => encode_text_value(
+                    &mut encoder,
+                    &s.path_is_relative.map(|value| value.to_string()),
+                ),
+                7 => encode_schema_int8(&mut encoder, s.parent_schema_id),
+                _ => unreachable!("schema registry projection index"),
+            }
+        }
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "schema_id ASC")
+}
+
+#[derive(Clone)]
+struct SchemaColumnProjection {
+    name: String,
+    index: usize,
+}
+
+fn schema_column_projections(
+    sql: &str,
+    source_schema: &[FieldInfo],
+) -> Vec<SchemaColumnProjection> {
+    let mut projections = Vec::new();
+    for item in select_projection_items(sql).unwrap_or_default() {
+        match item {
+            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                projections.extend(source_schema.iter().enumerate().map(|(index, field)| {
+                    SchemaColumnProjection {
+                        name: field.name().to_string(),
+                        index,
+                    }
+                }));
+            }
+            SelectItem::UnnamedExpr(expr) => {
+                let source_name = expr_last_identifier(&expr);
+                if let Some((index, field)) = source_schema.iter().enumerate().find(|(_, field)| {
+                    field
+                        .name()
+                        .eq_ignore_ascii_case(source_name.trim_matches('"'))
+                }) {
+                    projections.push(SchemaColumnProjection {
+                        name: field.name().to_string(),
+                        index,
+                    });
+                }
+            }
+            SelectItem::ExprWithAlias { expr, alias } => {
+                let source_name = expr_last_identifier(&expr);
+                if let Some((index, _)) = source_schema.iter().enumerate().find(|(_, field)| {
+                    field
+                        .name()
+                        .eq_ignore_ascii_case(source_name.trim_matches('"'))
+                }) {
+                    projections.push(SchemaColumnProjection {
+                        name: alias.value,
+                        index,
+                    });
+                }
+            }
+        }
+    }
+    if projections.is_empty() {
+        source_schema
+            .iter()
+            .enumerate()
+            .map(|(index, field)| SchemaColumnProjection {
+                name: field.name().to_string(),
+                index,
+            })
+            .collect()
+    } else {
+        projections
+    }
+}
+
+fn encode_schema_int8(encoder: &mut DataRowEncoder, value: Option<u64>) {
+    encoder
+        .encode_field_with_type_and_format(
+            &value.map(|value| value as i64),
+            &Type::INT8,
+            FieldFormat::Binary,
+        )
+        .expect("pgwire field encoding is infallible");
 }
 
 pub(super) fn make_tables_response(

@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::api::Type;
+use rocklake_catalog::{CatalogResult, CatalogStore};
+use rocklake_core::keys::MetadataScope;
 
 // ── helper macros ─────────────────────────────────────────────────────────────
 
@@ -109,6 +111,12 @@ pub fn schema_schema() -> Arc<Vec<FieldInfo>> {
         text_col!("path"),
         bool_col!("path_is_relative"),
     ])
+}
+
+pub fn schema_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*schema_schema()).clone();
+    fields.push(int8b!("parent_schema_id"));
+    Arc::new(fields)
 }
 
 // ── ducklake_table ────────────────────────────────────────────────────────────
@@ -704,6 +712,21 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
     }
 }
 
+pub fn fields_for_table_version(table_name: &str, stable_1_1: bool) -> Option<Arc<Vec<FieldInfo>>> {
+    if stable_1_1 && table_name == "ducklake_schema" {
+        return Some(schema_schema_v11());
+    }
+    fields_for_table(table_name)
+}
+
+pub async fn is_ducklake_v11(catalog: &CatalogStore) -> CatalogResult<bool> {
+    let reader = catalog.read_latest();
+    Ok(reader
+        .get_metadata(MetadataScope::Global, 0, "version")
+        .await?
+        .is_some_and(|row| row.value == "1.1"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,5 +740,13 @@ mod tests {
             encode_metadata_row(schema, values)
                 .unwrap_or_else(|error| panic!("{table} cannot be encoded: {error}"));
         }
+    }
+
+    #[test]
+    fn parent_schema_id_is_only_exposed_in_v11_schema() {
+        let v10 = fields_for_table_version("ducklake_schema", false).unwrap();
+        let v11 = fields_for_table_version("ducklake_schema", true).unwrap();
+        assert!(!v10.iter().any(|field| field.name() == "parent_schema_id"));
+        assert_eq!(v11.last().unwrap().name(), "parent_schema_id");
     }
 }

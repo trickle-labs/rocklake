@@ -144,6 +144,15 @@ async fn submit_ops(
     Ok(row_count)
 }
 
+async fn stable_ducklake_v11(
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<bool, RockLakeError> {
+    let catalog = store.lock().await;
+    crate::schema_registry::is_ducklake_v11(&catalog)
+        .await
+        .map_err(RockLakeError::from)
+}
+
 fn required_param_u64(
     params: &ParamValues,
     index: usize,
@@ -664,7 +673,9 @@ fn parse_insert_rows_map(
                 "default_value_type".to_string(),
                 "default_value_dialect".to_string(),
             ];
-        } else if table_name_normalized.contains("ducklake_schema") {
+        } else if table_name_normalized == "ducklake_schema"
+            && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 7)))
+        {
             cols = vec![
                 "schema_id".to_string(),
                 "schema_uuid".to_string(),
@@ -674,6 +685,13 @@ fn parse_insert_rows_map(
                 "path".to_string(),
                 "path_is_relative".to_string(),
             ];
+        } else if table_name_normalized == "ducklake_schema"
+            && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 8)))
+        {
+            cols = crate::schema_registry::schema_schema_v11()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
         }
     }
 
@@ -1181,13 +1199,14 @@ async fn execute_classified<'a>(
                 let catalog = store.lock().await;
                 (catalog.read_latest(), catalog.bootstrap_relation_names())
             };
+            let stable_1_1 = stable_ducklake_v11(store).await?;
             let initialized = reader
                 .get_snapshot()
                 .await
                 .map_err(RockLakeError::from)?
                 .is_some();
             let mut responses =
-                make_pg_catalog_scan_responses(_sql, initialized, &bootstrap_relations);
+                make_pg_catalog_scan_responses(_sql, initialized, &bootstrap_relations, stable_1_1);
             // The postgres scanner also issues individual pg_class queries
             // to discover a table after CREATE TABLE. Only the multi-statement
             // catalog probe returns the five result sets plus ROLLBACK.
@@ -1237,6 +1256,10 @@ async fn execute_classified<'a>(
                     for schema_row in bootstrap.schemas {
                         all_ops.push(BufferedOp::InsertSchema {
                             schema_name: schema_row.schema_name,
+                            schema_uuid: None,
+                            path: None,
+                            path_is_relative: None,
+                            parent_schema_id: None,
                         });
                     }
                     if bootstrap.has_snapshot {
@@ -1312,7 +1335,11 @@ async fn execute_classified<'a>(
             let snap_id = get_snapshot_param(params);
             let reader = resolve_reader(store, session, snap_id).await?;
             let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
-            Ok(vec![make_schemas_response(schemas)])
+            Ok(vec![make_schemas_response(
+                schemas,
+                _sql,
+                stable_ducklake_v11(store).await?,
+            )])
         }
         StatementKind::SelectTables => {
             let schema_id = resolve_comparison_u64(_sql, "schema_id", params);
@@ -2037,34 +2064,79 @@ async fn execute_classified<'a>(
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
         StatementKind::InsertSchema => {
-            let mut schema_name = String::new();
-            if let Some(rows) = parse_insert_rows_map(_sql, params) {
-                if let Some(row) = rows.first() {
-                    schema_name = row
-                        .get("schema_name")
-                        .and_then(|v| v.clone())
-                        .unwrap_or_default();
-                }
+            let stable_1_1 = {
+                let catalog = store.lock().await;
+                crate::schema_registry::is_ducklake_v11(&catalog)
+                    .await
+                    .map_err(RockLakeError::from)?
+            };
+            let ops = if let Some(rows) = parse_insert_rows_map(_sql, params) {
+                rows.into_iter()
+                    .map(|row| {
+                        let schema_name = row
+                            .get("schema_name")
+                            .and_then(|value| value.clone())
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| RockLakeError::MissingParam {
+                                name: "schema_name".into(),
+                            })?;
+                        let parent_schema_id = match row.get("parent_schema_id") {
+                            Some(Some(value)) => Some(value.parse::<u64>().map_err(|_| {
+                                RockLakeError::MissingParam {
+                                    name: "parent_schema_id".into(),
+                                }
+                            })?),
+                            _ => None,
+                        };
+                        if parent_schema_id.is_some() && !stable_1_1 {
+                            return Err(RockLakeError::Unsupported(
+                                "nested schemas require DuckLake 1.1".into(),
+                            ));
+                        }
+                        let path_is_relative = match row.get("path_is_relative") {
+                            Some(Some(_)) => {
+                                Some(row_map_bool(&row, "path_is_relative").ok_or_else(|| {
+                                    RockLakeError::MissingParam {
+                                        name: "path_is_relative".into(),
+                                    }
+                                })?)
+                            }
+                            Some(None) => None,
+                            None => Some(true),
+                        };
+                        Ok(BufferedOp::InsertSchema {
+                            schema_name,
+                            schema_uuid: row_map_string(&row, "schema_uuid"),
+                            path: row_map_string(&row, "path"),
+                            path_is_relative,
+                            parent_schema_id,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, RockLakeError>>()?
             } else {
                 let literals = literal_insert_values(_sql);
-                schema_name = params
+                let schema_name = params
                     .get_string(0)
                     .ok()
                     .or_else(|| literal_string(&literals, 4))
                     .unwrap_or_default();
-            }
-            if schema_name.is_empty() {
-                return Err(RockLakeError::MissingParam {
-                    name: "schema_name".into(),
-                });
-            }
-            let op = BufferedOp::InsertSchema { schema_name };
-            if session.in_transaction {
-                session.pending_txn.push(op)?;
-            } else {
-                execute_commit(vec![op], store, notify_manager).await?;
-            }
-            Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
+                if schema_name.is_empty() {
+                    return Err(RockLakeError::MissingParam {
+                        name: "schema_name".into(),
+                    });
+                }
+                vec![BufferedOp::InsertSchema {
+                    schema_name,
+                    schema_uuid: None,
+                    path: None,
+                    path_is_relative: None,
+                    parent_schema_id: None,
+                }]
+            };
+            let row_count = submit_ops(ops, session, store, notify_manager).await?;
+            Ok(vec![Response::Execution(Tag::new(&format!(
+                "INSERT 0 {row_count}"
+            )))])
         }
         StatementKind::InsertTable => {
             let mut table_id = None;
@@ -3189,7 +3261,7 @@ async fn execute_classified<'a>(
         // SELECT * FROM rocklake_catalog.{table_name}: read-only introspection.
         // Mutations are rejected with SQLSTATE 25006.
         StatementKind::VirtualCatalogScan { ref table_name } => {
-            execute_virtual_catalog_scan(table_name, store).await
+            execute_virtual_catalog_scan(table_name, _sql, store).await
         }
 
         // DELETE FROM "public".ducklake_inlined_data_<tid>_<sv> WHERE ctid IN (...)

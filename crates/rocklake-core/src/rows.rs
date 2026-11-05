@@ -87,6 +87,9 @@ pub struct SchemaRow {
     /// v0.25: true if path is relative.
     #[prost(bool, optional, tag = "7")]
     pub path_is_relative: Option<bool>,
+    /// v1.1: parent schema for a nested schema.
+    #[prost(uint64, optional, tag = "8")]
+    pub parent_schema_id: Option<u64>,
 }
 
 /// Table row value.

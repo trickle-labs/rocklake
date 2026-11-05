@@ -17,6 +17,8 @@
 
 #![allow(missing_docs)]
 
+use std::collections::{HashMap, HashSet};
+
 pub mod snapshot;
 pub mod stats;
 
@@ -561,6 +563,36 @@ impl CatalogWriter {
     }
 
     pub async fn create_schema(&mut self, schema_name: &str) -> CatalogResult<u64> {
+        self.create_schema_with_metadata(schema_name, None, None, None, None)
+            .await
+    }
+
+    pub async fn create_schema_with_metadata(
+        &mut self,
+        schema_name: &str,
+        schema_uuid: Option<&str>,
+        path: Option<&str>,
+        path_is_relative: Option<bool>,
+        parent_schema_id: Option<u64>,
+    ) -> CatalogResult<u64> {
+        if let Some(parent_schema_id) = parent_schema_id {
+            self.ensure_schema_exists(parent_schema_id).await?;
+        }
+        let schema_uuid = if let Some(schema_uuid) = schema_uuid {
+            uuid::Uuid::parse_str(schema_uuid)
+                .map_err(|error| {
+                    CatalogError::InvalidInput(format!("invalid schema UUID: {error}"))
+                })?
+                .to_string()
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
+        let path_is_relative = match path {
+            Some(path) if !path.is_empty() => {
+                Some(validate_registered_path(path, path_is_relative)?)
+            }
+            _ => path_is_relative.or(Some(true)),
+        };
         let schema_id = self.counters.alloc_catalog_id();
         let snapshot_id = self.counters.peek_snapshot_id();
 
@@ -569,9 +601,10 @@ impl CatalogWriter {
             schema_name: schema_name.to_string(),
             begin_snapshot: snapshot_id,
             end_snapshot: None,
-            schema_uuid: Some(uuid::Uuid::new_v4().to_string()),
-            path: None,
-            path_is_relative: Some(true),
+            schema_uuid: Some(schema_uuid),
+            path: path.map(str::to_string),
+            path_is_relative,
+            parent_schema_id,
         };
 
         let key = keys::key_schema(schema_id);
@@ -581,14 +614,68 @@ impl CatalogWriter {
     }
 
     pub async fn drop_schema(&mut self, schema_id: u64) -> CatalogResult<()> {
+        for schema_id in self.schema_cascade_order(schema_id).await? {
+            self.drop_schema_one(schema_id).await?;
+        }
+        Ok(())
+    }
+
+    async fn schema_cascade_order(&self, root_id: u64) -> CatalogResult<Vec<u64>> {
+        let prefix = keys::prefix_for_tag(TAG_SCHEMA);
+        let mut schemas = HashMap::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: SchemaRow = values::decode_value(&kv.value)?;
+            schemas.insert(row.schema_id, row);
+        }
+        for (key, value) in &self.staged {
+            if key.starts_with(&prefix) {
+                let row: SchemaRow = values::decode_value(value)?;
+                schemas.insert(row.schema_id, row);
+            }
+        }
+        if !schemas.contains_key(&root_id) {
+            return Err(CatalogError::NotFound(format!("schema {root_id}")));
+        }
+
+        let mut order = Vec::new();
+        let mut pending = vec![(root_id, false)];
+        let mut visited = HashSet::new();
+        while let Some((schema_id, expanded)) = pending.pop() {
+            if expanded {
+                order.push(schema_id);
+            } else if visited.insert(schema_id) {
+                pending.push((schema_id, true));
+                pending.extend(
+                    schemas
+                        .values()
+                        .filter(|row| {
+                            row.parent_schema_id == Some(schema_id) && row.end_snapshot.is_none()
+                        })
+                        .map(|row| (row.schema_id, false)),
+                );
+            }
+        }
+        Ok(order)
+    }
+
+    async fn drop_schema_one(&mut self, schema_id: u64) -> CatalogResult<()> {
         let snapshot_id = self.counters.peek_snapshot_id();
         let key = keys::key_schema(schema_id);
 
-        let existing = self
-            .db
-            .get(&key)
-            .await?
-            .ok_or_else(|| CatalogError::NotFound(format!("schema {schema_id}")))?;
+        let existing = match self.staged_value(&key) {
+            Some(value) => value.to_vec(),
+            None => self
+                .db
+                .get(&key)
+                .await?
+                .ok_or_else(|| CatalogError::NotFound(format!("schema {schema_id}")))?
+                .to_vec(),
+        };
 
         let mut row: SchemaRow = values::decode_value(&existing)?;
         row.end_snapshot = Some(snapshot_id);
