@@ -295,13 +295,19 @@ async fn data_root_resolved_from_catalog_metadata() {
     let data_dir = dir.path().join("data");
     std::fs::create_dir_all(&data_dir).unwrap();
 
-    use arrow::array::Int32Array;
+    use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("null_col", DataType::Int64, true),
+    ]));
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![10, 20])) as Arc<dyn arrow::array::Array>],
+        vec![
+            Arc::new(Int32Array::from(vec![10, 20])) as Arc<dyn arrow::array::Array>,
+            Arc::new(Int64Array::from(vec![None, None])) as Arc<dyn arrow::array::Array>,
+        ],
     )
     .unwrap();
     let parquet_path = data_dir.join("rows.parquet");
@@ -323,6 +329,9 @@ async fn data_root_resolved_from_catalog_metadata() {
     let sid = w.create_schema("main").await.unwrap();
     let tid = w.create_table(sid, "rows", None).await.unwrap();
     w.add_column(tid, "id", "INTEGER", 0, false, None)
+        .await
+        .unwrap();
+    w.add_column(tid, "null_col", "null", 1, true, None)
         .await
         .unwrap();
     w.register_data_file(
@@ -363,6 +372,15 @@ async fn data_root_resolved_from_catalog_metadata() {
         total, 2,
         "must read 2 rows from Parquet via metadata data_path"
     );
+    let null_col = ctx
+        .sql("SELECT null_col FROM duck.main.rows")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(null_col[0].column(0).data_type(), &DataType::Null);
+    assert_eq!(null_col[0].column(0).logical_null_count(), 2);
 }
 
 // ─── Table count registry ──────────────────────────────────────────────────
