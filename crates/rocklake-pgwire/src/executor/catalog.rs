@@ -1439,6 +1439,17 @@ struct MetadataColumnProjection {
     index: usize,
 }
 
+fn metadata_source_field<'a>(
+    source_name: &str,
+    source_schema: &'a [FieldInfo],
+) -> Option<(usize, &'a FieldInfo)> {
+    source_schema.iter().enumerate().find(|(_, field)| {
+        field.name().eq_ignore_ascii_case(source_name)
+            || (source_name.eq_ignore_ascii_case("row_count")
+                && field.name().eq_ignore_ascii_case("record_count"))
+    })
+}
+
 fn metadata_column_projections(
     sql: &str,
     source_schema: &[FieldInfo],
@@ -1456,11 +1467,9 @@ fn metadata_column_projections(
             }
             SelectItem::UnnamedExpr(expr) => {
                 let source_name = expr_last_identifier(&expr);
-                if let Some((index, field)) = source_schema.iter().enumerate().find(|(_, field)| {
-                    field
-                        .name()
-                        .eq_ignore_ascii_case(source_name.trim_matches('"'))
-                }) {
+                if let Some((index, field)) =
+                    metadata_source_field(source_name.trim_matches('"'), source_schema)
+                {
                     projections.push(MetadataColumnProjection {
                         name: field.name().to_string(),
                         index,
@@ -1469,11 +1478,9 @@ fn metadata_column_projections(
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let source_name = expr_last_identifier(&expr);
-                if let Some((index, _)) = source_schema.iter().enumerate().find(|(_, field)| {
-                    field
-                        .name()
-                        .eq_ignore_ascii_case(source_name.trim_matches('"'))
-                }) {
+                if let Some((index, _)) =
+                    metadata_source_field(source_name.trim_matches('"'), source_schema)
+                {
                     projections.push(MetadataColumnProjection {
                         name: alias.value,
                         index,
