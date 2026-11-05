@@ -33,13 +33,13 @@ The upstream 1.1 table overview lists 29 metadata tables, including the new `duc
 
 The installed DuckDB CLI reported `v2.0.0 (Cyanoptera) d54cbbe3df`. Against fresh local DuckDB metadata catalogs, `lake.options()` returned `version = 1.1` by default and `version = 1.0` when attached with `DUCKLAKE_VERSION '1.0'`. The 1.1 catalog's `ducklake_metadata` row also stored `version = 1.1`; its initial `ducklake_snapshot.schema_version` was `0`.
 
-`DESCRIBE` against the DuckDB 2.0 system metadata views confirmed these 1.0-to-1.1 schema deltas: `ducklake_schema.parent_schema_id`; `ducklake_data_file.row_group_count`; `ducklake_delete_file.row_group_count`; and `min_is_exact`/`max_is_exact` on both file and table column statistics. This confirms the schema changes listed above against a real reference client, but does not exercise RockLake PgWire or data operations. A SQLite-backed probe could not run because `sqlite_scanner` was unavailable locally and network access prevented downloading it.
+`pragma_table_info` against a fresh DuckDB 2.0 catalog enumerated all 29 metadata tables, with ordered columns, SQL types, and nullability matching the 1.1 specification's full schema script. Comparing it with the v1.0 schema confirmed the catalog delta: one new table (`ducklake_view_column_tag`); `parent_schema_id` on `ducklake_schema`; `row_group_count` on data and delete files; and `min_is_exact`/`max_is_exact` on file and table column statistics. The inlined-table system-column rename is a physical data-table change and is not represented in this metadata-table inventory. This reference capture does not exercise RockLake PgWire or data operations. A SQLite-backed probe could not run because `sqlite_scanner` was unavailable locally and network access prevented downloading it.
 
 ## Remaining verification work to close the gaps
 
 The reference probe above is partial evidence; the following compatibility checks remain unrun.
 
-1. Compare all 29 table names, ordered columns, SQL types, nullability, and version behavior from a fresh DuckDB 2.0 catalog to the 1.1 specification and RockLake PgWire. Keep the 1.0 fixture and tests separate.
+1. Compare the captured 29-table DuckDB 2.0 schema and version behavior against RockLake PgWire. Keep the 1.0 fixture and tests separate.
 2. Run real DuckDB 2.0 scenarios for nested schemas, `NULL` promotion, PostgreSQL `VARIANT` inlining, epoch transforms, multi-snapshot Puffin deletes/time travel, exact string bounds, row-group counts, and view column tags. Inspect the catalog rows as well as query results.
 3. Test fresh 1.1 and explicit 1.0 creation, reconnect/restart, and 1.0-to-1.1 `AUTOMATIC_MIGRATION`; inject a migration failure and test the documented recovery path and downgrade rejection.
 4. Round-trip representative 1.1 rows through catalog import/export, backup/restore, and each maintained client surface. Unsupported paths must return an error without dropping metadata.
