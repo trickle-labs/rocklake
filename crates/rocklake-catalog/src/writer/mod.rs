@@ -2827,6 +2827,28 @@ impl CatalogWriter {
         Ok(())
     }
 
+    pub async fn register_file_partition_value(
+        &mut self,
+        data_file_id: u64,
+        table_id: u64,
+        partition_key_index: u64,
+        partition_value: Option<&str>,
+    ) -> CatalogResult<()> {
+        self.ensure_data_file_belongs(table_id, data_file_id)
+            .await?;
+        let row = FilePartitionValueRow {
+            table_id,
+            partition_key_index,
+            data_file_id,
+            partition_value: partition_value.map(str::to_string),
+        };
+        self.stage(
+            keys::key_file_partition_value(table_id, partition_key_index, data_file_id),
+            values::encode_value(&row),
+        );
+        Ok(())
+    }
+
     /// Write a `ducklake_sort_expression` row directly.
     #[allow(clippy::too_many_arguments)]
     pub async fn register_sort_expression(

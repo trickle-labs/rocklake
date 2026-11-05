@@ -634,6 +634,17 @@ pub(super) async fn execute_commit(
                                 .await
                                 .map_err(RockLakeError::from)?;
                         }
+                        "ducklake_file_partition_value" => {
+                            writer
+                                .register_file_partition_value(
+                                    required_row_u64(&row, "data_file_id")?,
+                                    required_row_u64(&row, "table_id")?,
+                                    required_row_u64(&row, "partition_key_index")?,
+                                    row_map_string(&row, "partition_value").as_deref(),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
                         "ducklake_sort_expression" => {
                             writer
                                 .register_sort_expression(
@@ -3029,6 +3040,110 @@ pub(super) fn make_partition_columns_response(
         schema,
         data_rows,
         "partition_id ASC, partition_key_index ASC",
+    )
+}
+
+struct SchemaColumnProjection {
+    name: String,
+    index: usize,
+}
+
+fn schema_column_projections(
+    sql: &str,
+    source_schema: &[FieldInfo],
+) -> Vec<SchemaColumnProjection> {
+    let mut projections = Vec::new();
+    for item in select_projection_items(sql).unwrap_or_default() {
+        match item {
+            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                projections.extend(source_schema.iter().enumerate().map(|(index, field)| {
+                    SchemaColumnProjection {
+                        name: field.name().to_string(),
+                        index,
+                    }
+                }));
+            }
+            SelectItem::UnnamedExpr(expr) => {
+                let source_name = expr_last_identifier(&expr);
+                if let Some((index, field)) = source_schema.iter().enumerate().find(|(_, field)| {
+                    field
+                        .name()
+                        .eq_ignore_ascii_case(source_name.trim_matches('"'))
+                }) {
+                    projections.push(SchemaColumnProjection {
+                        name: field.name().to_string(),
+                        index,
+                    });
+                }
+            }
+            SelectItem::ExprWithAlias { expr, alias } => {
+                let source_name = expr_last_identifier(&expr);
+                if let Some((index, _)) = source_schema.iter().enumerate().find(|(_, field)| {
+                    field
+                        .name()
+                        .eq_ignore_ascii_case(source_name.trim_matches('"'))
+                }) {
+                    projections.push(SchemaColumnProjection {
+                        name: alias.value,
+                        index,
+                    });
+                }
+            }
+        }
+    }
+    if projections.is_empty() {
+        source_schema
+            .iter()
+            .enumerate()
+            .map(|(index, field)| SchemaColumnProjection {
+                name: field.name().to_string(),
+                index,
+            })
+            .collect()
+    } else {
+        projections
+    }
+}
+
+pub(super) fn make_file_partition_values_response(
+    sql: &str,
+    rows: Vec<rocklake_core::rows::FilePartitionValueRow>,
+) -> Response<'static> {
+    let source_schema = crate::schema_registry::file_partition_value_schema();
+    let projections = schema_column_projections(sql, &source_schema);
+    let schema = Arc::new(
+        projections
+            .iter()
+            .map(|projection| {
+                let source = &source_schema[projection.index];
+                FieldInfo::new(
+                    projection.name.clone(),
+                    None,
+                    None,
+                    source.datatype().clone(),
+                    source.format(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+    let mut data_rows = Vec::new();
+    for row in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        for projection in &projections {
+            match projection.index {
+                0 => encode_text_value(&mut encoder, &Some(row.data_file_id.to_string())),
+                1 => encode_text_value(&mut encoder, &Some(row.table_id.to_string())),
+                2 => encode_text_value(&mut encoder, &Some(row.partition_key_index.to_string())),
+                3 => encode_text_value(&mut encoder, &row.partition_value),
+                _ => unreachable!("file partition value schema projection index"),
+            }
+        }
+        data_rows.push(encoder.finish());
+    }
+    make_encoded_metadata_response(
+        schema,
+        data_rows,
+        "data_file_id ASC, partition_key_index ASC",
     )
 }
 

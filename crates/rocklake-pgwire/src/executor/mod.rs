@@ -41,7 +41,7 @@ use catalog::{
     make_column_tags_response, make_columns_response, make_data_files_stream_response,
     make_data_files_stream_response_from_rows, make_delete_files_stream_response,
     make_extended_data_file_response, make_file_column_stats_stream_response,
-    make_file_ids_response, make_file_variant_stats_response,
+    make_file_ids_response, make_file_partition_values_response, make_file_variant_stats_response,
     make_files_scheduled_for_deletion_response, make_global_table_stats_response,
     make_inlined_data_tables_response, make_inlined_rows_response,
     make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
@@ -439,8 +439,8 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_multi_statement_batch,
-        resolve_comparison_u64,
+        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_insert_rows_map,
+        parse_multi_statement_batch, resolve_comparison_u64, row_map_string, row_map_u64,
     };
     use rocklake_sql::ParamValues;
 
@@ -485,6 +485,39 @@ mod tests {
             .expect("two SQL statements");
         assert_eq!(statements.len(), 2);
         assert!(statements[0].contains("delete; ducklake"));
+    }
+
+    #[test]
+    fn parses_positional_ducklake_partition_columns() {
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_partition_column VALUES (4, 3, 0, 1, 'epoch_day')",
+            &ParamValues::default(),
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&rows[0], "partition_id"), Some(4));
+        assert_eq!(row_map_u64(&rows[0], "table_id"), Some(3));
+        assert_eq!(row_map_u64(&rows[0], "partition_key_index"), Some(0));
+        assert_eq!(row_map_u64(&rows[0], "column_id"), Some(1));
+        assert_eq!(
+            row_map_string(&rows[0], "transform").as_deref(),
+            Some("epoch_day")
+        );
+    }
+
+    #[test]
+    fn parses_positional_ducklake_file_partition_values() {
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_file_partition_value VALUES (7, 3, 0, '-1')",
+            &ParamValues::default(),
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&rows[0], "data_file_id"), Some(7));
+        assert_eq!(row_map_u64(&rows[0], "table_id"), Some(3));
+        assert_eq!(row_map_u64(&rows[0], "partition_key_index"), Some(0));
+        assert_eq!(
+            row_map_string(&rows[0], "partition_value").as_deref(),
+            Some("-1")
+        );
     }
 }
 
@@ -622,6 +655,24 @@ fn parse_insert_rows_map(
                 "begin_snapshot".to_string(),
                 "end_snapshot".to_string(),
             ];
+        } else if table_name_normalized == "ducklake_partition_column"
+            && insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 5))
+            })
+        {
+            cols = crate::schema_registry::partition_column_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
+        } else if table_name_normalized == "ducklake_file_partition_value"
+            && insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 4))
+            })
+        {
+            cols = crate::schema_registry::file_partition_value_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
         } else if table_name_normalized == "ducklake_sort_info" {
             cols = vec![
                 "sort_id".to_string(),
@@ -1811,6 +1862,18 @@ async fn execute_classified<'a>(
                     .map_err(RockLakeError::from)?
             };
             Ok(vec![make_partition_columns_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_file_partition_value" =>
+        {
+            let table_id = resolve_comparison_u64(_sql, "table_id", params);
+            let reader = { store.lock().await.read_latest() };
+            let rows = reader
+                .list_file_partition_values(table_id)
+                .await
+                .map_err(RockLakeError::from)?;
+            Ok(vec![make_file_partition_values_response(_sql, rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
@@ -3131,6 +3194,7 @@ async fn execute_classified<'a>(
                     | "ducklake_sort_info"
                     | "ducklake_files_scheduled_for_deletion"
                     | "ducklake_partition_column"
+                    | "ducklake_file_partition_value"
                     | "ducklake_sort_expression"
             ) {
                 let rows = parse_insert_rows_map(_sql, params).ok_or_else(|| {

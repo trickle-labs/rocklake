@@ -1954,6 +1954,31 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// List per-file partition values, optionally restricted to one table.
+    pub async fn list_file_partition_values(
+        &self,
+        table_id: Option<u64>,
+    ) -> CatalogResult<Vec<FilePartitionValueRow>> {
+        let prefix = table_id.map_or_else(
+            || keys::prefix_for_tag(TAG_FILE_PARTITION_VALUE),
+            keys::prefix_file_partition_values_for_table,
+        );
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: FilePartitionValueRow = values::decode_value(&kv.value)?;
+            if table_id.is_none_or(|table_id| row.table_id == table_id) {
+                rows.push(row);
+            }
+        }
+        rows.sort_by_key(|row| (row.data_file_id, row.partition_key_index));
+        Ok(rows)
+    }
+
     /// List all `ducklake_sort_expression` rows visible at this snapshot for a table.
     pub async fn list_sort_expressions(
         &self,

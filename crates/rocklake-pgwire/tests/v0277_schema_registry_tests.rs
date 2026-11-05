@@ -723,6 +723,84 @@ async fn golden_ducklake_file_partition_value() {
     );
 }
 
+#[tokio::test]
+async fn ducklake_file_partition_values_persist_and_project() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let table_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(commit);
+        table_id
+    };
+
+    let insert_file = format!(
+        "INSERT INTO ducklake_data_file (table_id, path, file_format, record_count, file_size_bytes) VALUES ({table_id}, 'epoch_day=-1.parquet', 'parquet', 1, 100)"
+    );
+    executor::execute_sql(
+        &insert_file,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let data_file_id = store
+        .lock()
+        .await
+        .read_latest()
+        .list_data_files(table_id)
+        .await
+        .unwrap()[0]
+        .data_file_id;
+
+    let insert_partition_value = format!(
+        "INSERT INTO ducklake_file_partition_value VALUES ({data_file_id}, {table_id}, 0, '-1')"
+    );
+    executor::execute_sql(
+        &insert_partition_value,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_file_partition_values(Some(table_id))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].data_file_id, data_file_id);
+    assert_eq!(rows[0].partition_value.as_deref(), Some("-1"));
+
+    let response = exec(
+        "SELECT table_id, partition_value FROM ducklake_file_partition_value",
+        &store,
+    )
+    .await;
+    let (columns, count) = inspect(response).await;
+    assert_cols_eq(
+        &columns,
+        &["table_id", "partition_value"],
+        "file_partition_value",
+    );
+    assert_eq!(count, 1);
+}
+
 // ── Three SELECT variants for high-risk tables ────────────────────────────────
 
 // ducklake_table_stats: SELECT *, SELECT explicit, SELECT with CAST
