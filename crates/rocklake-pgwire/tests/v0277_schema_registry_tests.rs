@@ -27,8 +27,10 @@ use tokio::sync::Mutex;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 
-use pgwire::api::results::Response;
+use pgwire::api::results::{FieldFormat, Response};
+use pgwire::api::Type;
 use rocklake_catalog::{CatalogStore, OpenOptions};
+use rocklake_core::keys::MetadataScope;
 use rocklake_pgwire::executor;
 use rocklake_pgwire::session::SessionState;
 use rocklake_sql::ParamValues;
@@ -991,6 +993,73 @@ async fn inlined_row_select_star_returns_unaliased_columns() {
         !cols.contains(&"row_id".to_string()),
         "SELECT * must NOT expose system column row_id, got: {cols:?}"
     );
+}
+
+#[tokio::test]
+async fn variant_inlined_values_are_exposed_as_binary_bytea() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let (_, table_id, _) = populate_base(&store).await;
+    let schema_version = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer
+            .add_column(table_id, "variant_value", "VARIANT", 1, true, None)
+            .await
+            .unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        catalog
+            .read_latest()
+            .get_snapshot()
+            .await
+            .unwrap()
+            .unwrap()
+            .schema_version
+    };
+
+    let table = format!("ducklake_inlined_data_{table_id}_{schema_version}");
+    let insert =
+        format!(r#"INSERT INTO "public".{table} VALUES (0, {schema_version}, NULL, 42, '\x0102')"#);
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let query = format!(r#"SELECT variant_value FROM "public".{table}"#);
+    let mut responses = executor::execute_sql(
+        &query,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let Response::Query(response) = responses.remove(0) else {
+        panic!("expected query response");
+    };
+    let fields = response.row_schema();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].datatype(), &Type::BYTEA);
+    assert_eq!(fields[0].format(), FieldFormat::Binary);
+
+    let rows = response.data_rows();
+    futures::pin_mut!(rows);
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(row.field_count, 1);
+    assert_eq!(i32::from_be_bytes(row.data[..4].try_into().unwrap()), 2);
+    assert_eq!(&row.data[4..], &[0x01, 0x02]);
 }
 
 #[tokio::test]

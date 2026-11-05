@@ -2876,7 +2876,7 @@ fn inlined_storage_type(logical_type: &str) -> Type {
         "TINYINT" | "SMALLINT" | "INT2" | "INT16" => Type::INT2,
         "INTEGER" | "INT" | "INT4" | "INT32" => Type::INT4,
         "BIGINT" | "INT8" | "INT64" => Type::INT8,
-        "VARCHAR" | "TEXT" | "STRING" | "BLOB" | "BYTEA" => Type::BYTEA,
+        "VARCHAR" | "TEXT" | "STRING" | "BLOB" | "BYTEA" | "VARIANT" => Type::BYTEA,
         "TIMESTAMP" | "TIMESTAMP WITHOUT TIME ZONE" => Type::TIMESTAMP,
         "TIMESTAMP WITH TIME ZONE" | "TIMESTAMPTZ" => Type::TIMESTAMPTZ,
         "DATE" => Type::DATE,
