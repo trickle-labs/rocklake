@@ -512,6 +512,7 @@ const DUCKLAKE_TABLES: &[&str] = &[
     "ducklake_sort_expression",
     "ducklake_tag",
     "ducklake_column_tag",
+    "ducklake_view_column_tag",
     "ducklake_schema_version",
 ];
 
@@ -657,6 +658,9 @@ fn normalize_ducklake_row(table: &str, data: &mut Value) {
             ("nulls_allowed", "is_nullable"),
         ],
         "ducklake_view" => &[("view_definition", "sql")],
+        "ducklake_tag" | "ducklake_column_tag" | "ducklake_view_column_tag" => {
+            &[("key", "tag_key"), ("value", "tag_value")]
+        }
         "ducklake_data_file" => &[("row_count", "record_count")],
         "ducklake_delete_file" => &[("row_count", "delete_count")],
         _ => &[],

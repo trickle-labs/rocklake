@@ -399,6 +399,18 @@ pub(super) async fn execute_commit(
                     }
                 }
             }
+            BufferedOp::EndViewColumnTag {
+                view_id,
+                column_name,
+                tag_key,
+                begin_snapshot,
+            } => {
+                needs_snapshot = true;
+                writer
+                    .remove_view_column_tag(view_id, &column_name, &tag_key, begin_snapshot)
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
             BufferedOp::UpdateTableStats {
                 table_id,
                 row_count_delta,
@@ -645,6 +657,27 @@ pub(super) async fn execute_commit(
                                     row_map_u64(&row, "table_id"),
                                     row_map_string(&row, "expression").as_deref(),
                                     row_map_string(&row, "dialect").as_deref(),
+                                )
+                                .await
+                                .map_err(RockLakeError::from)?;
+                        }
+                        "ducklake_view_column_tag" => {
+                            let tag_key = row_map_string(&row, "key")
+                                .or_else(|| row_map_string(&row, "tag_key"))
+                                .ok_or_else(|| RockLakeError::MissingParam {
+                                    name: "key".to_string(),
+                                })?;
+                            let tag_value = row_map_string(&row, "value")
+                                .or_else(|| row_map_string(&row, "tag_value"))
+                                .ok_or_else(|| RockLakeError::MissingParam {
+                                    name: "value".to_string(),
+                                })?;
+                            writer
+                                .set_view_column_tag(
+                                    required_row_u64(&row, "view_id")?,
+                                    &required_row_string(&row, "column_name")?,
+                                    &tag_key,
+                                    &tag_value,
                                 )
                                 .await
                                 .map_err(RockLakeError::from)?;
@@ -3114,6 +3147,32 @@ pub(super) fn make_column_tags_response(
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "table_id ASC, column_id ASC, key ASC")
+}
+
+pub(super) fn make_view_column_tags_response(
+    mut rows: Vec<rocklake_core::rows::ViewColumnTagRow>,
+) -> Response<'static> {
+    let schema = crate::schema_registry::view_column_tag_schema();
+    rows.sort_by(|left, right| {
+        (&left.view_id, &left.column_name, &left.tag_key).cmp(&(
+            &right.view_id,
+            &right.column_name,
+            &right.tag_key,
+        ))
+    });
+    let mut data_rows = Vec::new();
+    for r in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encode_text_value(&mut encoder, &Some(r.view_id.to_string()));
+        encode_text_value(&mut encoder, &Some(r.column_name.clone()));
+        encode_text_value(&mut encoder, &Some(r.begin_snapshot.to_string()));
+        let end = r.end_snapshot.map(|end| end.to_string());
+        encode_text_value(&mut encoder, &end);
+        encode_text_value(&mut encoder, &Some(r.tag_key.clone()));
+        encode_text_value(&mut encoder, &Some(r.tag_value.clone()));
+        data_rows.push(encoder.finish());
+    }
+    make_encoded_metadata_response(schema, data_rows, "view_id ASC, column_name ASC, key ASC")
 }
 
 /// v0.27: Build a PgWire response for `SELECT * FROM ducklake_sort_info`.

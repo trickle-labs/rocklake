@@ -1,4 +1,4 @@
-//! Protobuf-encoded row types for all 28 DuckLake v1.0 tables.
+//! Protobuf-encoded row types for DuckLake metadata tables, including v1.1 additions.
 //!
 //! These types use prost derive macros for protobuf encoding/decoding.
 
@@ -617,6 +617,23 @@ pub struct ColumnTagRow {
     pub table_id: u64,
     #[prost(uint64, tag = "2")]
     pub column_id: u64,
+    #[prost(string, tag = "3")]
+    pub tag_key: String,
+    #[prost(string, tag = "4")]
+    pub tag_value: String,
+    #[prost(uint64, tag = "5")]
+    pub begin_snapshot: u64,
+    #[prost(uint64, optional, tag = "6")]
+    pub end_snapshot: Option<u64>,
+}
+
+/// View column tag row value (DuckLake 1.1).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct ViewColumnTagRow {
+    #[prost(uint64, tag = "1")]
+    pub view_id: u64,
+    #[prost(string, tag = "2")]
+    pub column_name: String,
     #[prost(string, tag = "3")]
     pub tag_key: String,
     #[prost(string, tag = "4")]

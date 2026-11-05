@@ -51,7 +51,8 @@ use catalog::{
     make_schemas_response, make_snapshot_changes_response, make_snapshot_row_response,
     make_snapshot_stats_changes_response, make_sort_expressions_response, make_sort_info_response,
     make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
-    make_tags_response, make_views_response, parse_inlined_table_ids,
+    make_tags_response, make_view_column_tags_response, make_views_response,
+    parse_inlined_table_ids,
 };
 use extension::{
     execute_create_extension_table, execute_delete_extension_rows, execute_insert_extension_row,
@@ -969,6 +970,65 @@ fn resolve_comparison_u64(sql: &str, column: &str, params: &ParamValues) -> Opti
     literal_comparison_u64(sql, column)
 }
 
+fn resolve_comparison_string(sql: &str, column: &str, params: &ParamValues) -> Option<String> {
+    let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql).ok()?;
+    let selection = match statements.first()? {
+        Statement::Update {
+            selection: Some(selection),
+            ..
+        } => selection,
+        Statement::Delete(delete) => delete.selection.as_ref()?,
+        _ => return None,
+    };
+    let mut value = None;
+    let _: std::ops::ControlFlow<()> = visit_expressions(selection, |expr| {
+        if let Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } = expr
+        {
+            if expression_matches_column(left, column) {
+                value = resolve_expr(right, params);
+            } else if expression_matches_column(right, column) {
+                value = resolve_expr(left, params);
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    value
+}
+
+fn expression_matches_column(expr: &Expr, column: &str) -> bool {
+    match expr {
+        Expr::Identifier(id) => id.value.eq_ignore_ascii_case(column),
+        Expr::CompoundIdentifier(parts) => parts
+            .last()
+            .is_some_and(|id| id.value.eq_ignore_ascii_case(column)),
+        Expr::Nested(expr) => expression_matches_column(expr, column),
+        _ => false,
+    }
+}
+
+fn updates_column(sql: &str, column: &str) -> bool {
+    let Ok(statements) = Parser::parse_sql(&PostgreSqlDialect {}, sql) else {
+        return false;
+    };
+    let Some(Statement::Update { assignments, .. }) = statements.first() else {
+        return false;
+    };
+    assignments.iter().any(|assignment| {
+        assignment
+            .target
+            .to_string()
+            .split('.')
+            .next_back()
+            .unwrap_or_default()
+            .trim_matches('"')
+            .eq_ignore_ascii_case(column)
+    })
+}
+
 #[derive(Clone, Copy)]
 enum InlinedRowSelection {
     All,
@@ -1156,9 +1216,15 @@ async fn execute_classified<'a>(
                     .await
                     .map_err(RockLakeError::from)?
                     .is_some();
+                let ducklake_v11 = reader
+                    .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+                    .await
+                    .map_err(RockLakeError::from)?
+                    .is_some_and(|row| row.value == "1.1" || row.value == "1.1-dev1");
                 return Ok(vec![make_pg_catalog_staleness_response(
                     snapshot_id,
                     initialized,
+                    ducklake_v11,
                 )]);
             }
             if let Some(table_name) = inlined_table_name_from_sql(_sql) {
@@ -1186,8 +1252,17 @@ async fn execute_classified<'a>(
                 .await
                 .map_err(RockLakeError::from)?
                 .is_some();
-            let mut responses =
-                make_pg_catalog_scan_responses(_sql, initialized, &bootstrap_relations);
+            let ducklake_v11 = reader
+                .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+                .await
+                .map_err(RockLakeError::from)?
+                .is_some_and(|row| row.value == "1.1" || row.value == "1.1-dev1");
+            let mut responses = make_pg_catalog_scan_responses(
+                _sql,
+                initialized,
+                &bootstrap_relations,
+                ducklake_v11,
+            );
             // The postgres scanner also issues individual pg_class queries
             // to discover a table after CREATE TABLE. Only the multi-statement
             // catalog probe returns the five result sets plus ROLLBACK.
@@ -1729,6 +1804,27 @@ async fn execute_classified<'a>(
                 .await
                 .map_err(RockLakeError::from)?;
             Ok(vec![make_schema_versions_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_view_column_tag" =>
+        {
+            let reader = { store.lock().await.read_latest() };
+            let version = reader
+                .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+                .await
+                .map_err(RockLakeError::from)?
+                .map(|row| row.value);
+            if !matches!(version.as_deref(), Some("1.1" | "1.1-dev1")) {
+                return Err(RockLakeError::Unsupported(
+                    "ducklake_view_column_tag requires DuckLake format version 1.1".into(),
+                ));
+            }
+            let rows = reader
+                .list_all_view_column_tags()
+                .await
+                .map_err(RockLakeError::from)?;
+            Ok(vec![make_view_column_tags_response(rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
@@ -2985,6 +3081,33 @@ async fn execute_classified<'a>(
         }
 
         StatementKind::UpdateEndSnapshot(ref table_name) => {
+            if table_name == "ducklake_view_column_tag" {
+                if !updates_column(_sql, "end_snapshot") {
+                    return Err(RockLakeError::Unsupported(
+                        "only end_snapshot updates are supported for ducklake_view_column_tag"
+                            .into(),
+                    ));
+                }
+                let op = BufferedOp::EndViewColumnTag {
+                    view_id: resolve_comparison_u64(_sql, "view_id", params).ok_or_else(|| {
+                        RockLakeError::MissingParam {
+                            name: "view_id".into(),
+                        }
+                    })?,
+                    column_name: resolve_comparison_string(_sql, "column_name", params)
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "column_name".into(),
+                        })?,
+                    tag_key: resolve_comparison_string(_sql, "key", params)
+                        .ok_or_else(|| RockLakeError::MissingParam { name: "key".into() })?,
+                    begin_snapshot: resolve_comparison_u64(_sql, "begin_snapshot", params)
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "begin_snapshot".into(),
+                        })?,
+                };
+                submit_ops(vec![op], session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new("UPDATE 1"))]);
+            }
             let mut entity_id = params.get_u64(1).unwrap_or(0);
             let begin_snapshot = params.get_u64(2).unwrap_or(0);
             let mut end_snapshot = params.get_u64(0).unwrap_or(0);
@@ -3132,6 +3255,7 @@ async fn execute_classified<'a>(
                     | "ducklake_files_scheduled_for_deletion"
                     | "ducklake_partition_column"
                     | "ducklake_sort_expression"
+                    | "ducklake_view_column_tag"
             ) {
                 let rows = parse_insert_rows_map(_sql, params).ok_or_else(|| {
                     RockLakeError::Unsupported("could not parse DuckLake metadata insert".into())
@@ -3232,6 +3356,27 @@ async fn execute_classified<'a>(
         // DELETE FROM "public".ducklake_data_file WHERE data_file_id IN (...) or similar
         // Issued by DuckLake CHECKPOINT for garbage collection of old data files.
         StatementKind::DeleteDuckLakeCatalogRows { ref table_name } => {
+            if table_name == "ducklake_view_column_tag" {
+                let op = BufferedOp::EndViewColumnTag {
+                    view_id: resolve_comparison_u64(_sql, "view_id", params).ok_or_else(|| {
+                        RockLakeError::MissingParam {
+                            name: "view_id".into(),
+                        }
+                    })?,
+                    column_name: resolve_comparison_string(_sql, "column_name", params)
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "column_name".into(),
+                        })?,
+                    tag_key: resolve_comparison_string(_sql, "key", params)
+                        .ok_or_else(|| RockLakeError::MissingParam { name: "key".into() })?,
+                    begin_snapshot: resolve_comparison_u64(_sql, "begin_snapshot", params)
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "begin_snapshot".into(),
+                        })?,
+                };
+                submit_ops(vec![op], session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new("DELETE 1"))]);
+            }
             if table_name == "ducklake_inlined_data_tables" {
                 let table_ids = inlined_data_table_ids_from_ctid_sql(_sql);
                 let row_count = table_ids.len();

@@ -12,6 +12,7 @@ use rocklake_catalog::lease::hold_snapshot;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_core::keys;
 use rocklake_core::rows::{DataFileRow, FilesScheduledForDeletionRow};
+use rocklake_core::tags::TAG_VIEW_COLUMN_TAG;
 use rocklake_core::values;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -185,6 +186,58 @@ async fn excision_removes_only_retired_data_files() {
         .await
         .unwrap()
         .is_empty());
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn excision_removes_retired_view_column_tags() {
+    let mut store = CatalogStore::open(in_memory_options(
+        "view-tag-excise",
+        Arc::new(InMemory::new()),
+    ))
+    .await
+    .unwrap();
+    let (schema_id, view_id) = {
+        let mut writer = store.begin_write();
+        writer
+            .set_metadata(
+                rocklake_core::keys::MetadataScope::Global,
+                0,
+                "version",
+                "1.1",
+            )
+            .unwrap();
+        let schema_id = writer.create_schema("schema").await.unwrap();
+        let view_id = writer
+            .create_view(schema_id, "view", "SELECT 1 AS id")
+            .await
+            .unwrap();
+        writer
+            .set_view_column_tag(view_id, "id", "comment", "identifier")
+            .await
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        store.commit_writer(commit);
+        (schema_id, view_id)
+    };
+    let view_begin = store.read_latest().list_views(schema_id).await.unwrap()[0].begin_snapshot;
+    let prefix = keys::prefix_for_tag(TAG_VIEW_COLUMN_TAG);
+    let mut iter = store.db().scan_prefix(&prefix).await.unwrap();
+    assert!(iter.next().await.unwrap().is_some());
+
+    let mut writer = store.begin_write();
+    writer
+        .drop_view(schema_id, view_id, view_begin)
+        .await
+        .unwrap();
+    let commit = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(commit);
+    gc_apply(store.db(), 3).await.unwrap();
+    let result = excise_apply(store.db(), 3, "test").await.unwrap();
+    assert_eq!(result.keys_failed, 0);
+
+    let mut iter = store.db().scan_prefix(&prefix).await.unwrap();
+    assert!(iter.next().await.unwrap().is_none());
     store.close().await.unwrap();
 }
 

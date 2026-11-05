@@ -1,4 +1,4 @@
-//! Table tag bytes and key-shape metadata for all 28 DuckLake v1.0 tables
+//! Table tag bytes and key-shape metadata for DuckLake tables
 //! plus RockLake system namespaces.
 //!
 //! This module is the **single source of truth** for tag allocation.
@@ -86,6 +86,8 @@ pub const TAG_SORT_EXPRESSION: u8 = 0x19;
 pub const TAG_TAG: u8 = 0x1A;
 pub const TAG_COLUMN_TAG: u8 = 0x1B;
 pub const TAG_SCHEMA_VERSIONS: u8 = 0x1C;
+/// DuckLake 1.1 per-view-column tags.
+pub const TAG_VIEW_COLUMN_TAG: u8 = 0x1F;
 
 /// v0.32.0: Encrypted secrets (e.g. remote access keys for encrypted files).
 /// Key: `0x24 | secret_id(u64 BE)`
@@ -428,6 +430,14 @@ pub static ALL_TAGS: &[TagDescriptor] = &[
         status: TagStatus::Live,
     },
     TagDescriptor {
+        tag: TAG_VIEW_COLUMN_TAG,
+        name: "ducklake_view_column_tag",
+        key_shape: "view_id | column_name_hash | tag_key_hash | begin_snapshot",
+        mvcc: MvccBehavior::Versioned,
+        unique_guard: UniqueGuard::NotNeeded,
+        status: TagStatus::Live,
+    },
+    TagDescriptor {
         tag: TAG_DATA_FILE_BY_ORDER,
         name: "rocklake_data_file_by_order",
         key_shape: "table_id | file_order | data_file_id",
@@ -499,8 +509,8 @@ mod tests {
 
     #[test]
     fn all_ducklake_tags_allocated() {
-        // 28 DuckLake tables plus RockLake secondary indexes and system tags.
-        assert_eq!(ALL_TAGS.len(), 35);
+        // DuckLake tables plus RockLake secondary indexes and system tags.
+        assert_eq!(ALL_TAGS.len(), 36);
     }
 
     #[test]

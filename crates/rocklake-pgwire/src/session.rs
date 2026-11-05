@@ -78,6 +78,12 @@ pub enum BufferedOp {
         end_snapshot: u64,
         where_column: Option<String>,
     },
+    EndViewColumnTag {
+        view_id: u64,
+        column_name: String,
+        tag_key: String,
+        begin_snapshot: u64,
+    },
     UpdateTableStats {
         table_id: u64,
         row_count_delta: i64,

@@ -16,7 +16,7 @@
 
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
-use rocklake_catalog::{CatalogStore, OpenOptions};
+use rocklake_catalog::{CatalogError, CatalogStore, OpenOptions};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -28,6 +28,129 @@ fn test_opts(dir: &TempDir) -> OpenOptions {
         path: ObjectPath::from("catalog"),
         encryption: None,
     }
+}
+
+#[tokio::test]
+async fn view_column_tags_replace_and_follow_view_lifecycle() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+    let (schema_id, view_id, created) = {
+        let mut writer = store.begin_write();
+        writer
+            .set_metadata(
+                rocklake_core::keys::MetadataScope::Global,
+                0,
+                "version",
+                "1.1",
+            )
+            .unwrap();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let view_id = writer
+            .create_view(schema_id, "my_view", "SELECT id FROM source")
+            .await
+            .unwrap();
+        writer
+            .set_view_column_tag(view_id, "id", "comment", "first")
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        store.commit_writer(snapshot.clone());
+        (schema_id, view_id, snapshot)
+    };
+
+    let initial = store.read_at(created.clone()).unwrap();
+    let view_begin = initial.list_views(schema_id).await.unwrap()[0].begin_snapshot;
+    let initial_tags = initial.list_all_view_column_tags().await.unwrap();
+    assert_eq!(initial_tags.len(), 1);
+    assert_eq!(initial_tags[0].tag_value, "first");
+
+    let replaced = {
+        let mut writer = store.begin_write();
+        writer
+            .set_view_column_tag(view_id, "id", "comment", "second")
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        store.commit_writer(snapshot.clone());
+        snapshot
+    };
+    let replaced_reader = store.read_at(replaced.clone()).unwrap();
+    let replaced_tags = replaced_reader.list_all_view_column_tags().await.unwrap();
+    assert_eq!(replaced_tags.len(), 1);
+    assert_eq!(replaced_tags[0].tag_value, "second");
+    assert_eq!(
+        store
+            .read_at(created.clone())
+            .unwrap()
+            .list_all_view_column_tags()
+            .await
+            .unwrap()[0]
+            .tag_value,
+        "first"
+    );
+
+    let mut writer = store.begin_write();
+    writer
+        .set_view_column_tag(view_id, "id", "comment", "staged replacement")
+        .await
+        .unwrap();
+    writer
+        .drop_view(schema_id, view_id, view_begin)
+        .await
+        .unwrap();
+    let dropped = writer.create_snapshot(None, None).await.unwrap();
+    store.commit_writer(dropped);
+    assert!(store
+        .read_latest()
+        .list_all_view_column_tags()
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store
+            .read_at(replaced)
+            .unwrap()
+            .list_all_view_column_tags()
+            .await
+            .unwrap()[0]
+            .tag_value,
+        "second"
+    );
+}
+
+#[tokio::test]
+async fn view_column_tags_require_ducklake_1_1() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+    let mut writer = store.begin_write();
+    writer
+        .set_metadata(
+            rocklake_core::keys::MetadataScope::Global,
+            0,
+            "version",
+            "1.0",
+        )
+        .unwrap();
+    assert!(matches!(
+        writer
+            .set_view_column_tag(7, "id", "comment", "blocked")
+            .await,
+        Err(CatalogError::UnsupportedDuckLakeVersion { .. })
+    ));
+    writer
+        .set_metadata(
+            rocklake_core::keys::MetadataScope::Global,
+            0,
+            "version",
+            "1.1",
+        )
+        .unwrap();
+    assert!(matches!(
+        writer
+            .set_view_column_tag(7, "id", "comment", "orphan")
+            .await,
+        Err(CatalogError::NotFound(_))
+    ));
 }
 
 // ─── 1. View lifecycle ───────────────────────────────────────────────────────

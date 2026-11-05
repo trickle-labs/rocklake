@@ -547,6 +547,23 @@ pub fn key_column_tag(
     buf
 }
 
+/// Build a key for `ducklake_view_column_tag`:
+/// `0x1F | view_id | column_name_hash | tag_key_hash | begin_snapshot`.
+pub fn key_view_column_tag(
+    view_id: u64,
+    column_name_hash: u64,
+    tag_key_hash: u64,
+    begin_snapshot: u64,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(33);
+    buf.push(TAG_VIEW_COLUMN_TAG);
+    buf.extend_from_slice(&encode_u64(view_id));
+    buf.extend_from_slice(&encode_u64(column_name_hash));
+    buf.extend_from_slice(&encode_u64(tag_key_hash));
+    buf.extend_from_slice(&encode_u64(begin_snapshot));
+    buf
+}
+
 /// Build a key for `ducklake_schema_versions`: `0x1C | table_id(u64) | begin_snapshot(u64)`.
 pub fn key_schema_versions(table_id: u64, begin_snapshot: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(17);
@@ -836,6 +853,14 @@ pub fn prefix_column_tags(table_id: u64, column_id: u64) -> Vec<u8> {
     buf.push(TAG_COLUMN_TAG);
     buf.extend_from_slice(&encode_u64(table_id));
     buf.extend_from_slice(&encode_u64(column_id));
+    buf
+}
+
+/// Build a scan prefix for view column tags: `0x1F | view_id`.
+pub fn prefix_view_column_tags(view_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_VIEW_COLUMN_TAG);
+    buf.extend_from_slice(&encode_u64(view_id));
     buf
 }
 
