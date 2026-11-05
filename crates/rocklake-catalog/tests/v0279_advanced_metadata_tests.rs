@@ -54,11 +54,11 @@ async fn view_column_tags_replace_and_follow_view_lifecycle() {
             .await
             .unwrap();
         let snapshot = writer.create_snapshot(None, None).await.unwrap();
-        store.commit_writer(snapshot.clone());
+        store.commit_writer(snapshot);
         (schema_id, view_id, snapshot)
     };
 
-    let initial = store.read_at(created.clone()).unwrap();
+    let initial = store.read_at(created).unwrap();
     let view_begin = initial.list_views(schema_id).await.unwrap()[0].begin_snapshot;
     let initial_tags = initial.list_all_view_column_tags().await.unwrap();
     assert_eq!(initial_tags.len(), 1);
@@ -71,16 +71,16 @@ async fn view_column_tags_replace_and_follow_view_lifecycle() {
             .await
             .unwrap();
         let snapshot = writer.create_snapshot(None, None).await.unwrap();
-        store.commit_writer(snapshot.clone());
+        store.commit_writer(snapshot);
         snapshot
     };
-    let replaced_reader = store.read_at(replaced.clone()).unwrap();
+    let replaced_reader = store.read_at(replaced).unwrap();
     let replaced_tags = replaced_reader.list_all_view_column_tags().await.unwrap();
     assert_eq!(replaced_tags.len(), 1);
     assert_eq!(replaced_tags[0].tag_value, "second");
     assert_eq!(
         store
-            .read_at(created.clone())
+            .read_at(created)
             .unwrap()
             .list_all_view_column_tags()
             .await
