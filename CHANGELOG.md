@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.65.0] — 2026-11-05
+
+### Added
+
+- Added DuckDB 1.5.6 and 2.0.0 compatibility coverage for DuckLake 1.0.
+
+### Fixed
+
+- Fixed DuckDB catalog and Parquet access with absolute S3-compatible paths.
+- Updated dependencies to address security advisories.
+- Reduced disk use in compatibility CI jobs.
+
+### Limitations
+
+- DuckDB 2.0 requires an explicit DuckLake 1.0 pin; DuckLake 1.1 is unsupported.
+- S3-compatible emulator testing does not certify AWS S3 or cloud scale.
+
 ## [0.64.0] — 2026-09-20
 
 ### Changed
