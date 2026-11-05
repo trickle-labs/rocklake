@@ -7,10 +7,9 @@
 //!
 //! # Version gating
 //!
-//! Only DuckLake catalog version 7 (V1_0) is supported by default.  If the
-//! source catalog reports version 8 (V1_1_DEV_1), the migration is rejected
-//! with `CatalogError::UnsupportedDuckLakeVersion` (SQLSTATE 0A000) unless the
-//! caller passes `ACCEPT_VERSION_V1_1_DEV_1` in `accept_versions`.
+//! Only DuckLake format version 1.0 is supported by default. The experimental
+//! 1.1-dev1 format remains opt-in through `ACCEPT_VERSION_V1_1_DEV_1`; stable
+//! 1.1 and unknown formats are rejected until their metadata is supported.
 //!
 //! # Architecture
 //!
@@ -28,6 +27,7 @@ use std::collections::HashMap;
 use std::io::BufReader;
 
 use base64::Engine as _;
+use rusqlite::OptionalExtension;
 use slatedb::Db;
 
 use serde_json::Value;
@@ -37,9 +37,9 @@ use crate::export::ExportedRow;
 
 // ── Version constants ────────────────────────────────────────────────────────
 
-/// DuckLake catalog schema version 7 = V1_0 (the only supported version).
+/// Legacy DuckLake snapshot schema version 7 = V1_0.
 pub const DUCKLAKE_V1_0_CATALOG_VERSION: u64 = rocklake_core::version::DUCKLAKE_CATALOG_VERSION;
-/// DuckLake catalog schema version 8 = V1_1_DEV_1 (forward-compat pre-release).
+/// Legacy DuckLake snapshot schema version 8 = V1_1_DEV_1 (forward-compat pre-release).
 pub const DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION: u64 = 8;
 /// The `--accept-version` token for DuckLake v1.1 pre-release.
 pub const ACCEPT_VERSION_V1_1_DEV_1: &str = "V1_1_DEV_1";
@@ -66,7 +66,7 @@ pub struct MigrationReport {
     pub data_file_count: u64,
     /// Whether this was a dry-run (no writes performed).
     pub dry_run: bool,
-    /// Source catalog DuckLake catalog_version (schema_version of the latest snapshot).
+    /// Numeric compatibility version (7 = DuckLake 1.0, 8 = 1.1-dev1).
     pub source_catalog_version: u64,
     /// Exact source snapshot used for the migration.
     pub source_snapshot_id: u64,
@@ -92,16 +92,42 @@ impl MigrationReport {
 /// - [`SqliteDuckLakeSource`] — reads from a SQLite DuckLake catalog via `rusqlite`
 /// - [`PostgresDuckLakeSource`] — reads from a PostgreSQL DuckLake catalog
 pub trait DuckLakeSource {
-    /// Return the DuckLake catalog schema version (e.g., 7 = V1_0, 8 = V1_1_DEV_1).
-    ///
-    /// Derived from `MAX(schema_version)` across all snapshot rows.
+    /// Return the numeric compatibility version, using the snapshot field only
+    /// when format metadata is unavailable.
     fn catalog_version(&mut self) -> CatalogResult<u64>;
+
+    /// Return the format version from `ducklake_metadata`, when available.
+    /// Snapshot `schema_version` is a different counter and must not identify
+    /// the DuckLake format when this value is present.
+    fn format_version(&self) -> Option<&str> {
+        None
+    }
 
     /// Read all rows from the named DuckLake table and return them as
     /// `ExportedRow` values.  The implementation applies the correct MVCC
     /// predicate (`begin_snapshot <= N AND (end_snapshot IS NULL OR
     /// end_snapshot > N)`) before returning rows.
     fn read_table(&mut self, table: &str) -> CatalogResult<Vec<ExportedRow>>;
+}
+
+fn metadata_version_columns(columns: &[String]) -> CatalogResult<(&'static str, &'static str)> {
+    let key_column = ["key", "metadata_key"]
+        .into_iter()
+        .find(|name| columns.iter().any(|column| column == name))
+        .ok_or_else(|| {
+            CatalogError::MigrationSource(
+                "DuckLake ducklake_metadata has no key column".to_string(),
+            )
+        })?;
+    let value_column = ["value", "metadata_value"]
+        .into_iter()
+        .find(|name| columns.iter().any(|column| column == name))
+        .ok_or_else(|| {
+            CatalogError::MigrationSource(
+                "DuckLake ducklake_metadata has no value column".to_string(),
+            )
+        })?;
+    Ok((key_column, value_column))
 }
 
 // ── InMemoryDuckLakeSource ────────────────────────────────────────────────────
@@ -153,8 +179,9 @@ pub struct SqliteDuckLakeSource {
     pub snapshot_id: u64,
     /// All rows collected from the SQLite database, keyed by table name.
     rows: HashMap<String, Vec<ExportedRow>>,
-    /// The catalog version read from `MAX(schema_version)` in snapshots.
+    /// The maximum snapshot `schema_version` (legacy format fallback).
     version: u64,
+    format_version: Option<String>,
 }
 
 impl SqliteDuckLakeSource {
@@ -212,10 +239,14 @@ impl SqliteDuckLakeSource {
                 )
             })?;
 
+        let format_version = Self::read_format_version(&conn)?;
+        validate_format_version(format_version.as_deref(), version)?;
+
         let mut src = Self {
             snapshot_id: sid,
             rows: Default::default(),
             version,
+            format_version,
         };
 
         src.load_all_tables(&conn, sid)?;
@@ -316,11 +347,39 @@ impl SqliteDuckLakeSource {
         .map(|c| c > 0)
         .unwrap_or(false)
     }
+
+    fn read_format_version(conn: &rusqlite::Connection) -> CatalogResult<Option<String>> {
+        if !Self::table_exists(conn, "ducklake_metadata") {
+            return Ok(None);
+        }
+
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(ducklake_metadata)")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| row.get(1))?
+                    .collect::<Result<_, _>>()
+            })
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let (key_column, value_column) = metadata_version_columns(&columns)?;
+        let sql = format!(
+            "SELECT \"{value_column}\" FROM ducklake_metadata WHERE \"{key_column}\" = 'version' LIMIT 1"
+        );
+        conn.query_row(&sql, [], |row| row.get(0))
+            .optional()
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))
+    }
 }
 
 impl DuckLakeSource for SqliteDuckLakeSource {
     fn catalog_version(&mut self) -> CatalogResult<u64> {
-        Ok(self.version)
+        Ok(catalog_version_number(
+            self.format_version.as_deref(),
+            self.version,
+        ))
+    }
+
+    fn format_version(&self) -> Option<&str> {
+        self.format_version.as_deref()
     }
 
     fn read_table(&mut self, table: &str) -> CatalogResult<Vec<ExportedRow>> {
@@ -336,6 +395,7 @@ pub struct PostgresDuckLakeSource {
     pub snapshot_id: u64,
     rows: HashMap<String, Vec<ExportedRow>>,
     version: u64,
+    format_version: Option<String>,
 }
 
 impl PostgresDuckLakeSource {
@@ -368,6 +428,8 @@ impl PostgresDuckLakeSource {
         let version = row
             .try_get::<_, i64>(1)
             .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let format_version = Self::read_format_version(&client).await?;
+        validate_format_version(format_version.as_deref(), version.max(0) as u64)?;
         let sid = snapshot_id.unwrap_or(latest_snapshot.max(0) as u64);
 
         let names = client
@@ -393,6 +455,7 @@ impl PostgresDuckLakeSource {
             snapshot_id: sid,
             rows: HashMap::new(),
             version: version.max(0) as u64,
+            format_version,
         };
         for &target in DUCKLAKE_TABLES {
             let source_table = source_table_for_target(target);
@@ -469,11 +532,48 @@ impl PostgresDuckLakeSource {
         );
         Ok(())
     }
+
+    async fn read_format_version(client: &tokio_postgres::Client) -> CatalogResult<Option<String>> {
+        let columns = client
+            .query(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_schema = current_schema() AND table_name = 'ducklake_metadata'",
+                &[],
+            )
+            .await
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        if columns.is_empty() {
+            return Ok(None);
+        }
+        let column_names: Vec<String> = columns
+            .iter()
+            .map(|row| row.try_get(0))
+            .collect::<Result<_, _>>()
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?;
+        let (key_column, value_column) = metadata_version_columns(&column_names)?;
+        let sql = format!(
+            "SELECT \"{value_column}\" FROM ducklake_metadata WHERE \"{key_column}\" = 'version' LIMIT 1"
+        );
+        client
+            .query_opt(&sql, &[])
+            .await
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))?
+            .map(|row| row.try_get(0))
+            .transpose()
+            .map_err(|e| CatalogError::MigrationSource(e.to_string()))
+    }
 }
 
 impl DuckLakeSource for PostgresDuckLakeSource {
     fn catalog_version(&mut self) -> CatalogResult<u64> {
-        Ok(self.version)
+        Ok(catalog_version_number(
+            self.format_version.as_deref(),
+            self.version,
+        ))
+    }
+
+    fn format_version(&self) -> Option<&str> {
+        self.format_version.as_deref()
     }
 
     fn read_table(&mut self, table: &str) -> CatalogResult<Vec<ExportedRow>> {
@@ -537,9 +637,8 @@ fn source_target_table(source: &str) -> Option<&'static str> {
 ///
 /// # Version gating
 ///
-/// If the source catalog version is > 7 (V1_0) and the version string is not
-/// included in `accept_versions`, returns
-/// `CatalogError::UnsupportedDuckLakeVersion` with SQLSTATE 0A000.
+/// If `ducklake_metadata.version` is present, gate on that format string.
+/// Older sources without it retain the numeric compatibility gate.
 ///
 /// # Atomicity
 ///
@@ -552,23 +651,7 @@ pub async fn migrate_from_source(
     dry_run: bool,
 ) -> CatalogResult<MigrationReport> {
     let catalog_version = source.catalog_version()?;
-    if catalog_version > DUCKLAKE_V1_0_CATALOG_VERSION {
-        let token = if catalog_version == DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION {
-            ACCEPT_VERSION_V1_1_DEV_1
-        } else {
-            "UNKNOWN_VERSION"
-        };
-        if !accept_versions.contains(&token) {
-            return Err(CatalogError::UnsupportedDuckLakeVersion {
-                version: catalog_version,
-                message: format!(
-                    "DuckLake catalog version {catalog_version} is not supported. \
-                     Use --accept-version {token} to opt into experimental support. \
-                     (SQLSTATE 0A000)"
-                ),
-            });
-        }
-    }
+    validate_source_version(catalog_version, source.format_version(), accept_versions)?;
 
     let mut report = MigrationReport {
         tables: HashMap::new(),
@@ -630,6 +713,76 @@ pub async fn migrate_from_source(
     Ok(report)
 }
 
+fn validate_source_version(
+    catalog_version: u64,
+    format_version: Option<&str>,
+    accept_versions: &[&str],
+) -> CatalogResult<()> {
+    match format_version {
+        Some("1.0") => Ok(()),
+        Some("1.1-dev1") if accept_versions.contains(&ACCEPT_VERSION_V1_1_DEV_1) => Ok(()),
+        Some("1.1-dev1") => Err(CatalogError::UnsupportedDuckLakeVersion {
+            version: catalog_version,
+            message: format!(
+                "DuckLake format version 1.1-dev1 is experimental. Use --accept-version \
+                 {ACCEPT_VERSION_V1_1_DEV_1} to opt in. (SQLSTATE 0A000)"
+            ),
+        }),
+        Some(version) => Err(unsupported_format_version_error(version, catalog_version)),
+        None if catalog_version <= DUCKLAKE_V1_0_CATALOG_VERSION => Ok(()),
+        None => {
+            let token = if catalog_version == DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION {
+                ACCEPT_VERSION_V1_1_DEV_1
+            } else {
+                "UNKNOWN_VERSION"
+            };
+            if accept_versions.contains(&token) {
+                Ok(())
+            } else {
+                Err(CatalogError::UnsupportedDuckLakeVersion {
+                    version: catalog_version,
+                    message: format!(
+                        "DuckLake catalog version {catalog_version} is not supported. \
+                         Use --accept-version {token} to opt into experimental support. \
+                         (SQLSTATE 0A000)"
+                    ),
+                })
+            }
+        }
+    }
+}
+
+fn validate_format_version(
+    format_version: Option<&str>,
+    catalog_version: u64,
+) -> CatalogResult<()> {
+    if let Some(version) = format_version {
+        if !matches!(version, "1.0" | "1.1-dev1") {
+            return Err(unsupported_format_version_error(version, catalog_version));
+        }
+    }
+    Ok(())
+}
+
+fn unsupported_format_version_error(format_version: &str, catalog_version: u64) -> CatalogError {
+    CatalogError::UnsupportedDuckLakeVersion {
+        version: catalog_version,
+        message: format!(
+            "DuckLake format version {format_version} is not supported by this importer. \
+             Only format version 1.0 and experimental 1.1-dev1 are supported. \
+             (SQLSTATE 0A000)"
+        ),
+    }
+}
+
+fn catalog_version_number(format_version: Option<&str>, legacy_version: u64) -> u64 {
+    match format_version {
+        Some("1.0") => DUCKLAKE_V1_0_CATALOG_VERSION,
+        Some("1.1-dev1") => DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION,
+        _ => legacy_version,
+    }
+}
+
 fn rusqlite_value_to_json(val: rusqlite::types::Value) -> Value {
     match val {
         rusqlite::types::Value::Null => Value::Null,
@@ -678,5 +831,40 @@ fn normalize_ducklake_row(table: &str, data: &mut Value) {
         if let Some(value) = object.get(field).and_then(Value::as_i64) {
             object.insert(field.to_string(), Value::Bool(value != 0));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_version_is_authoritative_over_snapshot_schema_version() {
+        assert!(validate_source_version(42, Some("1.0"), &[]).is_ok());
+        assert!(validate_source_version(0, Some("1.1"), &[])
+            .unwrap_err()
+            .to_string()
+            .contains("format version 1.1"));
+        assert!(validate_source_version(0, Some("1.1-dev1"), &[]).is_err());
+        assert!(validate_source_version(0, Some("1.1-dev1"), &[ACCEPT_VERSION_V1_1_DEV_1]).is_ok());
+        assert_eq!(catalog_version_number(Some("1.0"), 42), 7);
+        assert_eq!(catalog_version_number(Some("1.1-dev1"), 42), 8);
+    }
+
+    #[test]
+    fn sqlite_reads_ducklake_format_version_from_metadata() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ducklake_metadata (key TEXT, value TEXT, scope TEXT, scope_id INTEGER); \
+             INSERT INTO ducklake_metadata VALUES ('version', '1.1', 'global', 0);",
+        )
+        .unwrap();
+
+        assert_eq!(
+            SqliteDuckLakeSource::read_format_version(&conn)
+                .unwrap()
+                .as_deref(),
+            Some("1.1")
+        );
     }
 }
