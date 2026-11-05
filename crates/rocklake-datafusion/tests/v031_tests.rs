@@ -69,7 +69,7 @@ fn bridge_run_sync_fails_on_disconnected_channel() {
 
 // ─── Type mapping completeness ─────────────────────────────────────────────
 
-/// All DuckLake v1.0 scalar types produce the correct Arrow DataType.
+/// DuckLake v1.0 scalar types and the v1.1 NULL type produce the correct Arrow DataType.
 #[tokio::test]
 async fn type_mapping_covers_all_ducklake_v1_scalar_types() {
     use arrow::datatypes::DataType as AD;
@@ -81,8 +81,9 @@ async fn type_mapping_covers_all_ducklake_v1_scalar_types() {
     let schema_id = w.create_schema("t").await.unwrap();
     let table_id = w.create_table(schema_id, "types", None).await.unwrap();
 
-    // Every DuckLake v1.0 scalar type.
+    // Every DuckLake v1.0 scalar type plus the v1.1 NULL type.
     let columns: &[(&str, &str)] = &[
+        ("c_null", "null"),
         ("c_bool", "boolean"),
         ("c_i8", "tinyint"),
         ("c_i16", "smallint"),
@@ -123,6 +124,7 @@ async fn type_mapping_covers_all_ducklake_v1_scalar_types() {
 
     let field = |name: &str| schema.field_with_name(name).unwrap().data_type().clone();
 
+    assert_eq!(field("c_null"), AD::Null);
     assert_eq!(field("c_bool"), AD::Boolean);
     assert_eq!(field("c_i8"), AD::Int8);
     assert_eq!(field("c_i16"), AD::Int16);

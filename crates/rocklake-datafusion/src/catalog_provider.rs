@@ -710,7 +710,7 @@ impl RockLakeTableProvider {
 
     /// Map a DuckLake column type string to the corresponding Arrow DataType.
     ///
-    /// Uses `DuckLakeType::parse()` from `rocklake-core` for all v1.0 scalar
+    /// Uses `DuckLakeType::parse()` from `rocklake-core` for v1.0 scalar and v1.1 NULL
     /// types.  Nested types (list, struct, map) and geometry/variant return
     /// `DataFusionError::NotImplemented` rather than silently falling back to
     /// UTF-8.
@@ -720,6 +720,7 @@ impl RockLakeTableProvider {
         use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
         use rocklake_core::types::DuckLakeType;
         match DuckLakeType::parse(type_str) {
+            DuckLakeType::Null => Ok(DataType::Null),
             DuckLakeType::Integer {
                 signed: true,
                 width_bits: 8,
