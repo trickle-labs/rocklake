@@ -144,6 +144,15 @@ async fn submit_ops(
     Ok(row_count)
 }
 
+async fn stable_ducklake_v11(
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<bool, RockLakeError> {
+    let catalog = store.lock().await;
+    crate::schema_registry::is_ducklake_v11(&catalog)
+        .await
+        .map_err(RockLakeError::from)
+}
+
 fn required_param_u64(
     params: &ParamValues,
     index: usize,
@@ -439,8 +448,8 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_multi_statement_batch,
-        resolve_comparison_u64,
+        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_insert_rows_map,
+        parse_multi_statement_batch, resolve_comparison_u64, row_map_bool, row_map_optional_bool,
     };
     use rocklake_sql::ParamValues;
 
@@ -485,6 +494,29 @@ mod tests {
             .expect("two SQL statements");
         assert_eq!(statements.len(), 2);
         assert!(statements[0].contains("delete; ducklake"));
+    }
+
+    #[test]
+    fn parses_ducklake_v11_exactness_fields_by_name() {
+        let params = ParamValues::default();
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_file_column_stats (data_file_id, table_id, column_id, min_is_exact, max_is_exact) VALUES (3, 1, 2, false, true)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(row_map_bool(&rows[0], "min_is_exact"), Some(false));
+        assert_eq!(row_map_bool(&rows[0], "max_is_exact"), Some(true));
+
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_table_column_stats (table_id, column_id, min_is_exact, max_is_exact) VALUES (1, 2, true, NULL)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(
+            row_map_optional_bool(&rows[0], "min_is_exact"),
+            Some(Some(true))
+        );
+        assert_eq!(row_map_optional_bool(&rows[0], "max_is_exact"), Some(None));
     }
 }
 
@@ -716,6 +748,21 @@ pub(super) fn row_map_bool(
     key: &str,
 ) -> Option<bool> {
     row.get(key).and_then(|value| {
+        value
+            .as_ref()
+            .and_then(|text| match text.to_ascii_lowercase().as_str() {
+                "true" | "t" | "1" => Some(true),
+                "false" | "f" | "0" => Some(false),
+                _ => None,
+            })
+    })
+}
+
+fn row_map_optional_bool(
+    row: &std::collections::HashMap<String, Option<String>>,
+    key: &str,
+) -> Option<Option<bool>> {
+    row.get(key).map(|value| {
         value
             .as_ref()
             .and_then(|text| match text.to_ascii_lowercase().as_str() {
@@ -1177,9 +1224,16 @@ async fn execute_classified<'a>(
                     }
                 }
             }
-            let (reader, bootstrap_relations) = {
+            let (reader, bootstrap_relations, stable_1_1) = {
                 let catalog = store.lock().await;
-                (catalog.read_latest(), catalog.bootstrap_relation_names())
+                let stable_1_1 = crate::schema_registry::is_ducklake_v11(&catalog)
+                    .await
+                    .map_err(RockLakeError::from)?;
+                (
+                    catalog.read_latest(),
+                    catalog.bootstrap_relation_names(),
+                    stable_1_1,
+                )
             };
             let initialized = reader
                 .get_snapshot()
@@ -1187,7 +1241,7 @@ async fn execute_classified<'a>(
                 .map_err(RockLakeError::from)?
                 .is_some();
             let mut responses =
-                make_pg_catalog_scan_responses(_sql, initialized, &bootstrap_relations);
+                make_pg_catalog_scan_responses(_sql, initialized, &bootstrap_relations, stable_1_1);
             // The postgres scanner also issues individual pg_class queries
             // to discover a table after CREATE TABLE. Only the multi-statement
             // catalog probe returns the five result sets plus ROLLBACK.
@@ -1453,6 +1507,7 @@ async fn execute_classified<'a>(
             }
         }
         StatementKind::SelectFileColumnStats => {
+            let stable_1_1 = stable_ducklake_v11(store).await?;
             let table_id = params
                 .get_u64(0)
                 .ok()
@@ -1464,6 +1519,7 @@ async fn execute_classified<'a>(
             let (Some(table_id), Some(column_id)) = (table_id, column_id) else {
                 return Ok(vec![make_metadata_table_empty_response(
                     "ducklake_file_column_stats",
+                    stable_1_1,
                 )]);
             };
             let snap_id = params.get_u64(2).unwrap_or(u64::MAX);
@@ -1477,6 +1533,7 @@ async fn execute_classified<'a>(
                 return Ok(vec![make_file_column_stats_stream_response(
                     reader.snapshot_id().as_u64(),
                     _sql,
+                    stable_1_1,
                     rows,
                 )]);
             }
@@ -1506,6 +1563,7 @@ async fn execute_classified<'a>(
                 .to_ascii_lowercase()
                 .contains("ducklake_table_column_stats")
             {
+                let stable_1_1 = stable_ducklake_v11(store).await?;
                 let table_id = table_id.or_else(|| literal_assignment_u64(_sql, "table_id"));
                 let stats_rows = if let Some(table_id) = table_id {
                     reader
@@ -1530,6 +1588,7 @@ async fn execute_classified<'a>(
                 return Ok(vec![make_global_table_stats_response(
                     stats_rows,
                     column_stats,
+                    stable_1_1,
                 )]);
             }
             if let Some(table_id) = table_id {
@@ -1550,12 +1609,13 @@ async fn execute_classified<'a>(
             }
         }
         StatementKind::SelectTableColumnStats => {
+            let stable_1_1 = stable_ducklake_v11(store).await?;
             let reader = { store.lock().await.read_latest() };
             let rows = reader
                 .list_all_table_column_stats()
                 .await
                 .map_err(RockLakeError::from)?;
-            Ok(vec![make_table_column_stats_response(rows)])
+            Ok(vec![make_table_column_stats_response(rows, stable_1_1)])
         }
         StatementKind::SelectDeleteFiles => {
             // Do not return other tables' delete files for a literal filter.
@@ -1904,7 +1964,10 @@ async fn execute_classified<'a>(
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
-            Ok(vec![make_metadata_table_empty_response(table_name)])
+            let stable_1_1 = stable_ducklake_v11(store).await?;
+            Ok(vec![make_metadata_table_empty_response(
+                table_name, stable_1_1,
+            )])
         }
 
         StatementKind::SelectInlinedData => {
@@ -2524,7 +2587,28 @@ async fn execute_classified<'a>(
         StatementKind::InsertFileColumnStats => {
             let parameterized = _sql.contains('$');
             let mut ops = Vec::new();
-            if parameterized {
+            if let Some(rows) = parse_insert_rows_map(_sql, params)
+                .filter(|rows| rows.iter().any(|row| !row.is_empty()))
+            {
+                for row in rows {
+                    let null_count = row_map_u64(&row, "null_count");
+                    ops.push(BufferedOp::InsertFileColumnStats {
+                        data_file_id: required_row_u64_value(&row, &["data_file_id"])?,
+                        table_id: required_row_u64_value(&row, &["table_id"])?,
+                        column_id: required_row_u64_value(&row, &["column_id"])?,
+                        contains_null: null_count.is_some_and(|count| count > 0),
+                        column_size_bytes: row_map_u64(&row, "column_size_bytes"),
+                        value_count: row_map_u64(&row, "value_count"),
+                        null_count,
+                        min_value: row_map_string(&row, "min_value"),
+                        max_value: row_map_string(&row, "max_value"),
+                        contains_nan: row_map_bool(&row, "contains_nan").unwrap_or(false),
+                        extra_stats: row_map_string(&row, "extra_stats"),
+                        min_is_exact: row_map_bool(&row, "min_is_exact"),
+                        max_is_exact: row_map_bool(&row, "max_is_exact"),
+                    });
+                }
+            } else if parameterized {
                 let null_count = required_param_u64(params, 5, "null_count")?;
                 ops.push(BufferedOp::InsertFileColumnStats {
                     data_file_id: required_param_u64(params, 0, "data_file_id")?,
@@ -2541,6 +2625,12 @@ async fn execute_classified<'a>(
                         .map(|value| matches!(value, "t" | "true" | "1" | "TRUE"))
                         .unwrap_or(false),
                     extra_stats: params.get_optional_string(9),
+                    min_is_exact: params
+                        .get(10)
+                        .map(|value| matches!(value, "t" | "true" | "1" | "TRUE")),
+                    max_is_exact: params
+                        .get(11)
+                        .map(|value| matches!(value, "t" | "true" | "1" | "TRUE")),
                 });
             } else {
                 for literals in literal_insert_rows(_sql) {
@@ -2580,6 +2670,8 @@ async fn execute_classified<'a>(
                         max_value: literal_string(&literals, 7),
                         contains_nan: literal_bool(&literals, 8).unwrap_or(false),
                         extra_stats: literal_string(&literals, 9),
+                        min_is_exact: literal_bool(&literals, 10),
+                        max_is_exact: literal_bool(&literals, 11),
                     });
                 }
             }
@@ -2599,7 +2691,23 @@ async fn execute_classified<'a>(
             let literal_rows = literal_insert_rows(_sql);
             let parameterized = _sql.contains('$');
             let mut ops = Vec::new();
-            if parameterized || literal_rows.is_empty() {
+            if let Some(rows) = parse_insert_rows_map(_sql, params)
+                .filter(|rows| rows.iter().any(|row| !row.is_empty()))
+            {
+                for row in rows {
+                    ops.push(BufferedOp::InsertTableColumnStats {
+                        table_id: required_row_u64_value(&row, &["table_id"])?,
+                        column_id: required_row_u64_value(&row, &["column_id"])?,
+                        contains_null: row_map_bool(&row, "contains_null").unwrap_or(false),
+                        contains_nan: row_map_bool(&row, "contains_nan"),
+                        min_value: row_map_string(&row, "min_value"),
+                        max_value: row_map_string(&row, "max_value"),
+                        extra_stats: row_map_string(&row, "extra_stats"),
+                        min_is_exact: row_map_optional_bool(&row, "min_is_exact"),
+                        max_is_exact: row_map_optional_bool(&row, "max_is_exact"),
+                    });
+                }
+            } else if parameterized || literal_rows.is_empty() {
                 let literals = literal_rows.into_iter().next().unwrap_or_default();
                 ops.push(BufferedOp::InsertTableColumnStats {
                     table_id: if parameterized {
@@ -2637,6 +2745,12 @@ async fn execute_classified<'a>(
                     extra_stats: params
                         .get_optional_string(6)
                         .or_else(|| literal_string(&literals, 6)),
+                    min_is_exact: params
+                        .get(7)
+                        .map(|value| Some(matches!(value, "t" | "true" | "1" | "TRUE"))),
+                    max_is_exact: params
+                        .get(8)
+                        .map(|value| Some(matches!(value, "t" | "true" | "1" | "TRUE"))),
                 });
             } else {
                 for literals in literal_rows {
@@ -2648,6 +2762,8 @@ async fn execute_classified<'a>(
                         min_value: literal_string(&literals, 4),
                         max_value: literal_string(&literals, 5),
                         extra_stats: literal_string(&literals, 6),
+                        min_is_exact: literal_bool(&literals, 7).map(Some),
+                        max_is_exact: literal_bool(&literals, 8).map(Some),
                     });
                 }
             }
@@ -2674,6 +2790,8 @@ async fn execute_classified<'a>(
                     min_value: literal_string(&literals, 4),
                     max_value: literal_string(&literals, 5),
                     extra_stats: literal_string(&literals, 6),
+                    min_is_exact: literal_bool(&literals, 7).map(Some),
+                    max_is_exact: literal_bool(&literals, 8).map(Some),
                 })
                 .collect();
             let row_count = ops.len();

@@ -698,6 +698,7 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
     sql: &str,
     initialized: bool,
     bootstrap_relations: &std::collections::HashSet<String>,
+    stable_1_1: bool,
 ) -> Vec<Response<'a>> {
     // Result set 1: pg_namespace
     let ns_schema = make_pg_namespace_schema();
@@ -728,7 +729,7 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
             if requested_table.is_some_and(|requested| requested != *table) {
                 continue;
             }
-            let fields = crate::schema_registry::fields_for_table(table)
+            let fields = crate::schema_registry::fields_for_table_version(table, stable_1_1)
                 .expect("supported DuckLake metadata table must have a schema");
             for (index, field) in fields.iter().enumerate() {
                 cls_rows.push(make_pg_class_attribute_row(
@@ -781,10 +782,11 @@ mod pg_catalog_tests {
     #[tokio::test]
     async fn initialized_duckdb_2_catalog_exposes_registered_columns() {
         let sql = "SELECT relname, type_schema FROM pg_class JOIN pg_namespace ON true";
-        let response = make_pg_catalog_scan_responses(sql, true, &std::collections::HashSet::new())
-            .into_iter()
-            .nth(1)
-            .expect("pg_class response");
+        let response =
+            make_pg_catalog_scan_responses(sql, true, &std::collections::HashSet::new(), false)
+                .into_iter()
+                .nth(1)
+                .expect("pg_class response");
         let Response::Query(query) = response else {
             panic!("expected pg_class Query response");
         };

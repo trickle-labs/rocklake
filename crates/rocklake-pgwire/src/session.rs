@@ -107,6 +107,8 @@ pub enum BufferedOp {
         max_value: Option<String>,
         contains_nan: bool,
         extra_stats: Option<String>,
+        min_is_exact: Option<bool>,
+        max_is_exact: Option<bool>,
     },
     InsertTableColumnStats {
         table_id: u64,
@@ -116,6 +118,8 @@ pub enum BufferedOp {
         min_value: Option<String>,
         max_value: Option<String>,
         extra_stats: Option<String>,
+        min_is_exact: Option<Option<bool>>,
+        max_is_exact: Option<Option<bool>>,
     },
     InsertMetadata {
         key: String,

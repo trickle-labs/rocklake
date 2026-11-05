@@ -198,6 +198,19 @@ fn merge_optional_bool_or(existing: Option<bool>, incoming: Option<bool>) -> Opt
     }
 }
 
+fn merge_exactness(
+    existing_bound: Option<&str>,
+    existing: Option<bool>,
+    incoming: Option<Option<bool>>,
+) -> Option<bool> {
+    match incoming {
+        None => existing,
+        Some(None) => None,
+        Some(Some(value)) if existing_bound.is_some() => existing.map(|old| old && value),
+        Some(Some(value)) => Some(value),
+    }
+}
+
 /// Input parameters for `upsert_file_column_stats`.
 ///
 /// Introduced in v0.21 to replace the 7-argument positional API and bring the
@@ -386,6 +399,33 @@ impl CatalogWriter {
         contains_nan: Option<bool>,
         extra_stats: Option<&str>,
     ) -> CatalogResult<()> {
+        self.upsert_table_column_stats_with_exactness(
+            table_id,
+            column_id,
+            contains_null,
+            min_value,
+            max_value,
+            contains_nan,
+            extra_stats,
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_table_column_stats_with_exactness(
+        &mut self,
+        table_id: u64,
+        column_id: u64,
+        contains_null: bool,
+        min_value: Option<&str>,
+        max_value: Option<&str>,
+        contains_nan: Option<bool>,
+        extra_stats: Option<&str>,
+        min_is_exact: Option<Option<bool>>,
+        max_is_exact: Option<Option<bool>>,
+    ) -> CatalogResult<()> {
         self.ensure_column_belongs(table_id, column_id).await?;
         let existing = {
             let key = keys::key_table_column_stats(table_id, column_id);
@@ -422,7 +462,17 @@ impl CatalogWriter {
             ),
             extra_stats: extra_stats
                 .map(|s| s.to_string())
-                .or_else(|| existing.and_then(|row| row.extra_stats)),
+                .or_else(|| existing.as_ref().and_then(|row| row.extra_stats.clone())),
+            min_is_exact: merge_exactness(
+                existing.as_ref().and_then(|row| row.min_value.as_deref()),
+                existing.as_ref().and_then(|row| row.min_is_exact),
+                min_is_exact,
+            ),
+            max_is_exact: merge_exactness(
+                existing.as_ref().and_then(|row| row.max_value.as_deref()),
+                existing.as_ref().and_then(|row| row.max_is_exact),
+                max_is_exact,
+            ),
         };
         let key = keys::key_table_column_stats(table_id, column_id);
         self.stage(key, values::encode_value(&row));
@@ -460,6 +510,16 @@ impl CatalogWriter {
         &mut self,
         input: FileColumnStatsInput<'_>,
     ) -> CatalogResult<()> {
+        self.upsert_file_column_stats_with_exactness(input, None, None)
+            .await
+    }
+
+    pub async fn upsert_file_column_stats_with_exactness(
+        &mut self,
+        input: FileColumnStatsInput<'_>,
+        min_is_exact: Option<bool>,
+        max_is_exact: Option<bool>,
+    ) -> CatalogResult<()> {
         self.ensure_data_file_belongs(input.table_id, input.data_file_id)
             .await?;
         self.ensure_column_belongs(input.table_id, input.column_id)
@@ -476,6 +536,8 @@ impl CatalogWriter {
             value_count: input.value_count,
             null_count: input.null_count,
             extra_stats: input.extra_stats.map(|s| s.to_string()),
+            min_is_exact,
+            max_is_exact,
         };
         let key = keys::key_file_column_stats(input.table_id, input.column_id, input.data_file_id);
         let encoded = values::encode_value(&row);
