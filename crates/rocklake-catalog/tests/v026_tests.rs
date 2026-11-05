@@ -156,7 +156,7 @@ async fn upsert_file_column_stats_with_new_fields() {
     .await
     .unwrap();
     restored_db.close().await.unwrap();
-    let mut restored = CatalogStore::open(test_opts(&restored_dir)).await.unwrap();
+    let restored = CatalogStore::open(test_opts(&restored_dir)).await.unwrap();
     let restored_stats = restored
         .read_latest()
         .list_file_column_stats(table_id, col_id)
@@ -231,7 +231,7 @@ async fn table_stats_exactness_is_conservative_when_bounds_merge() {
         )
         .await
         .unwrap();
-    writer.create_snapshot(None, None).await.unwrap();
+    let _ = writer.create_snapshot(None, None).await.unwrap();
 
     let stats = store
         .read_latest()

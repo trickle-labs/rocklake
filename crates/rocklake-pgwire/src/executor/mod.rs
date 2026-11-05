@@ -450,6 +450,7 @@ mod tests {
     use super::{
         file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_insert_rows_map,
         parse_multi_statement_batch, resolve_comparison_u64, row_map_bool, row_map_optional_bool,
+        row_map_u64,
     };
     use rocklake_sql::ParamValues;
 
@@ -517,6 +518,43 @@ mod tests {
             Some(Some(true))
         );
         assert_eq!(row_map_optional_bool(&rows[0], "max_is_exact"), Some(None));
+    }
+
+    #[test]
+    fn parses_schema_qualified_positional_statistics_rows() {
+        let params = ParamValues::default();
+        let table_rows = parse_insert_rows_map(
+            "INSERT INTO \"public\".ducklake_table_column_stats VALUES (1, 2, false, NULL, '1', '12', NULL), (1, 3, false, NULL, 'a', 'z', NULL)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&table_rows[0], "column_id"), Some(2));
+        assert_eq!(row_map_u64(&table_rows[1], "column_id"), Some(3));
+
+        let file_rows = parse_insert_rows_map(
+            "INSERT INTO \"public\".ducklake_file_column_stats VALUES (4, 1, 2, 8, 12, 0, '1', '12', false, NULL), (4, 1, 3, 8, 12, 0, 'a', 'z', false, NULL)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&file_rows[0], "column_id"), Some(2));
+        assert_eq!(row_map_u64(&file_rows[1], "column_id"), Some(3));
+
+        let table_rows = parse_insert_rows_map(
+            "INSERT INTO \"public\".ducklake_table_column_stats VALUES (1, 2, false, NULL, '1', '12', NULL, true, false)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(
+            row_map_optional_bool(&table_rows[0], "min_is_exact"),
+            Some(Some(true))
+        );
+
+        let file_rows = parse_insert_rows_map(
+            "INSERT INTO \"public\".ducklake_file_column_stats VALUES (4, 1, 2, 8, 12, 0, '1', '12', false, NULL, true, false)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(row_map_bool(&file_rows[0], "min_is_exact"), Some(true));
     }
 }
 
@@ -643,6 +681,26 @@ fn parse_insert_rows_map(
         {
             cols = crate::schema_registry::delete_file_schema().iter()
                 .map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_table_column_stats" {
+            let v11 = insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.first().is_some_and(|row| row.len() == 9))
+            });
+            let schema = if v11 {
+                crate::schema_registry::table_column_stats_schema_v11()
+            } else {
+                crate::schema_registry::table_column_stats_schema()
+            };
+            cols = schema.iter().map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_file_column_stats" {
+            let v11 = insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.first().is_some_and(|row| row.len() == 12))
+            });
+            let schema = if v11 {
+                crate::schema_registry::file_column_stats_schema_v11()
+            } else {
+                crate::schema_registry::file_column_stats_schema()
+            };
+            cols = schema.iter().map(|field| field.name().to_string()).collect();
         } else if table_name_normalized == "ducklake_column_mapping" {
             cols = vec!["table_id".to_string(), "mapping_type".to_string()];
         } else if table_name_normalized == "ducklake_name_mapping" {

@@ -416,7 +416,7 @@ async fn ducklake_v11_stats_expose_exactness_columns() {
         writer
             .set_metadata(MetadataScope::Global, 0, "version", "1.1")
             .unwrap();
-        writer.create_snapshot(None, None).await.unwrap();
+        let _ = writer.create_snapshot(None, None).await.unwrap();
         (table_id, column_id)
     };
     drop(store);
