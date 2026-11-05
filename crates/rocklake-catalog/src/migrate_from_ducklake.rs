@@ -853,18 +853,20 @@ mod tests {
 
     #[test]
     fn sqlite_reads_ducklake_format_version_from_metadata() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE ducklake_metadata (key TEXT, value TEXT, scope TEXT, scope_id INTEGER); \
-             INSERT INTO ducklake_metadata VALUES ('version', '1.1', 'global', 0);",
-        )
-        .unwrap();
+        for (key_column, value_column) in [("key", "value"), ("metadata_key", "metadata_value")] {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute_batch(&format!(
+                "CREATE TABLE ducklake_metadata ({key_column} TEXT, {value_column} TEXT); \
+                 INSERT INTO ducklake_metadata VALUES ('version', '1.1');"
+            ))
+            .unwrap();
 
-        assert_eq!(
-            SqliteDuckLakeSource::read_format_version(&conn)
-                .unwrap()
-                .as_deref(),
-            Some("1.1")
-        );
+            assert_eq!(
+                SqliteDuckLakeSource::read_format_version(&conn)
+                    .unwrap()
+                    .as_deref(),
+                Some("1.1")
+            );
+        }
     }
 }
