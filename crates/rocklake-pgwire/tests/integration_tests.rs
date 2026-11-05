@@ -563,6 +563,10 @@ async fn test_sqlstate_batch_too_large() {
     // This shouldn't trigger the limit with one op
     let result = txn.push(BufferedOp::InsertSchema {
         schema_name: "test".to_string(),
+        schema_uuid: None,
+        path: None,
+        path_is_relative: None,
+        parent_schema_id: None,
     });
     assert!(result.is_ok());
 }
