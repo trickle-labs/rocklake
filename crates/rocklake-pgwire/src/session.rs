@@ -281,6 +281,8 @@ pub struct CopyAccumulator {
     pub table: String,
     /// Raw binary COPY bytes buffered across one or more `CopyData` messages.
     pub data: Vec<u8>,
+    /// User-column types for a DuckLake inlined-data COPY stream.
+    pub inlined_column_types: Option<Vec<String>>,
 }
 
 /// A schema row parsed from a `ducklake_schema` binary COPY FROM STDIN stream.

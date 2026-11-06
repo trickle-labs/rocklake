@@ -3789,17 +3789,38 @@ fn decode_bytea_literal(value: &str) -> Vec<u8> {
 
 /// v0.47.3: Build a PgWire response for `SELECT * FROM ducklake_partition_info`.
 pub(super) fn make_partition_info_response(
+    sql: &str,
     rows: Vec<rocklake_core::rows::PartitionInfoRow>,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::partition_info_schema();
+    let source_schema = crate::schema_registry::partition_info_schema();
+    let projections = schema_column_projections(sql, &source_schema);
+    let schema = Arc::new(
+        projections
+            .iter()
+            .map(|projection| {
+                let source = &source_schema[projection.index];
+                FieldInfo::new(
+                    projection.name.clone(),
+                    None,
+                    None,
+                    source.datatype().clone(),
+                    source.format(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
     let mut data_rows = Vec::new();
     for r in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        encode_text_value(&mut encoder, &Some(r.partition_id.to_string()));
-        encode_text_value(&mut encoder, &Some(r.table_id.to_string()));
-        encode_text_value(&mut encoder, &Some(r.begin_snapshot.to_string()));
-        let end = r.end_snapshot.map(|e| e.to_string());
-        encode_text_value(&mut encoder, &end);
+        for projection in &projections {
+            match projection.index {
+                0 => encode_text_value(&mut encoder, &Some(r.partition_id.to_string())),
+                1 => encode_text_value(&mut encoder, &Some(r.table_id.to_string())),
+                2 => encode_text_value(&mut encoder, &Some(r.begin_snapshot.to_string())),
+                3 => encode_text_value(&mut encoder, &r.end_snapshot.map(|e| e.to_string())),
+                _ => unreachable!("partition info schema projection index"),
+            }
+        }
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "table_id ASC, partition_id ASC")
@@ -3807,18 +3828,39 @@ pub(super) fn make_partition_info_response(
 
 /// v0.47.3: Build a PgWire response for `SELECT * FROM ducklake_partition_column`.
 pub(super) fn make_partition_columns_response(
+    sql: &str,
     rows: Vec<rocklake_core::rows::PartitionColumnRow>,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::partition_column_schema();
+    let source_schema = crate::schema_registry::partition_column_schema();
+    let projections = schema_column_projections(sql, &source_schema);
+    let schema = Arc::new(
+        projections
+            .iter()
+            .map(|projection| {
+                let source = &source_schema[projection.index];
+                FieldInfo::new(
+                    projection.name.clone(),
+                    None,
+                    None,
+                    source.datatype().clone(),
+                    source.format(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
     let mut data_rows = Vec::new();
     for r in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        encode_text_value(&mut encoder, &Some(r.partition_id.to_string()));
-        let table_id = r.table_id.map(|t| t.to_string());
-        encode_text_value(&mut encoder, &table_id);
-        encode_text_value(&mut encoder, &Some(r.partition_key_index.to_string()));
-        encode_text_value(&mut encoder, &Some(r.column_id.to_string()));
-        encode_text_value(&mut encoder, &r.transform);
+        for projection in &projections {
+            match projection.index {
+                0 => encode_text_value(&mut encoder, &Some(r.partition_id.to_string())),
+                1 => encode_text_value(&mut encoder, &r.table_id.map(|t| t.to_string())),
+                2 => encode_text_value(&mut encoder, &Some(r.partition_key_index.to_string())),
+                3 => encode_text_value(&mut encoder, &Some(r.column_id.to_string())),
+                4 => encode_text_value(&mut encoder, &r.transform),
+                _ => unreachable!("partition column schema projection index"),
+            }
+        }
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(

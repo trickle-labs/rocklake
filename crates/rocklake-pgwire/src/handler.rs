@@ -54,7 +54,7 @@ use crate::lifecycle::{
 };
 use crate::notify::NotifyManager;
 use crate::server::{server_shutting_down_error, AuthConfig, MultiPrincipalAuth};
-use crate::session::{BootstrapMetadataRow, BootstrapSchemaRow, SessionState};
+use crate::session::{BootstrapMetadataRow, BootstrapSchemaRow, BufferedOp, SessionState};
 
 fn extract_bootstrap_metadata(row: &[Option<Vec<u8>>]) -> Option<BootstrapMetadataRow> {
     Some(BootstrapMetadataRow {
@@ -201,10 +201,10 @@ impl CopyHandler for RockLakeCopyHandler {
             return Err(error);
         }
         // Drain the accumulator outside the lock to avoid holding it during parsing.
-        let (table, data) = {
+        let (table, data, inlined_column_types) = {
             let mut session = self.session.lock().await;
             match session.pending_copy.take() {
-                Some(acc) => (acc.table, acc.data),
+                Some(acc) => (acc.table, acc.data, acc.inlined_column_types),
                 None => {
                     // No active COPY — still send CommandComplete.
                     let result = send_copy_done(client, 0).await;
@@ -247,8 +247,16 @@ impl CopyHandler for RockLakeCopyHandler {
         }
 
         // Parse the binary COPY stream and extract bootstrap rows.
-        let rows = match copy_parser::parse_binary_copy_rows(&data) {
-            Ok(rows) => rows,
+        let parsed = copy_parser::parse_binary_copy_rows(&data).and_then(|rows| {
+            if let Some(column_types) = inlined_column_types.as_deref() {
+                copy_parser::decode_inlined_copy_rows(&rows, column_types)
+                    .map(|inlined_rows| (rows, Some(inlined_rows)))
+            } else {
+                Ok((rows, None))
+            }
+        });
+        let (rows, inlined_rows) = match parsed {
+            Ok(parsed) => parsed,
             Err(e) => {
                 // Binary COPY stream is malformed — fail closed with SQLSTATE 08P01
                 // (protocol violation). Do NOT mark bootstrap as complete.
@@ -275,38 +283,86 @@ impl CopyHandler for RockLakeCopyHandler {
 
         {
             let mut session = self.session.lock().await;
-            match table.as_str() {
-                "ducklake_snapshot" if !rows.is_empty() => {
-                    // Any row means DuckDB has initialised a snapshot.
-                    session.bootstrap.has_snapshot = true;
+            if let Some(inlined_rows) = inlined_rows {
+                if !inlined_rows.is_empty() && !session.in_transaction {
+                    let msg = format!(
+                        "binary COPY into '{table}' must run inside a DuckLake transaction"
+                    );
+                    drop(session);
+                    client
+                        .send(PgWireBackendMessage::ErrorResponse(ErrorResponse::from(
+                            ErrorInfo::new("ERROR".to_string(), "25000".to_string(), msg.clone()),
+                        )))
+                        .await
+                        .ok();
+                    observation.set_terminal(RequestTerminalState::Error);
+                    let error = PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "25000".to_string(),
+                        msg,
+                    )));
+                    query.record_error(&error);
+                    query.abort_transaction().await;
+                    query.finish(RequestTerminalState::Error);
+                    return Err(error);
                 }
-                "ducklake_schema" => {
-                    for row in &rows {
-                        // ducklake_schema column order:
-                        //   0: schema_id (BIGINT)
-                        //   1: schema_uuid (UUID)
-                        //   2: begin_snapshot (BIGINT)
-                        //   3: end_snapshot (BIGINT, nullable)
-                        //   4: schema_name (VARCHAR)  ← what we need
-                        //   5: path (VARCHAR, nullable)
-                        //   6: path_is_relative (BOOLEAN, nullable)
-                        if let Some(name) = copy_parser::extract_varchar(row, 4) {
-                            session
-                                .bootstrap
-                                .schemas
-                                .push(BootstrapSchemaRow { schema_name: name });
+                let result = if inlined_rows.is_empty() {
+                    Ok(())
+                } else {
+                    session.pending_txn.push(BufferedOp::InsertInlinedRow {
+                        table_name: table.clone(),
+                        rows: inlined_rows,
+                    })
+                };
+                if let Err(error) = result {
+                    drop(session);
+                    client
+                        .send(PgWireBackendMessage::ErrorResponse(ErrorResponse::from(
+                            error.to_pg_error_info(),
+                        )))
+                        .await
+                        .ok();
+                    observation.set_terminal(RequestTerminalState::Error);
+                    let error = PgWireError::UserError(Box::new(error.to_pg_error_info()));
+                    query.record_error(&error);
+                    query.abort_transaction().await;
+                    query.finish(RequestTerminalState::Error);
+                    return Err(error);
+                }
+            } else {
+                match table.as_str() {
+                    "ducklake_snapshot" if !rows.is_empty() => {
+                        // Any row means DuckDB has initialised a snapshot.
+                        session.bootstrap.has_snapshot = true;
+                    }
+                    "ducklake_schema" => {
+                        for row in &rows {
+                            // ducklake_schema column order:
+                            //   0: schema_id (BIGINT)
+                            //   1: schema_uuid (UUID)
+                            //   2: begin_snapshot (BIGINT)
+                            //   3: end_snapshot (BIGINT, nullable)
+                            //   4: schema_name (VARCHAR)  ← what we need
+                            //   5: path (VARCHAR, nullable)
+                            //   6: path_is_relative (BOOLEAN, nullable)
+                            if let Some(name) = copy_parser::extract_varchar(row, 4) {
+                                session
+                                    .bootstrap
+                                    .schemas
+                                    .push(BootstrapSchemaRow { schema_name: name });
+                            }
                         }
                     }
-                }
-                "ducklake_metadata" => {
-                    for row in &rows {
-                        if let Some(metadata) = extract_bootstrap_metadata(row) {
-                            session.bootstrap.metadata.push(metadata);
+                    "ducklake_metadata" => {
+                        for row in &rows {
+                            if let Some(metadata) = extract_bootstrap_metadata(row) {
+                                session.bootstrap.metadata.push(metadata);
+                            }
                         }
                     }
+                    // ducklake_snapshot_changes do not affect catalog bootstrap state.
+                    _ => {}
                 }
-                // ducklake_snapshot_changes do not affect catalog bootstrap state.
-                _ => {}
             }
         }
 

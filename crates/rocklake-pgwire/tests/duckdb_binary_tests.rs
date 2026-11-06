@@ -613,3 +613,163 @@ async fn duckdb_fresh_catalog_defaults_to_v11_and_reopens_after_restart() {
         .unwrap();
     assert_eq!(restarted_table, data_files);
 }
+
+#[tokio::test]
+#[ignore = "requires DuckDB 2.0, the DuckLake extension, and a loopback listener"]
+async fn duckdb_2_0_epoch_partitions_and_variant_inlining_survive_restart() {
+    let dir = TempDir::new().unwrap();
+    let data_dir = TempDir::new().unwrap();
+    let data_path = data_dir.path().to_string_lossy().into_owned();
+    let (port, shutdown_tx, handle, catalog) = start_server(&dir, None).await;
+    let create_sql = format!(
+        "LOAD ducklake; \
+         ATTACH 'ducklake:postgres:host=127.0.0.1 port={port} dbname=rocklake' AS lake \
+             (DATA_PATH '{data_path}', DATA_INLINING_ROW_LIMIT 1); \
+         USE lake; \
+         CREATE TABLE lake.main.variant_events \
+             (id INTEGER, payload VARIANT); \
+         INSERT INTO lake.main.variant_events VALUES \
+             (1, '{{\"city\":\"Oslo\",\"n\":2}}'::VARIANT); \
+         SELECT payload::VARCHAR FROM lake.main.variant_events; \
+         CREATE TABLE lake.main.epoch_events PARTITIONED BY (epoch_day(ts)) AS \
+             SELECT * FROM (VALUES \
+                 (TIMESTAMP '1969-12-31 00:00:00', 1), \
+                 (TIMESTAMP '1970-01-01 00:00:00', 2), \
+                 (TIMESTAMP '1970-01-02 00:00:00', 3) \
+             ) AS rows(ts, id); \
+         SELECT concat( \
+             (SELECT count(*) FROM lake.main.epoch_events \
+                 WHERE ts < TIMESTAMP '1970-01-01 00:00:00')::VARCHAR, ',', \
+             (SELECT count(*) FROM lake.main.epoch_events \
+                 WHERE ts = TIMESTAMP '1970-01-01 00:00:00')::VARCHAR, ',', \
+             (SELECT count(*) FROM lake.main.epoch_events \
+                 WHERE ts >= TIMESTAMP '1970-01-02 00:00:00')::VARCHAR \
+         ) AS epoch_counts; \
+         USE memory; DETACH lake;"
+    );
+    let create_output = tokio::time::timeout(
+        Duration::from_secs(90),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&create_sql)
+            .output(),
+    )
+    .await
+    .expect("DuckDB epoch/variant write timed out")
+    .expect("duckdb process must start");
+    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
+    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
+    assert!(
+        create_output.status.success(),
+        "DuckDB epoch/variant write failed: {}\nstdout: {create_stdout}\nstderr: {create_stderr}",
+        create_output.status
+    );
+    assert!(create_stdout.contains("Oslo"), "{create_stdout}");
+    assert!(create_stdout.contains("1,1,1"), "{create_stdout}");
+
+    let (variant_table, epoch_table, epoch_values) = {
+        let catalog = catalog.lock().await;
+        let reader = catalog.read_latest();
+        let schema_id = reader
+            .list_schemas()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|schema| schema.schema_name == "main")
+            .unwrap()
+            .schema_id;
+        let tables = reader.list_tables(schema_id).await.unwrap();
+        let variant_table = tables
+            .iter()
+            .find(|table| table.table_name == "variant_events")
+            .unwrap()
+            .table_id;
+        let epoch_table = tables
+            .iter()
+            .find(|table| table.table_name == "epoch_events")
+            .unwrap()
+            .table_id;
+        let inline_rows = reader.list_inlined_inserts(variant_table).await.unwrap();
+        let files = reader.list_data_files(variant_table).await.unwrap();
+        assert_eq!(inline_rows.len(), 1);
+        assert!(files.is_empty());
+        let partitions = reader.list_partition_info(epoch_table).await.unwrap();
+        assert_eq!(partitions.len(), 1);
+        let columns = reader
+            .list_partition_columns(partitions[0].partition_id)
+            .await
+            .unwrap();
+        assert_eq!(columns.len(), 1);
+        assert_eq!(columns[0].transform.as_deref(), Some("epoch_day"));
+        let mut epoch_values = reader
+            .list_file_partition_values(Some(epoch_table))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.partition_value.unwrap())
+            .collect::<Vec<_>>();
+        epoch_values.sort();
+        (variant_table, epoch_table, epoch_values)
+    };
+    assert_eq!(epoch_values, vec!["-1", "0", "1"]);
+
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
+    drop(catalog);
+
+    let (restart_port, restart_shutdown_tx, restart_handle, restarted_catalog) =
+        start_server(&dir, None).await;
+    let reopen_sql = format!(
+        "LOAD ducklake; \
+         ATTACH 'ducklake:postgres:host=127.0.0.1 port={restart_port} dbname=rocklake' AS lake \
+             (DATA_PATH '{data_path}'); \
+         SELECT payload::VARCHAR FROM lake.main.variant_events; \
+         SELECT concat( \
+             (SELECT count(*) FROM lake.main.epoch_events \
+                 WHERE ts < TIMESTAMP '1970-01-01 00:00:00')::VARCHAR, ',', \
+             (SELECT count(*) FROM lake.main.epoch_events \
+                 WHERE ts = TIMESTAMP '1970-01-01 00:00:00')::VARCHAR, ',', \
+             (SELECT count(*) FROM lake.main.epoch_events \
+                 WHERE ts >= TIMESTAMP '1970-01-02 00:00:00')::VARCHAR \
+         ) AS epoch_counts; \
+         DETACH lake;"
+    );
+    let reopen_output = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&reopen_sql)
+            .output(),
+    )
+    .await
+    .expect("DuckDB epoch/variant reopen timed out")
+    .expect("duckdb process must start");
+    let _ = restart_shutdown_tx.send(());
+    let _ = restart_handle.await;
+    let reopen_stdout = String::from_utf8_lossy(&reopen_output.stdout);
+    let reopen_stderr = String::from_utf8_lossy(&reopen_output.stderr);
+    assert!(
+        reopen_output.status.success(),
+        "DuckDB epoch/variant reopen failed: {}\nstdout: {reopen_stdout}\nstderr: {reopen_stderr}",
+        reopen_output.status
+    );
+    assert!(reopen_stdout.contains("Oslo"), "{reopen_stdout}");
+    assert!(reopen_stdout.contains("1,1,1"), "{reopen_stdout}");
+    let restarted_catalog = restarted_catalog.lock().await;
+    let reader = restarted_catalog.read_latest();
+    let inline_rows = reader.list_inlined_inserts(variant_table).await.unwrap();
+    let files = reader.list_data_files(variant_table).await.unwrap();
+    assert_eq!(inline_rows.len(), 1);
+    assert!(files.is_empty());
+    let mut restarted_epoch_values = reader
+        .list_file_partition_values(Some(epoch_table))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.partition_value.unwrap())
+        .collect::<Vec<_>>();
+    restarted_epoch_values.sort();
+    assert_eq!(restarted_epoch_values, vec!["-1", "0", "1"]);
+}

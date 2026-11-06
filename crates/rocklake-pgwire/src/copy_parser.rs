@@ -63,6 +63,16 @@ pub enum CopyParseError {
     /// The stream ended without the `field_count = -1` end-of-data marker.
     #[error("binary COPY stream missing end-of-data marker")]
     MissingEndMarker,
+    /// An inlined row did not contain the three DuckLake system columns and its user columns.
+    #[error("inlined COPY row {row} has {actual} fields, expected {expected}")]
+    InlinedFieldCount {
+        row: usize,
+        expected: usize,
+        actual: usize,
+    },
+    /// A binary field could not be converted to the canonical inlined value representation.
+    #[error("invalid inlined COPY value at row {row}, field {field}")]
+    InvalidInlinedValue { row: usize, field: usize },
 }
 
 /// Parse a PostgreSQL binary COPY stream.
@@ -150,6 +160,104 @@ pub fn parse_binary_copy_rows(data: &[u8]) -> Result<Vec<Vec<Option<Vec<u8>>>>, 
     }
 
     Ok(rows)
+}
+
+/// Convert binary COPY rows for a DuckLake inlined-data table into the value
+/// representation used by SQL `INSERT` handling.
+pub fn decode_inlined_copy_rows(
+    rows: &[Vec<Option<Vec<u8>>>],
+    column_types: &[String],
+) -> Result<Vec<Vec<Option<String>>>, CopyParseError> {
+    let expected_fields = column_types.len() + 3;
+    rows.iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            if row.len() != expected_fields {
+                return Err(CopyParseError::InlinedFieldCount {
+                    row: row_index,
+                    expected: expected_fields,
+                    actual: row.len(),
+                });
+            }
+            let row_id = extract_i64(row, 0)
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or(CopyParseError::InvalidInlinedValue {
+                    row: row_index,
+                    field: 0,
+                })?;
+            let mut values = vec![Some(row_id.to_string()), None, None];
+            for (column_index, column_type) in column_types.iter().enumerate() {
+                values.push(
+                    decode_inlined_field(
+                        row.get(column_index + 3).and_then(Option::as_deref),
+                        column_type,
+                    )
+                    .map_err(|()| CopyParseError::InvalidInlinedValue {
+                        row: row_index,
+                        field: column_index + 3,
+                    })?,
+                );
+            }
+            Ok(values)
+        })
+        .collect()
+}
+
+fn decode_inlined_field(bytes: Option<&[u8]>, data_type: &str) -> Result<Option<String>, ()> {
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    let data_type = data_type.trim().to_ascii_uppercase();
+    let text = || String::from_utf8(bytes.to_vec()).map_err(|_| ());
+    let value = match data_type.as_str() {
+        "BOOLEAN" | "BOOL" => match bytes {
+            [0] => "false".to_string(),
+            [1] => "true".to_string(),
+            _ => return Err(()),
+        },
+        "TINYINT" | "SMALLINT" | "INT2" | "INT16" => {
+            i16::from_be_bytes(bytes.try_into().map_err(|_| ())?).to_string()
+        }
+        "INTEGER" | "INT" | "INT4" | "INT32" => {
+            i32::from_be_bytes(bytes.try_into().map_err(|_| ())?).to_string()
+        }
+        "BIGINT" | "INT8" | "INT64" => {
+            i64::from_be_bytes(bytes.try_into().map_err(|_| ())?).to_string()
+        }
+        "DATE" => {
+            let days = i32::from_be_bytes(bytes.try_into().map_err(|_| ())?);
+            let epoch = chrono::NaiveDate::from_ymd_opt(2000, 1, 1).ok_or(())?;
+            epoch
+                .checked_add_signed(chrono::Duration::days(i64::from(days)))
+                .ok_or(())?
+                .format("%Y-%m-%d")
+                .to_string()
+        }
+        "TIMESTAMP"
+        | "TIMESTAMP WITHOUT TIME ZONE"
+        | "TIMESTAMP WITH TIME ZONE"
+        | "TIMESTAMPTZ" => {
+            const PG_EPOCH_MICROS: i64 = 946_684_800 * 1_000_000;
+            let micros = i64::from_be_bytes(bytes.try_into().map_err(|_| ())?);
+            let unix_micros = micros.checked_add(PG_EPOCH_MICROS).ok_or(())?;
+            chrono::DateTime::<chrono::Utc>::from_timestamp_micros(unix_micros)
+                .ok_or(())?
+                .naive_utc()
+                .format("%Y-%m-%d %H:%M:%S%.6f")
+                .to_string()
+        }
+        "VARCHAR" | "TEXT" | "STRING" | "BLOB" | "BYTEA" | "VARIANT" => {
+            let mut hex = String::with_capacity(bytes.len() * 2 + 2);
+            hex.push_str("\\x");
+            for byte in bytes {
+                use std::fmt::Write as _;
+                write!(&mut hex, "{byte:02x}").map_err(|_| ())?;
+            }
+            hex
+        }
+        _ => text()?,
+    };
+    Ok(Some(value))
 }
 
 // ─── Field extraction helpers ─────────────────────────────────────────────────
@@ -245,6 +353,28 @@ mod tests {
         let rows = parse_binary_copy_rows(&data).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(extract_varchar(&rows[0], 4), Some("main".to_string()));
+    }
+
+    #[test]
+    fn decode_inlined_copy_preserves_variant_bytes_and_integer_values() {
+        let row: &[Option<Vec<u8>>] = &[
+            Some(0i64.to_be_bytes().to_vec()),
+            Some(3i64.to_be_bytes().to_vec()),
+            None,
+            Some(1i32.to_be_bytes().to_vec()),
+            Some(b"variant-binary".to_vec()),
+        ];
+        let rows = decode_inlined_copy_rows(
+            &[row.to_vec()],
+            &["INTEGER".to_string(), "VARIANT".to_string()],
+        )
+        .unwrap();
+        assert_eq!(rows[0][0].as_deref(), Some("0"));
+        assert_eq!(rows[0][3].as_deref(), Some("1"));
+        assert_eq!(
+            rows[0][4].as_deref(),
+            Some("\\x76617269616e742d62696e617279")
+        );
     }
 
     // ── Fail-closed truncation tests ──────────────────────────────────────
