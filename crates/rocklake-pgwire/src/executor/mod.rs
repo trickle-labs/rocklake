@@ -1287,7 +1287,9 @@ async fn execute_classified<'a>(
             }
         }
         StatementKind::SelectLatestSnapshotInfo => {
-            let reader = { store.lock().await.read_latest() };
+            let snapshot_id =
+                resolve_comparison_u64(_sql, "snapshot_id", params).unwrap_or(u64::MAX);
+            let reader = resolve_reader(store, session, snapshot_id).await?;
             let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             Ok(vec![make_latest_snapshot_info_response(snap)])
         }
