@@ -75,6 +75,14 @@ remain open. See the
 [upgrade guide](operations/ducklake-version-upgrade.md) for backup, recovery,
 client, and downgrade boundaries.
 
+The C ABI and Python, Node.js, Go, and Java bindings expose high-level snapshot,
+schema, table, and selected data-file projections. They do not expose arbitrary
+DuckLake metadata tables, 1.1 fields such as nested-schema parent IDs,
+row-group counts, string-bound exactness, or view-column tags, or catalog
+import/export and migration operations. These projections are not a full-fidelity
+DuckLake 1.1 metadata API; those fields remain in catalog storage, but their
+direct read through these bindings is not certified.
+
 ---
 
 ## DuckDB Client Versions
