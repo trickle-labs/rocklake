@@ -135,8 +135,8 @@ jobs:
           "$RUNNER_TEMP/duckdb/duckdb" --version
           "$RUNNER_TEMP/duckdb/duckdb" -no-agent -c "INSTALL ducklake; LOAD ducklake;"
       - run: cargo test -p rocklake-pgwire --test duckdb_binary_tests -- --include-ignored --test-threads=1 --nocapture
-      - run: cargo test -p rocklake-pgwire --features minio-tests --test duckdb_container_tests duckdb_v11_parquet_and_catalog_use_distinct_s3_prefixes_after_restart -- --test-threads=1 --nocapture
-      - run: cargo test -p rocklake-pgwire --features minio-tests --test duckdb_container_tests duckdb_1_5_6_rejects_stable_v11_catalog_without_mutation -- --test-threads=1 --nocapture
+      - run: cargo test -p rocklake-pgwire --features minio-tests --test duckdb_container_tests duckdb_v11_parquet_and_catalog_use_distinct_s3_prefixes_after_restart -- --include-ignored --test-threads=1 --nocapture
+      - run: cargo test -p rocklake-pgwire --features minio-tests --test duckdb_container_tests duckdb_1_5_6_rejects_stable_v11_catalog_without_mutation -- --include-ignored --test-threads=1 --nocapture
       - run: cargo test -p rocklake-catalog --test v111_ducklake_migration_tests -- --test-threads=1 --nocapture
 
   public-surface:

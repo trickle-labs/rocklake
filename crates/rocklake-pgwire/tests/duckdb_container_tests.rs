@@ -904,6 +904,7 @@ async fn duckdb_parquet_and_catalog_share_s3_store() {
 }
 
 #[tokio::test]
+#[ignore = "requires DuckDB 2.0, MinIO, and the Silo harness"]
 async fn duckdb_v11_parquet_and_catalog_use_distinct_s3_prefixes_after_restart() {
     let (catalog, pgwire) = setup_catalog("s3_parquet_v11").await;
     let data_dir = TempDir::new().expect("duckdb data dir should be created");
@@ -1013,6 +1014,7 @@ async fn duckdb_v11_parquet_and_catalog_use_distinct_s3_prefixes_after_restart()
 }
 
 #[tokio::test]
+#[ignore = "requires DuckDB 2.0 and 1.5.6 clients with the Silo harness"]
 async fn duckdb_1_5_6_rejects_stable_v11_catalog_without_mutation() {
     let (catalog, pgwire) = setup_catalog("ducklake_v11_unsupported_client").await;
     let duckdb_2_data = TempDir::new().expect("DuckDB 2.0 data directory");
