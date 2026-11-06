@@ -54,7 +54,7 @@ The reference probe above is partial evidence; the following compatibility check
 
 ## Follow-on candidate evidence (2026-11-06)
 
-PR #130 adds a real DuckDB 2.0 scenario for creating a `NULL` column, promoting it to `VARCHAR`, preserving the earlier snapshot schema, and reading the data after a RockLake restart. The scenario also found and fixes a column-retirement path that discarded the table ID from DuckLake's `dropped_cols` CTE. PR #130 is open; this evidence is still a candidate change, not a release certification.
+PR #130 adds a real DuckDB 2.0 scenario for creating a `NULL` column, promoting it to `VARCHAR`, preserving the earlier snapshot schema, and reading the data after a RockLake restart. The scenario also found and fixes a column-retirement path that discarded the table ID from DuckLake's `dropped_cols` CTE. PR #131 adds a DuckDB 2.0 Silo scenario that writes catalog and Parquet objects under separate prefixes and verifies fresh-client reads. Both PRs are open; this evidence is still a candidate change, not a release certification.
 
 ## Sources
 

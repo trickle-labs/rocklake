@@ -185,6 +185,14 @@ jobs:
           --test duckdb_binary_tests
           -- --include-ignored --test-threads=1 --nocapture
 
+      - name: Run DuckLake 1.1 MinIO catalog and Parquet scenario
+        run: >-
+          cargo test --package rocklake-pgwire
+          --features minio-tests
+          --test duckdb_container_tests
+          duckdb_v11_parquet_and_catalog_use_distinct_s3_prefixes_after_restart
+          -- --test-threads=1 --nocapture
+
       - name: Run migration recovery tests
         run: >-
           cargo test --package rocklake-catalog

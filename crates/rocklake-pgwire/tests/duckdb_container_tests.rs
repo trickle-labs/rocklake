@@ -903,6 +903,115 @@ async fn duckdb_parquet_and_catalog_share_s3_store() {
 }
 
 #[tokio::test]
+async fn duckdb_v11_parquet_and_catalog_use_distinct_s3_prefixes_after_restart() {
+    let (catalog, pgwire) = setup_catalog("s3_parquet_v11").await;
+    let data_dir = TempDir::new().expect("duckdb data dir should be created");
+    let storage = minio().await;
+    let suffix = data_dir.path().file_name().unwrap().to_string_lossy();
+    let catalog_prefix = test_prefix("s3_parquet_v11");
+    let data_prefix = format!("duckdb-container-loop/s3-parquet-v11/{suffix}");
+    let data_path = format!("s3://{}/{data_prefix}/", storage.bucket);
+    assert_ne!(catalog_prefix, data_prefix);
+    assert!(storage.list_objects(&data_prefix).await.unwrap().is_empty());
+
+    let port = storage
+        .endpoint
+        .rsplit(':')
+        .next()
+        .expect("S3 endpoint port");
+    let secret = format!(
+        "CREATE SECRET s3_test (TYPE S3, KEY_ID '{}', SECRET '{}', \
+         REGION 'us-east-1', ENDPOINT 'host.docker.internal:{port}', \
+         URL_STYLE 'path', USE_SSL false)",
+        storage.access_key, storage.secret_key
+    );
+    let query = "SELECT CASE WHEN COUNT(*) = 12 AND COUNT(DISTINCT id) = 12 \
+                 AND COUNT(*) FILTER (WHERE id BETWEEN 1 AND 12 \
+                 AND payload = 'value-' || id::VARCHAR) = 12 \
+                 THEN 's3_v11_rows_match' ELSE 'incorrect' END FROM analytics.events";
+
+    let duckdb = start_duckdb(&data_dir).await;
+    duckdb
+        .execute_raw("INSTALL httpfs")
+        .await
+        .expect("install httpfs");
+    duckdb
+        .execute_raw("LOAD httpfs")
+        .await
+        .expect("load httpfs");
+    duckdb.execute_raw(&secret).await.expect("configure S3");
+    let write_sql = attach_sql_default(
+        &pgwire,
+        &data_path,
+        "CREATE SCHEMA analytics; \
+         CREATE TABLE analytics.events (id INTEGER, payload VARCHAR); \
+         INSERT INTO analytics.events SELECT range, 'value-' || range::VARCHAR FROM range(1, 13); \
+         SELECT value FROM my_lake.options() WHERE option_name = 'version';",
+    );
+    let write = duckdb
+        .run_sql(&write_sql)
+        .await
+        .expect("write DuckLake 1.1 data to S3");
+    assert!(write.stdout.contains("1.1"), "{}", write.stdout);
+    commit_visibility_barrier(&catalog, "duckdb-container-v11", "S3 data visibility").await;
+
+    let schema = schema_id(&catalog, "analytics").await;
+    let table = table_id(&catalog, schema, "events").await;
+    let files = catalog
+        .reader_latest()
+        .await
+        .list_data_files(table)
+        .await
+        .expect("catalog data files");
+    let catalog_objects = catalog_object_count(&catalog_prefix).await;
+    let objects = storage
+        .list_objects(&data_prefix)
+        .await
+        .expect("S3 data objects");
+    assert!(catalog_objects > 0, "catalog prefix must contain metadata");
+    assert!(
+        files.iter().any(|file| file.record_count == 12 && objects.iter().any(|object| {
+            object.ends_with(".parquet") && object.ends_with(&file.path)
+        })),
+        "DuckLake 1.1 catalog must reference Parquet data in the separate S3 prefix: files={files:?}, objects={objects:?}"
+    );
+    let first_read = duckdb.run_sql(query).await.expect("read S3 rows");
+    assert!(
+        output_after_statement(&first_read.stdout, query).contains("s3_v11_rows_match"),
+        "unexpected first read: {}",
+        first_read.stdout
+    );
+    duckdb.stop().await;
+
+    let duckdb = start_duckdb(&data_dir).await;
+    duckdb
+        .execute_raw("INSTALL httpfs")
+        .await
+        .expect("install httpfs");
+    duckdb
+        .execute_raw("LOAD httpfs")
+        .await
+        .expect("load httpfs");
+    duckdb.execute_raw(&secret).await.expect("configure S3");
+    let reconnect_sql = attach_sql_default(&pgwire, &data_path, query);
+    let reconnect = duckdb
+        .run_sql(&reconnect_sql)
+        .await
+        .expect("read DuckLake 1.1 S3 rows after fresh-client reconnect");
+    assert!(
+        output_after_statement(&reconnect.stdout, query).contains("s3_v11_rows_match"),
+        "unexpected fresh-client read: {}",
+        reconnect.stdout
+    );
+    catalog
+        .assert_durable()
+        .await
+        .expect("DuckLake 1.1 S3 catalog should reopen cleanly");
+    duckdb.stop().await;
+    pgwire.stop().await;
+}
+
+#[tokio::test]
 async fn duckdb_container_restart_and_reconnect_preserves_state() {
     let prefix = test_prefix("restart_reconnect");
     let (catalog, pgwire) = setup_catalog("restart_reconnect").await;
