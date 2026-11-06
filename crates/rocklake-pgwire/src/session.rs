@@ -39,6 +39,7 @@ pub enum BufferedOp {
         parent_column: Option<u64>,
     },
     InsertDataFile {
+        data_file_id: Option<u64>,
         table_id: u64,
         path: String,
         file_format: String,
@@ -46,6 +47,10 @@ pub enum BufferedOp {
         file_size_bytes: u64,
         row_id_start: Option<u64>,
         row_id_start_supplied: bool,
+        begin_snapshot: Option<u64>,
+        end_snapshot: Option<u64>,
+        file_order: Option<u64>,
+        path_is_relative: Option<bool>,
         footer_size: Option<i64>,
         encryption_key: Option<String>,
         partition_id: Option<u64>,
@@ -151,6 +156,11 @@ pub enum BufferedOp {
         scope: Option<String>,
         scope_id: Option<u64>,
     },
+    DeleteMetadata {
+        key: String,
+        scope: rocklake_core::keys::MetadataScope,
+        scope_id: u64,
+    },
     MigrateDuckLakeV11,
     InsertInlinedDataTables {
         table_id: u64,
@@ -185,6 +195,11 @@ pub enum BufferedOp {
     DeleteInlinedRows {
         table_name: String,
         row_ids: Vec<u64>,
+    },
+    DeleteInlinedDelete {
+        table_id: u64,
+        data_file_id: u64,
+        row_id: u64,
     },
     DeleteDuckLakeCatalogRows {
         table_name: String,
@@ -328,6 +343,10 @@ pub struct SessionState {
     pub pending_copy: Option<CopyAccumulator>,
     /// Bootstrap rows received via COPY FROM STDIN during DuckDB ATTACH.
     pub bootstrap: BootstrapState,
+    /// Metadata rows returned by the latest ctid lookup for a metadata delete.
+    pub metadata_ctid_rows: Vec<rocklake_core::rows::MetadataRow>,
+    /// Inlined deletion rows returned by the latest ctid lookup.
+    pub inlined_delete_ctid_rows: Vec<rocklake_core::rows::InlinedDeleteRow>,
     /// True while DuckDB is running the SQL prelude of a DuckLake v1.1 migration.
     pub ducklake_v11_migration_in_progress: bool,
 }
@@ -367,6 +386,8 @@ impl Default for SessionState {
             subscriptions: ConnectionSubscriptions::new(),
             pending_copy: None,
             bootstrap: BootstrapState::default(),
+            metadata_ctid_rows: Vec::new(),
+            inlined_delete_ctid_rows: Vec::new(),
             ducklake_v11_migration_in_progress: false,
         }
     }
@@ -382,6 +403,8 @@ impl SessionState {
         self.pending_txn.clear();
         self.pending_copy = None;
         self.bootstrap = BootstrapState::default();
+        self.metadata_ctid_rows.clear();
+        self.inlined_delete_ctid_rows.clear();
         self.ducklake_v11_migration_in_progress = false;
         self.transaction_snapshot_id = None;
         self.in_transaction = false;

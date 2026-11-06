@@ -891,6 +891,187 @@ async fn duckdb_2_0_epoch_partitions_and_variant_inlining_survive_restart() {
 
 #[tokio::test]
 #[ignore = "requires DuckDB 2.0, the DuckLake extension, and a loopback listener"]
+async fn duckdb_2_0_non_migration_features_work_with_rocklake() {
+    let dir = TempDir::new().unwrap();
+    let data_dir = TempDir::new().unwrap();
+    let data_path = data_dir.path().to_string_lossy().into_owned();
+    let import_path = data_dir.path().join("imported.parquet");
+    let parquet_sql = format!(
+        "COPY (SELECT i::INTEGER id, TIME '12:34:56'::TIME_NS time_ns, \
+             TIMESTAMP '2020-01-01 00:00:00'::TIMESTAMPTZ_NS ts_ns, \
+             i::BIGINT::VARIANT payload FROM range(1, 4) t(i)) \
+         TO '{}' (FORMAT PARQUET);",
+        import_path.display()
+    );
+    let parquet_output = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&parquet_sql)
+            .output(),
+    )
+    .await
+    .expect("DuckDB Parquet fixture creation timed out")
+    .expect("duckdb process must start");
+    assert!(
+        parquet_output.status.success(),
+        "DuckDB Parquet fixture creation failed: {}",
+        String::from_utf8_lossy(&parquet_output.stderr)
+    );
+
+    let (port, shutdown_tx, handle, catalog) = start_server(&dir, None).await;
+    let create_sql = format!(
+        "LOAD ducklake; \
+         ATTACH 'ducklake:postgres:host=127.0.0.1 port={port} dbname=rocklake' AS lake \
+             (DATA_PATH '{data_path}', DATA_INLINING_ROW_LIMIT 0); \
+         CREATE TABLE lake.main.layout_events \
+             (id INTEGER, region VARCHAR, details STRUCT(city VARCHAR)) \
+             PARTITIONED BY (region) SORTED BY (id) \
+             WITH (parquet_compression = 'zstd'); \
+         ALTER TABLE lake.main.layout_events SET (skip_stats_columns = ['id']); \
+         ALTER TABLE lake.main.layout_events RESET (parquet_compression); \
+         SELECT concat(scope, ':', scope_entry) FROM lake.options() \
+             WHERE option_name = 'skip_stats_columns'; \
+         CREATE TABLE lake.main.compaction_events (id INTEGER); \
+         CREATE TABLE lake.main.imported \
+             (id INTEGER, time_ns TIME_NS, ts_ns TIMESTAMPTZ_NS, payload VARIANT); \
+         DETACH lake;"
+    );
+    let create_output = tokio::time::timeout(
+        Duration::from_secs(90),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&create_sql)
+            .output(),
+    )
+    .await
+    .expect("DuckLake 2.0 DDL scenario timed out")
+    .expect("duckdb process must start");
+    let create_stdout = String::from_utf8_lossy(&create_output.stdout);
+    let create_stderr = String::from_utf8_lossy(&create_output.stderr);
+    assert!(
+        create_output.status.success(),
+        "DuckLake 2.0 DDL scenario failed: {}\nstdout: {create_stdout}\nstderr: {create_stderr}",
+        create_output.status
+    );
+    assert!(
+        create_stdout.contains("TABLE:main.layout_events"),
+        "{create_stdout}"
+    );
+    let table_names = {
+        let catalog = catalog.lock().await;
+        let reader = catalog.read_latest();
+        let schema_id = reader
+            .list_schemas()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|schema| schema.schema_name == "main")
+            .unwrap()
+            .schema_id;
+        reader
+            .list_tables(schema_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|table| table.table_name)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        table_names.contains(&"layout_events".to_string()),
+        "{table_names:?}"
+    );
+    assert!(
+        table_names.contains(&"compaction_events".to_string()),
+        "{table_names:?}"
+    );
+    assert!(
+        table_names.contains(&"imported".to_string()),
+        "{table_names:?}"
+    );
+
+    let sql = format!(
+        "LOAD ducklake; \
+         ATTACH 'ducklake:postgres:host=127.0.0.1 port={port} dbname=rocklake' AS lake \
+             (DATA_PATH '{data_path}', DATA_INLINING_ROW_LIMIT 0); \
+         INSERT INTO lake.main.layout_events VALUES \
+             (1, 'eu', {{'city': 'Oslo'}}), (2, 'us', {{'city': NULL}}), \
+             (3, 'eu', {{'city': 'Bergen'}}); \
+         INSERT INTO lake.main.layout_events VALUES \
+             (4, 'eu', {{'city': 'Trondheim'}}); \
+         INSERT INTO lake.main.compaction_events VALUES (1); \
+         INSERT INTO lake.main.compaction_events VALUES (2); \
+         INSERT INTO lake.main.compaction_events VALUES (3); \
+         CALL ducklake_merge_adjacent_files('lake', 'compaction_events', \
+             min_file_size => 0, max_file_size => 10000000, max_compacted_files => 2, \
+             newer_than => now() - INTERVAL 1 DAY, older_than => now() + INTERVAL 1 DAY); \
+         DELETE FROM lake.main.compaction_events WHERE id = 3; \
+         CALL ducklake_rewrite_data_files('lake', 'compaction_events', max_compacted_files => 2); \
+         SELECT concat( \
+             (SELECT count(*) FROM lake.main.compaction_events)::VARCHAR, ':', \
+             (SELECT count(*) FROM lake.main.imported)::VARCHAR, ':', \
+             (SELECT count(*) FROM lake.main.layout_events WHERE id = 99 OR region = 'none')::VARCHAR, ':', \
+             (SELECT count(*) FROM lake.main.layout_events WHERE details.city IS NULL)::VARCHAR \
+         ); \
+         DETACH lake;",
+    );
+    let output = tokio::time::timeout(
+        Duration::from_secs(120),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&sql)
+            .output(),
+    )
+    .await
+    .expect("DuckLake 2.0 feature scenario timed out")
+    .expect("duckdb process must start");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "DuckLake 2.0 feature scenario failed: {}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status
+    );
+    assert!(stdout.contains("2:0:0:1"), "{stdout}");
+
+    let import_sql = format!(
+        "LOAD ducklake; \
+         ATTACH 'ducklake:postgres:host=127.0.0.1 port={port} dbname=rocklake' AS lake \
+             (DATA_PATH '{data_path}', DATA_INLINING_ROW_LIMIT 0); \
+         CALL ducklake_add_data_files('lake', 'imported', '{}'); \
+         SELECT concat((SELECT count(*) FROM lake.main.imported)::VARCHAR, ':', \
+             (SELECT count(*) FROM lake.main.imported WHERE payload::VARCHAR = '1')::VARCHAR); \
+         DETACH lake;",
+        import_path.display()
+    );
+    let import_output = tokio::time::timeout(
+        Duration::from_secs(90),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&import_sql)
+            .output(),
+    )
+    .await
+    .expect("DuckLake Parquet import scenario timed out")
+    .expect("duckdb process must start");
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
+    let import_stdout = String::from_utf8_lossy(&import_output.stdout);
+    let import_stderr = String::from_utf8_lossy(&import_output.stderr);
+    assert!(
+        import_output.status.success(),
+        "DuckLake Parquet import failed: {}\nstdout: {import_stdout}\nstderr: {import_stderr}",
+        import_output.status
+    );
+    assert!(import_stdout.contains("3:1"), "{import_stdout}");
+}
+
+#[tokio::test]
+#[ignore = "requires DuckDB 2.0, the DuckLake extension, and a loopback listener"]
 async fn duckdb_v11_concurrent_clients_keep_both_commits() {
     let dir = TempDir::new().unwrap();
     let data_dir = TempDir::new().unwrap();

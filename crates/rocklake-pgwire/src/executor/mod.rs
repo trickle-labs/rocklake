@@ -266,6 +266,8 @@ pub async fn execute_sql_with_mode<'a>(
         // in the same transaction fails.
         session.pending_txn.clear();
         session.bootstrap = Default::default();
+        session.metadata_ctid_rows.clear();
+        session.inlined_delete_ctid_rows.clear();
         session.in_transaction = false;
         session.transaction_snapshot_id = None;
         session.ducklake_v11_migration_in_progress = false;
@@ -1073,6 +1075,24 @@ fn parse_insert_rows_map(
         {
             cols = crate::schema_registry::delete_file_schema_v11().iter()
                 .map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_column_mapping"
+            && insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 3))
+            })
+        {
+            cols = crate::schema_registry::column_mapping_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
+        } else if table_name_normalized == "ducklake_name_mapping"
+            && insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 6))
+            })
+        {
+            cols = crate::schema_registry::name_mapping_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
         } else if table_name_normalized == "ducklake_column_mapping" {
             cols = vec!["table_id".to_string(), "mapping_type".to_string()];
         } else if table_name_normalized == "ducklake_name_mapping" {
@@ -1109,6 +1129,15 @@ fn parse_insert_rows_map(
                 "begin_snapshot".to_string(),
                 "end_snapshot".to_string(),
             ];
+        } else if table_name_normalized == "ducklake_sort_expression"
+            && insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 7))
+            })
+        {
+            cols = crate::schema_registry::sort_expression_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
         } else if table_name_normalized == "ducklake_files_scheduled_for_deletion" {
             cols = vec![
                 "data_file_id".to_string(),
@@ -1931,9 +1960,36 @@ async fn execute_classified<'a>(
                         });
                     }
                 } else {
-                    // Catalog already initialised; skip bootstrap ops.
+                    use rocklake_core::keys::MetadataScope;
+                    for metadata_row in bootstrap.metadata {
+                        if metadata_row.key == "version" {
+                            continue;
+                        }
+                        let scope = match metadata_row.scope.as_deref() {
+                            Some("schema") => MetadataScope::Schema,
+                            Some("table") => MetadataScope::Table,
+                            _ => MetadataScope::Global,
+                        };
+                        let scope_id = metadata_row.scope_id.unwrap_or(0);
+                        let stored = reader
+                            .get_metadata(scope, scope_id, &metadata_row.key)
+                            .await
+                            .map_err(RockLakeError::from)?;
+                        if stored.as_ref().map(|row| row.value.as_str())
+                            != Some(metadata_row.value.as_str())
+                        {
+                            all_ops.push(BufferedOp::InsertMetadata {
+                                key: metadata_row.key,
+                                value: metadata_row.value,
+                                scope: metadata_row.scope,
+                                scope_id: metadata_row.scope_id,
+                            });
+                        }
+                    }
                 }
             }
+            session.metadata_ctid_rows.clear();
+            session.inlined_delete_ctid_rows.clear();
             all_ops.extend(ops);
             execute_commit(all_ops, store, notify_manager).await?;
             Ok(vec![Response::TransactionEnd(Tag::new("COMMIT"))])
@@ -1941,6 +1997,8 @@ async fn execute_classified<'a>(
         StatementKind::Rollback => {
             session.pending_txn.clear();
             session.bootstrap = Default::default();
+            session.metadata_ctid_rows.clear();
+            session.inlined_delete_ctid_rows.clear();
             session.in_transaction = false;
             session.transaction_snapshot_id = None;
             session.ducklake_v11_migration_in_progress = false;
@@ -2384,6 +2442,11 @@ async fn execute_classified<'a>(
             if let Some(scope_id) = scope_id {
                 rows.retain(|row| row.scope_id.unwrap_or(0) == scope_id);
             }
+            session.metadata_ctid_rows = if _sql.to_ascii_lowercase().contains("ctid") {
+                rows.clone()
+            } else {
+                Vec::new()
+            };
             Ok(vec![make_metadata_response(_sql, rows)])
         }
         StatementKind::SelectViews => {
@@ -2725,6 +2788,7 @@ async fn execute_classified<'a>(
             Ok(vec![make_inlined_data_tables_response(_sql, rows)])
         }
         StatementKind::SelectInlinedRows => {
+            session.inlined_delete_ctid_rows.clear();
             let Some(table_name) = inlined_table_name_from_sql(_sql) else {
                 return Ok(vec![make_empty_response()]);
             };
@@ -2736,6 +2800,9 @@ async fn execute_classified<'a>(
                     .list_inlined_deletes(table_id)
                     .await
                     .map_err(RockLakeError::from)?;
+                if _sql.to_ascii_lowercase().contains("ctid") {
+                    session.inlined_delete_ctid_rows = rows.clone();
+                }
                 return Ok(vec![make_inlined_deletes_response(_sql, rows)]);
             }
             let Some((table_id, schema_version)) = parse_inlined_table_ids(&table_name) else {
@@ -3191,6 +3258,7 @@ async fn execute_classified<'a>(
                     .into_iter()
                     .map(|row| {
                         Ok(BufferedOp::InsertDataFile {
+                            data_file_id: row_map_u64(&row, "data_file_id"),
                             table_id: required_row_u64_value(&row, &["table_id"])?,
                             path: required_row_string_value(&row, &["path"])?,
                             file_format: required_row_string_value(
@@ -3204,6 +3272,10 @@ async fn execute_classified<'a>(
                             file_size_bytes: required_row_u64_value(&row, &["file_size_bytes"])?,
                             row_id_start: row_map_u64(&row, "row_id_start"),
                             row_id_start_supplied: row.contains_key("row_id_start"),
+                            begin_snapshot: row_map_u64(&row, "begin_snapshot"),
+                            end_snapshot: row_map_u64(&row, "end_snapshot"),
+                            file_order: row_map_u64(&row, "file_order"),
+                            path_is_relative: row_map_bool(&row, "path_is_relative"),
                             footer_size: optional_row_i64_value(&row, "footer_size")?,
                             encryption_key: row_map_string(&row, "encryption_key"),
                             partition_id: row_map_u64(&row, "partition_id"),
@@ -3221,6 +3293,7 @@ async fn execute_classified<'a>(
             let literals = literal_insert_values(_sql);
             let parameterized = _sql.contains('$');
             let op = BufferedOp::InsertDataFile {
+                data_file_id: None,
                 table_id: if parameterized {
                     required_param_u64(params, 0, "table_id")?
                 } else {
@@ -3262,6 +3335,10 @@ async fn execute_classified<'a>(
                     literal_u64(&literals, 11)
                 },
                 row_id_start_supplied: !parameterized && literals.len() > 11,
+                begin_snapshot: None,
+                end_snapshot: None,
+                file_order: None,
+                path_is_relative: None,
                 footer_size: literal_string(&literals, 10)
                     .and_then(|value| value.parse::<i64>().ok()),
                 encryption_key: None,
@@ -4297,6 +4374,43 @@ async fn execute_classified<'a>(
         // DELETE FROM "public".ducklake_data_file WHERE data_file_id IN (...) or similar
         // Issued by DuckLake CHECKPOINT for garbage collection of old data files.
         StatementKind::DeleteDuckLakeCatalogRows { ref table_name } => {
+            if let Some(table_id) = parse_inlined_delete_table_id(table_name) {
+                let selected_rows = std::mem::take(&mut session.inlined_delete_ctid_rows);
+                let ops = row_ids_from_ctid_sql(_sql)
+                    .into_iter()
+                    .filter_map(|row_id| selected_rows.get(row_id as usize))
+                    .map(|row| BufferedOp::DeleteInlinedDelete {
+                        table_id,
+                        data_file_id: row.data_file_id,
+                        row_id: row.row_id,
+                    })
+                    .collect::<Vec<_>>();
+                let count = submit_ops(ops, session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "DELETE {count}"
+                )))]);
+            }
+            if table_name == "ducklake_metadata" && _sql.to_ascii_lowercase().contains("ctid") {
+                use rocklake_core::keys::MetadataScope;
+                let selected_rows = std::mem::take(&mut session.metadata_ctid_rows);
+                let ops = row_ids_from_ctid_sql(_sql)
+                    .into_iter()
+                    .filter_map(|row_id| selected_rows.get(row_id as usize))
+                    .map(|row| BufferedOp::DeleteMetadata {
+                        key: row.key.clone(),
+                        scope: match row.scope.as_deref() {
+                            Some("schema") => MetadataScope::Schema,
+                            Some("table") => MetadataScope::Table,
+                            _ => MetadataScope::Global,
+                        },
+                        scope_id: row.scope_id.unwrap_or(0),
+                    })
+                    .collect();
+                let count = submit_ops(ops, session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "DELETE {count}"
+                )))]);
+            }
             if table_name == "ducklake_view_column_tag" {
                 let op = BufferedOp::EndViewColumnTag {
                     view_id: resolve_comparison_u64(_sql, "view_id", params).ok_or_else(|| {

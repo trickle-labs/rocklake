@@ -387,6 +387,7 @@ pub struct ColumnMappingRow {
 pub struct NameMappingRow {
     #[prost(uint64, tag = "1")]
     pub mapping_id: u64,
+    /// Column ordinal within this mapping.
     #[prost(uint64, tag = "2")]
     pub column_id: u64,
     /// Spec column: name (was source_name pre-v0.25).
@@ -395,7 +396,7 @@ pub struct NameMappingRow {
     /// Legacy: source_name_hash; deprecated in v0.25. Not written for new rows.
     #[prost(uint64, optional, tag = "4")]
     pub source_name_hash: Option<u64>,
-    /// v0.25: target field ID in the file schema.
+    /// v0.25: field ID to which this source name maps.
     #[prost(uint64, optional, tag = "5")]
     pub target_field_id: Option<u64>,
     /// v0.25: parent column_id for nested name mappings.
@@ -597,8 +598,8 @@ pub struct SortExpressionRow {
     pub sort_id: u64,
     #[prost(uint64, tag = "2")]
     pub sort_key_index: u64,
-    #[prost(uint64, tag = "3")]
-    pub column_id: u64,
+    #[prost(uint64, optional, tag = "3")]
+    pub column_id: Option<u64>,
     /// v0.26: spec string field — 'ASC' or 'DESC' (replaces boolean ascending).
     #[prost(string, optional, tag = "4")]
     pub sort_direction: Option<String>,

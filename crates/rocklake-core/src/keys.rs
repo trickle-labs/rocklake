@@ -416,7 +416,7 @@ pub fn key_column_mapping(table_id: u64, mapping_id: u64) -> Vec<u8> {
     buf
 }
 
-/// Build a key for `ducklake_name_mapping`: `0x10 | mapping_id(u64) | column_id(u64) | source_name_hash(u64)`.
+/// Build a key for `ducklake_name_mapping`: `0x10 | mapping_id(u64) | mapped column ordinal(u64) | source_name_hash(u64)`.
 pub fn key_name_mapping(mapping_id: u64, column_id: u64, source_name_hash: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(25);
     buf.push(TAG_NAME_MAPPING);

@@ -676,10 +676,13 @@ fn verify_foreign_keys(
             "name mapping",
             "mapping",
         );
-        require(result, column_ids, row.column_id, "name mapping", "column");
-        if let Some(parent) = row.parent_column {
-            require(result, column_ids, parent, "name mapping", "parent column");
-        }
+        require(
+            result,
+            column_ids,
+            row.target_field_id.unwrap_or(row.column_id),
+            "name mapping",
+            "column",
+        );
     }
     for (_, row) in table_stats {
         require(result, table_ids, row.table_id, "table stats", "table");
@@ -789,13 +792,9 @@ fn verify_foreign_keys(
     }
     for (_, row) in sort_expressions {
         require(result, sort_ids, row.sort_id, "sort expression", "sort");
-        require(
-            result,
-            column_ids,
-            row.column_id,
-            "sort expression",
-            "column",
-        );
+        if let Some(column_id) = row.column_id {
+            require(result, column_ids, column_id, "sort expression", "column");
+        }
         if let Some(table_id) = row.table_id {
             require(result, table_ids, table_id, "sort expression", "table");
         }

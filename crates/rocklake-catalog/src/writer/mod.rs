@@ -347,6 +347,34 @@ impl CatalogWriter {
         Err(CatalogError::NotFound(format!("data file {data_file_id}")))
     }
 
+    async fn ensure_new_data_file_id(&self, data_file_id: u64) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_DATA_FILE);
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<DataFileRow>(value)
+                    .map(|row| row.data_file_id == data_file_id)
+                    .unwrap_or(false)
+        }) {
+            return Err(CatalogError::Duplicate(format!("data file {data_file_id}")));
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: DataFileRow = values::decode_value(&kv.value)?;
+            if row.data_file_id == data_file_id {
+                return Err(CatalogError::Duplicate(format!("data file {data_file_id}")));
+            }
+        }
+        Ok(())
+    }
+
     async fn ensure_delete_file_exists(&self, delete_file_id: u64) -> CatalogResult<()> {
         let prefix = keys::prefix_for_tag(TAG_DELETE_FILE);
         if self.staged.iter().any(|(key, value)| {
@@ -505,6 +533,34 @@ impl CatalogWriter {
         Err(CatalogError::NotFound(format!(
             "mapping {mapping_id} on table {table_id}"
         )))
+    }
+
+    async fn find_column_mapping_table_id(&self, mapping_id: u64) -> CatalogResult<Option<u64>> {
+        let prefix = keys::prefix_for_tag(TAG_COLUMN_MAPPING);
+        for (key, value) in &self.staged {
+            if key.starts_with(&prefix) {
+                let row: ColumnMappingRow = values::decode_value(value)?;
+                if row.mapping_id == mapping_id {
+                    return Ok(Some(row.table_id));
+                }
+            }
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ColumnMappingRow = values::decode_value(&kv.value)?;
+            if row.mapping_id == mapping_id {
+                return Ok(Some(row.table_id));
+            }
+        }
+        Ok(None)
     }
 
     async fn ensure_sort_belongs(&self, sort_id: u64, table_id: Option<u64>) -> CatalogResult<()> {
@@ -1713,7 +1769,7 @@ impl CatalogWriter {
                 .map_err(|e| CatalogError::SlateDb(e.to_string()))?
             {
                 let se_row: SortExpressionRow = values::decode_value(&kv.value)?;
-                if se_row.column_id == column_id {
+                if se_row.column_id == Some(column_id) {
                     to_retire.push(kv.key.to_vec());
                 }
             }
@@ -2155,6 +2211,43 @@ impl CatalogWriter {
         Ok(data_file_id)
     }
 
+    /// Register a DuckLake data-file row with its supplied identifier and indexes.
+    pub async fn register_data_file_row(&mut self, mut row: DataFileRow) -> CatalogResult<u64> {
+        self.ensure_table_exists(row.table_id).await?;
+        self.ensure_new_data_file_id(row.data_file_id).await?;
+        if let Some(partition_id) = row.partition_id {
+            self.ensure_partition_belongs(partition_id, Some(row.table_id))
+                .await?;
+        }
+        if let Some(mapping_id) = row.mapping_id {
+            self.ensure_mapping_belongs(mapping_id, row.table_id)
+                .await?;
+        }
+        let path_is_relative = validate_registered_path(&row.path, row.path_is_relative)?;
+        row.path_is_relative = Some(path_is_relative);
+        row.begin_snapshot
+            .get_or_insert_with(|| self.counters.peek_snapshot_id());
+        self.counters.ensure_file_id_at_least(row.data_file_id);
+
+        let idx_snapshot = row.begin_snapshot.unwrap_or(0);
+        let idx_order = row.file_order.unwrap_or(row.data_file_id);
+        let data_file_id = row.data_file_id;
+        let encoded = values::encode_value(&row);
+        self.stage(
+            keys::key_data_file(row.table_id, data_file_id),
+            encoded.clone(),
+        );
+        self.stage(
+            keys::key_data_file_by_snapshot(row.table_id, idx_snapshot, data_file_id),
+            encoded.clone(),
+        );
+        self.stage(
+            keys::key_data_file_by_order(row.table_id, idx_order, data_file_id),
+            encoded,
+        );
+        Ok(data_file_id)
+    }
+
     /// v0.27.12: Register a delete file with all DuckLake v1.0 extended fields.
     ///
     /// Persists and exposes `footer_size` and `partial_max`.
@@ -2462,7 +2555,17 @@ impl CatalogWriter {
         parent_column: Option<u64>,
         is_partition: Option<bool>,
     ) -> CatalogResult<u64> {
-        if self.find_column_table_id(column_id).await?.is_none() {
+        let mapping_id = mapping_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
+        let referenced_column_id = target_field_id.unwrap_or(column_id);
+        if let Some(table_id) = self.find_column_mapping_table_id(mapping_id).await? {
+            self.ensure_column_belongs(table_id, referenced_column_id)
+                .await?;
+            self.ensure_mapping_belongs(mapping_id, table_id).await?;
+        } else if self
+            .find_column_table_id(referenced_column_id)
+            .await?
+            .is_none()
+        {
             // DuckLake's bootstrap catalog can create name mappings before it
             // mirrors the column rows. Reject unknown IDs once columns exist.
             let prefix = keys::prefix_for_tag(TAG_COLUMN);
@@ -2478,11 +2581,12 @@ impl CatalogWriter {
             {
                 let row: ColumnRow = values::decode_value(&kv.value)?;
                 if row.end_snapshot.is_none() {
-                    return Err(CatalogError::NotFound(format!("column {column_id}")));
+                    return Err(CatalogError::NotFound(format!(
+                        "column {referenced_column_id}"
+                    )));
                 }
             }
         }
-        let mapping_id = mapping_id.unwrap_or_else(|| self.counters.alloc_catalog_id());
         self.counters.ensure_catalog_id_at_least(mapping_id);
 
         let row = NameMappingRow {
@@ -2538,6 +2642,22 @@ impl CatalogWriter {
         };
 
         let key = keys::key_inlined_delete(table_id, data_file_id, row_id);
+        self.stage(key, values::encode_value(&row));
+        Ok(())
+    }
+
+    pub async fn retire_inlined_delete(
+        &mut self,
+        table_id: u64,
+        data_file_id: u64,
+        row_id: u64,
+    ) -> CatalogResult<()> {
+        let key = keys::key_inlined_delete(table_id, data_file_id, row_id);
+        let Some(value) = self.db.get(&key).await? else {
+            return Ok(());
+        };
+        let mut row: InlinedDeleteRow = values::decode_value(&value)?;
+        row.end_snapshot = Some(self.counters.peek_snapshot_id());
         self.stage(key, values::encode_value(&row));
         Ok(())
     }
@@ -3303,7 +3423,7 @@ impl CatalogWriter {
         &mut self,
         sort_id: u64,
         sort_key_index: u64,
-        column_id: u64,
+        column_id: Option<u64>,
         sort_direction: Option<&str>,
         null_order: Option<&str>,
         table_id: Option<u64>,
@@ -3311,14 +3431,16 @@ impl CatalogWriter {
         dialect: Option<&str>,
     ) -> CatalogResult<()> {
         self.ensure_sort_belongs(sort_id, table_id).await?;
-        let column_table_id = self
-            .find_column_table_id(column_id)
-            .await?
-            .ok_or_else(|| CatalogError::NotFound(format!("column {column_id}")))?;
-        if let Some(table_id) = table_id {
-            self.ensure_column_belongs(table_id, column_id).await?;
-        } else if column_table_id == 0 {
-            return Err(CatalogError::NotFound(format!("column {column_id}")));
+        if let Some(column_id) = column_id {
+            let column_table_id = self
+                .find_column_table_id(column_id)
+                .await?
+                .ok_or_else(|| CatalogError::NotFound(format!("column {column_id}")))?;
+            if let Some(table_id) = table_id {
+                self.ensure_column_belongs(table_id, column_id).await?;
+            } else if column_table_id == 0 {
+                return Err(CatalogError::NotFound(format!("column {column_id}")));
+            }
         }
         let row = SortExpressionRow {
             sort_id,
@@ -3451,6 +3573,17 @@ impl CatalogWriter {
         };
         let k = keys::key_metadata(scope, scope_id, key);
         self.stage(k, values::encode_value(&row));
+        Ok(())
+    }
+
+    pub fn delete_metadata(
+        &mut self,
+        scope: rocklake_core::keys::MetadataScope,
+        scope_id: u64,
+        key: &str,
+    ) -> CatalogResult<()> {
+        validate_app_metadata_key(key)?;
+        self.stage_delete(keys::key_metadata(scope, scope_id, key));
         Ok(())
     }
 
