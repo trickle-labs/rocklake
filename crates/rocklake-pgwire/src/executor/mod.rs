@@ -685,7 +685,11 @@ fn resolve_expr(expr: &sqlparser::ast::Expr, params: &ParamValues) -> Option<Str
     }
 }
 
-fn update_table_column_stats(sql: &str, params: &ParamValues) -> Result<BufferedOp, RockLakeError> {
+fn update_table_column_stats(
+    sql: &str,
+    params: &ParamValues,
+    has_exactness_fields: bool,
+) -> Result<BufferedOp, RockLakeError> {
     let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql)
         .map_err(|error| RockLakeError::Unsupported(error.to_string()))?;
     let Some(Statement::Update {
@@ -783,7 +787,7 @@ fn update_table_column_stats(sql: &str, params: &ParamValues) -> Result<Buffered
             ));
         }
     }
-    if values.len() != 7 {
+    if values.len() != if has_exactness_fields { 7 } else { 5 } {
         return Err(RockLakeError::Unsupported(
             "DuckLake table-column stats updates must set all stats fields".into(),
         ));
@@ -824,8 +828,16 @@ fn update_table_column_stats(sql: &str, params: &ParamValues) -> Result<Buffered
         min_value: required("min_value")?,
         max_value: required("max_value")?,
         extra_stats: required("extra_stats")?,
-        min_is_exact: parse_nullable_bool("min_is_exact", required("min_is_exact")?)?,
-        max_is_exact: parse_nullable_bool("max_is_exact", required("max_is_exact")?)?,
+        min_is_exact: if has_exactness_fields {
+            parse_nullable_bool("min_is_exact", required("min_is_exact")?)?
+        } else {
+            None
+        },
+        max_is_exact: if has_exactness_fields {
+            parse_nullable_bool("max_is_exact", required("max_is_exact")?)?
+        } else {
+            None
+        },
     })
 }
 
@@ -3085,7 +3097,7 @@ async fn execute_classified<'a>(
             )))])
         }
         StatementKind::UpdateTableColumnStats => {
-            let op = update_table_column_stats(_sql, params)?;
+            let op = update_table_column_stats(_sql, params, stable_ducklake_v11(store).await?)?;
             if session.in_transaction {
                 session.pending_txn.push(op)?;
             } else {

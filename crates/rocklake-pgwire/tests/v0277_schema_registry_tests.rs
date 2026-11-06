@@ -576,6 +576,67 @@ async fn ducklake_v11_stats_expose_exactness_columns() {
 }
 
 #[tokio::test]
+async fn ducklake_v10_table_column_stats_update_uses_legacy_fields() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let (table_id, column_id) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+        let column_id = writer
+            .add_column(table_id, "name", "varchar", 0, true, None)
+            .await
+            .unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.0")
+            .unwrap();
+        writer
+            .upsert_table_column_stats(
+                table_id,
+                column_id,
+                false,
+                Some("a"),
+                Some("z"),
+                Some(false),
+                None,
+            )
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        (table_id, column_id)
+    };
+
+    let update = format!(
+        "UPDATE ducklake_table_column_stats SET contains_null = false, contains_nan = NULL, min_value = '1', max_value = '2', extra_stats = NULL WHERE table_id = {table_id} AND column_id = {column_id}"
+    );
+    executor::execute_sql(
+        &update,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_table_column_stats()
+        .await
+        .unwrap();
+    assert_eq!(rows[0].min_value.as_deref(), Some("1"));
+    assert_eq!(rows[0].max_value.as_deref(), Some("2"));
+    assert_eq!(rows[0].contains_nan, None);
+    assert_eq!(rows[0].min_is_exact, None);
+    assert_eq!(rows[0].max_is_exact, None);
+}
+
+#[tokio::test]
 async fn golden_ducklake_metadata() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
