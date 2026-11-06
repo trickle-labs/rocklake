@@ -225,6 +225,27 @@ impl CopyHandler for RockLakeCopyHandler {
             }
         };
 
+        if table.starts_with("update_data_") {
+            let row_count = data
+                .split(|byte| *byte == b'\n')
+                .filter(|row| !row.is_empty())
+                .count();
+            let result = send_copy_done(client, row_count).await;
+            match &result {
+                Ok(()) => {
+                    observation.finish();
+                    query.finish(RequestTerminalState::Completed);
+                }
+                Err(error) => {
+                    observation.set_terminal(RequestTerminalState::ProtocolError);
+                    query.record_error(error);
+                    query.abort_transaction().await;
+                    query.finish(RequestTerminalState::ProtocolError);
+                }
+            }
+            return result;
+        }
+
         // Parse the binary COPY stream and extract bootstrap rows.
         let rows = match copy_parser::parse_binary_copy_rows(&data) {
             Ok(rows) => rows,
@@ -1321,6 +1342,8 @@ fn required_permission(kind: &StatementKind) -> Option<Permission> {
         | StatementKind::InsertTableColumnStats
         | StatementKind::InsertFileColumnStats
         | StatementKind::InsertMetadata
+        | StatementKind::UpdateMetadata
+        | StatementKind::DuckLakeV11MigrationStep
         | StatementKind::InsertInlinedDataTables
         | StatementKind::InsertSchemaVersions
         | StatementKind::InsertView
@@ -1347,6 +1370,7 @@ fn required_permission(kind: &StatementKind) -> Option<Permission> {
         | StatementKind::SelectMaxSnapshot
         | StatementKind::SelectLatestSnapshotInfo
         | StatementKind::SelectSnapshotStatsAndChanges
+        | StatementKind::SelectSnapshotHistory
         | StatementKind::SelectMaxSnapshotAfter
         | StatementKind::SelectSchemas
         | StatementKind::SelectTables
@@ -3143,6 +3167,10 @@ fn describe_fields_for_sql_version(
         | rocklake_sql::StatementKind::SelectFirstSnapshot => {
             project_described_fields(sql, (*crate::schema_registry::snapshot_schema()).clone())
         }
+        rocklake_sql::StatementKind::SelectSnapshotHistory => project_described_schema_fields(
+            sql,
+            (*crate::schema_registry::snapshot_schema()).clone(),
+        ),
         rocklake_sql::StatementKind::SelectSnapshotChanges => project_described_fields(
             sql,
             (*crate::schema_registry::snapshot_changes_schema()).clone(),
@@ -3238,6 +3266,39 @@ fn describe_inlined_row_fields(
     stable_1_1: bool,
 ) -> Vec<pgwire::api::results::FieldInfo> {
     use pgwire::api::results::{FieldFormat, FieldInfo};
+
+    if executor::inlined_select_star_limit_zero(sql) {
+        let system_columns = if stable_1_1 {
+            [
+                "_ducklake_row_id",
+                "_ducklake_begin_snapshot",
+                "_ducklake_end_snapshot",
+            ]
+        } else {
+            ["row_id", "begin_snapshot", "end_snapshot"]
+        };
+        return system_columns
+            .into_iter()
+            .map(|name| {
+                FieldInfo::new(
+                    name.to_string(),
+                    None,
+                    None,
+                    Type::INT8,
+                    FieldFormat::Binary,
+                )
+            })
+            .chain(columns.iter().map(|column| {
+                FieldInfo::new(
+                    column.column_name.clone(),
+                    None,
+                    None,
+                    inlined_storage_type(&column.data_type),
+                    FieldFormat::Binary,
+                )
+            }))
+            .collect();
+    }
 
     let field_for_name = |name: &str| {
         let lower = name.trim_matches('"').to_ascii_lowercase();
@@ -3431,9 +3492,58 @@ fn project_metadata_file_fields(
 #[cfg(test)]
 mod pg_parameter_tests {
     use super::{
-        describe_fields_for_sql, describe_fields_for_sql_version, describe_params_for_sql,
+        describe_fields_for_sql, describe_fields_for_sql_version, describe_inlined_row_fields,
+        describe_params_for_sql,
     };
     use pgwire::api::Type;
+    use rocklake_core::rows::ColumnRow;
+
+    fn inlined_column() -> ColumnRow {
+        ColumnRow {
+            column_id: 1,
+            table_id: 2,
+            column_name: "value".into(),
+            data_type: "BIGINT".into(),
+            column_index: 0,
+            begin_snapshot: 1,
+            end_snapshot: None,
+            default_value: None,
+            is_nullable: true,
+            initial_default: None,
+            default_value_type: None,
+            default_value_dialect: None,
+            parent_column: None,
+        }
+    }
+
+    #[test]
+    fn inlined_limit_zero_wildcard_describes_versioned_system_columns() {
+        let columns = [inlined_column()];
+        let sql = "SELECT * FROM ducklake_inlined_data_2_1 LIMIT 0";
+        for (stable_1_1, expected) in [
+            (false, ["row_id", "begin_snapshot", "end_snapshot", "value"]),
+            (
+                true,
+                [
+                    "_ducklake_row_id",
+                    "_ducklake_begin_snapshot",
+                    "_ducklake_end_snapshot",
+                    "value",
+                ],
+            ),
+        ] {
+            let fields = describe_inlined_row_fields(sql, &columns, stable_1_1);
+            assert_eq!(
+                fields.iter().map(|field| field.name()).collect::<Vec<_>>(),
+                expected
+            );
+        }
+
+        let normal =
+            describe_inlined_row_fields("SELECT * FROM ducklake_inlined_data_2_1", &columns, true);
+        assert_eq!(normal.len(), 1);
+        assert_eq!(normal[0].name(), "value");
+    }
 
     #[test]
     fn literal_data_file_queries_require_no_bound_parameters() {

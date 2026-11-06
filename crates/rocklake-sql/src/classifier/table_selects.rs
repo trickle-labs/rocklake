@@ -145,6 +145,20 @@ pub(super) fn classify_snapshot_select(
         return StatementKind::SelectLatestSnapshotInfo;
     }
 
+    let projection = select
+        .projection
+        .iter()
+        .map(projection_item_name)
+        .collect::<Vec<_>>();
+    if select.selection.is_none()
+        && query.limit.is_none()
+        && projection.len() == 2
+        && projection.iter().any(|item| item == "snapshot_id")
+        && projection.iter().any(|item| item == "schema_version")
+    {
+        return StatementKind::SelectSnapshotHistory;
+    }
+
     // SELECT * (wildcard) → full snapshot table scan
     let has_wildcard = select.projection.iter().any(|item| {
         matches!(

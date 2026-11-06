@@ -587,6 +587,12 @@ pub(super) async fn execute_commit(
                     .set_metadata(resolved_scope, resolved_scope_id, &key, &value)
                     .map_err(RockLakeError::from)?;
             }
+            BufferedOp::MigrateDuckLakeV11 => {
+                needs_snapshot |= writer
+                    .migrate_ducklake_v10_to_v11()
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
             BufferedOp::InsertInlinedDataTables {
                 table_id,
                 table_name,
@@ -1005,6 +1011,51 @@ pub(super) fn make_snapshot_row_response(
     Response::Query(resp)
 }
 
+pub(super) fn make_snapshot_history_response(
+    sql: &str,
+    rows: Vec<rocklake_core::rows::SnapshotRow>,
+) -> Response<'static> {
+    let source_schema = crate::schema_registry::snapshot_schema();
+    let projections = crate::schema_registry::project_schema_columns(sql, &source_schema);
+    let schema: Arc<Vec<FieldInfo>> = Arc::new(
+        projections
+            .iter()
+            .map(|projection| {
+                let source = &source_schema[projection.index];
+                FieldInfo::new(
+                    projection.name.clone(),
+                    None,
+                    None,
+                    source.datatype().clone(),
+                    source.format(),
+                )
+            })
+            .collect(),
+    );
+    let mut data_rows = Vec::new();
+    for row in &rows {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        for projection in &projections {
+            match projection.index {
+                0 => encode_text_value(&mut encoder, &Some(row.snapshot_id.to_string())),
+                1 => encode_text_value(&mut encoder, &Some(row.snapshot_time.clone())),
+                2 => encode_text_value(&mut encoder, &Some(row.schema_version.to_string())),
+                3 => encode_text_value(
+                    &mut encoder,
+                    &row.next_catalog_id.map(|value| value.to_string()),
+                ),
+                4 => encode_text_value(
+                    &mut encoder,
+                    &row.next_file_id.map(|value| value.to_string()),
+                ),
+                _ => unreachable!("snapshot registry projection index"),
+            }
+        }
+        data_rows.push(encoder.finish());
+    }
+    make_encoded_metadata_response(schema, data_rows, "snapshot_id ASC")
+}
+
 /// Build a PgWire response for `SELECT * FROM ducklake_snapshot_changes`.
 ///
 /// Spec columns (DuckLake v1.0): `snapshot_id, changes_made, author,
@@ -1230,27 +1281,122 @@ pub(super) fn make_tables_response(
 }
 
 pub(super) fn make_columns_response(
+    sql: &str,
     columns: Vec<rocklake_core::rows::ColumnRow>,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::column_schema();
+    enum Projection {
+        Field(usize, String),
+        Ctid(String),
+    }
+    let source_schema = crate::schema_registry::column_schema();
+    let projections = if sql.to_ascii_lowercase().contains("ctid") {
+        let all_fields = || {
+            source_schema
+                .iter()
+                .enumerate()
+                .map(|(index, field)| Projection::Field(index, field.name().to_string()))
+                .collect::<Vec<_>>()
+        };
+        let Some(items) = select_projection_items(sql) else {
+            return make_columns_response("SELECT * FROM ducklake_column", columns);
+        };
+        let mut projections = Vec::new();
+        for item in items {
+            let (expr, output_name) = match item {
+                SelectItem::UnnamedExpr(expr) => {
+                    let name = expr_last_identifier(&expr);
+                    (expr, name)
+                }
+                SelectItem::ExprWithAlias { expr, alias } => (expr, alias.value),
+                SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                    projections = all_fields();
+                    break;
+                }
+            };
+            let source_name = expr_last_identifier(&expr);
+            if source_name.eq_ignore_ascii_case("ctid") {
+                projections.push(Projection::Ctid(output_name));
+            } else if let Some(index) = source_schema
+                .iter()
+                .position(|field| field.name().eq_ignore_ascii_case(&source_name))
+            {
+                projections.push(Projection::Field(index, output_name));
+            } else {
+                projections = all_fields();
+                break;
+            }
+        }
+        if projections.is_empty() {
+            all_fields()
+        } else {
+            projections
+        }
+    } else {
+        crate::schema_registry::project_schema_columns(sql, &source_schema)
+            .into_iter()
+            .map(|projection| Projection::Field(projection.index, projection.name))
+            .collect()
+    };
+    let schema = Arc::new(
+        projections
+            .iter()
+            .map(|projection| match projection {
+                Projection::Field(index, name) => {
+                    let source = &source_schema[*index];
+                    FieldInfo::new(
+                        name.clone(),
+                        None,
+                        None,
+                        source.datatype().clone(),
+                        source.format(),
+                    )
+                }
+                Projection::Ctid(name) => {
+                    FieldInfo::new(name.clone(), None, None, Type::TID, FieldFormat::Binary)
+                }
+            })
+            .collect::<Vec<_>>(),
+    );
     let mut data_rows = Vec::new();
-    for c in &columns {
+    for (row_index, c) in columns.iter().enumerate() {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        encode_text_value(&mut encoder, &Some(c.column_id.to_string()));
-        encode_text_value(&mut encoder, &Some(c.begin_snapshot.to_string()));
-        let end = c.end_snapshot.map(|e| e.to_string());
-        encode_text_value(&mut encoder, &end);
-        encode_text_value(&mut encoder, &Some(c.table_id.to_string()));
-        encode_text_value(&mut encoder, &Some(c.column_index.to_string()));
-        encode_text_value(&mut encoder, &Some(c.column_name.clone()));
-        encode_text_value(&mut encoder, &Some(c.data_type.clone()));
-        encode_text_value(&mut encoder, &c.initial_default);
-        encode_text_value(&mut encoder, &c.default_value);
-        encode_text_value(&mut encoder, &Some(c.is_nullable.to_string()));
-        let parent = c.parent_column.map(|v| v.to_string());
-        encode_text_value(&mut encoder, &parent);
-        encode_text_value(&mut encoder, &c.default_value_type);
-        encode_text_value(&mut encoder, &c.default_value_dialect);
+        for projection in &projections {
+            match projection {
+                Projection::Field(index, _) => match index {
+                    0 => encode_text_value(&mut encoder, &Some(c.column_id.to_string())),
+                    1 => encode_text_value(&mut encoder, &Some(c.begin_snapshot.to_string())),
+                    2 => encode_text_value(
+                        &mut encoder,
+                        &c.end_snapshot.map(|value| value.to_string()),
+                    ),
+                    3 => encode_text_value(&mut encoder, &Some(c.table_id.to_string())),
+                    4 => encode_text_value(&mut encoder, &Some(c.column_index.to_string())),
+                    5 => encode_text_value(&mut encoder, &Some(c.column_name.clone())),
+                    6 => encode_text_value(&mut encoder, &Some(c.data_type.clone())),
+                    7 => encode_text_value(&mut encoder, &c.initial_default),
+                    8 => encode_text_value(&mut encoder, &c.default_value),
+                    9 => encode_text_value(&mut encoder, &Some(c.is_nullable.to_string())),
+                    10 => encode_text_value(
+                        &mut encoder,
+                        &c.parent_column.map(|value| value.to_string()),
+                    ),
+                    11 => encode_text_value(&mut encoder, &c.default_value_type),
+                    12 => encode_text_value(&mut encoder, &c.default_value_dialect),
+                    _ => unreachable!("column registry projection index"),
+                },
+                Projection::Ctid(_) => {
+                    let mut tid = [0u8; 6];
+                    tid[..4].copy_from_slice(&(row_index as u32).to_be_bytes());
+                    encoder
+                        .encode_field_with_type_and_format(
+                            &tid.as_slice(),
+                            &Type::BYTEA,
+                            FieldFormat::Binary,
+                        )
+                        .expect("pgwire field encoding is infallible");
+                }
+            }
+        }
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(
@@ -2882,6 +3028,107 @@ pub(super) fn make_metadata_response(
     rows: Vec<rocklake_core::rows::MetadataRow>,
 ) -> Response<'static> {
     let source_schema = crate::schema_registry::metadata_schema();
+    if sql.to_ascii_lowercase().contains("ctid") {
+        enum Projection {
+            Field(usize, String),
+            Ctid(String),
+        }
+        let all_fields = || {
+            source_schema
+                .iter()
+                .enumerate()
+                .map(|(index, field)| Projection::Field(index, field.name().to_string()))
+                .collect::<Vec<_>>()
+        };
+        let Some(items) = select_projection_items(sql) else {
+            return make_metadata_response("SELECT * FROM ducklake_metadata", rows);
+        };
+        let mut projections = Vec::new();
+        for item in items {
+            let (expr, output_name) = match item {
+                SelectItem::UnnamedExpr(expr) => {
+                    let name = expr_last_identifier(&expr);
+                    (expr, name)
+                }
+                SelectItem::ExprWithAlias { expr, alias } => (expr, alias.value),
+                SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                    projections = all_fields();
+                    break;
+                }
+            };
+            let source_name = expr_last_identifier(&expr);
+            if source_name.eq_ignore_ascii_case("ctid") {
+                projections.push(Projection::Ctid(output_name));
+            } else if let Some(index) = source_schema
+                .iter()
+                .position(|field| field.name().eq_ignore_ascii_case(&source_name))
+            {
+                projections.push(Projection::Field(index, output_name));
+            } else {
+                projections = all_fields();
+                break;
+            }
+        }
+        if projections.is_empty() {
+            projections = all_fields();
+        }
+        let schema = Arc::new(
+            projections
+                .iter()
+                .map(|projection| match projection {
+                    Projection::Field(index, name) => {
+                        let source = &source_schema[*index];
+                        FieldInfo::new(
+                            name.clone(),
+                            None,
+                            None,
+                            source.datatype().clone(),
+                            source.format(),
+                        )
+                    }
+                    Projection::Ctid(name) => {
+                        FieldInfo::new(name.clone(), None, None, Type::TID, FieldFormat::Binary)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
+        let mut data_rows = Vec::new();
+        for (row_index, row) in rows.iter().enumerate() {
+            let mut encoder = DataRowEncoder::new(schema.clone());
+            for projection in &projections {
+                match projection {
+                    Projection::Field(index, _) => match index {
+                        0 => encode_text_value(&mut encoder, &Some(row.key.clone())),
+                        1 => encode_text_value(&mut encoder, &Some(row.value.clone())),
+                        2 => encode_text_value(
+                            &mut encoder,
+                            &row.scope.clone().filter(|scope| scope != "global"),
+                        ),
+                        3 => encode_text_value(
+                            &mut encoder,
+                            &row.scope_id
+                                .filter(|_| row.scope.as_deref() != Some("global"))
+                                .map(|value| value.to_string()),
+                        ),
+                        _ => unreachable!("metadata registry projection index"),
+                    },
+                    Projection::Ctid(_) => {
+                        let mut tid = [0u8; 6];
+                        tid[..4].copy_from_slice(&(row_index as u32).to_be_bytes());
+                        encoder
+                            .encode_field_with_type_and_format(
+                                &tid.as_slice(),
+                                &Type::BYTEA,
+                                FieldFormat::Binary,
+                            )
+                            .expect("pgwire field encoding is infallible");
+                    }
+                }
+            }
+            data_rows.push(encoder.finish());
+        }
+        return make_encoded_metadata_response(schema, data_rows, "key ASC");
+    }
     let projections = metadata_column_projections(sql, &source_schema);
     let schema = metadata_projection_schema(&source_schema, &projections);
     let mut data_rows = Vec::new();
@@ -3115,15 +3362,37 @@ fn inlined_data_table_column_index(name: &str) -> Option<usize> {
 }
 
 pub(super) fn make_schema_versions_response(
+    sql: &str,
     rows: Vec<rocklake_core::rows::SchemaVersionsRow>,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::schema_versions_schema();
+    let source_schema = crate::schema_registry::schema_versions_schema();
+    let projections = crate::schema_registry::project_schema_columns(sql, &source_schema);
+    let schema: Arc<Vec<FieldInfo>> = Arc::new(
+        projections
+            .iter()
+            .map(|projection| {
+                let source = &source_schema[projection.index];
+                FieldInfo::new(
+                    projection.name.clone(),
+                    None,
+                    None,
+                    source.datatype().clone(),
+                    source.format(),
+                )
+            })
+            .collect(),
+    );
     let mut data_rows = Vec::new();
     for row in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        encode_text_value(&mut encoder, &Some(row.begin_snapshot.to_string()));
-        encode_text_value(&mut encoder, &Some(row.schema_version.to_string()));
-        encode_text_value(&mut encoder, &Some(row.table_id.to_string()));
+        for projection in &projections {
+            match projection.index {
+                0 => encode_text_value(&mut encoder, &Some(row.begin_snapshot.to_string())),
+                1 => encode_text_value(&mut encoder, &Some(row.schema_version.to_string())),
+                2 => encode_text_value(&mut encoder, &Some(row.table_id.to_string())),
+                _ => unreachable!("schema version registry projection index"),
+            }
+        }
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "table_id ASC, begin_snapshot ASC")

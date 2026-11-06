@@ -31,7 +31,7 @@ This claim is backed by the durable compatibility corpus and automated CI eviden
 | Table stats, column stats, data-file metadata survive incremental commits | ✅ |
 | Conflict checks and snapshot changes work under multiple writers | ✅ |
 | Exact column schema, count, names, and OIDs under describe match the spec | ✅ |
-| Catalog Version 7 (`V1_0`) is returned; v1.1 migration (`V1_1_DEV_1`) is rejected | ✅ |
+| Catalog Version 7 (`V1_0`) is returned; existing 1.0 catalogs stay at 1.0 on ordinary attach | ✅ |
 
 **CI Evidence**: The `ducklake-corpus` job in `.github/workflows/compatibility.yml`
 runs on every push/PR and verifies the full DuckLake compatibility corpus. A nightly job
@@ -57,12 +57,23 @@ The direct-upgrade source is v0.60.0. The migration registry is fail-closed:
 v0.65.0 ships a verified same-format no-op, while unknown targets and all
 downgrades are rejected before mutation.
 
-**Full DuckLake 1.1 support remains in progress.** Fresh DuckDB 2.0 catalogs
-use stable 1.1 by default and persist that version; existing 1.0 catalogs stay
-at 1.0 on ordinary attach. Feature and migration coverage remain open in
-[#110](https://github.com/trickle-labs/rocklake/issues/110),
-[#111](https://github.com/trickle-labs/rocklake/issues/111), and
-[#112](https://github.com/trickle-labs/rocklake/issues/112).
+## DuckLake v1.1 Migration Preview
+
+RockLake includes a real-client migration path for an existing RockLake
+DuckLake 1.0 catalog using DuckDB 2.0.0 and `AUTOMATIC_MIGRATION`. Ordinary
+attachment preserves 1.0; a fresh catalog defaults to stable 1.1. The manual
+end-to-end migration check covers nested-struct defaults, inlined and
+Parquet-backed rows, historical reads, downgrade rejection, and reconnect after
+a RockLake restart. Transaction failure/retry behavior has a separate test.
+
+This is a migration preview, not certification of every DuckLake 1.1 feature
+or interface. Broader fresh-catalog coverage in
+[#110](https://github.com/trickle-labs/rocklake/issues/110), remaining migration
+criteria in [#111](https://github.com/trickle-labs/rocklake/issues/111), and full
+feature certification in [#112](https://github.com/trickle-labs/rocklake/issues/112)
+remain open. See the
+[upgrade guide](operations/ducklake-version-upgrade.md) for backup, recovery,
+client, and downgrade boundaries.
 
 ---
 
@@ -88,7 +99,7 @@ at 1.0 on ordinary attach. Feature and migration coverage remain open in
 | `migrate-from-ducklake` CLI | ✅ Supported | v0.27+ | NDJSON source |
 | `export-catalog` CLI | ✅ Supported | v0.27+ | All 28 tables to NDJSON |
 | DuckLake compatibility corpus CI | ✅ Supported | v0.27.10 | Pinned DuckDB 1.5.3 / DuckLake 1.0 in CI |
-| DuckLake v1.1 rejection gate | ✅ Enforced | v0.27.10 | V1_1_DEV_1 migrations never applied |
+| DuckLake v1.0-to-1.1 migration | ⚠️ Preview | Live-client coverage; not release-certified | Existing catalogs require DuckDB 2.0 `AUTOMATIC_MIGRATION`; this is not full 1.1 certification |
 
 ## SQL Clients
 

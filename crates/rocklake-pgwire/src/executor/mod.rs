@@ -48,11 +48,11 @@ use catalog::{
     make_macros_response, make_metadata_response, make_metadata_table_empty_response,
     make_name_mapping_response, make_partition_columns_response, make_partition_info_response,
     make_scan_data_file_response, make_schema_version_response, make_schema_versions_response,
-    make_schemas_response, make_snapshot_changes_response, make_snapshot_row_response,
-    make_snapshot_stats_changes_response, make_sort_expressions_response, make_sort_info_response,
-    make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
-    make_tags_response, make_view_column_tags_response, make_views_response,
-    parse_inlined_table_ids,
+    make_schemas_response, make_snapshot_changes_response, make_snapshot_history_response,
+    make_snapshot_row_response, make_snapshot_stats_changes_response,
+    make_sort_expressions_response, make_sort_info_response, make_table_column_stats_response,
+    make_table_stats_rows_response_for_sql, make_tables_response, make_tags_response,
+    make_view_column_tags_response, make_views_response, parse_inlined_table_ids,
 };
 use extension::{
     execute_create_extension_table, execute_delete_extension_rows, execute_insert_extension_row,
@@ -88,6 +88,8 @@ fn is_mutating_statement(kind: &StatementKind, sql: &str) -> bool {
         | StatementKind::InsertTableColumnStats
         | StatementKind::InsertFileColumnStats
         | StatementKind::InsertMetadata
+        | StatementKind::UpdateMetadata
+        | StatementKind::DuckLakeV11MigrationStep
         | StatementKind::InsertInlinedDataTables
         | StatementKind::InsertSchemaVersions
         | StatementKind::InsertView
@@ -151,6 +153,19 @@ async fn stable_ducklake_v11(
     let catalog = store.lock().await;
     crate::schema_registry::is_ducklake_v11(&catalog)
         .await
+        .map_err(RockLakeError::from)
+}
+
+async fn current_ducklake_version(
+    store: &Arc<tokio::sync::Mutex<CatalogStore>>,
+) -> Result<Option<String>, RockLakeError> {
+    store
+        .lock()
+        .await
+        .read_latest()
+        .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+        .await
+        .map(|row| row.map(|metadata| metadata.value))
         .map_err(RockLakeError::from)
 }
 
@@ -252,6 +267,8 @@ pub async fn execute_sql_with_mode<'a>(
         session.pending_txn.clear();
         session.bootstrap = Default::default();
         session.in_transaction = false;
+        session.transaction_snapshot_id = None;
+        session.ducklake_v11_migration_in_progress = false;
     }
     result
 }
@@ -1491,6 +1508,26 @@ fn resolve_comparison_string(sql: &str, column: &str, params: &ParamValues) -> O
     value
 }
 
+fn resolve_assignment_string(sql: &str, column: &str, params: &ParamValues) -> Option<String> {
+    let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql).ok()?;
+    let Statement::Update { assignments, .. } = statements.first()? else {
+        return None;
+    };
+    assignments.iter().find_map(|assignment| {
+        let target = assignment
+            .target
+            .to_string()
+            .split('.')
+            .next_back()?
+            .trim_matches('"')
+            .to_string();
+        target
+            .eq_ignore_ascii_case(column)
+            .then(|| resolve_expr(&assignment.value, params))
+            .flatten()
+    })
+}
+
 fn expression_matches_column(expr: &Expr, column: &str) -> bool {
     match expr {
         Expr::Identifier(id) => id.value.eq_ignore_ascii_case(column),
@@ -1546,6 +1583,29 @@ fn is_end_snapshot_column(expr: &Expr, stable_1_1: bool) -> bool {
         Expr::Nested(expr) => is_end_snapshot_column(expr, stable_1_1),
         _ => false,
     }
+}
+
+pub(crate) fn inlined_select_star_limit_zero(sql: &str) -> bool {
+    let Ok(statements) = Parser::parse_sql(&PostgreSqlDialect {}, sql) else {
+        return false;
+    };
+    let Some(Statement::Query(query)) = statements.first() else {
+        return false;
+    };
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return false;
+    };
+    query
+        .limit
+        .as_ref()
+        .is_some_and(|limit| limit.to_string() == "0")
+        && select.projection.iter().any(|item| {
+            matches!(
+                item,
+                sqlparser::ast::SelectItem::Wildcard(_)
+                    | sqlparser::ast::SelectItem::QualifiedWildcard(_, _)
+            )
+        })
 }
 
 fn required_end_snapshot_nullness(expr: &Expr, stable_1_1: bool) -> Option<bool> {
@@ -1821,6 +1881,7 @@ async fn execute_classified<'a>(
         // ─── Transaction Control ───────────────────────────────────────
         StatementKind::Begin => {
             session.in_transaction = true;
+            session.ducklake_v11_migration_in_progress = false;
             let latest_snap = { store.lock().await.read_latest().snapshot_id().as_u64() };
             session.transaction_snapshot_id = Some(latest_snap);
             Ok(vec![Response::TransactionStart(Tag::new("BEGIN"))])
@@ -1830,6 +1891,7 @@ async fn execute_classified<'a>(
             let ops = session.pending_txn.take();
             session.in_transaction = false;
             session.transaction_snapshot_id = None;
+            session.ducklake_v11_migration_in_progress = false;
 
             // If this transaction contained COPY FROM STDIN bootstrap data
             // (i.e. DuckDB ATTACH initialisation), convert those rows into
@@ -1882,6 +1944,7 @@ async fn execute_classified<'a>(
             session.bootstrap = Default::default();
             session.in_transaction = false;
             session.transaction_snapshot_id = None;
+            session.ducklake_v11_migration_in_progress = false;
             Ok(vec![Response::TransactionEnd(Tag::new("ROLLBACK"))])
         }
 
@@ -2024,7 +2087,7 @@ async fn execute_classified<'a>(
                 }
                 columns
             };
-            Ok(vec![make_columns_response(columns)])
+            Ok(vec![make_columns_response(_sql, columns)])
         }
         StatementKind::SelectExtendedDataFiles => {
             // DuckDB's extended COPY query filters data files by snapshot and
@@ -2266,6 +2329,14 @@ async fn execute_classified<'a>(
                 stable_1_1,
             )])
         }
+        StatementKind::SelectSnapshotHistory => {
+            let reader = { store.lock().await.read_latest() };
+            let rows = reader
+                .list_all_snapshots()
+                .await
+                .map_err(RockLakeError::from)?;
+            Ok(vec![make_snapshot_history_response(_sql, rows)])
+        }
         StatementKind::SelectSnapshot => {
             let snap_id = params.get_u64(0).ok();
             let reader = {
@@ -2424,7 +2495,7 @@ async fn execute_classified<'a>(
             if let Some(begin_snapshot) = begin_snapshot {
                 rows.retain(|row| row.begin_snapshot <= begin_snapshot);
             }
-            Ok(vec![make_schema_versions_response(rows)])
+            Ok(vec![make_schema_versions_response(_sql, rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
@@ -3572,6 +3643,68 @@ async fn execute_classified<'a>(
             }
             Ok(vec![Response::Execution(Tag::new("INSERT 0 1"))])
         }
+        StatementKind::UpdateMetadata => {
+            let lower = _sql.to_ascii_lowercase();
+            let staging_version_update = session.ducklake_v11_migration_in_progress
+                && lower.contains("ducklake_metadata")
+                && lower.contains("update_data_")
+                && lower.contains("__page_id_string")
+                && lower.contains("ctid");
+            let key = if staging_version_update {
+                Some("version".to_string())
+            } else {
+                resolve_comparison_string(_sql, "key", params)
+            };
+            let value = if staging_version_update {
+                Some("1.1".to_string())
+            } else {
+                resolve_assignment_string(_sql, "value", params)
+            };
+            if key.as_deref() != Some("version") || value.as_deref() != Some("1.1") {
+                return Err(RockLakeError::Unsupported(
+                    "only the DuckLake 1.0-to-1.1 version update is supported".into(),
+                ));
+            }
+            match current_ducklake_version(store).await?.as_deref() {
+                Some("1.0") => {
+                    let op = BufferedOp::MigrateDuckLakeV11;
+                    if session.in_transaction {
+                        session.pending_txn.push(op)?;
+                    } else {
+                        execute_commit(vec![op], store, notify_manager).await?;
+                    }
+                }
+                Some("1.1") => {}
+                Some(version) => {
+                    return Err(RockLakeError::Unsupported(format!(
+                        "cannot migrate DuckLake catalog version {version} to 1.1"
+                    )))
+                }
+                None => {
+                    return Err(RockLakeError::Unsupported(
+                        "DuckLake catalog has no version marker to migrate".into(),
+                    ))
+                }
+            }
+            Ok(vec![Response::Execution(Tag::new("UPDATE 1"))])
+        }
+        StatementKind::DuckLakeV11MigrationStep => {
+            match current_ducklake_version(store).await?.as_deref() {
+                Some("1.0") => session.ducklake_v11_migration_in_progress = true,
+                Some("1.1") => {}
+                Some(version) => {
+                    return Err(RockLakeError::Unsupported(format!(
+                    "DuckLake v1.1 migration steps are incompatible with catalog version {version}"
+                )))
+                }
+                None => {
+                    return Err(RockLakeError::Unsupported(
+                        "DuckLake migration requires a version marker".into(),
+                    ))
+                }
+            }
+            Ok(vec![Response::Execution(Tag::new("OK"))])
+        }
         StatementKind::InsertSchemaVersions => {
             let literal_rows = literal_insert_rows(_sql);
             let parameterized = _sql.contains('$');
@@ -3682,7 +3815,7 @@ async fn execute_classified<'a>(
                 BufferedOp::InsertView {
                     schema_id: required_row_u64_value(row, &["schema_id"])?,
                     view_name: required_row_string_value(row, &["view_name"])?,
-                    sql: required_row_string_value(row, &["sql"])?,
+                    sql: required_row_string_value(row, &["sql", "view_definition"])?,
                     view_uuid: row_map_string(row, "view_uuid"),
                     dialect: row_map_string(row, "dialect"),
                     column_aliases: row_map_string(row, "column_aliases"),
@@ -4327,15 +4460,23 @@ async fn execute_classified<'a>(
 
         // ─── COPY Protocol (DuckDB 1.5+ binary COPY) ───────────────────
         StatementKind::CopyFromStdin { ref table } => {
+            if table.starts_with("update_data_") && !session.ducklake_v11_migration_in_progress {
+                return Err(RockLakeError::Unsupported(format!(
+                    "COPY into migration staging table {table} outside DuckLake v1.1 migration"
+                )));
+            }
             // Record which table is being loaded so on_copy_data / on_copy_done
             // can accumulate and parse the binary stream correctly.
             session.pending_copy = Some(CopyAccumulator {
                 table: table.clone(),
                 data: Vec::new(),
             });
-            // Return CopyIn response with binary format (1).
-            // format=1 (binary), columns=0 (unspecified), empty column_formats.
-            Ok(vec![Response::CopyIn(CopyResponse::new(1, 0, vec![]))])
+            let format = if table.starts_with("update_data_") {
+                0
+            } else {
+                1
+            };
+            Ok(vec![Response::CopyIn(CopyResponse::new(format, 0, vec![]))])
         }
         StatementKind::CopyToStdout { ref query } => {
             // COPY TO STDOUT requires streaming binary data through the wire

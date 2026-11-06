@@ -150,6 +150,7 @@ pub enum BufferedOp {
         scope: Option<String>,
         scope_id: Option<u64>,
     },
+    MigrateDuckLakeV11,
     InsertInlinedDataTables {
         table_id: u64,
         table_name: String,
@@ -324,6 +325,8 @@ pub struct SessionState {
     pub pending_copy: Option<CopyAccumulator>,
     /// Bootstrap rows received via COPY FROM STDIN during DuckDB ATTACH.
     pub bootstrap: BootstrapState,
+    /// True while DuckDB is running the SQL prelude of a DuckLake v1.1 migration.
+    pub ducklake_v11_migration_in_progress: bool,
 }
 
 /// Session-level settings (SET/SHOW).
@@ -361,6 +364,7 @@ impl Default for SessionState {
             subscriptions: ConnectionSubscriptions::new(),
             pending_copy: None,
             bootstrap: BootstrapState::default(),
+            ducklake_v11_migration_in_progress: false,
         }
     }
 }
@@ -375,6 +379,7 @@ impl SessionState {
         self.pending_txn.clear();
         self.pending_copy = None;
         self.bootstrap = BootstrapState::default();
+        self.ducklake_v11_migration_in_progress = false;
         self.transaction_snapshot_id = None;
         self.in_transaction = false;
     }

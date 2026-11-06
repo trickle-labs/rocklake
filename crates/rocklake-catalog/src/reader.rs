@@ -352,6 +352,27 @@ impl CatalogReader {
         }
     }
 
+    /// List snapshot IDs and schema versions visible to this reader.
+    pub async fn list_all_snapshots(&self) -> CatalogResult<Vec<SnapshotRow>> {
+        let mut rows = Vec::new();
+        let mut iter = self
+            .db
+            .scan_prefix(&keys::prefix_for_tag(TAG_SNAPSHOT))
+            .await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?
+        {
+            let row = values::decode_value::<SnapshotRow>(&kv.value)?;
+            if row.snapshot_id <= self.dl_snapshot_id.as_u64() {
+                rows.push(row);
+            }
+        }
+        rows.sort_by_key(|row| row.snapshot_id);
+        Ok(rows)
+    }
+
     /// List all `ducklake_snapshot_changes` rows across all snapshots.
     ///
     /// Returns one `SnapshotChangesRow` per snapshot that has a recorded
