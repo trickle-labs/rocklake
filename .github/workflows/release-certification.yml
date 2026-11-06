@@ -113,6 +113,30 @@ jobs:
       - run: cargo test -p rocklake-pgwire --test v0481_ducklake_1_0_compliance_tests -- --exact schema_registry_matches_ducklake_1_0_manifest
       - run: cargo test -p rocklake-pgwire --test v02710_corpus_tests -- --test-threads=1 --nocapture
 
+  ducklake-v11:
+    name: DuckLake 1.1 Critical Paths (DuckDB 2.0.0)
+    runs-on: ubuntu-latest
+    env:
+      ROCKLAKE_DUCKDB_VERSION: "2.0.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.certified-ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: test "$(git rev-parse HEAD)" = "$CERTIFIED_REF"
+      - name: Install DuckDB CLI and DuckLake extension
+        run: |
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz" -o "$RUNNER_TEMP/duckdb.tar.gz"
+          tar -xzf "$RUNNER_TEMP/duckdb.tar.gz" -C "$RUNNER_TEMP/duckdb"
+          test -x "$RUNNER_TEMP/duckdb/duckdb"
+          echo "$RUNNER_TEMP/duckdb" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/duckdb/duckdb" --version
+          "$RUNNER_TEMP/duckdb/duckdb" -no-agent -c "INSTALL ducklake; LOAD ducklake;"
+      - run: cargo test -p rocklake-pgwire --test duckdb_binary_tests -- --include-ignored --test-threads=1 --nocapture
+      - run: cargo test -p rocklake-catalog --test v111_ducklake_migration_tests -- --test-threads=1 --nocapture
+
   public-surface:
     name: Public Surface
     runs-on: ubuntu-latest
@@ -277,12 +301,13 @@ jobs:
   release-certification:
     name: Release Certification
     if: always()
-    needs: [quality, failure-certification, ducklake, public-surface, backend-execution, windows, security, docs, quickstart, compatibility, miri-sanitizers, connection-lifecycle]
+    needs: [quality, failure-certification, ducklake, ducklake-v11, public-surface, backend-execution, windows, security, docs, quickstart, compatibility, miri-sanitizers, connection-lifecycle]
     runs-on: ubuntu-latest
     env:
       QUALITY_RESULT: ${{ needs.quality.result }}
       FAILURE_RESULT: ${{ needs.failure-certification.result }}
       DUCKLAKE_RESULT: ${{ needs.ducklake.result }}
+      DUCKLAKE_V11_RESULT: ${{ needs.ducklake-v11.result }}
       PUBLIC_SURFACE_RESULT: ${{ needs.public-surface.result }}
       BACKEND_RESULT: ${{ needs.backend-execution.result }}
       WINDOWS_RESULT: ${{ needs.windows.result }}
@@ -304,6 +329,7 @@ jobs:
           test "$QUALITY_RESULT" = success
           test "$FAILURE_RESULT" = success
           test "$DUCKLAKE_RESULT" = success
+          test "$DUCKLAKE_V11_RESULT" = success
           test "$PUBLIC_SURFACE_RESULT" = success
           test "$BACKEND_RESULT" = success
           test "$WINDOWS_RESULT" = success
@@ -313,8 +339,8 @@ jobs:
           test "$COMPATIBILITY_RESULT" = success
           test "$MIRI_RESULT" = success
           test "$LIFECYCLE_RESULT" = success
-          printf '{"certified_sha":"%s","quality":"%s","failure_certification":"%s","ducklake":"%s","public_surface":"%s","backend_execution":"%s","windows":"%s","security":"%s","docs":"%s","quickstart":"%s","compatibility":"%s","miri_sanitizers":"%s","connection_lifecycle":"%s"}\n' \
-            "$CERTIFIED_REF" "$QUALITY_RESULT" "$FAILURE_RESULT" "$DUCKLAKE_RESULT" \
+          printf '{"certified_sha":"%s","quality":"%s","failure_certification":"%s","ducklake":"%s","ducklake_v11":"%s","public_surface":"%s","backend_execution":"%s","windows":"%s","security":"%s","docs":"%s","quickstart":"%s","compatibility":"%s","miri_sanitizers":"%s","connection_lifecycle":"%s"}\n' \
+            "$CERTIFIED_REF" "$QUALITY_RESULT" "$FAILURE_RESULT" "$DUCKLAKE_RESULT" "$DUCKLAKE_V11_RESULT" \
             "$PUBLIC_SURFACE_RESULT" "$BACKEND_RESULT" "$WINDOWS_RESULT" "$SECURITY_RESULT" \
             "$DOCS_RESULT" "$QUICKSTART_RESULT" "$COMPATIBILITY_RESULT" "$MIRI_RESULT" "$LIFECYCLE_RESULT" \
             > release-certification.json
