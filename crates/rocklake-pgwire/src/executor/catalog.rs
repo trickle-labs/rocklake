@@ -12,7 +12,7 @@ use sqlparser::parser::Parser;
 
 use rocklake_catalog::writer::stats::FileColumnStatsInput;
 use rocklake_catalog::{CatalogStore, CommitResult};
-use rocklake_core::rows::{ColumnRow, InlinedDataTablesRow, InlinedInsertRow};
+use rocklake_core::rows::{ColumnRow, InlinedDataTablesRow, InlinedDeleteRow, InlinedInsertRow};
 
 use crate::error::RockLakeError;
 use crate::lifecycle::OperationClass;
@@ -295,6 +295,17 @@ pub(super) async fn execute_commit(
                         encryption_key.as_deref(),
                         row_group_count,
                     )
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
+            BufferedOp::InsertInlinedDelete {
+                table_id,
+                data_file_id,
+                row_id,
+            } => {
+                needs_snapshot = true;
+                writer
+                    .register_inlined_delete(table_id, data_file_id, row_id)
                     .await
                     .map_err(RockLakeError::from)?;
             }
@@ -1071,8 +1082,10 @@ pub(super) fn make_snapshot_changes_response(
 
 pub(super) fn make_latest_snapshot_info_response(
     snap: Option<rocklake_core::rows::SnapshotRow>,
+    include_version: bool,
+    version: Option<String>,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::latest_snapshot_info_schema();
+    let schema = crate::schema_registry::latest_snapshot_info_schema(include_version);
 
     let (snapshot_id, schema_version, next_catalog_id, next_file_id) = match snap {
         Some(s) => (
@@ -1104,6 +1117,9 @@ pub(super) fn make_latest_snapshot_info_response(
     encoder
         .encode_field_with_type_and_format(&Some(next_file_id), &Type::INT8, FieldFormat::Binary)
         .expect("pgwire field encoding is infallible");
+    if include_version {
+        encode_text_value(&mut encoder, &version);
+    }
     let data_rows = vec![encoder.finish()];
 
     let mut resp = QueryResponse::new(schema, futures::stream::iter(data_rows));
@@ -1553,7 +1569,7 @@ pub(super) fn make_scan_data_file_response(
 #[derive(Clone)]
 struct MetadataColumnProjection {
     name: String,
-    index: usize,
+    index: Option<usize>,
 }
 
 fn metadata_source_field<'a>(
@@ -1578,29 +1594,45 @@ fn metadata_column_projections(
                 projections.extend(source_schema.iter().enumerate().map(|(index, field)| {
                     MetadataColumnProjection {
                         name: field.name().to_string(),
-                        index,
+                        index: Some(index),
                     }
                 }));
             }
             SelectItem::UnnamedExpr(expr) => {
+                if matches!(&expr, Expr::Value(value) if matches!(value.value, sqlparser::ast::Value::Null))
+                {
+                    projections.push(MetadataColumnProjection {
+                        name: "?column?".to_string(),
+                        index: None,
+                    });
+                    continue;
+                }
                 let source_name = expr_last_identifier(&expr);
                 if let Some((index, field)) =
                     metadata_source_field(source_name.trim_matches('"'), source_schema)
                 {
                     projections.push(MetadataColumnProjection {
                         name: field.name().to_string(),
-                        index,
+                        index: Some(index),
                     });
                 }
             }
             SelectItem::ExprWithAlias { expr, alias } => {
+                if matches!(&expr, Expr::Value(value) if matches!(value.value, sqlparser::ast::Value::Null))
+                {
+                    projections.push(MetadataColumnProjection {
+                        name: alias.value,
+                        index: None,
+                    });
+                    continue;
+                }
                 let source_name = expr_last_identifier(&expr);
                 if let Some((index, _)) =
                     metadata_source_field(source_name.trim_matches('"'), source_schema)
                 {
                     projections.push(MetadataColumnProjection {
                         name: alias.value,
-                        index,
+                        index: Some(index),
                     });
                 }
             }
@@ -1612,7 +1644,7 @@ fn metadata_column_projections(
             .enumerate()
             .map(|(index, field)| MetadataColumnProjection {
                 name: field.name().to_string(),
-                index,
+                index: Some(index),
             })
             .collect()
     } else {
@@ -1632,7 +1664,10 @@ fn metadata_projection_schema(
                     projection.name.clone(),
                     None,
                     None,
-                    source_schema[projection.index].datatype().clone(),
+                    projection
+                        .index
+                        .map(|index| source_schema[index].datatype().clone())
+                        .unwrap_or(Type::UNKNOWN),
                     FieldFormat::Text,
                 )
             })
@@ -1673,7 +1708,12 @@ fn encode_data_file_row(
         schema,
         projections
             .iter()
-            .map(|projection| values[projection.index].clone())
+            .map(|projection| {
+                projection
+                    .index
+                    .map(|index| values[index].clone())
+                    .unwrap_or(MetadataValue::Null)
+            })
             .collect(),
     )
 }
@@ -1782,7 +1822,7 @@ pub(super) fn make_file_column_stats_stream_response(
     >,
 ) -> Response<'static> {
     let projections = file_column_stats_projections(sql, stable_1_1);
-    let schema = Arc::new(
+    let schema: Arc<Vec<FieldInfo>> = Arc::new(
         projections
             .iter()
             .map(|projection| {
@@ -2782,7 +2822,12 @@ fn encode_delete_file_row(
         schema,
         projections
             .iter()
-            .map(|projection| values[projection.index].clone())
+            .map(|projection| {
+                projection
+                    .index
+                    .map(|index| values[index].clone())
+                    .unwrap_or(MetadataValue::Null)
+            })
             .collect(),
     )
 }
@@ -2831,21 +2876,39 @@ pub(super) fn make_files_scheduled_for_deletion_response(
     make_encoded_metadata_response(schema, data_rows, "schedule_start ASC, data_file_id ASC")
 }
 
-/// v0.25: Build a PgWire response for `SELECT * FROM ducklake_metadata`.
+/// Build a PgWire response for `SELECT ... FROM ducklake_metadata`.
 pub(super) fn make_metadata_response(
+    sql: &str,
     rows: Vec<rocklake_core::rows::MetadataRow>,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::metadata_schema();
+    let source_schema = crate::schema_registry::metadata_schema();
+    let projections = metadata_column_projections(sql, &source_schema);
+    let schema = metadata_projection_schema(&source_schema, &projections);
     let mut data_rows = Vec::new();
     for r in &rows {
-        let mut encoder = DataRowEncoder::new(schema.clone());
-        encode_text_value(&mut encoder, &Some(r.key.clone()));
-        encode_text_value(&mut encoder, &Some(r.value.clone()));
-        let scope_str = r.scope.clone().or_else(|| Some("global".to_string()));
-        encode_text_value(&mut encoder, &scope_str);
-        let scope_id = r.scope_id.map(|v| v.to_string());
-        encode_text_value(&mut encoder, &scope_id);
-        data_rows.push(encoder.finish());
+        let values = [
+            MetadataValue::text(r.key.clone()),
+            MetadataValue::text(r.value.clone()),
+            MetadataValue::optional_text(r.scope.clone().filter(|scope| scope != "global")),
+            MetadataValue::optional_int8(
+                r.scope
+                    .as_deref()
+                    .filter(|scope| *scope != "global")
+                    .and(r.scope_id),
+            ),
+        ];
+        data_rows.push(encode_metadata_row(
+            schema.clone(),
+            projections
+                .iter()
+                .map(|projection| {
+                    projection
+                        .index
+                        .map(|index| values[index].clone())
+                        .unwrap_or(MetadataValue::Null)
+                })
+                .collect(),
+        ));
     }
     make_encoded_metadata_response(schema, data_rows, "scope ASC, key ASC")
 }
@@ -2952,46 +3015,103 @@ pub(super) fn make_inlined_data_tables_response(
     rows: Vec<InlinedDataTablesRow>,
 ) -> Response<'static> {
     let has_ctid = sql.to_ascii_lowercase().contains("ctid");
-    let schema = if has_ctid {
-        Arc::new(vec![
-            FieldInfo::new("table_id".into(), None, None, Type::INT8, FieldFormat::Text),
-            FieldInfo::new(
-                "schema_version".into(),
-                None,
-                None,
-                Type::INT8,
-                FieldFormat::Text,
-            ),
-            FieldInfo::new("ctid".into(), None, None, Type::TID, FieldFormat::Binary),
-        ])
+    let projections = if has_ctid {
+        vec![
+            ("table_id".to_string(), 0),
+            ("schema_version".to_string(), 2),
+            ("ctid".to_string(), 3),
+        ]
     } else {
-        crate::schema_registry::inlined_data_tables_schema()
+        inlined_data_table_projections(sql)
     };
+    let schema = Arc::new(
+        projections
+            .iter()
+            .map(|(name, index)| match index {
+                0 | 2 => FieldInfo::new(name.clone(), None, None, Type::INT8, FieldFormat::Text),
+                3 => FieldInfo::new(name.clone(), None, None, Type::TID, FieldFormat::Binary),
+                _ => FieldInfo::new(name.clone(), None, None, Type::TEXT, FieldFormat::Text),
+            })
+            .collect::<Vec<_>>(),
+    );
     let mut data_rows = Vec::new();
     for row in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        encode_text_value(&mut encoder, &Some(row.table_id.to_string()));
-        if has_ctid {
-            encode_text_value(&mut encoder, &Some(row.schema_version.to_string()));
-            let block = (row.table_id as u32).to_be_bytes();
-            let offset = (row.schema_version as u16).to_be_bytes();
-            let mut tid = [0u8; 6];
-            tid[..4].copy_from_slice(&block);
-            tid[4..].copy_from_slice(&offset);
-            encoder
-                .encode_field_with_type_and_format(
-                    &tid.as_slice(),
-                    &Type::BYTEA,
-                    FieldFormat::Binary,
-                )
-                .expect("pgwire field encoding is infallible");
-        } else {
-            encode_text_value(&mut encoder, &Some(row.sql.clone()));
-            encode_text_value(&mut encoder, &Some(row.schema_version.to_string()));
+        for (_, index) in &projections {
+            match index {
+                0 => encode_text_value(&mut encoder, &Some(row.table_id.to_string())),
+                1 => encode_text_value(&mut encoder, &Some(row.sql.clone())),
+                2 => encode_text_value(&mut encoder, &Some(row.schema_version.to_string())),
+                3 => {
+                    let block = (row.table_id as u32).to_be_bytes();
+                    let offset = (row.schema_version as u16).to_be_bytes();
+                    let mut tid = [0u8; 6];
+                    tid[..4].copy_from_slice(&block);
+                    tid[4..].copy_from_slice(&offset);
+                    encoder
+                        .encode_field_with_type_and_format(
+                            &tid.as_slice(),
+                            &Type::BYTEA,
+                            FieldFormat::Binary,
+                        )
+                        .expect("pgwire field encoding is infallible");
+                }
+                _ => unreachable!("inlined data table projection index is valid"),
+            }
         }
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "table_id ASC, schema_version ASC")
+}
+
+fn inlined_data_table_projections(sql: &str) -> Vec<(String, usize)> {
+    let defaults = || {
+        vec![
+            ("table_id".to_string(), 0),
+            ("table_name".to_string(), 1),
+            ("schema_version".to_string(), 2),
+        ]
+    };
+    let Some(items) = select_projection_items(sql) else {
+        return defaults();
+    };
+    let mut projections = Vec::new();
+    for item in items {
+        match item {
+            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                return defaults();
+            }
+            SelectItem::UnnamedExpr(expr) => {
+                let name = expr_last_identifier(&expr);
+                let Some(index) = inlined_data_table_column_index(&name) else {
+                    continue;
+                };
+                projections.push((name, index));
+            }
+            SelectItem::ExprWithAlias { expr, alias } => {
+                let source_name = expr_last_identifier(&expr);
+                let Some(index) = inlined_data_table_column_index(&source_name) else {
+                    continue;
+                };
+                projections.push((alias.value, index));
+            }
+        }
+    }
+    if projections.is_empty() {
+        defaults()
+    } else {
+        projections
+    }
+}
+
+fn inlined_data_table_column_index(name: &str) -> Option<usize> {
+    match name.trim_matches('"').to_ascii_lowercase().as_str() {
+        "table_id" => Some(0),
+        "table_name" => Some(1),
+        "schema_version" => Some(2),
+        "ctid" => Some(3),
+        _ => None,
+    }
 }
 
 pub(super) fn make_schema_versions_response(
@@ -3013,8 +3133,9 @@ pub(super) fn make_inlined_rows_response(
     sql: &str,
     columns: Vec<ColumnRow>,
     rows: Vec<InlinedInsertRow>,
+    stable_1_1: bool,
 ) -> Response<'static> {
-    let projections = inlined_projections(sql, &columns);
+    let projections = inlined_projections(sql, &columns, stable_1_1);
     let schema = Arc::new(
         projections
             .iter()
@@ -3086,7 +3207,69 @@ pub(super) fn make_inlined_rows_response(
     make_encoded_metadata_response(schema, data_rows, "row_id ASC")
 }
 
-fn inlined_projections(sql: &str, columns: &[ColumnRow]) -> Vec<InlinedProjection> {
+pub(super) fn make_inlined_deletes_response(
+    sql: &str,
+    rows: Vec<InlinedDeleteRow>,
+) -> Response<'static> {
+    let source_schema = ["file_id", "row_id", "begin_snapshot"]
+        .into_iter()
+        .map(|name| {
+            FieldInfo::new(
+                name.to_string(),
+                None,
+                None,
+                Type::INT8,
+                FieldFormat::Binary,
+            )
+        })
+        .collect::<Vec<_>>();
+    let projections = metadata_column_projections(sql, &source_schema);
+    let schema: Arc<Vec<FieldInfo>> = Arc::new(
+        projections
+            .iter()
+            .map(|projection| {
+                FieldInfo::new(
+                    projection.name.clone(),
+                    None,
+                    None,
+                    projection.index.map_or(Type::UNKNOWN, |_| Type::INT8),
+                    FieldFormat::Binary,
+                )
+            })
+            .collect(),
+    );
+    let mut data_rows = Vec::new();
+    for row in &rows {
+        let values = [
+            MetadataValue::int8(row.data_file_id),
+            MetadataValue::int8(row.row_id),
+            MetadataValue::int8(row.begin_snapshot),
+        ];
+        data_rows.push(encode_metadata_row(
+            schema.clone(),
+            projections
+                .iter()
+                .map(|projection| {
+                    projection
+                        .index
+                        .map(|index| values[index].clone())
+                        .unwrap_or(MetadataValue::Null)
+                })
+                .collect(),
+        ));
+    }
+    make_encoded_metadata_response(
+        schema,
+        data_rows,
+        "begin_snapshot ASC, file_id ASC, row_id ASC",
+    )
+}
+
+fn inlined_projections(
+    sql: &str,
+    columns: &[ColumnRow],
+    stable_1_1: bool,
+) -> Vec<InlinedProjection> {
     let items = select_projection_items(sql).unwrap_or_default();
     let mut projections = Vec::new();
     for item in items {
@@ -3097,7 +3280,7 @@ fn inlined_projections(sql: &str, columns: &[ColumnRow]) -> Vec<InlinedProjectio
             SelectItem::UnnamedExpr(expr) => {
                 let source_name = expr_last_identifier(&expr);
                 if let Some(projection) =
-                    inlined_projection_for_name(&source_name, &source_name, columns)
+                    inlined_projection_for_name(&source_name, &source_name, columns, stable_1_1)
                 {
                     projections.push(projection);
                 }
@@ -3105,7 +3288,7 @@ fn inlined_projections(sql: &str, columns: &[ColumnRow]) -> Vec<InlinedProjectio
             SelectItem::ExprWithAlias { expr, alias } => {
                 let source_name = expr_last_identifier(&expr);
                 if let Some(projection) =
-                    inlined_projection_for_name(&source_name, &alias.value, columns)
+                    inlined_projection_for_name(&source_name, &alias.value, columns, stable_1_1)
                 {
                     projections.push(projection);
                 }
@@ -3149,21 +3332,37 @@ fn inlined_projection_for_name(
     source_name: &str,
     output_name: &str,
     columns: &[ColumnRow],
+    stable_1_1: bool,
 ) -> Option<InlinedProjection> {
     let source_name = source_name.trim_matches('"').to_ascii_lowercase();
     let output_name = output_name.trim_matches('"').to_string();
     match source_name.as_str() {
-        "row_id" => Some(InlinedProjection {
+        "_ducklake_row_id" if stable_1_1 => Some(InlinedProjection {
             name: output_name,
             datatype: Type::INT8,
             source: InlinedProjectionSource::RowId,
         }),
-        "begin_snapshot" => Some(InlinedProjection {
+        "row_id" if !stable_1_1 => Some(InlinedProjection {
+            name: output_name,
+            datatype: Type::INT8,
+            source: InlinedProjectionSource::RowId,
+        }),
+        "_ducklake_begin_snapshot" if stable_1_1 => Some(InlinedProjection {
             name: output_name,
             datatype: Type::INT8,
             source: InlinedProjectionSource::BeginSnapshot,
         }),
-        "end_snapshot" => Some(InlinedProjection {
+        "begin_snapshot" if !stable_1_1 => Some(InlinedProjection {
+            name: output_name,
+            datatype: Type::INT8,
+            source: InlinedProjectionSource::BeginSnapshot,
+        }),
+        "_ducklake_end_snapshot" if stable_1_1 => Some(InlinedProjection {
+            name: output_name,
+            datatype: Type::INT8,
+            source: InlinedProjectionSource::EndSnapshot,
+        }),
+        "end_snapshot" if !stable_1_1 => Some(InlinedProjection {
             name: output_name,
             datatype: Type::INT8,
             source: InlinedProjectionSource::EndSnapshot,

@@ -168,6 +168,11 @@ pub enum BufferedOp {
         table_name: String,
         rows: Vec<Vec<Option<String>>>,
     },
+    InsertInlinedDelete {
+        table_id: u64,
+        data_file_id: u64,
+        row_id: u64,
+    },
     /// Rows from a named-column DuckLake metadata insert. Keeping the parsed
     /// maps in the pending transaction preserves column order and NULLs until
     /// the one catalog commit boundary.

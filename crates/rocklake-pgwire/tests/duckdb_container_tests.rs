@@ -81,6 +81,16 @@ fn attach_sql(pgwire: &PgWireHarness, data_path: &str, body: &str) -> String {
     )
 }
 
+fn attach_sql_default(pgwire: &PgWireHarness, data_path: &str, body: &str) -> String {
+    format!(
+        "LOAD ducklake; \
+         ATTACH 'ducklake:postgres:{dsn}' AS my_lake (DATA_PATH '{data_path}'); \
+         USE my_lake; \
+         {body}",
+        dsn = pgwire.container_connection_string(),
+    )
+}
+
 async fn schema_id(catalog: &CatalogHarness, schema_name: &str) -> u64 {
     let reader = catalog.reader_latest().await;
     let schemas = reader
@@ -985,6 +995,131 @@ async fn duckdb_container_restart_and_reconnect_preserves_state() {
         "mounted DuckDB data files should survive container restart"
     );
 
+    pgwire.stop().await;
+}
+
+#[tokio::test]
+async fn duckdb_2_0_default_fresh_catalog_survives_server_restart() {
+    if !duckdb_version().starts_with("2.0") {
+        return;
+    }
+
+    let (catalog, pgwire) = setup_catalog("fresh_v11_restart").await;
+    let data_dir = TempDir::new().expect("duckdb data dir should be created");
+    {
+        let duckdb = start_duckdb(&data_dir).await;
+        let write_sql = attach_sql_default(
+            &pgwire,
+            duckdb.data_path(),
+            "CREATE SCHEMA analytics; \
+             CREATE TABLE analytics.inline_events (id INTEGER, payload VARCHAR); \
+             INSERT INTO analytics.inline_events VALUES (1, 'inline-old'), (2, 'inline-deleted'); \
+             CREATE TABLE analytics.file_events (id INTEGER, payload VARCHAR); \
+             INSERT INTO analytics.file_events \
+                 SELECT range, 'file-' || range::VARCHAR FROM range(1, 13); \
+             UPDATE analytics.inline_events SET payload = 'inline-updated' WHERE id = 1; \
+             DELETE FROM analytics.inline_events WHERE id = 2; \
+             UPDATE analytics.file_events SET payload = 'file-updated' WHERE id = 2; \
+             DELETE FROM analytics.file_events WHERE id = 1; \
+             ALTER TABLE analytics.inline_events ADD COLUMN note VARCHAR; \
+             UPDATE analytics.inline_events SET note = 'schema-change' WHERE id = 1; \
+             SELECT parent_schema_id FROM __ducklake_metadata_my_lake.ducklake_schema WHERE schema_name = 'analytics'; \
+             SELECT id, payload, note FROM analytics.inline_events; \
+             SELECT id, payload FROM analytics.file_events WHERE id = 2;",
+        );
+        let output = duckdb
+            .run_sql(&write_sql)
+            .await
+            .expect("fresh DuckLake 1.1 create/write phase should succeed");
+        assert!(
+            output.stdout.contains("parent_schema_id")
+                && output.stdout.contains("inline-updated")
+                && output.stdout.contains("schema-change")
+                && output.stdout.contains("file-updated"),
+            "fresh catalog should default to DuckLake 1.1 and read inline/file data\nstdout: {}\nstderr: {}",
+            output.stdout,
+            output.stderr
+        );
+        let file_rows = output_after_statement(
+            &output.stdout,
+            "SELECT id, payload FROM analytics.file_events WHERE id = 2;",
+        );
+        assert_eq!(file_rows.matches("file-updated").count(), 1);
+        assert!(!file_rows.contains("file-2"));
+        duckdb.stop().await;
+    }
+
+    let schema = schema_id(&catalog, "analytics").await;
+    let file_table = table_id(&catalog, schema, "file_events").await;
+    assert!(
+        !catalog
+            .reader_latest()
+            .await
+            .list_data_files(file_table)
+            .await
+            .expect("file-backed table metadata should be readable")
+            .is_empty(),
+        "larger inserts should create Parquet-backed data files"
+    );
+    let first_snapshot = catalog.reader_latest().await.snapshot_id();
+
+    pgwire.stop().await;
+    catalog
+        .reopen()
+        .await
+        .expect("fresh catalog should reopen before DuckDB reconnects");
+    let pgwire = PgWireHarness::start_with_catalog(catalog.store.clone())
+        .await
+        .expect("PG-Wire server should restart");
+
+    {
+        let duckdb = start_duckdb(&data_dir).await;
+        let read_sql = attach_sql_default(
+            &pgwire,
+            duckdb.data_path(),
+            "SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'my_lake' ORDER BY schema_name; \
+             SELECT parent_schema_id FROM __ducklake_metadata_my_lake.ducklake_schema WHERE schema_name = 'analytics'; \
+             SELECT id, payload, note FROM my_lake.analytics.inline_events; \
+             SELECT id, payload FROM my_lake.analytics.file_events WHERE id = 2;",
+        );
+        let output = duckdb
+            .run_sql(&read_sql)
+            .await
+            .expect("fresh DuckDB process should reconnect after server restart");
+        let schemas = output_after_statement(
+            &output.stdout,
+            "SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'my_lake' ORDER BY schema_name;",
+        );
+        assert!(
+            schemas.contains("analytics"),
+            "reconnected DuckDB should register the analytics schema: {schemas}"
+        );
+        assert!(
+            output.stdout.contains("parent_schema_id")
+                && output.stdout.contains("inline-updated")
+                && output.stdout.contains("schema-change")
+                && output.stdout.contains("file-updated"),
+            "reconnected DuckDB should read committed 1.1 catalog schema and rows\nstdout: {}\nstderr: {}",
+            output.stdout,
+            output.stderr
+        );
+        let file_rows = output_after_statement(
+            &output.stdout,
+            "SELECT id, payload FROM my_lake.analytics.file_events WHERE id = 2;",
+        );
+        assert_eq!(file_rows.matches("file-updated").count(), 1);
+        assert!(!file_rows.contains("file-2"));
+        duckdb.stop().await;
+    }
+
+    assert!(
+        catalog.reader_latest().await.snapshot_id().as_u64() >= first_snapshot.as_u64(),
+        "reopened catalog should retain its committed snapshot"
+    );
+    assert!(
+        !parquet_files(data_dir.path()).is_empty(),
+        "file-backed DuckLake data should survive the restart"
+    );
     pgwire.stop().await;
 }
 

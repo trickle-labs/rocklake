@@ -139,7 +139,7 @@ pub(super) fn make_single_int_response<'a>(col_name: &str, value: Option<i64>) -
 
 /// Zero-row result for DuckDB's pg_catalog.pg_tables inlined-delete-table probe.
 /// Optional per-table inlined deletes are not physical PostgreSQL relations.
-pub(super) fn make_pg_tables_probe_response<'a>() -> Response<'a> {
+pub(super) fn make_pg_tables_probe_response<'a>(exists: bool) -> Response<'a> {
     let schema = Arc::new(vec![FieldInfo::new(
         "?column?".to_string(),
         None,
@@ -147,9 +147,17 @@ pub(super) fn make_pg_tables_probe_response<'a>() -> Response<'a> {
         Type::INT8,
         FieldFormat::Binary,
     )]);
-    let rows: Vec<pgwire::error::PgWireResult<pgwire::messages::data::DataRow>> = Vec::new();
+    let rows = if exists {
+        let mut encoder = DataRowEncoder::new(schema.clone());
+        encoder
+            .encode_field_with_type_and_format(&Some(1_i64), &Type::INT8, FieldFormat::Binary)
+            .expect("pgwire field encoding is infallible");
+        vec![encoder.finish()]
+    } else {
+        Vec::new()
+    };
     let mut response = QueryResponse::new(schema, futures::stream::iter(rows));
-    response.set_command_tag("SELECT 0");
+    response.set_command_tag(if exists { "SELECT 1" } else { "SELECT 0" });
     Response::Query(response)
 }
 
@@ -426,21 +434,27 @@ pub(super) fn make_pg_catalog_inlined_table_response<'a>(
     table_name: &str,
     columns: Vec<ColumnRow>,
     sql: &str,
+    stable_1_1: bool,
 ) -> Response<'a> {
     let schema = make_pg_class_schema(sql);
     let mut rows = Vec::new();
     let mut attnum = 1i64;
 
-    for (name, type_name) in [
-        ("row_id".to_string(), "int8".to_string()),
-        ("begin_snapshot".to_string(), "int8".to_string()),
-        ("end_snapshot".to_string(), "int8".to_string()),
-    ] {
+    let system_columns = if stable_1_1 {
+        [
+            "_ducklake_row_id",
+            "_ducklake_begin_snapshot",
+            "_ducklake_end_snapshot",
+        ]
+    } else {
+        ["row_id", "begin_snapshot", "end_snapshot"]
+    };
+    for name in system_columns {
         rows.push(make_pg_class_attribute_row(
             schema.clone(),
             table_name,
-            &name,
-            &type_name,
+            name,
+            "int8",
             attnum,
         ));
         attnum += 1;
@@ -742,6 +756,23 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
                     table,
                     field.name(),
                     pg_type_name_for_catalog_field(field),
+                    (index + 1) as i64,
+                ));
+            }
+        }
+        for table in bootstrap_relations
+            .iter()
+            .filter(|table| table.starts_with("ducklake_inlined_delete_"))
+        {
+            if requested_table.is_some_and(|requested| requested != table) {
+                continue;
+            }
+            for (index, field) in ["file_id", "row_id", "begin_snapshot"].iter().enumerate() {
+                cls_rows.push(make_pg_class_attribute_row(
+                    cls_schema.clone(),
+                    table,
+                    field,
+                    "int8",
                     (index + 1) as i64,
                 ));
             }

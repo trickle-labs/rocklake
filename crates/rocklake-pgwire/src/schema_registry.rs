@@ -679,14 +679,18 @@ pub fn global_table_stats_schema_v11() -> Arc<Vec<FieldInfo>> {
 
 // ── Utility: latest snapshot info ────────────────────────────────────────────
 
-/// Schema for the 4-column `SelectLatestSnapshotInfo` response.
-pub fn latest_snapshot_info_schema() -> Arc<Vec<FieldInfo>> {
-    Arc::new(vec![
+/// Schema for the `SelectLatestSnapshotInfo` response.
+pub fn latest_snapshot_info_schema(include_version: bool) -> Arc<Vec<FieldInfo>> {
+    let mut fields = vec![
         int8b!("snapshot_id"),
         int8b!("schema_version"),
         int8b!("next_catalog_id"),
         int8b!("next_file_id"),
-    ])
+    ];
+    if include_version {
+        fields.push(text_col!("?column?"));
+    }
+    Arc::new(fields)
 }
 
 // ── ducklake_file_variant_stats ───────────────────────────────────────────────

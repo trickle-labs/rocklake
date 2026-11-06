@@ -421,6 +421,18 @@ async fn duckdb_2_0_pg_tables_probe_returns_no_inlined_delete_table() {
     let (names, count) = query_names_and_count(exec_one(sql, &store).await).await;
     assert_eq!(names, vec!["?column?"]);
     assert_eq!(count, 0, "optional inlined-delete table is not yet present");
+
+    exec_one(
+        "CREATE TABLE IF NOT EXISTS ducklake_inlined_delete_3 (file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT)",
+        &store,
+    )
+    .await;
+    let (names, count) = query_names_and_count(exec_one(sql, &store).await).await;
+    assert_eq!(names, vec!["?column?"]);
+    assert_eq!(
+        count, 1,
+        "created inlined-delete table must be discoverable"
+    );
 }
 
 #[tokio::test]
@@ -500,7 +512,7 @@ async fn duckdb_2_0_discovers_declared_table_before_first_snapshot() {
     assert_eq!(columns.len(), 15);
     assert_eq!(
         after,
-        rocklake_pgwire::schema_registry::schema_schema().len()
+        rocklake_pgwire::schema_registry::schema_schema_v11().len()
     );
     let reader = { store.lock().await.read_latest() };
     assert!(reader.get_snapshot().await.unwrap().is_none());
@@ -769,11 +781,18 @@ async fn inlined_checkpoint_queries_include_retired_versions() {
         (table_id, first.as_u64(), second.as_u64())
     };
     let table = format!("ducklake_inlined_data_{table_id}_1");
-    let all =
-        format!("SELECT row_id, begin_snapshot FROM {table} WHERE begin_snapshot <= {second}");
-    let ended = format!("SELECT row_id, begin_snapshot, end_snapshot FROM {table} WHERE begin_snapshot <= {second} AND end_snapshot IS NOT NULL");
-    let visible = format!("SELECT row_id FROM {table} WHERE begin_snapshot <= {second} AND (end_snapshot > {second} OR end_snapshot IS NULL)");
-    let previously_visible = format!("SELECT row_id FROM {table} WHERE begin_snapshot <= {first} AND (end_snapshot > {first} OR end_snapshot IS NULL)");
+    let all = format!(
+        "SELECT _ducklake_row_id, _ducklake_begin_snapshot FROM {table} WHERE _ducklake_begin_snapshot <= {second}"
+    );
+    let ended = format!(
+        "SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_end_snapshot FROM {table} WHERE _ducklake_begin_snapshot <= {second} AND _ducklake_end_snapshot IS NOT NULL"
+    );
+    let visible = format!(
+        "SELECT _ducklake_row_id FROM {table} WHERE _ducklake_begin_snapshot <= {second} AND (_ducklake_end_snapshot > {second} OR _ducklake_end_snapshot IS NULL)"
+    );
+    let previously_visible = format!(
+        "SELECT _ducklake_row_id FROM {table} WHERE _ducklake_begin_snapshot <= {first} AND (_ducklake_end_snapshot > {first} OR _ducklake_end_snapshot IS NULL)"
+    );
     assert_eq!(
         query_names_and_count(exec_one(&all, &store).await).await.1,
         2
