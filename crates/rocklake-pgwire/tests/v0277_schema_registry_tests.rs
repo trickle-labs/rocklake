@@ -646,13 +646,17 @@ async fn ducklake_v11_stats_expose_exactness_columns() {
 async fn ducklake_v10_table_column_stats_update_uses_legacy_fields() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
-    let (table_id, column_id) = {
+    let (table_id, column_id, second_column_id) = {
         let mut catalog = store.lock().await;
         let mut writer = catalog.begin_write();
         let schema_id = writer.create_schema("main").await.unwrap();
         let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
         let column_id = writer
             .add_column(table_id, "name", "varchar", 0, true, None)
+            .await
+            .unwrap();
+        let second_column_id = writer
+            .add_column(table_id, "other", "varchar", 1, true, None)
             .await
             .unwrap();
         writer
@@ -670,13 +674,25 @@ async fn ducklake_v10_table_column_stats_update_uses_legacy_fields() {
             )
             .await
             .unwrap();
+        writer
+            .upsert_table_column_stats(
+                table_id,
+                second_column_id,
+                false,
+                Some("b"),
+                Some("y"),
+                Some(false),
+                None,
+            )
+            .await
+            .unwrap();
         let snapshot = writer.create_snapshot(None, None).await.unwrap();
         catalog.commit_writer(snapshot);
-        (table_id, column_id)
+        (table_id, column_id, second_column_id)
     };
 
     let update = format!(
-        "UPDATE ducklake_table_column_stats SET contains_null = false, contains_nan = NULL, min_value = '1', max_value = '2', extra_stats = NULL WHERE table_id = {table_id} AND column_id = {column_id}"
+        "WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max, new_extra_stats) AS (VALUES ({table_id}, {column_id}, false, NULL, '1', '2', NULL), ({table_id}, {second_column_id}, true, NULL, '3', '4', NULL)) UPDATE ducklake_table_column_stats SET contains_null = CAST(new_contains_null AS BOOLEAN), contains_nan = CAST(new_contains_nan AS BOOLEAN), min_value = new_min, max_value = new_max, extra_stats = new_extra_stats FROM new_values WHERE table_id = tid AND column_id = cid"
     );
     executor::execute_sql(
         &update,
@@ -696,11 +712,20 @@ async fn ducklake_v10_table_column_stats_update_uses_legacy_fields() {
         .list_all_table_column_stats()
         .await
         .unwrap();
-    assert_eq!(rows[0].min_value.as_deref(), Some("1"));
-    assert_eq!(rows[0].max_value.as_deref(), Some("2"));
-    assert_eq!(rows[0].contains_nan, None);
-    assert_eq!(rows[0].min_is_exact, None);
-    assert_eq!(rows[0].max_is_exact, None);
+    let first = rows.iter().find(|row| row.column_id == column_id).unwrap();
+    assert_eq!(first.min_value.as_deref(), Some("1"));
+    assert_eq!(first.max_value.as_deref(), Some("2"));
+    assert!(!first.contains_null);
+    assert_eq!(first.contains_nan, None);
+    assert_eq!(first.min_is_exact, None);
+    assert_eq!(first.max_is_exact, None);
+    let second = rows
+        .iter()
+        .find(|row| row.column_id == second_column_id)
+        .unwrap();
+    assert_eq!(second.min_value.as_deref(), Some("3"));
+    assert_eq!(second.max_value.as_deref(), Some("4"));
+    assert!(second.contains_null);
 }
 
 #[tokio::test]
