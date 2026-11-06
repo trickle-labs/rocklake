@@ -691,7 +691,7 @@ async fn view_lifecycle_insert_then_select() {
     // Create a view via INSERT INTO ducklake_view.
     exec_all(
         "INSERT INTO ducklake_view \
-         (schema_id, view_name, view_definition, dialect) \
+         (schema_id, view_name, sql, dialect) \
          VALUES ($1, $2, $3, $4)",
         &store,
         &ParamValues::new(vec![
