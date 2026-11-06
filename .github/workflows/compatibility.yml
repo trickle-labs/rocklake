@@ -193,6 +193,14 @@ jobs:
           duckdb_v11_parquet_and_catalog_use_distinct_s3_prefixes_after_restart
           -- --test-threads=1 --nocapture
 
+      - name: Verify DuckDB 1.5.6 rejects a DuckLake 1.1 catalog
+        run: >-
+          cargo test --package rocklake-pgwire
+          --features minio-tests
+          --test duckdb_container_tests
+          duckdb_1_5_6_rejects_stable_v11_catalog_without_mutation
+          -- --test-threads=1 --nocapture
+
       - name: Run migration recovery tests
         run: >-
           cargo test --package rocklake-catalog

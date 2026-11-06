@@ -17,9 +17,11 @@ still rejects stable 1.1 source catalogs.
 
 The tested migration uses DuckDB v2.0.0 with a RockLake PostgreSQL-wire
 catalog. An explicit request for DuckLake 1.0 after migration is rejected and
-leaves the catalog at 1.1. DuckDB versions older than 2.0 have not been tested
-against a migrated catalog; do not use them. DuckLake does not support
-downgrading a migrated catalog.
+leaves the catalog at 1.1. DuckDB 1.5.6 rejects a stable 1.1 catalog with a
+version/catalog error and leaves its version and snapshot history unchanged.
+DuckDB v2.0.0 is the tested client for migrated catalogs; other client versions
+are not certified here. DuckLake does not support downgrading a migrated
+catalog.
 
 ## Checking Your Source Catalog Version
 

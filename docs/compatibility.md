@@ -93,6 +93,11 @@ direct read through these bindings is not certified.
 | 2.0.0 | ✅ Supported with DuckLake 1.0 | Explicit `DUCKLAKE_VERSION '1.0'` on `ATTACH`. |
 | < 1.5.2 | ❌ Not supported | Older versions do not support DuckLake 1.0 |
 
+For a stable DuckLake 1.1 catalog, DuckDB 2.0.0 is the tested client. An
+end-to-end test confirms DuckDB 1.5.6 rejects the 1.1 format with a clear
+version error and leaves the catalog version and snapshot history unchanged.
+Other client versions have not been tested against migrated 1.1 catalogs.
+
 ## DuckLake Protocol
 
 | Feature | Status | Version | Notes |
