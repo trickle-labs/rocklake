@@ -59,6 +59,7 @@ proptest! {
             schema_uuid: None,
             path: None,
             path_is_relative: None,
+            parent_schema_id: None,
         };
         let encoded = encode_value(&row);
         let decoded: SchemaRow = decode_value(&encoded).unwrap();

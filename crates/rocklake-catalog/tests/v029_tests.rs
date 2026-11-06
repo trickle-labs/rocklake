@@ -364,3 +364,91 @@ async fn checkpoint_restore_noop_no_extra_counter_advance() {
 
     db.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn nested_schema_parentage_survives_export_and_drop_cascade() {
+    let src = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&src)).await.unwrap();
+    let mut writer = store.begin_write();
+    let sales_id = writer
+        .create_schema_with_metadata(
+            "sales",
+            Some("550e8400-e29b-41d4-a716-446655440000"),
+            Some("sales/"),
+            Some(true),
+            None,
+        )
+        .await
+        .unwrap();
+    let europe_id = writer
+        .create_schema_with_metadata(
+            "europe",
+            Some("550e8400-e29b-41d4-a716-446655440001"),
+            Some("sales/europe/"),
+            Some(true),
+            Some(sales_id),
+        )
+        .await
+        .unwrap();
+    let france_id = writer
+        .create_schema_with_metadata(
+            "france",
+            Some("550e8400-e29b-41d4-a716-446655440002"),
+            Some("sales/europe/france/"),
+            Some(true),
+            Some(europe_id),
+        )
+        .await
+        .unwrap();
+    let snapshot = writer.create_snapshot(None, None).await.unwrap();
+    let snapshot_id = snapshot.snapshot_id;
+    store.commit_writer(snapshot);
+    store.close().await.unwrap();
+
+    let db = open_db(&src).await;
+    let mut export_buf = Vec::new();
+    rocklake_catalog::export::export_catalog(&db, None, &mut export_buf)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+
+    let dst = TempDir::new().unwrap();
+    let db = open_db(&dst).await;
+    rocklake_catalog::export::import_catalog(&db, std::io::BufReader::new(export_buf.as_slice()))
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+
+    let mut imported = CatalogStore::open(test_opts(&dst)).await.unwrap();
+    let historical = imported.read_at(snapshot_id).unwrap();
+    let schemas = historical.list_schemas().await.unwrap();
+    assert_eq!(schemas.len(), 3);
+    let europe = schemas
+        .iter()
+        .find(|row| row.schema_id == europe_id)
+        .unwrap();
+    let france = schemas
+        .iter()
+        .find(|row| row.schema_id == france_id)
+        .unwrap();
+    assert_eq!(europe.parent_schema_id, Some(sales_id));
+    assert_eq!(europe.path.as_deref(), Some("sales/europe/"));
+    assert_eq!(
+        europe.schema_uuid.as_deref(),
+        Some("550e8400-e29b-41d4-a716-446655440001")
+    );
+    assert_eq!(france.parent_schema_id, Some(europe_id));
+
+    let mut writer = imported.begin_write();
+    writer.drop_schema(sales_id).await.unwrap();
+    let dropped = writer.create_snapshot(None, None).await.unwrap();
+    imported.commit_writer(dropped);
+    assert!(imported
+        .read_latest()
+        .list_schemas()
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(historical.list_schemas().await.unwrap().len(), 3);
+    imported.close().await.unwrap();
+}

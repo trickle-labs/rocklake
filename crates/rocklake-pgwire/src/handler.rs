@@ -3012,9 +3012,15 @@ fn describe_fields_for_sql_version(
             vec![text_col!(var.as_str())]
         }
         // ── Catalog table schemas — all derived from the shared schema registry ──
-        rocklake_sql::StatementKind::SelectSchemas => {
-            project_described_fields(sql, (*crate::schema_registry::schema_schema()).clone())
-        }
+        rocklake_sql::StatementKind::SelectSchemas => project_described_schema_fields(
+            sql,
+            (*if stable_1_1 {
+                crate::schema_registry::schema_schema_v11()
+            } else {
+                crate::schema_registry::schema_schema()
+            })
+            .clone(),
+        ),
         rocklake_sql::StatementKind::SelectTables => {
             project_described_fields(sql, (*crate::schema_registry::table_schema()).clone())
         }
@@ -3269,6 +3275,25 @@ fn project_described_fields(
 ) -> Vec<pgwire::api::results::FieldInfo> {
     // The legacy metadata handlers return full rows regardless of the projection.
     schema
+}
+
+fn project_described_schema_fields(
+    sql: &str,
+    schema: Vec<pgwire::api::results::FieldInfo>,
+) -> Vec<pgwire::api::results::FieldInfo> {
+    crate::schema_registry::project_schema_columns(sql, &schema)
+        .into_iter()
+        .map(|projection| {
+            let field = &schema[projection.index];
+            pgwire::api::results::FieldInfo::new(
+                projection.name,
+                None,
+                None,
+                field.datatype().clone(),
+                field.format(),
+            )
+        })
+        .collect()
 }
 
 fn project_metadata_file_fields(

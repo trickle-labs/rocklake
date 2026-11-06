@@ -285,6 +285,73 @@ async fn golden_ducklake_schema() {
         cols.first().map(|s| s.as_str()) == Some("schema_id"),
         "first column must be schema_id, got: {cols:?}"
     );
+    assert!(!cols.contains(&"parent_schema_id".to_string()));
+}
+
+#[tokio::test]
+async fn ducklake_v11_nested_schemas_are_persisted_and_projected() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let root_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let root_id = writer.create_schema("sales").await.unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        root_id
+    };
+    drop(store);
+    let store = open_store(&dir).await;
+
+    let insert_sql = format!(
+        "INSERT INTO ducklake_schema (schema_uuid, schema_name, path, path_is_relative, parent_schema_id) VALUES ('550e8400-e29b-41d4-a716-446655440001', 'europe', 'sales/europe/', true, {root_id})"
+    );
+    executor::execute_sql(
+        &insert_sql,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let schemas = store
+        .lock()
+        .await
+        .read_latest()
+        .list_schemas()
+        .await
+        .unwrap();
+    let nested = schemas
+        .iter()
+        .find(|row| row.schema_name == "europe")
+        .unwrap();
+    assert_eq!(nested.parent_schema_id, Some(root_id));
+    assert_eq!(nested.path.as_deref(), Some("sales/europe/"));
+    assert_eq!(
+        nested.schema_uuid.as_deref(),
+        Some("550e8400-e29b-41d4-a716-446655440001")
+    );
+
+    let (cols, count) = inspect(
+        exec(
+            "SELECT schema_name, parent_schema_id, path FROM ducklake_schema",
+            &store,
+        )
+        .await,
+    )
+    .await;
+    assert_cols_eq(
+        &cols,
+        &["schema_name", "parent_schema_id", "path"],
+        "nested schema projection",
+    );
+    assert_eq!(count, 2);
 }
 
 #[tokio::test]

@@ -90,6 +90,7 @@ fn export_manifest(snapshot_id: u64) -> ExportManifest {
                 "schema_uuid",
                 "path",
                 "path_is_relative",
+                "parent_schema_id",
             ],
             "ducklake_table" => &[
                 "table_id",
@@ -585,6 +586,7 @@ pub async fn export_catalog<W: Write>(
                     "schema_uuid": row.schema_uuid,
                     "path": row.path,
                     "path_is_relative": row.path_is_relative,
+                    "parent_schema_id": row.parent_schema_id,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -1768,6 +1770,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     schema_uuid: d["schema_uuid"].as_str().map(|s| s.to_string()),
                     path: d["path"].as_str().map(|s| s.to_string()),
                     path_is_relative: d["path_is_relative"].as_bool(),
+                    parent_schema_id: d["parent_schema_id"].as_u64(),
                 };
                 let key = keys::key_schema(schema_id);
                 put!(key, values::encode_value(&row));
@@ -3053,6 +3056,7 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
         schema_uuid: None,
         path: None,
         path_is_relative: None,
+        parent_schema_id: None,
     };
     batch.put(
         keys::key_schema(schema_id),
