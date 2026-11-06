@@ -1,4 +1,4 @@
-//! Protobuf-encoded row types for all 28 DuckLake v1.0 tables.
+//! Protobuf-encoded row types for DuckLake metadata tables, including v1.1 additions.
 //!
 //! These types use prost derive macros for protobuf encoding/decoding.
 
@@ -286,6 +286,9 @@ pub struct DataFileRow {
     /// v0.24: partial_max upper-bound for zone-map pruning.
     #[prost(string, optional, tag = "17")]
     pub partial_max: Option<String>,
+    /// v1.1: number of Parquet row groups, if known.
+    #[prost(uint64, optional, tag = "18")]
+    pub row_group_count: Option<u64>,
 }
 
 /// Delete file row value.
@@ -328,6 +331,9 @@ pub struct DeleteFileRow {
     /// v1.0: opaque delete-file encryption key material.
     #[prost(string, optional, tag = "14")]
     pub encryption_key: Option<String>,
+    /// v1.1: number of Parquet row groups, if known.
+    #[prost(uint64, optional, tag = "15")]
+    pub row_group_count: Option<u64>,
 }
 
 /// Files scheduled for deletion row value.
@@ -442,6 +448,12 @@ pub struct TableColumnStatsRow {
     /// v0.26: JSON blob for geometry or variant extra stats.
     #[prost(string, optional, tag = "7")]
     pub extra_stats: Option<String>,
+    /// v1.1: whether the stored minimum is an exact value.
+    #[prost(bool, optional, tag = "8")]
+    pub min_is_exact: Option<bool>,
+    /// v1.1: whether the stored maximum is an exact value.
+    #[prost(bool, optional, tag = "9")]
+    pub max_is_exact: Option<bool>,
 }
 
 /// File column stats row value.
@@ -474,6 +486,12 @@ pub struct FileColumnStatsRow {
     /// v0.26: JSON blob for geometry or variant extra stats.
     #[prost(string, optional, tag = "11")]
     pub extra_stats: Option<String>,
+    /// v1.1: whether the stored minimum is an exact value.
+    #[prost(bool, optional, tag = "12")]
+    pub min_is_exact: Option<bool>,
+    /// v1.1: whether the stored maximum is an exact value.
+    #[prost(bool, optional, tag = "13")]
+    pub max_is_exact: Option<bool>,
 }
 
 /// File variant stats row value.
@@ -620,6 +638,23 @@ pub struct ColumnTagRow {
     pub table_id: u64,
     #[prost(uint64, tag = "2")]
     pub column_id: u64,
+    #[prost(string, tag = "3")]
+    pub tag_key: String,
+    #[prost(string, tag = "4")]
+    pub tag_value: String,
+    #[prost(uint64, tag = "5")]
+    pub begin_snapshot: u64,
+    #[prost(uint64, optional, tag = "6")]
+    pub end_snapshot: Option<u64>,
+}
+
+/// View column tag row value (DuckLake 1.1).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct ViewColumnTagRow {
+    #[prost(uint64, tag = "1")]
+    pub view_id: u64,
+    #[prost(string, tag = "2")]
+    pub column_name: String,
     #[prost(string, tag = "3")]
     pub tag_key: String,
     #[prost(string, tag = "4")]

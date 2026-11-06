@@ -149,7 +149,7 @@ pub enum Commands {
     #[command(name = "migrate-from-ducklake", hide = true)]
     MigrateFromDucklake(MigrateFromDucklakeArgs),
 
-    /// Export all 28+ DuckLake catalog tables to NDJSON.
+    /// Export DuckLake catalog tables to NDJSON.
     #[command(name = "export-catalog", hide = true)]
     ExportCatalog(ExportCatalogArgs),
 
@@ -229,7 +229,7 @@ pub enum CatalogSubcommand {
     /// Import catalog from NDJSON.
     Import(ImportArgs),
 
-    /// Export all 28+ DuckLake catalog tables to NDJSON.
+    /// Export DuckLake catalog tables to NDJSON.
     #[command(name = "export-catalog")]
     ExportCatalog(ExportCatalogArgs),
 

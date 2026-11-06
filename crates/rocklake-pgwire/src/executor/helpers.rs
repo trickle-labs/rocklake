@@ -636,6 +636,7 @@ fn make_pg_indexes_schema() -> Arc<Vec<FieldInfo>> {
 pub(super) fn make_pg_catalog_staleness_response<'a>(
     snapshot_id: u64,
     initialized: bool,
+    ducklake_v11: bool,
 ) -> Response<'a> {
     let schema = Arc::new(vec![
         FieldInfo::new("oid".to_string(), None, None, Type::INT8, FieldFormat::Text),
@@ -657,6 +658,7 @@ pub(super) fn make_pg_catalog_staleness_response<'a>(
     let rows = if initialized {
         crate::schema_registry::supported_tables()
             .iter()
+            .filter(|table| ducklake_v11 || **table != "ducklake_view_column_tag")
             .enumerate()
             .map(|(index, table)| {
                 let mut enc = DataRowEncoder::new(schema.clone());
@@ -689,7 +691,7 @@ pub(super) fn make_pg_catalog_staleness_response<'a>(
 ///
 /// The batch is:
 ///   1. `pg_namespace` — `(1, 'public')` and `(2, 'main')`
-///   2. `pg_class` UNION — column metadata for supported DuckLake v1.0 tables
+///   2. `pg_class` UNION — column metadata for relations supported by the catalog version
 ///   3. `pg_enum` — empty
 ///   4. `pg_type` composites — empty
 ///   5. `pg_indexes` — empty
@@ -723,6 +725,9 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
             .and_then(|filter| filter.trim_start().strip_prefix('\''))
             .and_then(|filter| filter.split('\'').next());
         for table in crate::schema_registry::supported_tables() {
+            if !stable_1_1 && *table == "ducklake_view_column_tag" {
+                continue;
+            }
             if !initialized && !bootstrap_relations.contains(*table) {
                 continue;
             }
@@ -783,7 +788,7 @@ mod pg_catalog_tests {
     async fn initialized_duckdb_2_catalog_exposes_registered_columns() {
         let sql = "SELECT relname, type_schema FROM pg_class JOIN pg_namespace ON true";
         let response =
-            make_pg_catalog_scan_responses(sql, true, &std::collections::HashSet::new(), false)
+            make_pg_catalog_scan_responses(sql, true, &std::collections::HashSet::new(), true)
                 .into_iter()
                 .nth(1)
                 .expect("pg_class response");
@@ -800,7 +805,37 @@ mod pg_catalog_tests {
         let expected = crate::schema_registry::supported_tables()
             .iter()
             .map(|table| {
-                crate::schema_registry::fields_for_table_version(table, false)
+                crate::schema_registry::fields_for_table_version(table, true)
+                    .expect("registered metadata schema")
+                    .len()
+            })
+            .sum::<usize>();
+        assert_eq!(count, expected);
+    }
+
+    #[tokio::test]
+    async fn ducklake_1_0_catalog_hides_v11_view_tag_relation() {
+        let sql = "SELECT relname, type_schema FROM pg_class JOIN pg_namespace ON true";
+        let response =
+            make_pg_catalog_scan_responses(sql, true, &std::collections::HashSet::new(), false)
+                .into_iter()
+                .nth(1)
+                .expect("pg_class response");
+        let Response::Query(query) = response else {
+            panic!("expected pg_class Query response");
+        };
+        let stream = query.data_rows();
+        futures::pin_mut!(stream);
+        let mut count = 0;
+        while let Some(row) = stream.next().await {
+            row.expect("valid pg_class metadata row");
+            count += 1;
+        }
+        let expected = crate::schema_registry::supported_tables()
+            .iter()
+            .filter(|table| **table != "ducklake_view_column_tag")
+            .map(|table| {
+                crate::schema_registry::fields_for_table(table)
                     .expect("registered metadata schema")
                     .len()
             })

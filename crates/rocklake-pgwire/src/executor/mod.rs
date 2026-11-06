@@ -41,7 +41,7 @@ use catalog::{
     make_column_tags_response, make_columns_response, make_data_files_stream_response,
     make_data_files_stream_response_from_rows, make_delete_files_stream_response,
     make_extended_data_file_response, make_file_column_stats_stream_response,
-    make_file_ids_response, make_file_variant_stats_response,
+    make_file_ids_response, make_file_partition_values_response, make_file_variant_stats_response,
     make_files_scheduled_for_deletion_response, make_global_table_stats_response,
     make_inlined_data_tables_response, make_inlined_rows_response,
     make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
@@ -51,7 +51,8 @@ use catalog::{
     make_schemas_response, make_snapshot_changes_response, make_snapshot_row_response,
     make_snapshot_stats_changes_response, make_sort_expressions_response, make_sort_info_response,
     make_table_column_stats_response, make_table_stats_rows_response_for_sql, make_tables_response,
-    make_tags_response, make_views_response, parse_inlined_table_ids,
+    make_tags_response, make_view_column_tags_response, make_views_response,
+    parse_inlined_table_ids,
 };
 use extension::{
     execute_create_extension_table, execute_delete_extension_rows, execute_insert_extension_row,
@@ -448,8 +449,9 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_multi_statement_batch,
-        resolve_comparison_u64,
+        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_insert_rows_map,
+        parse_multi_statement_batch, resolve_comparison_u64, row_map_bool, row_map_optional_bool,
+        row_map_string, row_map_u64,
     };
     use rocklake_sql::ParamValues;
 
@@ -494,6 +496,118 @@ mod tests {
             .expect("two SQL statements");
         assert_eq!(statements.len(), 2);
         assert!(statements[0].contains("delete; ducklake"));
+    }
+
+    #[test]
+    fn maps_positional_ducklake_view_rows_by_catalog_column_order() {
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_view VALUES (9, '739b25e2-02e0-43e7-9bd0-0d31db9866e8', 11, NULL, 3, 'event_view', 'duckdb', 'SELECT 1', 'event_id')",
+            &ParamValues::default(),
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&rows[0], "schema_id"), Some(3));
+        assert_eq!(
+            row_map_string(&rows[0], "view_name").as_deref(),
+            Some("event_view")
+        );
+        assert_eq!(
+            row_map_string(&rows[0], "view_uuid").as_deref(),
+            Some("739b25e2-02e0-43e7-9bd0-0d31db9866e8")
+        );
+        assert_eq!(row_map_string(&rows[0], "sql").as_deref(), Some("SELECT 1"));
+    }
+
+    #[test]
+    fn parses_ducklake_v11_exactness_fields_by_name() {
+        let params = ParamValues::default();
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_file_column_stats (data_file_id, table_id, column_id, min_is_exact, max_is_exact) VALUES (3, 1, 2, false, true)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(row_map_bool(&rows[0], "min_is_exact"), Some(false));
+        assert_eq!(row_map_bool(&rows[0], "max_is_exact"), Some(true));
+
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_table_column_stats (table_id, column_id, min_is_exact, max_is_exact) VALUES (1, 2, true, NULL)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(
+            row_map_optional_bool(&rows[0], "min_is_exact"),
+            Some(Some(true))
+        );
+        assert_eq!(row_map_optional_bool(&rows[0], "max_is_exact"), Some(None));
+    }
+
+    #[test]
+    fn parses_schema_qualified_positional_statistics_rows() {
+        let params = ParamValues::default();
+        let table_rows = parse_insert_rows_map(
+            "INSERT INTO \"public\".ducklake_table_column_stats VALUES (1, 2, false, NULL, '1', '12', NULL), (1, 3, false, NULL, 'a', 'z', NULL)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&table_rows[0], "column_id"), Some(2));
+        assert_eq!(row_map_u64(&table_rows[1], "column_id"), Some(3));
+
+        let file_rows = parse_insert_rows_map(
+            "INSERT INTO \"public\".ducklake_file_column_stats VALUES (4, 1, 2, 8, 12, 0, '1', '12', false, NULL), (4, 1, 3, 8, 12, 0, 'a', 'z', false, NULL)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&file_rows[0], "column_id"), Some(2));
+        assert_eq!(row_map_u64(&file_rows[1], "column_id"), Some(3));
+
+        let table_rows = parse_insert_rows_map(
+            "INSERT INTO \"public\".ducklake_table_column_stats VALUES (1, 2, false, NULL, '1', '12', NULL, true, false)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(
+            row_map_optional_bool(&table_rows[0], "min_is_exact"),
+            Some(Some(true))
+        );
+
+        let file_rows = parse_insert_rows_map(
+            "INSERT INTO \"public\".ducklake_file_column_stats VALUES (4, 1, 2, 8, 12, 0, '1', '12', false, NULL, true, false)",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(row_map_bool(&file_rows[0], "min_is_exact"), Some(true));
+    }
+
+    #[test]
+    fn parses_positional_ducklake_partition_columns() {
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_partition_column VALUES (4, 3, 0, 1, 'epoch_day')",
+            &ParamValues::default(),
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&rows[0], "partition_id"), Some(4));
+        assert_eq!(row_map_u64(&rows[0], "table_id"), Some(3));
+        assert_eq!(row_map_u64(&rows[0], "partition_key_index"), Some(0));
+        assert_eq!(row_map_u64(&rows[0], "column_id"), Some(1));
+        assert_eq!(
+            row_map_string(&rows[0], "transform").as_deref(),
+            Some("epoch_day")
+        );
+    }
+
+    #[test]
+    fn parses_positional_ducklake_file_partition_values() {
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_file_partition_value VALUES (7, 3, 0, '-1')",
+            &ParamValues::default(),
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&rows[0], "data_file_id"), Some(7));
+        assert_eq!(row_map_u64(&rows[0], "table_id"), Some(3));
+        assert_eq!(row_map_u64(&rows[0], "partition_key_index"), Some(0));
+        assert_eq!(
+            row_map_string(&rows[0], "partition_value").as_deref(),
+            Some("-1")
+        );
     }
 }
 
@@ -591,6 +705,162 @@ fn resolve_expr(expr: &sqlparser::ast::Expr, params: &ParamValues) -> Option<Str
     }
 }
 
+fn update_table_column_stats(
+    sql: &str,
+    params: &ParamValues,
+    has_exactness_fields: bool,
+) -> Result<BufferedOp, RockLakeError> {
+    let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql)
+        .map_err(|error| RockLakeError::Unsupported(error.to_string()))?;
+    let Some(Statement::Update {
+        selection: Some(selection),
+        assignments,
+        ..
+    }) = statements.first()
+    else {
+        return Err(RockLakeError::Unsupported(
+            "DuckLake table-column stats updates require a row filter".into(),
+        ));
+    };
+
+    fn column_name(expr: &Expr) -> Option<String> {
+        let name = expr.to_string();
+        Some(
+            name.rsplit('.')
+                .next()?
+                .trim_matches('"')
+                .to_ascii_lowercase(),
+        )
+    }
+
+    fn collect_id_filters(
+        expr: &Expr,
+        params: &ParamValues,
+        filters: &mut std::collections::HashMap<String, u64>,
+    ) -> bool {
+        match expr {
+            Expr::Nested(expr) => collect_id_filters(expr, params, filters),
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::And,
+                right,
+            } => {
+                collect_id_filters(left, params, filters)
+                    && collect_id_filters(right, params, filters)
+            }
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Eq,
+                right,
+            } => {
+                let (column, value) = if column_name(left).as_deref() == Some("table_id") {
+                    ("table_id", resolve_expr(right, params))
+                } else if column_name(right).as_deref() == Some("table_id") {
+                    ("table_id", resolve_expr(left, params))
+                } else if column_name(left).as_deref() == Some("column_id") {
+                    ("column_id", resolve_expr(right, params))
+                } else if column_name(right).as_deref() == Some("column_id") {
+                    ("column_id", resolve_expr(left, params))
+                } else {
+                    return false;
+                };
+                let Some(value) = value.and_then(|value| value.parse::<u64>().ok()) else {
+                    return false;
+                };
+                filters.insert(column.to_string(), value).is_none()
+            }
+            _ => false,
+        }
+    }
+
+    let mut filters = std::collections::HashMap::new();
+    if !collect_id_filters(selection, params, &mut filters) || filters.len() != 2 {
+        return Err(RockLakeError::Unsupported(
+            "DuckLake table-column stats updates must filter one table_id and column_id".into(),
+        ));
+    }
+    let mut values = std::collections::HashMap::new();
+    for assignment in assignments {
+        let column = assignment
+            .target
+            .to_string()
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_ascii_lowercase();
+        if !matches!(
+            column.as_str(),
+            "contains_null"
+                | "contains_nan"
+                | "min_value"
+                | "max_value"
+                | "extra_stats"
+                | "min_is_exact"
+                | "max_is_exact"
+        ) || values
+            .insert(column, resolve_expr(&assignment.value, params))
+            .is_some()
+        {
+            return Err(RockLakeError::Unsupported(
+                "unsupported DuckLake table-column stats update".into(),
+            ));
+        }
+    }
+    if values.len() != if has_exactness_fields { 7 } else { 5 } {
+        return Err(RockLakeError::Unsupported(
+            "DuckLake table-column stats updates must set all stats fields".into(),
+        ));
+    }
+
+    let required = |column: &str| {
+        values
+            .get(column)
+            .cloned()
+            .ok_or_else(|| RockLakeError::MissingParam {
+                name: column.to_string(),
+            })
+    };
+    let parse_bool = |column: &str, value: Option<String>| {
+        let Some(value) = value else {
+            return Err(RockLakeError::ValueDecode(format!(
+                "{column} cannot be NULL"
+            )));
+        };
+        match value.to_ascii_lowercase().as_str() {
+            "true" | "t" | "1" => Ok(true),
+            "false" | "f" | "0" => Ok(false),
+            _ => Err(RockLakeError::ValueDecode(format!(
+                "invalid boolean for {column}"
+            ))),
+        }
+    };
+    let parse_nullable_bool = |column: &str, value: Option<String>| {
+        value
+            .map(|value| parse_bool(column, Some(value)))
+            .transpose()
+    };
+    Ok(BufferedOp::SetTableColumnStats {
+        table_id: filters["table_id"],
+        column_id: filters["column_id"],
+        contains_null: parse_bool("contains_null", required("contains_null")?)?,
+        contains_nan: parse_nullable_bool("contains_nan", required("contains_nan")?)?,
+        min_value: required("min_value")?,
+        max_value: required("max_value")?,
+        extra_stats: required("extra_stats")?,
+        min_is_exact: if has_exactness_fields {
+            parse_nullable_bool("min_is_exact", required("min_is_exact")?)?
+        } else {
+            None
+        },
+        max_is_exact: if has_exactness_fields {
+            parse_nullable_bool("max_is_exact", required("max_is_exact")?)?
+        } else {
+            None
+        },
+    })
+}
+
 fn parse_insert_rows_map(
     sql: &str,
     params: &ParamValues,
@@ -615,10 +885,52 @@ fn parse_insert_rows_map(
         .collect();
 
     if cols.is_empty() {
-        if table_name_normalized == "ducklake_delete_file"
+        if table_name_normalized == "ducklake_data_file"
+            && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 16)))
+        {
+            cols = crate::schema_registry::data_file_schema().iter()
+                .map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_data_file"
+            && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 17)))
+        {
+            cols = crate::schema_registry::data_file_schema_v11().iter()
+                .map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_delete_file"
             && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 13)))
         {
             cols = crate::schema_registry::delete_file_schema().iter()
+                .map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_view"
+            && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 9)))
+        {
+            cols = crate::schema_registry::view_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
+        } else if table_name_normalized == "ducklake_table_column_stats" {
+            let v11 = insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.first().is_some_and(|row| row.len() == 9))
+            });
+            let schema = if v11 {
+                crate::schema_registry::table_column_stats_schema_v11()
+            } else {
+                crate::schema_registry::table_column_stats_schema()
+            };
+            cols = schema.iter().map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_file_column_stats" {
+            let v11 = insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.first().is_some_and(|row| row.len() == 12))
+            });
+            let schema = if v11 {
+                crate::schema_registry::file_column_stats_schema_v11()
+            } else {
+                crate::schema_registry::file_column_stats_schema()
+            };
+            cols = schema.iter().map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_delete_file"
+            && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 14)))
+        {
+            cols = crate::schema_registry::delete_file_schema_v11().iter()
                 .map(|field| field.name().to_string()).collect();
         } else if table_name_normalized == "ducklake_column_mapping" {
             cols = vec!["table_id".to_string(), "mapping_type".to_string()];
@@ -631,6 +943,24 @@ fn parse_insert_rows_map(
                 "begin_snapshot".to_string(),
                 "end_snapshot".to_string(),
             ];
+        } else if table_name_normalized == "ducklake_partition_column"
+            && insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 5))
+            })
+        {
+            cols = crate::schema_registry::partition_column_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
+        } else if table_name_normalized == "ducklake_file_partition_value"
+            && insert.source.as_ref().is_some_and(|source| {
+                matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 4))
+            })
+        {
+            cols = crate::schema_registry::file_partition_value_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
         } else if table_name_normalized == "ducklake_sort_info" {
             cols = vec![
                 "sort_id".to_string(),
@@ -734,6 +1064,21 @@ pub(super) fn row_map_bool(
     key: &str,
 ) -> Option<bool> {
     row.get(key).and_then(|value| {
+        value
+            .as_ref()
+            .and_then(|text| match text.to_ascii_lowercase().as_str() {
+                "true" | "t" | "1" => Some(true),
+                "false" | "f" | "0" => Some(false),
+                _ => None,
+            })
+    })
+}
+
+fn row_map_optional_bool(
+    row: &std::collections::HashMap<String, Option<String>>,
+    key: &str,
+) -> Option<Option<bool>> {
+    row.get(key).map(|value| {
         value
             .as_ref()
             .and_then(|text| match text.to_ascii_lowercase().as_str() {
@@ -987,6 +1332,65 @@ fn resolve_comparison_u64(sql: &str, column: &str, params: &ParamValues) -> Opti
     literal_comparison_u64(sql, column)
 }
 
+fn resolve_comparison_string(sql: &str, column: &str, params: &ParamValues) -> Option<String> {
+    let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql).ok()?;
+    let selection = match statements.first()? {
+        Statement::Update {
+            selection: Some(selection),
+            ..
+        } => selection,
+        Statement::Delete(delete) => delete.selection.as_ref()?,
+        _ => return None,
+    };
+    let mut value = None;
+    let _: std::ops::ControlFlow<()> = visit_expressions(selection, |expr| {
+        if let Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } = expr
+        {
+            if expression_matches_column(left, column) {
+                value = resolve_expr(right, params);
+            } else if expression_matches_column(right, column) {
+                value = resolve_expr(left, params);
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    value
+}
+
+fn expression_matches_column(expr: &Expr, column: &str) -> bool {
+    match expr {
+        Expr::Identifier(id) => id.value.eq_ignore_ascii_case(column),
+        Expr::CompoundIdentifier(parts) => parts
+            .last()
+            .is_some_and(|id| id.value.eq_ignore_ascii_case(column)),
+        Expr::Nested(expr) => expression_matches_column(expr, column),
+        _ => false,
+    }
+}
+
+fn updates_column(sql: &str, column: &str) -> bool {
+    let Ok(statements) = Parser::parse_sql(&PostgreSqlDialect {}, sql) else {
+        return false;
+    };
+    let Some(Statement::Update { assignments, .. }) = statements.first() else {
+        return false;
+    };
+    assignments.iter().any(|assignment| {
+        assignment
+            .target
+            .to_string()
+            .split('.')
+            .next_back()
+            .unwrap_or_default()
+            .trim_matches('"')
+            .eq_ignore_ascii_case(column)
+    })
+}
+
 #[derive(Clone, Copy)]
 enum InlinedRowSelection {
     All,
@@ -1174,9 +1578,15 @@ async fn execute_classified<'a>(
                     .await
                     .map_err(RockLakeError::from)?
                     .is_some();
+                let ducklake_v11 = reader
+                    .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+                    .await
+                    .map_err(RockLakeError::from)?
+                    .is_some_and(|row| row.value == "1.1" || row.value == "1.1-dev1");
                 return Ok(vec![make_pg_catalog_staleness_response(
                     snapshot_id,
                     initialized,
+                    ducklake_v11,
                 )]);
             }
             if let Some(table_name) = inlined_table_name_from_sql(_sql) {
@@ -1322,7 +1732,9 @@ async fn execute_classified<'a>(
             }
         }
         StatementKind::SelectLatestSnapshotInfo => {
-            let reader = { store.lock().await.read_latest() };
+            let snapshot_id =
+                resolve_comparison_u64(_sql, "snapshot_id", params).unwrap_or(u64::MAX);
+            let reader = resolve_reader(store, session, snapshot_id).await?;
             let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
             Ok(vec![make_latest_snapshot_info_response(snap)])
         }
@@ -1432,6 +1844,7 @@ async fn execute_classified<'a>(
             Ok(vec![make_extended_data_file_response(files, deletes)])
         }
         StatementKind::SelectDataFiles => {
+            let stable_1_1 = stable_ducklake_v11(store).await?;
             let table_id = resolve_comparison_u64(_sql, "table_id", params);
             let snap_id =
                 resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
@@ -1464,7 +1877,8 @@ async fn execute_classified<'a>(
 
             if let Some(table_id) = table_id {
                 return Ok(vec![
-                    make_data_files_stream_response(reader, table_id, None).await?,
+                    make_data_files_stream_response(reader, table_id, None, _sql, stable_1_1)
+                        .await?,
                 ]);
             } else {
                 let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
@@ -1488,10 +1902,13 @@ async fn execute_classified<'a>(
                     snapshot_id,
                     files,
                     None,
+                    _sql,
+                    stable_1_1,
                 )])
             }
         }
         StatementKind::SelectFileColumnStats => {
+            let stable_1_1 = stable_ducklake_v11(store).await?;
             let table_id = params
                 .get_u64(0)
                 .ok()
@@ -1503,6 +1920,7 @@ async fn execute_classified<'a>(
             let (Some(table_id), Some(column_id)) = (table_id, column_id) else {
                 return Ok(vec![make_metadata_table_empty_response(
                     "ducklake_file_column_stats",
+                    stable_1_1,
                 )]);
             };
             let snap_id = params.get_u64(2).unwrap_or(u64::MAX);
@@ -1516,6 +1934,7 @@ async fn execute_classified<'a>(
                 return Ok(vec![make_file_column_stats_stream_response(
                     reader.snapshot_id().as_u64(),
                     _sql,
+                    stable_1_1,
                     rows,
                 )]);
             }
@@ -1545,6 +1964,7 @@ async fn execute_classified<'a>(
                 .to_ascii_lowercase()
                 .contains("ducklake_table_column_stats")
             {
+                let stable_1_1 = stable_ducklake_v11(store).await?;
                 let table_id = table_id.or_else(|| literal_assignment_u64(_sql, "table_id"));
                 let stats_rows = if let Some(table_id) = table_id {
                     reader
@@ -1569,6 +1989,7 @@ async fn execute_classified<'a>(
                 return Ok(vec![make_global_table_stats_response(
                     stats_rows,
                     column_stats,
+                    stable_1_1,
                 )]);
             }
             if let Some(table_id) = table_id {
@@ -1589,14 +2010,16 @@ async fn execute_classified<'a>(
             }
         }
         StatementKind::SelectTableColumnStats => {
+            let stable_1_1 = stable_ducklake_v11(store).await?;
             let reader = { store.lock().await.read_latest() };
             let rows = reader
                 .list_all_table_column_stats()
                 .await
                 .map_err(RockLakeError::from)?;
-            Ok(vec![make_table_column_stats_response(rows)])
+            Ok(vec![make_table_column_stats_response(rows, stable_1_1)])
         }
         StatementKind::SelectDeleteFiles => {
+            let stable_1_1 = stable_ducklake_v11(store).await?;
             // Do not return other tables' delete files for a literal filter.
             // Incorrect cross-table deletion counts can produce a negative net
             // row count, which DuckDB 2.0 rejects as an unsigned value.
@@ -1612,6 +2035,8 @@ async fn execute_classified<'a>(
                 return Ok(vec![make_delete_files_stream_response(
                     reader.snapshot_id().as_u64(),
                     files,
+                    _sql,
+                    stable_1_1,
                 )]);
             }
             let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
@@ -1631,7 +2056,12 @@ async fn execute_classified<'a>(
                 async move { reader.stream_delete_files(table_id).await }
             });
             let files = streams.try_flatten().boxed();
-            Ok(vec![make_delete_files_stream_response(snapshot_id, files)])
+            Ok(vec![make_delete_files_stream_response(
+                snapshot_id,
+                files,
+                _sql,
+                stable_1_1,
+            )])
         }
         StatementKind::SelectSnapshot => {
             let snap_id = params.get_u64(0).ok();
@@ -1771,6 +2201,27 @@ async fn execute_classified<'a>(
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_view_column_tag" =>
+        {
+            let reader = { store.lock().await.read_latest() };
+            let version = reader
+                .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+                .await
+                .map_err(RockLakeError::from)?
+                .map(|row| row.value);
+            if !matches!(version.as_deref(), Some("1.1" | "1.1-dev1")) {
+                return Err(RockLakeError::Unsupported(
+                    "ducklake_view_column_tag requires DuckLake format version 1.1".into(),
+                ));
+            }
+            let rows = reader
+                .list_all_view_column_tags()
+                .await
+                .map_err(RockLakeError::from)?;
+            Ok(vec![make_view_column_tags_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
             if table_name == "ducklake_file_variant_stats" =>
         {
             let _reader = { store.lock().await.read_latest() };
@@ -1850,6 +2301,18 @@ async fn execute_classified<'a>(
                     .map_err(RockLakeError::from)?
             };
             Ok(vec![make_partition_columns_response(rows)])
+        }
+
+        StatementKind::SelectDuckLakeMetadataTable { ref table_name }
+            if table_name == "ducklake_file_partition_value" =>
+        {
+            let table_id = resolve_comparison_u64(_sql, "table_id", params);
+            let reader = { store.lock().await.read_latest() };
+            let rows = reader
+                .list_file_partition_values(table_id)
+                .await
+                .map_err(RockLakeError::from)?;
+            Ok(vec![make_file_partition_values_response(_sql, rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
@@ -1943,7 +2406,10 @@ async fn execute_classified<'a>(
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name } => {
-            Ok(vec![make_metadata_table_empty_response(table_name)])
+            Ok(vec![make_metadata_table_empty_response(
+                table_name,
+                stable_ducklake_v11(store).await?,
+            )])
         }
 
         StatementKind::SelectInlinedData => {
@@ -2026,7 +2492,14 @@ async fn execute_classified<'a>(
             let reader = resolve_reader(store, session, snap_id).await?;
             let limit = usize::try_from(limit).unwrap_or(usize::MAX);
             Ok(vec![
-                make_data_files_stream_response(reader, table_id, Some(limit)).await?,
+                make_data_files_stream_response(
+                    reader,
+                    table_id,
+                    Some(limit),
+                    _sql,
+                    stable_ducklake_v11(store).await?,
+                )
+                .await?,
             ])
         }
         StatementKind::SelectGenRandomUuid => {
@@ -2419,6 +2892,7 @@ async fn execute_classified<'a>(
                             partition_id: row_map_u64(&row, "partition_id"),
                             mapping_id: row_map_u64(&row, "mapping_id"),
                             partial_max: row_map_string(&row, "partial_max"),
+                            row_group_count: row_map_u64(&row, "row_group_count"),
                         })
                     })
                     .collect::<Result<Vec<_>, RockLakeError>>()?;
@@ -2477,6 +2951,7 @@ async fn execute_classified<'a>(
                 partition_id: None,
                 mapping_id: None,
                 partial_max: None,
+                row_group_count: None,
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -2506,6 +2981,7 @@ async fn execute_classified<'a>(
                             footer_size: optional_row_i64_value(&row, "footer_size")?,
                             partial_max: row_map_string(&row, "partial_max"),
                             encryption_key: row_map_string(&row, "encryption_key"),
+                            row_group_count: row_map_u64(&row, "row_group_count"),
                         })
                     })
                     .collect::<Result<Vec<_>, RockLakeError>>()?;
@@ -2553,6 +3029,7 @@ async fn execute_classified<'a>(
                 footer_size: None,
                 partial_max: None,
                 encryption_key: None,
+                row_group_count: None,
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -2608,7 +3085,28 @@ async fn execute_classified<'a>(
         StatementKind::InsertFileColumnStats => {
             let parameterized = _sql.contains('$');
             let mut ops = Vec::new();
-            if parameterized {
+            if let Some(rows) = parse_insert_rows_map(_sql, params)
+                .filter(|rows| rows.iter().any(|row| !row.is_empty()))
+            {
+                for row in rows {
+                    let null_count = row_map_u64(&row, "null_count");
+                    ops.push(BufferedOp::InsertFileColumnStats {
+                        data_file_id: required_row_u64_value(&row, &["data_file_id"])?,
+                        table_id: required_row_u64_value(&row, &["table_id"])?,
+                        column_id: required_row_u64_value(&row, &["column_id"])?,
+                        contains_null: null_count.is_some_and(|count| count > 0),
+                        column_size_bytes: row_map_u64(&row, "column_size_bytes"),
+                        value_count: row_map_u64(&row, "value_count"),
+                        null_count,
+                        min_value: row_map_string(&row, "min_value"),
+                        max_value: row_map_string(&row, "max_value"),
+                        contains_nan: row_map_bool(&row, "contains_nan").unwrap_or(false),
+                        extra_stats: row_map_string(&row, "extra_stats"),
+                        min_is_exact: row_map_bool(&row, "min_is_exact"),
+                        max_is_exact: row_map_bool(&row, "max_is_exact"),
+                    });
+                }
+            } else if parameterized {
                 let null_count = required_param_u64(params, 5, "null_count")?;
                 ops.push(BufferedOp::InsertFileColumnStats {
                     data_file_id: required_param_u64(params, 0, "data_file_id")?,
@@ -2625,6 +3123,12 @@ async fn execute_classified<'a>(
                         .map(|value| matches!(value, "t" | "true" | "1" | "TRUE"))
                         .unwrap_or(false),
                     extra_stats: params.get_optional_string(9),
+                    min_is_exact: params
+                        .get(10)
+                        .map(|value| matches!(value, "t" | "true" | "1" | "TRUE")),
+                    max_is_exact: params
+                        .get(11)
+                        .map(|value| matches!(value, "t" | "true" | "1" | "TRUE")),
                 });
             } else {
                 for literals in literal_insert_rows(_sql) {
@@ -2664,6 +3168,8 @@ async fn execute_classified<'a>(
                         max_value: literal_string(&literals, 7),
                         contains_nan: literal_bool(&literals, 8).unwrap_or(false),
                         extra_stats: literal_string(&literals, 9),
+                        min_is_exact: literal_bool(&literals, 10),
+                        max_is_exact: literal_bool(&literals, 11),
                     });
                 }
             }
@@ -2683,7 +3189,23 @@ async fn execute_classified<'a>(
             let literal_rows = literal_insert_rows(_sql);
             let parameterized = _sql.contains('$');
             let mut ops = Vec::new();
-            if parameterized || literal_rows.is_empty() {
+            if let Some(rows) = parse_insert_rows_map(_sql, params)
+                .filter(|rows| rows.iter().any(|row| !row.is_empty()))
+            {
+                for row in rows {
+                    ops.push(BufferedOp::InsertTableColumnStats {
+                        table_id: required_row_u64_value(&row, &["table_id"])?,
+                        column_id: required_row_u64_value(&row, &["column_id"])?,
+                        contains_null: row_map_bool(&row, "contains_null").unwrap_or(false),
+                        contains_nan: row_map_bool(&row, "contains_nan"),
+                        min_value: row_map_string(&row, "min_value"),
+                        max_value: row_map_string(&row, "max_value"),
+                        extra_stats: row_map_string(&row, "extra_stats"),
+                        min_is_exact: row_map_optional_bool(&row, "min_is_exact"),
+                        max_is_exact: row_map_optional_bool(&row, "max_is_exact"),
+                    });
+                }
+            } else if parameterized || literal_rows.is_empty() {
                 let literals = literal_rows.into_iter().next().unwrap_or_default();
                 ops.push(BufferedOp::InsertTableColumnStats {
                     table_id: if parameterized {
@@ -2721,6 +3243,12 @@ async fn execute_classified<'a>(
                     extra_stats: params
                         .get_optional_string(6)
                         .or_else(|| literal_string(&literals, 6)),
+                    min_is_exact: params
+                        .get(7)
+                        .map(|value| Some(matches!(value, "t" | "true" | "1" | "TRUE"))),
+                    max_is_exact: params
+                        .get(8)
+                        .map(|value| Some(matches!(value, "t" | "true" | "1" | "TRUE"))),
                 });
             } else {
                 for literals in literal_rows {
@@ -2732,6 +3260,8 @@ async fn execute_classified<'a>(
                         min_value: literal_string(&literals, 4),
                         max_value: literal_string(&literals, 5),
                         extra_stats: literal_string(&literals, 6),
+                        min_is_exact: literal_bool(&literals, 7).map(Some),
+                        max_is_exact: literal_bool(&literals, 8).map(Some),
                     });
                 }
             }
@@ -2748,29 +3278,13 @@ async fn execute_classified<'a>(
             )))])
         }
         StatementKind::UpdateTableColumnStats => {
-            let ops: Vec<BufferedOp> = literal_insert_rows(_sql)
-                .into_iter()
-                .map(|literals| BufferedOp::InsertTableColumnStats {
-                    table_id: literal_u64(&literals, 0).unwrap_or(0),
-                    column_id: literal_u64(&literals, 1).unwrap_or(0),
-                    contains_null: literal_bool(&literals, 2).unwrap_or(false),
-                    contains_nan: literal_bool(&literals, 3),
-                    min_value: literal_string(&literals, 4),
-                    max_value: literal_string(&literals, 5),
-                    extra_stats: literal_string(&literals, 6),
-                })
-                .collect();
-            let row_count = ops.len();
+            let op = update_table_column_stats(_sql, params, stable_ducklake_v11(store).await?)?;
             if session.in_transaction {
-                for op in ops {
-                    session.pending_txn.push(op)?;
-                }
+                session.pending_txn.push(op)?;
             } else {
-                execute_commit(ops, store, notify_manager).await?;
+                execute_commit(vec![op], store, notify_manager).await?;
             }
-            Ok(vec![Response::Execution(Tag::new(&format!(
-                "UPDATE {row_count}"
-            )))])
+            Ok(vec![Response::Execution(Tag::new("UPDATE 1"))])
         }
         StatementKind::InsertMetadata => {
             let parameterized = _sql.contains('$');
@@ -2911,35 +3425,49 @@ async fn execute_classified<'a>(
             )))])
         }
         StatementKind::InsertView => {
-            let parameterized = _sql.contains('$');
-            let literals = literal_insert_values(_sql);
-            let op = BufferedOp::InsertView {
-                schema_id: if parameterized {
-                    required_param_u64(params, 0, "schema_id")?
-                } else {
-                    literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
-                        name: "schema_id".into(),
-                    })?
-                },
-                view_name: if parameterized {
-                    required_param_string(params, 1, "view_name")?
-                } else {
-                    literal_string(&literals, 1)
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| RockLakeError::MissingParam {
-                            name: "view_name".into(),
+            let op = if let Some(rows) = parse_insert_rows_map(_sql, params) {
+                let row = rows.first().ok_or_else(|| RockLakeError::MissingParam {
+                    name: "view_name".into(),
+                })?;
+                BufferedOp::InsertView {
+                    schema_id: required_row_u64_value(row, &["schema_id"])?,
+                    view_name: required_row_string_value(row, &["view_name"])?,
+                    sql: required_row_string_value(row, &["sql"])?,
+                    view_uuid: row_map_string(row, "view_uuid"),
+                    dialect: row_map_string(row, "dialect"),
+                    column_aliases: row_map_string(row, "column_aliases"),
+                }
+            } else {
+                let parameterized = _sql.contains('$');
+                let literals = literal_insert_values(_sql);
+                BufferedOp::InsertView {
+                    schema_id: if parameterized {
+                        required_param_u64(params, 0, "schema_id")?
+                    } else {
+                        literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "schema_id".into(),
                         })?
-                },
-                sql: if parameterized {
-                    required_param_string(params, 2, "sql")?
-                } else {
-                    literal_string(&literals, 2)
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| RockLakeError::MissingParam { name: "sql".into() })?
-                },
-                view_uuid: params.get_optional_string(3),
-                dialect: params.get_optional_string(4),
-                column_aliases: params.get_optional_string(5),
+                    },
+                    view_name: if parameterized {
+                        required_param_string(params, 1, "view_name")?
+                    } else {
+                        literal_string(&literals, 1)
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| RockLakeError::MissingParam {
+                                name: "view_name".into(),
+                            })?
+                    },
+                    sql: if parameterized {
+                        required_param_string(params, 2, "sql")?
+                    } else {
+                        literal_string(&literals, 2)
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| RockLakeError::MissingParam { name: "sql".into() })?
+                    },
+                    view_uuid: params.get_optional_string(3),
+                    dialect: params.get_optional_string(4),
+                    column_aliases: params.get_optional_string(5),
+                }
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -3069,6 +3597,43 @@ async fn execute_classified<'a>(
         }
 
         StatementKind::UpdateEndSnapshot(ref table_name) => {
+            if table_name == "ducklake_view_column_tag" {
+                if !updates_column(_sql, "end_snapshot") {
+                    let lower = _sql.to_ascii_lowercase();
+                    if lower.starts_with("with overwritten_tags")
+                        && lower.contains("update")
+                        && lower.contains("ducklake_view_column_tag")
+                        && lower.contains("set end_snapshot")
+                        && lower.contains("from overwritten_tags")
+                    {
+                        // DuckDB's replacement INSERT retires the matching live tag itself.
+                        return Ok(vec![Response::Execution(Tag::new("UPDATE 0"))]);
+                    }
+                    return Err(RockLakeError::Unsupported(
+                        "only end_snapshot updates are supported for ducklake_view_column_tag"
+                            .into(),
+                    ));
+                }
+                let op = BufferedOp::EndViewColumnTag {
+                    view_id: resolve_comparison_u64(_sql, "view_id", params).ok_or_else(|| {
+                        RockLakeError::MissingParam {
+                            name: "view_id".into(),
+                        }
+                    })?,
+                    column_name: resolve_comparison_string(_sql, "column_name", params)
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "column_name".into(),
+                        })?,
+                    tag_key: resolve_comparison_string(_sql, "key", params)
+                        .ok_or_else(|| RockLakeError::MissingParam { name: "key".into() })?,
+                    begin_snapshot: resolve_comparison_u64(_sql, "begin_snapshot", params)
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "begin_snapshot".into(),
+                        })?,
+                };
+                submit_ops(vec![op], session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new("UPDATE 1"))]);
+            }
             let mut entity_id = params.get_u64(1).unwrap_or(0);
             let begin_snapshot = params.get_u64(2).unwrap_or(0);
             let mut end_snapshot = params.get_u64(0).unwrap_or(0);
@@ -3215,7 +3780,9 @@ async fn execute_classified<'a>(
                     | "ducklake_sort_info"
                     | "ducklake_files_scheduled_for_deletion"
                     | "ducklake_partition_column"
+                    | "ducklake_file_partition_value"
                     | "ducklake_sort_expression"
+                    | "ducklake_view_column_tag"
             ) {
                 let rows = parse_insert_rows_map(_sql, params).ok_or_else(|| {
                     RockLakeError::Unsupported("could not parse DuckLake metadata insert".into())
@@ -3316,6 +3883,27 @@ async fn execute_classified<'a>(
         // DELETE FROM "public".ducklake_data_file WHERE data_file_id IN (...) or similar
         // Issued by DuckLake CHECKPOINT for garbage collection of old data files.
         StatementKind::DeleteDuckLakeCatalogRows { ref table_name } => {
+            if table_name == "ducklake_view_column_tag" {
+                let op = BufferedOp::EndViewColumnTag {
+                    view_id: resolve_comparison_u64(_sql, "view_id", params).ok_or_else(|| {
+                        RockLakeError::MissingParam {
+                            name: "view_id".into(),
+                        }
+                    })?,
+                    column_name: resolve_comparison_string(_sql, "column_name", params)
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "column_name".into(),
+                        })?,
+                    tag_key: resolve_comparison_string(_sql, "key", params)
+                        .ok_or_else(|| RockLakeError::MissingParam { name: "key".into() })?,
+                    begin_snapshot: resolve_comparison_u64(_sql, "begin_snapshot", params)
+                        .ok_or_else(|| RockLakeError::MissingParam {
+                            name: "begin_snapshot".into(),
+                        })?,
+                };
+                submit_ops(vec![op], session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new("DELETE 1"))]);
+            }
             if table_name == "ducklake_inlined_data_tables" {
                 let table_ids = inlined_data_table_ids_from_ctid_sql(_sql);
                 let row_count = table_ids.len();

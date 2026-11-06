@@ -1,4 +1,4 @@
-//! DuckLake v1.0 table schema registry.
+//! Versioned DuckLake metadata table schema registry.
 //!
 //! This module is the **single authoritative source** for the PgWire
 //! `FieldInfo` definitions of every DuckLake metadata table.  All executor
@@ -7,9 +7,8 @@
 //!
 //! # Design
 //!
-//! Each public function returns a fresh `Arc<Vec<FieldInfo>>` whose column
-//! names, types, and wire formats exactly match the DuckLake v1.0 spec.
-//! Callers clone the `Arc` to share the immutable schema between the
+//! Each schema function returns a fresh `Arc<Vec<FieldInfo>>` for its DuckLake
+//! format version. Callers clone the `Arc` to share it between the
 //! `QueryResponse` header and each `DataRowEncoder`.
 
 use std::sync::Arc;
@@ -261,6 +260,12 @@ pub fn data_file_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn data_file_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*data_file_schema()).clone();
+    fields.push(int8t!("row_group_count"));
+    Arc::new(fields)
+}
+
 // ── ducklake_delete_file ──────────────────────────────────────────────────────
 
 /// `ducklake_delete_file(delete_file_id, table_id, begin_snapshot, end_snapshot,
@@ -284,6 +289,12 @@ pub fn delete_file_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn delete_file_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*delete_file_schema()).clone();
+    fields.push(int8t!("row_group_count"));
+    Arc::new(fields)
+}
+
 // ── ducklake_table_stats ──────────────────────────────────────────────────────
 
 /// `ducklake_table_stats(table_id, record_count, next_row_id, file_size_bytes)`
@@ -299,8 +310,7 @@ pub fn table_stats_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_table_column_stats ───────────────────────────────────────────────
 
-/// `ducklake_table_column_stats(table_id, column_id, contains_null,
-/// contains_nan, min_value, max_value, extra_stats)` — DuckLake v1.0 spec.
+/// DuckLake v1.0 column statistics schema.
 pub fn table_column_stats_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("table_id"),
@@ -313,11 +323,15 @@ pub fn table_column_stats_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn table_column_stats_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*table_column_stats_schema()).clone();
+    fields.extend([bool_col!("min_is_exact"), bool_col!("max_is_exact")]);
+    Arc::new(fields)
+}
+
 // ── ducklake_file_column_stats ────────────────────────────────────────────────
 
-/// `ducklake_file_column_stats(data_file_id, table_id, column_id,
-/// column_size_bytes, value_count, null_count, min_value, max_value,
-/// contains_nan, extra_stats)` — DuckLake v1.0 spec.
+/// DuckLake v1.0 file statistics schema.
 pub fn file_column_stats_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("data_file_id"),
@@ -331,6 +345,12 @@ pub fn file_column_stats_schema() -> Arc<Vec<FieldInfo>> {
         bool_col!("contains_nan"),
         text_col!("extra_stats"),
     ])
+}
+
+pub fn file_column_stats_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*file_column_stats_schema()).clone();
+    fields.extend([bool_col!("min_is_exact"), bool_col!("max_is_exact")]);
+    Arc::new(fields)
 }
 
 // ── ducklake_metadata ─────────────────────────────────────────────────────────
@@ -439,6 +459,19 @@ pub fn column_tag_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("table_id"),
         int8t!("column_id"),
+        int8t!("begin_snapshot"),
+        int8t!("end_snapshot"),
+        text_col!("key"),
+        text_col!("value"),
+    ])
+}
+
+/// `ducklake_view_column_tag(view_id, column_name, begin_snapshot,
+/// end_snapshot, key, value)` — DuckLake 1.1.
+pub fn view_column_tag_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        int8t!("view_id"),
+        text_col!("column_name"),
         int8t!("begin_snapshot"),
         int8t!("end_snapshot"),
         text_col!("key"),
@@ -638,6 +671,12 @@ pub fn global_table_stats_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn global_table_stats_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*global_table_stats_schema()).clone();
+    fields.extend([bool_col!("min_is_exact"), bool_col!("max_is_exact")]);
+    Arc::new(fields)
+}
+
 // ── Utility: latest snapshot info ────────────────────────────────────────────
 
 /// Schema for the 4-column `SelectLatestSnapshotInfo` response.
@@ -739,13 +778,14 @@ pub fn supported_tables() -> &'static [&'static str] {
         "ducklake_file_variant_stats",
         "ducklake_column_mapping",
         "ducklake_name_mapping",
+        "ducklake_view_column_tag",
     ]
 }
 
 /// Look up the canonical `FieldInfo` list for a named DuckLake metadata table.
 ///
-/// Returns `Some(schema)` for the 28 DuckLake v1.0 tables and RockLake's
-/// retained extension tables; `None` for unknown names.
+/// Returns `Some(schema)` for supported DuckLake and RockLake tables; `None`
+/// for unknown names.
 pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
     match table_name {
         "ducklake_snapshot" => Some(snapshot_schema()),
@@ -765,6 +805,7 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
         "ducklake_macro_parameters" => Some(macro_parameters_schema()),
         "ducklake_tag" => Some(tag_schema()),
         "ducklake_column_tag" => Some(column_tag_schema()),
+        "ducklake_view_column_tag" => Some(view_column_tag_schema()),
         "ducklake_partition_info" => Some(partition_info_schema()),
         "ducklake_partition_column" => Some(partition_column_schema()),
         "ducklake_partition_value" => Some(partition_value_schema()),
@@ -787,8 +828,15 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
 }
 
 pub fn fields_for_table_version(table_name: &str, stable_1_1: bool) -> Option<Arc<Vec<FieldInfo>>> {
-    if stable_1_1 && table_name == "ducklake_schema" {
-        return Some(schema_schema_v11());
+    if stable_1_1 {
+        match table_name {
+            "ducklake_schema" => return Some(schema_schema_v11()),
+            "ducklake_table_column_stats" => return Some(table_column_stats_schema_v11()),
+            "ducklake_file_column_stats" => return Some(file_column_stats_schema_v11()),
+            "ducklake_data_file" => return Some(data_file_schema_v11()),
+            "ducklake_delete_file" => return Some(delete_file_schema_v11()),
+            _ => {}
+        }
     }
     fields_for_table(table_name)
 }
@@ -866,6 +914,15 @@ mod tests {
     }
 
     #[test]
+    fn exact_bounds_are_only_exposed_by_the_v11_schema() {
+        let v10 = fields_for_table_version("ducklake_file_column_stats", false).unwrap();
+        let v11 = fields_for_table_version("ducklake_file_column_stats", true).unwrap();
+        assert_eq!(v10.len() + 2, v11.len());
+        assert_eq!(v11[v11.len() - 2].name(), "min_is_exact");
+        assert_eq!(v11[v11.len() - 1].name(), "max_is_exact");
+    }
+
+    #[test]
     fn schema_projection_maps_columns_aliases_and_wildcards() {
         let schema = schema_schema();
         let columns = project_schema_columns(
@@ -886,5 +943,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             (0..schema.len()).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn row_group_counts_are_only_exposed_in_v11_schemas() {
+        for table in ["ducklake_data_file", "ducklake_delete_file"] {
+            let v10 = fields_for_table_version(table, false).unwrap();
+            let v11 = fields_for_table_version(table, true).unwrap();
+            assert!(!v10.iter().any(|field| field.name() == "row_group_count"));
+            assert_eq!(v11.last().unwrap().name(), "row_group_count");
+        }
     }
 }

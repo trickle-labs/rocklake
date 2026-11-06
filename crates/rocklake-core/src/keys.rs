@@ -547,6 +547,23 @@ pub fn key_column_tag(
     buf
 }
 
+/// Build a key for `ducklake_view_column_tag`:
+/// `0x1F | view_id | column_name_hash | tag_key_hash | begin_snapshot`.
+pub fn key_view_column_tag(
+    view_id: u64,
+    column_name_hash: u64,
+    tag_key_hash: u64,
+    begin_snapshot: u64,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(33);
+    buf.push(TAG_VIEW_COLUMN_TAG);
+    buf.extend_from_slice(&encode_u64(view_id));
+    buf.extend_from_slice(&encode_u64(column_name_hash));
+    buf.extend_from_slice(&encode_u64(tag_key_hash));
+    buf.extend_from_slice(&encode_u64(begin_snapshot));
+    buf
+}
+
 /// Build a key for `ducklake_schema_versions`: `0x1C | table_id(u64) | begin_snapshot(u64)`.
 pub fn key_schema_versions(table_id: u64, begin_snapshot: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(17);
@@ -738,6 +755,14 @@ pub fn prefix_data_files_for_table(table_id: u64) -> Vec<u8> {
     buf
 }
 
+/// Build a scan prefix for file partition values of a specific table: `0x17 | table_id`.
+pub fn prefix_file_partition_values_for_table(table_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_FILE_PARTITION_VALUE);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf
+}
+
 /// Build a scan prefix for columns of a specific table: `0x06 | table_id`.
 pub fn prefix_columns_for_table(table_id: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(9);
@@ -839,6 +864,14 @@ pub fn prefix_column_tags(table_id: u64, column_id: u64) -> Vec<u8> {
     buf
 }
 
+/// Build a scan prefix for view column tags: `0x1F | view_id`.
+pub fn prefix_view_column_tags(view_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_VIEW_COLUMN_TAG);
+    buf.extend_from_slice(&encode_u64(view_id));
+    buf
+}
+
 /// Extract the tag byte from a raw key. Returns error if key is empty.
 pub fn extract_tag(key: &[u8]) -> Result<u8, KeyError> {
     if key.is_empty() {
@@ -924,8 +957,10 @@ mod tests {
     fn prefix_isolation() {
         let data_prefix = prefix_data_files_for_table(42);
         let col_prefix = prefix_columns_for_table(42);
+        let partition_value_prefix = prefix_file_partition_values_for_table(42);
         // Different tags → no overlap
         assert_ne!(data_prefix[0], col_prefix[0]);
+        assert!(key_file_partition_value(42, 0, 1).starts_with(&partition_value_prefix));
     }
 
     #[test]

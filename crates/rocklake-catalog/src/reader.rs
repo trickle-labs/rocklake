@@ -1794,6 +1794,24 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// List all view column tags visible at this snapshot.
+    pub async fn list_all_view_column_tags(&self) -> CatalogResult<Vec<ViewColumnTagRow>> {
+        let prefix = keys::prefix_for_tag(TAG_VIEW_COLUMN_TAG);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ViewColumnTagRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
     /// List all `ducklake_sort_info` rows visible at this snapshot (all tables).
     pub async fn list_all_sort_info(&self) -> CatalogResult<Vec<SortInfoRow>> {
         let prefix = keys::prefix_for_tag(TAG_SORT_INFO);
@@ -1951,6 +1969,31 @@ impl CatalogReader {
             }
         }
         rows.sort_by_key(|r| (r.partition_id, r.partition_key_index));
+        Ok(rows)
+    }
+
+    /// List per-file partition values, optionally restricted to one table.
+    pub async fn list_file_partition_values(
+        &self,
+        table_id: Option<u64>,
+    ) -> CatalogResult<Vec<FilePartitionValueRow>> {
+        let prefix = table_id.map_or_else(
+            || keys::prefix_for_tag(TAG_FILE_PARTITION_VALUE),
+            keys::prefix_file_partition_values_for_table,
+        );
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: FilePartitionValueRow = values::decode_value(&kv.value)?;
+            if table_id.is_none_or(|table_id| row.table_id == table_id) {
+                rows.push(row);
+            }
+        }
+        rows.sort_by_key(|row| (row.data_file_id, row.partition_key_index));
         Ok(rows)
     }
 

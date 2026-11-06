@@ -198,6 +198,7 @@ nav:
     - integration/index.md
     - DuckDB: integration/duckdb.md
     - DuckDB Compatibility: integration/duckdb-compatibility.md
+    - DuckLake 1.1 Compatibility Inventory: integration/ducklake-1.1-compatibility-inventory.md
     - pg-tide-relay: integration/pg-tide-relay.md
     - DataFusion: integration/datafusion.md
     - Native Extension (unsupported): integration/native-extension.md

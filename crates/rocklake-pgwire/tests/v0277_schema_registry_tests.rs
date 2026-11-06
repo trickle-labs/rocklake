@@ -1,7 +1,7 @@
 //! v0.27.7 Schema Registry Tests — DuckLake SQL Schema Registry.
 //!
 //! Verifies that the `schema_registry` module is the single authoritative
-//! source for all 28 DuckLake v1.0 metadata table schemas, and that every
+//! source for DuckLake v1.0 metadata schemas and the v1.1 view-tag table, and that every
 //! executor path returns RowDescription that matches the registry.
 //!
 //! # Tests
@@ -27,7 +27,8 @@ use tokio::sync::Mutex;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 
-use pgwire::api::results::Response;
+use pgwire::api::results::{FieldFormat, Response};
+use pgwire::api::Type;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_core::keys::MetadataScope;
 use rocklake_pgwire::executor;
@@ -103,9 +104,8 @@ async fn inspect(resp: Response<'static>) -> (Vec<String>, usize) {
             futures::pin_mut!(stream);
             let mut count = 0usize;
             while let Some(item) = stream.next().await {
-                if item.is_ok() {
-                    count += 1;
-                }
+                item.expect("valid response row");
+                count += 1;
             }
             (cols, count)
         }
@@ -166,14 +166,14 @@ async fn populate_base(store: &Arc<Mutex<CatalogStore>>) -> (u64, u64, u64) {
     (1, 2, 3)
 }
 
-// ── Registry correctness: fields_for_table covers all 28 tables ──────────────
+// ── Registry correctness: every supported table has a schema ────────────────
 
 #[test]
 fn registry_covers_all_32_tables() {
     use rocklake_pgwire::schema_registry::fields_for_table;
 
     let tables = [
-        // 29 original tables
+        // DuckLake catalog tables
         "ducklake_snapshot",
         "ducklake_snapshot_changes",
         "ducklake_schema",
@@ -191,6 +191,7 @@ fn registry_covers_all_32_tables() {
         "ducklake_macro_parameters",
         "ducklake_tag",
         "ducklake_column_tag",
+        "ducklake_view_column_tag",
         "ducklake_partition_info",
         "ducklake_partition_column",
         "ducklake_partition_value",
@@ -203,24 +204,24 @@ fn registry_covers_all_32_tables() {
         "ducklake_encrypted_secret",
         "ducklake_encryption_key",
         "ducklake_file_partition_value",
-        // 3 extension tables added in v0.27.11
+        // Extension tables
         "ducklake_file_variant_stats",
         "ducklake_column_mapping",
         "ducklake_name_mapping",
     ];
 
-    assert_eq!(tables.len(), 32, "test list must have exactly 32 tables");
+    assert_eq!(tables.len(), 33, "test list must have exactly 33 tables");
 
     for table in &tables {
         assert!(
             fields_for_table(table).is_some(),
-            "fields_for_table must return Some for all 32 spec tables; missing: {table}"
+            "fields_for_table must return Some for all supported tables; missing: {table}"
         );
     }
 }
 
 // ── Golden column-order tests ─────────────────────────────────────────────────
-// For each of the 28 tables, verify that executing a SELECT returns column
+// For each legacy table, verify that executing a SELECT returns column
 // names and order matching the spec as defined in schema_registry.rs.
 
 #[tokio::test]
@@ -406,6 +407,7 @@ async fn golden_ducklake_data_file() {
         cols.contains(&"path".to_string()),
         "must have path: {cols:?}"
     );
+    assert!(!cols.contains(&"row_group_count".to_string()));
 }
 
 #[tokio::test]
@@ -423,6 +425,107 @@ async fn golden_ducklake_delete_file() {
         cols.contains(&"path".to_string()),
         "must have path: {cols:?}"
     );
+    assert!(!cols.contains(&"row_group_count".to_string()));
+}
+
+#[tokio::test]
+async fn ducklake_v11_row_group_counts_persist_and_are_exposed() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let table_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(commit);
+        table_id
+    };
+    drop(store);
+    let store = open_store(&dir).await;
+
+    let insert_data = format!(
+        "INSERT INTO ducklake_data_file (table_id, path, file_format, record_count, file_size_bytes, row_group_count) VALUES ({table_id}, 'part.parquet', 'parquet', 10, 100, 3)"
+    );
+    executor::execute_sql(
+        &insert_data,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let data_files = store
+        .lock()
+        .await
+        .read_latest()
+        .list_data_files(table_id)
+        .await
+        .unwrap();
+    let data_file_id = data_files[0].data_file_id;
+    assert_eq!(data_files[0].row_group_count, Some(3));
+
+    let insert_delete = format!(
+        "INSERT INTO ducklake_delete_file (data_file_id, table_id, path, delete_count, file_size_bytes, row_group_count) VALUES ({data_file_id}, {table_id}, 'delete.parquet', 1, 20, 2)"
+    );
+    executor::execute_sql(
+        &insert_delete,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let delete_files = store
+        .lock()
+        .await
+        .read_latest()
+        .list_delete_files(table_id)
+        .await
+        .unwrap();
+    assert_eq!(delete_files[0].row_group_count, Some(2));
+
+    let (data_cols, _) = inspect(exec("SELECT * FROM ducklake_data_file", &store).await).await;
+    let (delete_cols, _) = inspect(exec("SELECT * FROM ducklake_delete_file", &store).await).await;
+    assert!(data_cols.ends_with(&["row_group_count".into()]));
+    assert!(delete_cols.ends_with(&["row_group_count".into()]));
+
+    let (data_projection, data_rows) = inspect(
+        exec(
+            "SELECT path, row_group_count FROM ducklake_data_file",
+            &store,
+        )
+        .await,
+    )
+    .await;
+    assert_cols_eq(
+        &data_projection,
+        &["path", "row_group_count"],
+        "data_file projection",
+    );
+    assert_eq!(data_rows, 1);
+
+    let (delete_projection, delete_rows) = inspect(
+        exec(
+            "SELECT path, row_group_count FROM ducklake_delete_file",
+            &store,
+        )
+        .await,
+    )
+    .await;
+    assert_cols_eq(
+        &delete_projection,
+        &["path", "row_group_count"],
+        "delete_file projection",
+    );
+    assert_eq!(delete_rows, 1);
 }
 
 #[tokio::test]
@@ -450,6 +553,7 @@ async fn golden_ducklake_table_column_stats() {
         cols.first().map(|s| s.as_str()) == Some("table_id"),
         "first column must be table_id, got: {cols:?}"
     );
+    assert!(!cols.contains(&"min_is_exact".to_string()));
 }
 
 #[tokio::test]
@@ -463,6 +567,141 @@ async fn golden_ducklake_file_column_stats() {
         cols.first().map(|s| s.as_str()) == Some("data_file_id"),
         "first column must be data_file_id, got: {cols:?}"
     );
+    assert!(!cols.contains(&"min_is_exact".to_string()));
+}
+
+#[tokio::test]
+async fn ducklake_v11_stats_expose_exactness_columns() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let (table_id, column_id) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+        let column_id = writer
+            .add_column(table_id, "name", "varchar", 0, true, None)
+            .await
+            .unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let _ = writer.create_snapshot(None, None).await.unwrap();
+        (table_id, column_id)
+    };
+    drop(store);
+    let store = open_store(&dir).await;
+
+    let insert = format!(
+        "INSERT INTO ducklake_table_column_stats (table_id, column_id, contains_null, contains_nan, min_value, max_value, extra_stats, min_is_exact, max_is_exact) VALUES ({table_id}, {column_id}, false, false, 'a', 'z', NULL, false, true)"
+    );
+    let mut session = SessionState::new();
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut session,
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let update = format!(
+        "UPDATE ducklake_table_column_stats SET contains_null = false, contains_nan = NULL, min_value = '1', max_value = '2', extra_stats = NULL, min_is_exact = true, max_is_exact = true WHERE table_id = {table_id} AND column_id = {column_id}"
+    );
+    executor::execute_sql(
+        &update,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let table_stats = exec("SELECT * FROM ducklake_table_column_stats", &store).await;
+    let (table_cols, table_count) = inspect(table_stats).await;
+    assert!(table_cols.ends_with(&["min_is_exact".into(), "max_is_exact".into()]));
+    assert_eq!(table_count, 1);
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_table_column_stats()
+        .await
+        .unwrap();
+    assert_eq!(rows[0].min_value.as_deref(), Some("1"));
+    assert_eq!(rows[0].max_value.as_deref(), Some("2"));
+    assert_eq!(rows[0].contains_nan, None);
+    assert_eq!(rows[0].min_is_exact, Some(true));
+    assert_eq!(rows[0].max_is_exact, Some(true));
+
+    let file_stats = exec("SELECT * FROM ducklake_file_column_stats", &store).await;
+    let (file_cols, _) = inspect(file_stats).await;
+    assert!(file_cols.ends_with(&["min_is_exact".into(), "max_is_exact".into()]));
+}
+
+#[tokio::test]
+async fn ducklake_v10_table_column_stats_update_uses_legacy_fields() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let (table_id, column_id) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+        let column_id = writer
+            .add_column(table_id, "name", "varchar", 0, true, None)
+            .await
+            .unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.0")
+            .unwrap();
+        writer
+            .upsert_table_column_stats(
+                table_id,
+                column_id,
+                false,
+                Some("a"),
+                Some("z"),
+                Some(false),
+                None,
+            )
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        (table_id, column_id)
+    };
+
+    let update = format!(
+        "UPDATE ducklake_table_column_stats SET contains_null = false, contains_nan = NULL, min_value = '1', max_value = '2', extra_stats = NULL WHERE table_id = {table_id} AND column_id = {column_id}"
+    );
+    executor::execute_sql(
+        &update,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_table_column_stats()
+        .await
+        .unwrap();
+    assert_eq!(rows[0].min_value.as_deref(), Some("1"));
+    assert_eq!(rows[0].max_value.as_deref(), Some("2"));
+    assert_eq!(rows[0].contains_nan, None);
+    assert_eq!(rows[0].min_is_exact, None);
+    assert_eq!(rows[0].max_is_exact, None);
 }
 
 #[tokio::test]
@@ -585,6 +824,179 @@ async fn golden_ducklake_column_tag() {
         ],
         "ducklake_column_tag",
     );
+}
+
+#[tokio::test]
+async fn ducklake_1_1_view_column_tags_are_selectable() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let version_error = executor::execute_sql(
+        "SELECT * FROM ducklake_view_column_tag",
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .err()
+    .expect("DuckLake 1.0 must reject the 1.1-only relation");
+    assert!(version_error
+        .to_string()
+        .contains("requires DuckLake format version 1.1"));
+
+    let view_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(
+                rocklake_core::keys::MetadataScope::Global,
+                0,
+                "version",
+                "1.1",
+            )
+            .unwrap();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let view_id = writer
+            .create_view(schema_id, "tagged_view", "SELECT 1 AS id")
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        view_id
+    };
+
+    let insert = format!(
+        "INSERT INTO ducklake_view_column_tag (view_id, column_name, begin_snapshot, end_snapshot, key, value) VALUES ({view_id}, 'id', 1, NULL, 'comment', 'identifier')"
+    );
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let (cols, count) = inspect(exec("SELECT * FROM ducklake_view_column_tag", &store).await).await;
+    assert_cols_eq(
+        &cols,
+        &[
+            "view_id",
+            "column_name",
+            "begin_snapshot",
+            "end_snapshot",
+            "key",
+            "value",
+        ],
+        "ducklake_view_column_tag",
+    );
+    assert_eq!(count, 1);
+
+    let overwrite = format!(
+        "WITH overwritten_tags(vid, col, k) AS (VALUES ({view_id}, 'id', 'comment')) UPDATE \"public\".ducklake_view_column_tag SET end_snapshot = 12 FROM overwritten_tags WHERE view_id = vid AND ducklake_view_column_tag.column_name = overwritten_tags.col AND ducklake_view_column_tag.key = overwritten_tags.k AND end_snapshot IS NULL"
+    );
+    executor::execute_sql(
+        &overwrite,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let replacement = format!(
+        "INSERT INTO ducklake_view_column_tag (view_id, column_name, begin_snapshot, end_snapshot, key, value) VALUES ({view_id}, 'id', 1, NULL, 'comment', 'updated')"
+    );
+    executor::execute_sql(
+        &replacement,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let active_tags = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_view_column_tags()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|tag| tag.end_snapshot.is_none())
+        .collect::<Vec<_>>();
+    assert_eq!(active_tags.len(), 1);
+    assert_eq!(active_tags[0].tag_value, "updated");
+
+    let begin_snapshot = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_view_column_tags()
+        .await
+        .unwrap()[0]
+        .begin_snapshot;
+
+    executor::execute_sql(
+        "UPDATE ducklake_view_column_tag SET end_snapshot = $1 WHERE view_id = $2 AND column_name = $3 AND key = $4 AND begin_snapshot = $5",
+        &ParamValues::new(vec![
+            Some("3".into()),
+            Some(view_id.to_string()),
+            Some("id".into()),
+            Some("comment".into()),
+            Some(begin_snapshot.to_string()),
+        ]),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let (_, count) = inspect(exec("SELECT * FROM ducklake_view_column_tag", &store).await).await;
+    assert_eq!(count, 0);
+
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let begin_snapshot = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_view_column_tags()
+        .await
+        .unwrap()[0]
+        .begin_snapshot;
+    executor::execute_sql(
+        "DELETE FROM ducklake_view_column_tag WHERE view_id = $1 AND column_name = $2 AND key = $3 AND begin_snapshot = $4",
+        &ParamValues::new(vec![
+            Some(view_id.to_string()),
+            Some("id".into()),
+            Some("comment".into()),
+            Some(begin_snapshot.to_string()),
+        ]),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let (_, count) = inspect(exec("SELECT * FROM ducklake_view_column_tag", &store).await).await;
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]
@@ -789,6 +1201,84 @@ async fn golden_ducklake_file_partition_value() {
         ],
         "ducklake_file_partition_value",
     );
+}
+
+#[tokio::test]
+async fn ducklake_file_partition_values_persist_and_project() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let table_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(commit);
+        table_id
+    };
+
+    let insert_file = format!(
+        "INSERT INTO ducklake_data_file (table_id, path, file_format, record_count, file_size_bytes) VALUES ({table_id}, 'epoch_day=-1.parquet', 'parquet', 1, 100)"
+    );
+    executor::execute_sql(
+        &insert_file,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let data_file_id = store
+        .lock()
+        .await
+        .read_latest()
+        .list_data_files(table_id)
+        .await
+        .unwrap()[0]
+        .data_file_id;
+
+    let insert_partition_value = format!(
+        "INSERT INTO ducklake_file_partition_value VALUES ({data_file_id}, {table_id}, 0, '-1')"
+    );
+    executor::execute_sql(
+        &insert_partition_value,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_file_partition_values(Some(table_id))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].data_file_id, data_file_id);
+    assert_eq!(rows[0].partition_value.as_deref(), Some("-1"));
+
+    let response = exec(
+        "SELECT table_id, partition_value FROM ducklake_file_partition_value",
+        &store,
+    )
+    .await;
+    let (columns, count) = inspect(response).await;
+    assert_cols_eq(
+        &columns,
+        &["table_id", "partition_value"],
+        "file_partition_value",
+    );
+    assert_eq!(count, 1);
 }
 
 // ── Three SELECT variants for high-risk tables ────────────────────────────────
@@ -1059,6 +1549,73 @@ async fn inlined_row_select_star_returns_unaliased_columns() {
         !cols.contains(&"row_id".to_string()),
         "SELECT * must NOT expose system column row_id, got: {cols:?}"
     );
+}
+
+#[tokio::test]
+async fn variant_inlined_values_are_exposed_as_binary_bytea() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let (_, table_id, _) = populate_base(&store).await;
+    let schema_version = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer
+            .add_column(table_id, "variant_value", "VARIANT", 1, true, None)
+            .await
+            .unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        catalog
+            .read_latest()
+            .get_snapshot()
+            .await
+            .unwrap()
+            .unwrap()
+            .schema_version
+    };
+
+    let table = format!("ducklake_inlined_data_{table_id}_{schema_version}");
+    let insert =
+        format!(r#"INSERT INTO "public".{table} VALUES (0, {schema_version}, NULL, 42, '\x0102')"#);
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let query = format!(r#"SELECT variant_value FROM "public".{table}"#);
+    let mut responses = executor::execute_sql(
+        &query,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let Response::Query(response) = responses.remove(0) else {
+        panic!("expected query response");
+    };
+    let fields = response.row_schema();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].datatype(), &Type::BYTEA);
+    assert_eq!(fields[0].format(), FieldFormat::Binary);
+
+    let rows = response.data_rows();
+    futures::pin_mut!(rows);
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(row.field_count, 1);
+    assert_eq!(i32::from_be_bytes(row.data[..4].try_into().unwrap()), 2);
+    assert_eq!(&row.data[4..], &[0x01, 0x02]);
 }
 
 #[tokio::test]

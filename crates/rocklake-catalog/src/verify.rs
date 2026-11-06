@@ -111,6 +111,8 @@ pub async fn verify_catalog(db: &Db) -> CatalogResult<VerifyResult> {
         scan_rows::<SortExpressionRow>(db, TAG_SORT_EXPRESSION, &mut result).await?;
     let tags = scan_rows::<TagRow>(db, TAG_TAG, &mut result).await?;
     let column_tags = scan_rows::<ColumnTagRow>(db, TAG_COLUMN_TAG, &mut result).await?;
+    let view_column_tags =
+        scan_rows::<ViewColumnTagRow>(db, TAG_VIEW_COLUMN_TAG, &mut result).await?;
     let schema_versions =
         scan_rows::<SchemaVersionsRow>(db, TAG_SCHEMA_VERSIONS, &mut result).await?;
     let leases = scan_rows::<SnapshotLeaseRow>(db, TAG_SNAPSHOT_LEASE, &mut result).await?;
@@ -190,6 +192,13 @@ pub async fn verify_catalog(db: &Db) -> CatalogResult<VerifyResult> {
     verify_mvcc(
         &mut result,
         latest,
+        &view_column_tags,
+        "view column tag",
+        |row| (row.view_id, row.begin_snapshot, row.end_snapshot),
+    );
+    verify_mvcc(
+        &mut result,
+        latest,
         &inline_inserts,
         "inlined insert",
         |row| (row.row_id, row.begin_snapshot, row.end_snapshot),
@@ -239,6 +248,7 @@ pub async fn verify_catalog(db: &Db) -> CatalogResult<VerifyResult> {
         &sort_expressions,
         &tags,
         &column_tags,
+        &view_column_tags,
         &schema_versions,
         &inline_inserts,
         &inline_deletes,
@@ -366,6 +376,7 @@ async fn verify_keys(db: &Db, result: &mut VerifyResult) -> CatalogResult<()> {
             TAG_FILE_COLUMN_STATS_BY_SNAPSHOT => 33,
             TAG_DELETE_FILE_BY_TABLE | TAG_DATA_FILE_BY_ORDER => 25,
             TAG_FILE_VARIANT_STATS | TAG_COLUMN_TAG => 33,
+            TAG_VIEW_COLUMN_TAG => 33,
             TAG_TAG => 25,
             TAG_DATA_FILE_BY_SNAPSHOT => 25,
             TAG_SNAPSHOT_LEASE => 4,
@@ -575,6 +586,7 @@ fn verify_foreign_keys(
     sort_expressions: &[(Vec<u8>, SortExpressionRow)],
     tags: &[(Vec<u8>, TagRow)],
     column_tags: &[(Vec<u8>, ColumnTagRow)],
+    view_column_tags: &[(Vec<u8>, ViewColumnTagRow)],
     schema_versions: &[(Vec<u8>, SchemaVersionsRow)],
     inline_inserts: &[(Vec<u8>, InlinedInsertRow)],
     inline_deletes: &[(Vec<u8>, InlinedDeleteRow)],
@@ -592,6 +604,7 @@ fn verify_foreign_keys(
     for (_, row) in views {
         require(result, schema_ids, row.schema_id, "view", "schema");
     }
+    let view_ids: HashSet<u64> = views.iter().map(|(_, row)| row.view_id).collect();
     for (_, row) in macros {
         require(result, schema_ids, row.schema_id, "macro", "schema");
     }
@@ -798,6 +811,9 @@ fn verify_foreign_keys(
     for (_, row) in column_tags {
         require(result, table_ids, row.table_id, "column tag", "table");
         require(result, column_ids, row.column_id, "column tag", "column");
+    }
+    for (_, row) in view_column_tags {
+        require(result, &view_ids, row.view_id, "view column tag", "view");
     }
     for (_, row) in schema_versions {
         require(result, table_ids, row.table_id, "schema version", "table");

@@ -51,6 +51,7 @@ pub enum BufferedOp {
         partition_id: Option<u64>,
         mapping_id: Option<u64>,
         partial_max: Option<String>,
+        row_group_count: Option<u64>,
     },
     InsertDeleteFile {
         data_file_id: u64,
@@ -63,6 +64,7 @@ pub enum BufferedOp {
         footer_size: Option<i64>,
         partial_max: Option<String>,
         encryption_key: Option<String>,
+        row_group_count: Option<u64>,
     },
     InsertSnapshot {
         author: Option<String>,
@@ -82,9 +84,26 @@ pub enum BufferedOp {
         end_snapshot: u64,
         where_column: Option<String>,
     },
+    EndViewColumnTag {
+        view_id: u64,
+        column_name: String,
+        tag_key: String,
+        begin_snapshot: u64,
+    },
     UpdateTableStats {
         table_id: u64,
         row_count_delta: i64,
+    },
+    SetTableColumnStats {
+        table_id: u64,
+        column_id: u64,
+        contains_null: bool,
+        contains_nan: Option<bool>,
+        min_value: Option<String>,
+        max_value: Option<String>,
+        extra_stats: Option<String>,
+        min_is_exact: Option<bool>,
+        max_is_exact: Option<bool>,
     },
     RecomputeTableFileSize {
         table_id: u64,
@@ -111,6 +130,8 @@ pub enum BufferedOp {
         max_value: Option<String>,
         contains_nan: bool,
         extra_stats: Option<String>,
+        min_is_exact: Option<bool>,
+        max_is_exact: Option<bool>,
     },
     InsertTableColumnStats {
         table_id: u64,
@@ -120,6 +141,8 @@ pub enum BufferedOp {
         min_value: Option<String>,
         max_value: Option<String>,
         extra_stats: Option<String>,
+        min_is_exact: Option<Option<bool>>,
+        max_is_exact: Option<Option<bool>>,
     },
     InsertMetadata {
         key: String,

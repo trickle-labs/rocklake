@@ -5,28 +5,30 @@ RockLake and how to prepare for future version upgrades.
 
 ## Supported DuckLake Versions
 
-| DuckLake Version | catalog_version | RockLake Support |
-|------------------|-----------------|------------------|
-| 1.0              | 7               | Full support (default) |
-| 1.1 (dev)        | 8 (`V1_1_DEV_1`)| Experimental — requires `--accept-version V1_1_DEV_1` |
+| DuckLake format version | RockLake migration support |
+|-------------------------|----------------------------|
+| 1.0                     | Supported by default |
+| 1.1-dev1                | Experimental — requires `--accept-version V1_1_DEV_1` |
+| 1.1                     | Rejected until stable 1.1 metadata is supported |
 
-RockLake v0.63.2 always reports `ducklake_version = "1.0"` and `catalog_version = 7`
-to clients. It will not self-report as v1.1 until those features are fully
-validated and promoted to stable.
+RockLake currently supports DuckLake 1.0. It does not claim stable 1.1 support.
 
 ## Checking Your Source Catalog Version
 
-For a SQLite-backed DuckLake catalog:
+Check the format version stored in `ducklake_metadata`:
 
 ```sh
 sqlite3 /var/lib/ducklake/catalog.db \
-  "SELECT MAX(schema_version) FROM ducklake_snapshot"
+  "SELECT value FROM ducklake_metadata WHERE key = 'version'"
 ```
 
-- Result `7` → DuckLake v1.0. Migration is accepted by default.
-- Result `8` → DuckLake v1.1-dev. Pass `--accept-version V1_1_DEV_1` to proceed.
+The result `1.0` is accepted by default. The result `1.1-dev1` requires
+`--accept-version V1_1_DEV_1`. Stable `1.1` is rejected until RockLake can
+preserve its metadata. `ducklake_snapshot.schema_version` tracks schema changes
+within a catalog; it is not the format version. Only use its maximum as a
+fallback for legacy catalogs that have no metadata version row.
 
-## Migrating from DuckLake v1.1 (dev)
+## Migrating from DuckLake v1.1-dev1
 
 ```sh
 rocklake migrate-from-ducklake \
@@ -41,7 +43,7 @@ rocklake migrate-from-ducklake \
 
 ## Version Gate and SQLSTATE
 
-When a source catalog version is not in the accepted list, RockLake returns:
+When a source format is not supported, RockLake returns:
 
 ```
 ERROR 0A000: unsupported DuckLake catalog version <N>: ...
@@ -50,14 +52,11 @@ ERROR 0A000: unsupported DuckLake catalog version <N>: ...
 `SQLSTATE 0A000` is the PostgreSQL `feature_not_supported` code, which surfaces
 correctly in clients that understand the PG wire protocol.
 
-## Future Version Support
+## Stable 1.1 Support
 
-RockLake tracks the DuckLake specification. When DuckLake v1.1 is finalized and
-promoted to stable, RockLake will add full support in a subsequent minor release.
-At that point, the exact upstream version will be added to the v0.60 compatibility
-contract only after fresh create/read/update/delete/schema-evolution/restart/
-time-travel tests and corpus comparison pass. `--accept-version V1_1_DEV_1`
-does not bypass the supported v1.0 contract.
+Stable DuckLake 1.1 catalogs remain unsupported by this importer. The
+`--accept-version V1_1_DEV_1` flag applies only to the prerelease format and does
+not bypass the supported v1.0 contract.
 
 ## See Also
 

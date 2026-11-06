@@ -1840,6 +1840,7 @@ impl CatalogWriter {
             partition_id: None,
             mapping_id: None,
             partial_max: None,
+            row_group_count: None,
         };
 
         let key = keys::key_data_file(table_id, data_file_id);
@@ -1904,6 +1905,7 @@ impl CatalogWriter {
             partition_id: None,
             mapping_id: None,
             partial_max: partial_max.map(|s| s.to_string()),
+            row_group_count: None,
         };
 
         let key = keys::key_data_file(table_id, data_file_id);
@@ -1940,6 +1942,37 @@ impl CatalogWriter {
         mapping_id: Option<u64>,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.register_data_file_with_metadata_and_row_group_count(
+            table_id,
+            path,
+            file_format,
+            record_count,
+            file_size_bytes,
+            footer_size,
+            encryption_key,
+            partition_id,
+            mapping_id,
+            partial_max,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_data_file_with_metadata_and_row_group_count(
+        &mut self,
+        table_id: u64,
+        path: &str,
+        file_format: &str,
+        record_count: u64,
+        file_size_bytes: u64,
+        footer_size: Option<i64>,
+        encryption_key: Option<&str>,
+        partition_id: Option<u64>,
+        mapping_id: Option<u64>,
+        partial_max: Option<&str>,
+        row_group_count: Option<u64>,
+    ) -> CatalogResult<u64> {
         self.ensure_table_exists(table_id).await?;
         validate_registered_path(path, None)?;
         if let Some(partition_id) = partition_id {
@@ -1952,7 +1985,7 @@ impl CatalogWriter {
         let row_id_start = self
             .allocate_row_id_start(table_id, record_count, file_size_bytes)
             .await?;
-        self.register_data_file_with_metadata_and_row_id_start(
+        self.register_data_file_with_metadata_and_row_id_start_and_row_group_count(
             table_id,
             path,
             file_format,
@@ -1964,6 +1997,7 @@ impl CatalogWriter {
             mapping_id,
             partial_max,
             Some(row_id_start),
+            row_group_count,
         )
         .await
     }
@@ -1982,6 +2016,39 @@ impl CatalogWriter {
         mapping_id: Option<u64>,
         partial_max: Option<&str>,
         row_id_start: Option<u64>,
+    ) -> CatalogResult<u64> {
+        self.register_data_file_with_metadata_and_row_id_start_and_row_group_count(
+            table_id,
+            path,
+            file_format,
+            record_count,
+            file_size_bytes,
+            footer_size,
+            encryption_key,
+            partition_id,
+            mapping_id,
+            partial_max,
+            row_id_start,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_data_file_with_metadata_and_row_id_start_and_row_group_count(
+        &mut self,
+        table_id: u64,
+        path: &str,
+        file_format: &str,
+        record_count: u64,
+        file_size_bytes: u64,
+        footer_size: Option<i64>,
+        encryption_key: Option<&str>,
+        partition_id: Option<u64>,
+        mapping_id: Option<u64>,
+        partial_max: Option<&str>,
+        row_id_start: Option<u64>,
+        row_group_count: Option<u64>,
     ) -> CatalogResult<u64> {
         crate::fault_injection::trigger(
             crate::fault_injection::WriteFaultPoint::AfterParquetWriteBeforeRegisterDataFile,
@@ -2020,6 +2087,7 @@ impl CatalogWriter {
             partition_id,
             mapping_id,
             partial_max: partial_max.map(|s| s.to_string()),
+            row_group_count,
         };
 
         let key = keys::key_data_file(table_id, data_file_id);
@@ -2080,6 +2148,37 @@ impl CatalogWriter {
         partial_max: Option<&str>,
         encryption_key: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.register_delete_file_with_opts_and_row_group_count(
+            data_file_id,
+            path,
+            delete_count,
+            file_size_bytes,
+            table_id,
+            format,
+            path_is_relative,
+            footer_size,
+            partial_max,
+            encryption_key,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_delete_file_with_opts_and_row_group_count(
+        &mut self,
+        data_file_id: u64,
+        path: &str,
+        delete_count: u64,
+        file_size_bytes: u64,
+        table_id: Option<u64>,
+        format: Option<&str>,
+        path_is_relative: Option<bool>,
+        footer_size: Option<i64>,
+        partial_max: Option<&str>,
+        encryption_key: Option<&str>,
+        row_group_count: Option<u64>,
+    ) -> CatalogResult<u64> {
         if let Some(table_id) = table_id {
             if data_file_id != 0 {
                 self.ensure_data_file_belongs(table_id, data_file_id)
@@ -2117,6 +2216,7 @@ impl CatalogWriter {
             footer_size,
             partial_max: partial_max.map(|s| s.to_string()),
             encryption_key: encryption_key.map(|s| s.to_string()),
+            row_group_count,
         };
 
         let key = keys::key_delete_file(data_file_id, delete_file_id);
@@ -2530,6 +2630,41 @@ impl CatalogWriter {
             }
         }
 
+        // CASCADE: retire live view-column tags when the view is dropped.
+        {
+            let prefix = keys::prefix_view_column_tags(view_id);
+            let mut iter = self.db.scan_prefix(&prefix).await?;
+            let mut to_retire = Vec::new();
+            while let Some(kv) = iter
+                .next()
+                .await
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+            {
+                let mut tag_row: ViewColumnTagRow = values::decode_value(&kv.value)?;
+                if tag_row.end_snapshot.is_none() {
+                    tag_row.end_snapshot = Some(snapshot_id);
+                    to_retire.push((kv.key.to_vec(), tag_row));
+                }
+            }
+            for (tag_key, tag_row) in to_retire {
+                self.stage(tag_key, values::encode_value(&tag_row));
+            }
+
+            let mut staged_to_retire = Vec::new();
+            for (key, value) in &self.staged {
+                if key.starts_with(&prefix) {
+                    let mut tag_row: ViewColumnTagRow = values::decode_value(value)?;
+                    if tag_row.view_id == view_id && tag_row.end_snapshot.is_none() {
+                        tag_row.end_snapshot = Some(snapshot_id);
+                        staged_to_retire.push((key.clone(), tag_row));
+                    }
+                }
+            }
+            for (tag_key, tag_row) in staged_to_retire {
+                self.stage(tag_key, values::encode_value(&tag_row));
+            }
+        }
+
         self.mark_schema_changed();
         Ok(())
     }
@@ -2820,6 +2955,144 @@ impl CatalogWriter {
         Ok(())
     }
 
+    /// Set or replace a tag on a view column. DuckLake 1.1 identifies view
+    /// columns by their query output name, before aliases are applied.
+    pub async fn set_view_column_tag(
+        &mut self,
+        view_id: u64,
+        column_name: &str,
+        tag_key: &str,
+        tag_value: &str,
+    ) -> CatalogResult<()> {
+        self.require_ducklake_v11().await?;
+        self.ensure_view_exists_for_tag(view_id).await?;
+        let snapshot_id = self.counters.peek_snapshot_id();
+        let column_name_hash = hash_tag_key(column_name);
+        let tag_key_hash = hash_tag_key(tag_key);
+        let prefix = keys::prefix_view_column_tags(view_id);
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        let mut to_retire = Vec::new();
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let mut row: ViewColumnTagRow = values::decode_value(&kv.value)?;
+            if row.column_name == column_name
+                && row.tag_key == tag_key
+                && row.end_snapshot.is_none()
+            {
+                row.end_snapshot = Some(snapshot_id);
+                to_retire.push((kv.key.to_vec(), row));
+            }
+        }
+        for (key, row) in to_retire {
+            self.stage(key, values::encode_value(&row));
+        }
+
+        let row = ViewColumnTagRow {
+            view_id,
+            column_name: column_name.to_string(),
+            tag_key: tag_key.to_string(),
+            tag_value: tag_value.to_string(),
+            begin_snapshot: snapshot_id,
+            end_snapshot: None,
+        };
+        let key = keys::key_view_column_tag(view_id, column_name_hash, tag_key_hash, snapshot_id);
+        self.stage(key, values::encode_value(&row));
+        Ok(())
+    }
+
+    /// End a tag version on a view column.
+    pub async fn remove_view_column_tag(
+        &mut self,
+        view_id: u64,
+        column_name: &str,
+        tag_key: &str,
+        begin_snapshot: u64,
+    ) -> CatalogResult<()> {
+        self.require_ducklake_v11().await?;
+        let key = keys::key_view_column_tag(
+            view_id,
+            hash_tag_key(column_name),
+            hash_tag_key(tag_key),
+            begin_snapshot,
+        );
+        let existing = self
+            .db
+            .get(&key)
+            .await?
+            .ok_or_else(|| CatalogError::NotFound(format!("view column tag {tag_key}")))?;
+        let mut row: ViewColumnTagRow = values::decode_value(&existing)?;
+        if row.column_name != column_name || row.tag_key != tag_key || row.end_snapshot.is_some() {
+            return Err(CatalogError::NotFound(format!("view column tag {tag_key}")));
+        }
+        row.end_snapshot = Some(self.counters.peek_snapshot_id());
+        self.stage(key, values::encode_value(&row));
+        Ok(())
+    }
+
+    async fn require_ducklake_v11(&self) -> CatalogResult<()> {
+        let key = keys::key_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version");
+        let staged = self
+            .staged
+            .iter()
+            .rev()
+            .find(|(staged_key, _)| staged_key == &key)
+            .map(|(_, value)| value.as_slice());
+        let metadata = if let Some(value) = staged {
+            Some(values::decode_value::<MetadataRow>(value)?)
+        } else {
+            self.db
+                .get(&key)
+                .await?
+                .map(|value| values::decode_value::<MetadataRow>(&value))
+                .transpose()?
+        };
+        if !metadata
+            .as_ref()
+            .is_some_and(|row| row.value == "1.1" || row.value == "1.1-dev1")
+        {
+            return Err(CatalogError::UnsupportedDuckLakeVersion {
+                version: 7,
+                message: "view column tags require DuckLake format version 1.1".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn ensure_view_exists_for_tag(&self, view_id: u64) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_VIEW);
+        let mut staged_state = None;
+        for (key, value) in &self.staged {
+            if key.starts_with(&prefix) {
+                let row: ViewRow = values::decode_value(value)?;
+                if row.view_id == view_id {
+                    staged_state = Some(row.end_snapshot.is_none());
+                }
+            }
+        }
+        if let Some(is_live) = staged_state {
+            return if is_live {
+                Ok(())
+            } else {
+                Err(CatalogError::NotFound(format!("view {view_id}")))
+            };
+        }
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ViewRow = values::decode_value(&kv.value)?;
+            if row.view_id == view_id && row.end_snapshot.is_none() {
+                return Ok(());
+            }
+        }
+        Err(CatalogError::NotFound(format!("view {view_id}")))
+    }
+
     // ─── v0.27: Sort Info ────────────────────────────────────────────────────
 
     /// Write a `ducklake_partition_info` row directly.
@@ -2911,6 +3184,28 @@ impl CatalogWriter {
         };
         let key = keys::key_partition_column(partition_id, partition_key_index);
         self.stage(key, values::encode_value(&row));
+        Ok(())
+    }
+
+    pub async fn register_file_partition_value(
+        &mut self,
+        data_file_id: u64,
+        table_id: u64,
+        partition_key_index: u64,
+        partition_value: Option<&str>,
+    ) -> CatalogResult<()> {
+        self.ensure_data_file_belongs(table_id, data_file_id)
+            .await?;
+        let row = FilePartitionValueRow {
+            table_id,
+            partition_key_index,
+            data_file_id,
+            partition_value: partition_value.map(str::to_string),
+        };
+        self.stage(
+            keys::key_file_partition_value(table_id, partition_key_index, data_file_id),
+            values::encode_value(&row),
+        );
         Ok(())
     }
 

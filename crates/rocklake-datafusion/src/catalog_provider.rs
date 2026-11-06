@@ -710,7 +710,7 @@ impl RockLakeTableProvider {
 
     /// Map a DuckLake column type string to the corresponding Arrow DataType.
     ///
-    /// Uses `DuckLakeType::parse()` from `rocklake-core` for all v1.0 scalar
+    /// Uses `DuckLakeType::parse()` from `rocklake-core` for v1.0 scalar and v1.1 NULL
     /// types.  Nested types (list, struct, map) and geometry/variant return
     /// `DataFusionError::NotImplemented` rather than silently falling back to
     /// UTF-8.
@@ -720,6 +720,7 @@ impl RockLakeTableProvider {
         use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
         use rocklake_core::types::DuckLakeType;
         match DuckLakeType::parse(type_str) {
+            DuckLakeType::Null => Ok(DataType::Null),
             DuckLakeType::Integer {
                 signed: true,
                 width_bits: 8,
@@ -879,6 +880,7 @@ impl TableProvider for RockLakeTableProvider {
             )));
         }
 
+        use datafusion::arrow::datatypes::{DataType, Schema};
         use datafusion::datasource::file_format::parquet::ParquetFormat;
         use datafusion::datasource::listing::{
             ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -931,11 +933,69 @@ impl TableProvider for RockLakeTableProvider {
         let file_format = Arc::new(ParquetFormat::default());
         let listing_options = ListingOptions::new(file_format).with_file_extension(".parquet");
 
+        let has_null_type = self
+            .schema
+            .fields()
+            .iter()
+            .any(|field| field.data_type() == &DataType::Null);
+        let scan_schema = if has_null_type {
+            Arc::new(Schema::new(
+                self.schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        if field.data_type() == &DataType::Null {
+                            Arc::new(field.as_ref().clone().with_data_type(DataType::Int64))
+                        } else {
+                            field.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+        } else {
+            self.schema.clone()
+        };
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(listing_options)
-            .with_schema(self.schema.clone());
+            .with_schema(scan_schema);
 
         let listing_table = ListingTable::try_new(config)?;
-        listing_table.scan(state, projection, filters, limit).await
+        let plan = listing_table
+            .scan(state, projection, filters, limit)
+            .await?;
+        if !has_null_type {
+            return Ok(plan);
+        }
+
+        let projection_indices = projection.map_or_else(
+            || (0..self.schema.fields().len()).collect(),
+            |indices| indices.to_vec(),
+        );
+        if !projection_indices
+            .iter()
+            .any(|index| self.schema.field(*index).data_type() == &DataType::Null)
+        {
+            return Ok(plan);
+        }
+
+        // DuckLake stores NULL columns as all-null BIGINT values in Parquet.
+        use datafusion::common::ScalarValue;
+        use datafusion::physical_expr::expressions::{Column, Literal};
+        use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+        let expressions = projection_indices
+            .iter()
+            .enumerate()
+            .map(|(output_index, index)| {
+                let field = self.schema.field(*index);
+                let expr: Arc<dyn datafusion::physical_expr::PhysicalExpr> =
+                    if field.data_type() == &DataType::Null {
+                        Arc::new(Literal::new(ScalarValue::Null))
+                    } else {
+                        Arc::new(Column::new(field.name(), output_index))
+                    };
+                ProjectionExpr::new(expr, field.name())
+            })
+            .collect::<Vec<_>>();
+        Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
     }
 }
