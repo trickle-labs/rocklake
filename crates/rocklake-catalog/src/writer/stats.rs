@@ -479,6 +479,7 @@ impl CatalogWriter {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn set_table_column_stats(
         &mut self,
         table_id: u64,
