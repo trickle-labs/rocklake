@@ -480,6 +480,7 @@ async fn cleanup_failpoints_are_propagated_before_object_and_catalog_delete() {
         partition_id: None,
         mapping_id: None,
         partial_max: None,
+        row_group_count: None,
     };
     db.put(
         &keys::key_data_file(1, 7),

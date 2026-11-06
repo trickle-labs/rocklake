@@ -104,9 +104,8 @@ async fn inspect(resp: Response<'static>) -> (Vec<String>, usize) {
             futures::pin_mut!(stream);
             let mut count = 0usize;
             while let Some(item) = stream.next().await {
-                if item.is_ok() {
-                    count += 1;
-                }
+                item.expect("valid response row");
+                count += 1;
             }
             (cols, count)
         }
@@ -340,6 +339,7 @@ async fn golden_ducklake_data_file() {
         cols.contains(&"path".to_string()),
         "must have path: {cols:?}"
     );
+    assert!(!cols.contains(&"row_group_count".to_string()));
 }
 
 #[tokio::test]
@@ -357,6 +357,107 @@ async fn golden_ducklake_delete_file() {
         cols.contains(&"path".to_string()),
         "must have path: {cols:?}"
     );
+    assert!(!cols.contains(&"row_group_count".to_string()));
+}
+
+#[tokio::test]
+async fn ducklake_v11_row_group_counts_persist_and_are_exposed() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let table_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(commit);
+        table_id
+    };
+    drop(store);
+    let store = open_store(&dir).await;
+
+    let insert_data = format!(
+        "INSERT INTO ducklake_data_file (table_id, path, file_format, record_count, file_size_bytes, row_group_count) VALUES ({table_id}, 'part.parquet', 'parquet', 10, 100, 3)"
+    );
+    executor::execute_sql(
+        &insert_data,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let data_files = store
+        .lock()
+        .await
+        .read_latest()
+        .list_data_files(table_id)
+        .await
+        .unwrap();
+    let data_file_id = data_files[0].data_file_id;
+    assert_eq!(data_files[0].row_group_count, Some(3));
+
+    let insert_delete = format!(
+        "INSERT INTO ducklake_delete_file (data_file_id, table_id, path, delete_count, file_size_bytes, row_group_count) VALUES ({data_file_id}, {table_id}, 'delete.parquet', 1, 20, 2)"
+    );
+    executor::execute_sql(
+        &insert_delete,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let delete_files = store
+        .lock()
+        .await
+        .read_latest()
+        .list_delete_files(table_id)
+        .await
+        .unwrap();
+    assert_eq!(delete_files[0].row_group_count, Some(2));
+
+    let (data_cols, _) = inspect(exec("SELECT * FROM ducklake_data_file", &store).await).await;
+    let (delete_cols, _) = inspect(exec("SELECT * FROM ducklake_delete_file", &store).await).await;
+    assert!(data_cols.ends_with(&["row_group_count".into()]));
+    assert!(delete_cols.ends_with(&["row_group_count".into()]));
+
+    let (data_projection, data_rows) = inspect(
+        exec(
+            "SELECT path, row_group_count FROM ducklake_data_file",
+            &store,
+        )
+        .await,
+    )
+    .await;
+    assert_cols_eq(
+        &data_projection,
+        &["path", "row_group_count"],
+        "data_file projection",
+    );
+    assert_eq!(data_rows, 1);
+
+    let (delete_projection, delete_rows) = inspect(
+        exec(
+            "SELECT path, row_group_count FROM ducklake_delete_file",
+            &store,
+        )
+        .await,
+    )
+    .await;
+    assert_cols_eq(
+        &delete_projection,
+        &["path", "row_group_count"],
+        "delete_file projection",
+    );
+    assert_eq!(delete_rows, 1);
 }
 
 #[tokio::test]
