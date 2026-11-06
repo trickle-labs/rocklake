@@ -71,9 +71,9 @@ migrated catalog.
 
 The migration is committed as one RockLake catalog snapshot. The recovery test
 injects a failure at the snapshot pre-commit boundary after the migration
-update has been staged; it verifies that the catalog remains at 1.0 and that
-the migration can be retried. It does not simulate killing DuckDB or RockLake
-mid-process.
+update has been staged, closes and reopens RockLake, verifies that the catalog
+remains at 1.0 with its existing inlined rows, then retries the migration. It
+does not simulate killing DuckDB or RockLake mid-process.
 
 After an attach error, reconnect and query the catalog version before retrying.
 If it is `1.0`, fix the reported cause and retry the explicit migration. If the
