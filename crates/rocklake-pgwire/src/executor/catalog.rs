@@ -427,6 +427,32 @@ pub(super) async fn execute_commit(
                     .await
                     .map_err(RockLakeError::from)?;
             }
+            BufferedOp::SetTableColumnStats {
+                table_id,
+                column_id,
+                contains_null,
+                contains_nan,
+                min_value,
+                max_value,
+                extra_stats,
+                min_is_exact,
+                max_is_exact,
+            } => {
+                needs_snapshot |= writer
+                    .set_table_column_stats(
+                        table_id,
+                        column_id,
+                        contains_null,
+                        contains_nan,
+                        min_value.as_deref(),
+                        max_value.as_deref(),
+                        extra_stats.as_deref(),
+                        min_is_exact,
+                        max_is_exact,
+                    )
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
             BufferedOp::RecomputeTableFileSize { table_id } => {
                 needs_snapshot = true;
                 writer
@@ -468,22 +494,28 @@ pub(super) async fn execute_commit(
                 max_value,
                 contains_nan,
                 extra_stats,
+                min_is_exact,
+                max_is_exact,
             } => {
                 needs_snapshot = true;
                 writer
-                    .upsert_file_column_stats(FileColumnStatsInput {
-                        table_id,
-                        column_id,
-                        data_file_id,
-                        contains_null,
-                        min_value: min_value.as_deref(),
-                        max_value: max_value.as_deref(),
-                        contains_nan,
-                        column_size_bytes,
-                        value_count,
-                        null_count,
-                        extra_stats: extra_stats.as_deref(),
-                    })
+                    .upsert_file_column_stats_with_exactness(
+                        FileColumnStatsInput {
+                            table_id,
+                            column_id,
+                            data_file_id,
+                            contains_null,
+                            min_value: min_value.as_deref(),
+                            max_value: max_value.as_deref(),
+                            contains_nan,
+                            column_size_bytes,
+                            value_count,
+                            null_count,
+                            extra_stats: extra_stats.as_deref(),
+                        },
+                        min_is_exact,
+                        max_is_exact,
+                    )
                     .await
                     .map_err(RockLakeError::from)?;
             }
@@ -495,10 +527,12 @@ pub(super) async fn execute_commit(
                 min_value,
                 max_value,
                 extra_stats,
+                min_is_exact,
+                max_is_exact,
             } => {
                 needs_snapshot = true;
                 writer
-                    .upsert_table_column_stats(
+                    .upsert_table_column_stats_with_exactness(
                         table_id,
                         column_id,
                         contains_null,
@@ -506,6 +540,8 @@ pub(super) async fn execute_commit(
                         max_value.as_deref(),
                         contains_nan,
                         extra_stats.as_deref(),
+                        min_is_exact,
+                        max_is_exact,
                     )
                     .await
                     .map_err(RockLakeError::from)?;
@@ -1692,6 +1728,8 @@ enum FileColumnStatsProjectionSource {
     MaxValue,
     ContainsNan,
     ExtraStats,
+    MinIsExact,
+    MaxIsExact,
 }
 
 #[derive(Clone)]
@@ -1704,12 +1742,13 @@ struct FileColumnStatsProjection {
 pub(super) fn make_file_column_stats_stream_response(
     snapshot_id: u64,
     sql: &str,
+    stable_1_1: bool,
     rows: BoxStream<
         'static,
         rocklake_catalog::error::CatalogResult<rocklake_core::rows::FileColumnStatsRow>,
     >,
 ) -> Response<'static> {
-    let projections = file_column_stats_projections(sql);
+    let projections = file_column_stats_projections(sql, stable_1_1);
     let schema = Arc::new(
         projections
             .iter()
@@ -1766,6 +1805,12 @@ pub(super) fn make_file_column_stats_stream_response(
                     FileColumnStatsProjectionSource::ExtraStats => {
                         MetadataValue::optional_text(row.extra_stats.clone())
                     }
+                    FileColumnStatsProjectionSource::MinIsExact => MetadataValue::optional_text(
+                        row.min_is_exact.map(|value| value.to_string()),
+                    ),
+                    FileColumnStatsProjectionSource::MaxIsExact => MetadataValue::optional_text(
+                        row.max_is_exact.map(|value| value.to_string()),
+                    ),
                 })
                 .collect();
             encode_metadata_row(schema, values)
@@ -1809,18 +1854,18 @@ fn text_field(name: &str) -> FieldInfo {
     FieldInfo::new(name.to_string(), None, None, Type::TEXT, FieldFormat::Text)
 }
 
-fn file_column_stats_projections(sql: &str) -> Vec<FileColumnStatsProjection> {
+fn file_column_stats_projections(sql: &str, stable_1_1: bool) -> Vec<FileColumnStatsProjection> {
     let items = select_projection_items(sql).unwrap_or_default();
     let mut projections = Vec::new();
     for item in items {
         match item {
             SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
-                projections.extend(default_file_column_stats_projections());
+                projections.extend(default_file_column_stats_projections(stable_1_1));
             }
             SelectItem::UnnamedExpr(expr) => {
                 let source_name = expr_last_identifier(&expr);
                 if let Some(projection) =
-                    file_column_stats_projection_for_name(&source_name, &source_name)
+                    file_column_stats_projection_for_name(&source_name, &source_name, stable_1_1)
                 {
                     projections.push(projection);
                 }
@@ -1828,7 +1873,7 @@ fn file_column_stats_projections(sql: &str) -> Vec<FileColumnStatsProjection> {
             SelectItem::ExprWithAlias { expr, alias } => {
                 let source_name = expr_last_identifier(&expr);
                 if let Some(projection) =
-                    file_column_stats_projection_for_name(&source_name, &alias.value)
+                    file_column_stats_projection_for_name(&source_name, &alias.value, stable_1_1)
                 {
                     projections.push(projection);
                 }
@@ -1837,7 +1882,7 @@ fn file_column_stats_projections(sql: &str) -> Vec<FileColumnStatsProjection> {
     }
 
     if projections.is_empty() {
-        default_file_column_stats_projections()
+        default_file_column_stats_projections(stable_1_1)
     } else {
         projections
     }
@@ -1921,8 +1966,8 @@ fn table_stats_projection(name: &str, source: TableStatsProjectionSource) -> Tab
     }
 }
 
-fn default_file_column_stats_projections() -> Vec<FileColumnStatsProjection> {
-    vec![
+fn default_file_column_stats_projections(stable_1_1: bool) -> Vec<FileColumnStatsProjection> {
+    let mut projections = vec![
         file_column_stats_projection(
             "data_file_id",
             Type::INT8,
@@ -1973,12 +2018,28 @@ fn default_file_column_stats_projections() -> Vec<FileColumnStatsProjection> {
             Type::TEXT,
             FileColumnStatsProjectionSource::ExtraStats,
         ),
-    ]
+    ];
+    if stable_1_1 {
+        projections.extend([
+            file_column_stats_projection(
+                "min_is_exact",
+                Type::BOOL,
+                FileColumnStatsProjectionSource::MinIsExact,
+            ),
+            file_column_stats_projection(
+                "max_is_exact",
+                Type::BOOL,
+                FileColumnStatsProjectionSource::MaxIsExact,
+            ),
+        ]);
+    }
+    projections
 }
 
 fn file_column_stats_projection_for_name(
     source_name: &str,
     output_name: &str,
+    stable_1_1: bool,
 ) -> Option<FileColumnStatsProjection> {
     let source_name = source_name.trim_matches('"').to_ascii_lowercase();
     let output_name = output_name.trim_matches('"');
@@ -2032,6 +2093,16 @@ fn file_column_stats_projection_for_name(
             output_name,
             Type::TEXT,
             FileColumnStatsProjectionSource::ExtraStats,
+        )),
+        "min_is_exact" if stable_1_1 => Some(file_column_stats_projection(
+            output_name,
+            Type::BOOL,
+            FileColumnStatsProjectionSource::MinIsExact,
+        )),
+        "max_is_exact" if stable_1_1 => Some(file_column_stats_projection(
+            output_name,
+            Type::BOOL,
+            FileColumnStatsProjectionSource::MaxIsExact,
         )),
         _ => None,
     }
@@ -2368,8 +2439,13 @@ pub(super) fn make_table_stats_rows_response_for_sql(
 pub(super) fn make_global_table_stats_response(
     stats_rows: Vec<rocklake_core::rows::TableStatsRow>,
     column_stats_rows: Vec<rocklake_core::rows::TableColumnStatsRow>,
+    stable_1_1: bool,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::global_table_stats_schema();
+    let schema = if stable_1_1 {
+        crate::schema_registry::global_table_stats_schema_v11()
+    } else {
+        crate::schema_registry::global_table_stats_schema()
+    };
     let mut data_rows = Vec::new();
     for stats in &stats_rows {
         let matching_column_stats = column_stats_rows
@@ -2377,13 +2453,19 @@ pub(super) fn make_global_table_stats_response(
             .filter(|row| row.table_id == stats.table_id)
             .collect::<Vec<_>>();
         if matching_column_stats.is_empty() {
-            data_rows.push(encode_global_table_stats_row(schema.clone(), stats, None));
+            data_rows.push(encode_global_table_stats_row(
+                schema.clone(),
+                stats,
+                None,
+                stable_1_1,
+            ));
         } else {
             for column_stats in matching_column_stats {
                 data_rows.push(encode_global_table_stats_row(
                     schema.clone(),
                     stats,
                     Some(column_stats),
+                    stable_1_1,
                 ));
             }
         }
@@ -2395,6 +2477,7 @@ fn encode_global_table_stats_row(
     schema: Arc<Vec<FieldInfo>>,
     stats: &rocklake_core::rows::TableStatsRow,
     column_stats: Option<&rocklake_core::rows::TableColumnStatsRow>,
+    stable_1_1: bool,
 ) -> pgwire::error::PgWireResult<pgwire::messages::data::DataRow> {
     let mut encoder = DataRowEncoder::new(schema);
     encode_text_value(&mut encoder, &Some(stats.table_id.to_string()));
@@ -2428,6 +2511,16 @@ fn encode_global_table_stats_row(
         &mut encoder,
         &column_stats.and_then(|row| row.extra_stats.clone()),
     );
+    if stable_1_1 {
+        encode_text_value(
+            &mut encoder,
+            &column_stats.and_then(|row| row.min_is_exact.map(|value| value.to_string())),
+        );
+        encode_text_value(
+            &mut encoder,
+            &column_stats.and_then(|row| row.max_is_exact.map(|value| value.to_string())),
+        );
+    }
     encoder.finish()
 }
 
@@ -2565,8 +2658,13 @@ fn encode_optional_text_row(
 
 pub(super) fn make_table_column_stats_response(
     rows: Vec<rocklake_core::rows::TableColumnStatsRow>,
+    stable_1_1: bool,
 ) -> Response<'static> {
-    let schema = crate::schema_registry::table_column_stats_schema();
+    let schema = if stable_1_1 {
+        crate::schema_registry::table_column_stats_schema_v11()
+    } else {
+        crate::schema_registry::table_column_stats_schema()
+    };
     let mut data_rows = Vec::new();
     for row in &rows {
         let mut encoder = DataRowEncoder::new(schema.clone());
@@ -2578,6 +2676,16 @@ pub(super) fn make_table_column_stats_response(
         encode_text_value(&mut encoder, &row.min_value);
         encode_text_value(&mut encoder, &row.max_value);
         encode_text_value(&mut encoder, &row.extra_stats);
+        if stable_1_1 {
+            encode_text_value(
+                &mut encoder,
+                &row.min_is_exact.map(|value| value.to_string()),
+            );
+            encode_text_value(
+                &mut encoder,
+                &row.max_is_exact.map(|value| value.to_string()),
+            );
+        }
         data_rows.push(encoder.finish());
     }
     make_encoded_metadata_response(schema, data_rows, "table_id ASC, column_id ASC")

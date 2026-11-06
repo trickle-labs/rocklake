@@ -88,6 +88,17 @@ pub enum BufferedOp {
         table_id: u64,
         row_count_delta: i64,
     },
+    SetTableColumnStats {
+        table_id: u64,
+        column_id: u64,
+        contains_null: bool,
+        contains_nan: Option<bool>,
+        min_value: Option<String>,
+        max_value: Option<String>,
+        extra_stats: Option<String>,
+        min_is_exact: Option<bool>,
+        max_is_exact: Option<bool>,
+    },
     RecomputeTableFileSize {
         table_id: u64,
     },
@@ -113,6 +124,8 @@ pub enum BufferedOp {
         max_value: Option<String>,
         contains_nan: bool,
         extra_stats: Option<String>,
+        min_is_exact: Option<bool>,
+        max_is_exact: Option<bool>,
     },
     InsertTableColumnStats {
         table_id: u64,
@@ -122,6 +135,8 @@ pub enum BufferedOp {
         min_value: Option<String>,
         max_value: Option<String>,
         extra_stats: Option<String>,
+        min_is_exact: Option<Option<bool>>,
+        max_is_exact: Option<Option<bool>>,
     },
     InsertMetadata {
         key: String,

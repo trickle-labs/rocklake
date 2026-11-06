@@ -448,6 +448,12 @@ pub struct TableColumnStatsRow {
     /// v0.26: JSON blob for geometry or variant extra stats.
     #[prost(string, optional, tag = "7")]
     pub extra_stats: Option<String>,
+    /// v1.1: whether the stored minimum is an exact value.
+    #[prost(bool, optional, tag = "8")]
+    pub min_is_exact: Option<bool>,
+    /// v1.1: whether the stored maximum is an exact value.
+    #[prost(bool, optional, tag = "9")]
+    pub max_is_exact: Option<bool>,
 }
 
 /// File column stats row value.
@@ -480,6 +486,12 @@ pub struct FileColumnStatsRow {
     /// v0.26: JSON blob for geometry or variant extra stats.
     #[prost(string, optional, tag = "11")]
     pub extra_stats: Option<String>,
+    /// v1.1: whether the stored minimum is an exact value.
+    #[prost(bool, optional, tag = "12")]
+    pub min_is_exact: Option<bool>,
+    /// v1.1: whether the stored maximum is an exact value.
+    #[prost(bool, optional, tag = "13")]
+    pub max_is_exact: Option<bool>,
 }
 
 /// File variant stats row value.

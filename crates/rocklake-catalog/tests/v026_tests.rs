@@ -32,6 +32,14 @@ fn test_opts(dir: &TempDir) -> OpenOptions {
     }
 }
 
+async fn open_db(dir: &TempDir) -> slatedb::Db {
+    let path = dir.path().to_str().unwrap().to_string();
+    let store = Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&path).unwrap());
+    slatedb::Db::open(ObjectPath::from("catalog"), store)
+        .await
+        .unwrap()
+}
+
 // ─── Phase 1: File Column Stats ──────────────────────────────────────────────
 
 #[test]
@@ -48,12 +56,16 @@ fn file_column_stats_row_has_v026_fields() {
         value_count: Some(1000),
         null_count: Some(5),
         extra_stats: Some(r#"{"type":"int32"}"#.to_string()),
+        min_is_exact: Some(true),
+        max_is_exact: Some(false),
     };
     assert!(row.contains_null);
     assert_eq!(row.column_size_bytes, Some(4096));
     assert_eq!(row.value_count, Some(1000));
     assert_eq!(row.null_count, Some(5));
     assert!(row.extra_stats.is_some());
+    assert_eq!(row.min_is_exact, Some(true));
+    assert_eq!(row.max_is_exact, Some(false));
 }
 
 #[tokio::test]
@@ -74,19 +86,23 @@ async fn upsert_file_column_stats_with_new_fields() {
         .unwrap();
 
     writer
-        .upsert_file_column_stats(FileColumnStatsInput {
-            table_id,
-            column_id: col_id,
-            data_file_id: file_id,
-            contains_null: true,
-            min_value: Some("1"),
-            max_value: Some("999"),
-            contains_nan: false,
-            column_size_bytes: Some(8192),
-            value_count: Some(1000),
-            null_count: Some(10),
-            extra_stats: Some(r#"{"info":"test"}"#),
-        })
+        .upsert_file_column_stats_with_exactness(
+            FileColumnStatsInput {
+                table_id,
+                column_id: col_id,
+                data_file_id: file_id,
+                contains_null: true,
+                min_value: Some("1"),
+                max_value: Some("999"),
+                contains_nan: false,
+                column_size_bytes: Some(8192),
+                value_count: Some(1000),
+                null_count: Some(10),
+                extra_stats: Some(r#"{"info":"test"}"#),
+            },
+            Some(false),
+            Some(true),
+        )
         .await
         .unwrap();
     let _snap = writer.create_snapshot(None, None).await.unwrap();
@@ -106,6 +122,12 @@ async fn upsert_file_column_stats_with_new_fields() {
         .await
         .unwrap();
     assert_eq!(kept, vec![file_id]);
+    let stats = reader
+        .list_file_column_stats(table_id, col_id)
+        .await
+        .unwrap();
+    assert_eq!(stats[0].min_is_exact, Some(false));
+    assert_eq!(stats[0].max_is_exact, Some(true));
 
     let pruned = reader
         .prune_files(
@@ -120,6 +142,29 @@ async fn upsert_file_column_stats_with_new_fields() {
         .await
         .unwrap();
     assert!(pruned.is_empty());
+
+    let mut export_buf = Vec::new();
+    rocklake_catalog::export::export_catalog(store.db(), None, &mut export_buf)
+        .await
+        .unwrap();
+    let restored_dir = TempDir::new().unwrap();
+    let restored_db = open_db(&restored_dir).await;
+    rocklake_catalog::export::import_catalog(
+        &restored_db,
+        std::io::BufReader::new(export_buf.as_slice()),
+    )
+    .await
+    .unwrap();
+    restored_db.close().await.unwrap();
+    let restored = CatalogStore::open(test_opts(&restored_dir)).await.unwrap();
+    let restored_stats = restored
+        .read_latest()
+        .list_file_column_stats(table_id, col_id)
+        .await
+        .unwrap();
+    assert_eq!(restored_stats[0].min_is_exact, Some(false));
+    assert_eq!(restored_stats[0].max_is_exact, Some(true));
+    restored.close().await.unwrap();
 
     store.close().await.unwrap();
 }
@@ -136,10 +181,67 @@ fn table_column_stats_row_has_v026_fields() {
         max_value: Some("z".to_string()),
         contains_nan: Some(true),
         extra_stats: Some(r#"{"key":"value"}"#.to_string()),
+        min_is_exact: Some(true),
+        max_is_exact: Some(false),
     };
     assert!(!row.contains_null);
     assert_eq!(row.contains_nan, Some(true));
     assert!(row.extra_stats.is_some());
+    assert_eq!(row.min_is_exact, Some(true));
+    assert_eq!(row.max_is_exact, Some(false));
+}
+
+#[tokio::test]
+async fn table_stats_exactness_is_conservative_when_bounds_merge() {
+    let dir = TempDir::new().unwrap();
+    let mut store = CatalogStore::open(test_opts(&dir)).await.unwrap();
+    let mut writer = store.begin_write();
+    let schema_id = writer.create_schema("main").await.unwrap();
+    let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+    let col_id = writer
+        .add_column(table_id, "name", "varchar", 0, true, None)
+        .await
+        .unwrap();
+
+    writer
+        .upsert_table_column_stats_with_exactness(
+            table_id,
+            col_id,
+            false,
+            Some("a"),
+            Some("z"),
+            None,
+            None,
+            Some(Some(true)),
+            Some(Some(true)),
+        )
+        .await
+        .unwrap();
+    writer
+        .upsert_table_column_stats_with_exactness(
+            table_id,
+            col_id,
+            false,
+            Some("b"),
+            Some("y"),
+            None,
+            None,
+            Some(Some(false)),
+            Some(Some(true)),
+        )
+        .await
+        .unwrap();
+    let _ = writer.create_snapshot(None, None).await.unwrap();
+
+    let stats = store
+        .read_latest()
+        .list_all_table_column_stats()
+        .await
+        .unwrap();
+    assert_eq!(stats[0].min_value.as_deref(), Some("a"));
+    assert_eq!(stats[0].min_is_exact, Some(false));
+    assert_eq!(stats[0].max_is_exact, Some(true));
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
