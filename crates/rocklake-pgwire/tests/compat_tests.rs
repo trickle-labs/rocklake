@@ -23,7 +23,7 @@ use object_store::path::Path as ObjectPath;
 
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_pgwire::executor;
-use rocklake_pgwire::session::SessionState;
+use rocklake_pgwire::session::{BootstrapMetadataRow, SessionState};
 use rocklake_sql::ParamValues;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -45,6 +45,39 @@ fn default_notify_manager() -> Arc<rocklake_pgwire::notify::NotifyManager> {
 
 fn default_extension_schemas() -> Arc<Vec<String>> {
     Arc::new(vec!["pgtrickle".to_string()])
+}
+
+#[tokio::test]
+async fn fresh_bootstrap_persists_ducklake_version_metadata() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let mut session = SessionState::new();
+    session.bootstrap.metadata.push(BootstrapMetadataRow {
+        key: "version".into(),
+        value: "1.1".into(),
+        scope: Some("global".into()),
+        scope_id: Some(0),
+    });
+
+    executor::execute_sql(
+        "COMMIT",
+        &ParamValues::default(),
+        &store,
+        &mut session,
+        &default_notify_manager(),
+        &default_extension_schemas(),
+    )
+    .await
+    .unwrap();
+
+    let metadata = store
+        .lock()
+        .await
+        .read_latest()
+        .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+        .await
+        .unwrap();
+    assert_eq!(metadata.map(|row| row.value).as_deref(), Some("1.1"));
 }
 
 // ── Test 1: Full DuckLake tutorial lifecycle ───────────────────────────────────

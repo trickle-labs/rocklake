@@ -259,6 +259,15 @@ pub struct BootstrapSchemaRow {
     pub schema_name: String,
 }
 
+/// A metadata row received from a `ducklake_metadata` binary COPY stream.
+#[derive(Debug, Clone)]
+pub struct BootstrapMetadataRow {
+    pub key: String,
+    pub value: String,
+    pub scope: Option<String>,
+    pub scope_id: Option<u64>,
+}
+
 /// Bootstrap state collected during the DuckDB `ATTACH` initialisation phase.
 ///
 /// DuckDB bootstraps the catalog by issuing binary `COPY … FROM STDIN` for
@@ -270,6 +279,8 @@ pub struct BootstrapState {
     pub has_snapshot: bool,
     /// Schema rows received from `ducklake_schema`.
     pub schemas: Vec<BootstrapSchemaRow>,
+    /// Metadata rows received from `ducklake_metadata`.
+    pub metadata: Vec<BootstrapMetadataRow>,
 }
 
 /// Per-session state.

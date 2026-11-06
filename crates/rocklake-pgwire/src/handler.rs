@@ -54,7 +54,16 @@ use crate::lifecycle::{
 };
 use crate::notify::NotifyManager;
 use crate::server::{server_shutting_down_error, AuthConfig, MultiPrincipalAuth};
-use crate::session::{BootstrapSchemaRow, SessionState};
+use crate::session::{BootstrapMetadataRow, BootstrapSchemaRow, SessionState};
+
+fn extract_bootstrap_metadata(row: &[Option<Vec<u8>>]) -> Option<BootstrapMetadataRow> {
+    Some(BootstrapMetadataRow {
+        key: copy_parser::extract_varchar(row, 0)?,
+        value: copy_parser::extract_varchar(row, 1)?,
+        scope: copy_parser::extract_varchar(row, 2),
+        scope_id: copy_parser::extract_i64(row, 3).and_then(|id| u64::try_from(id).ok()),
+    })
+}
 
 /// RockLake COPY handler: parses binary COPY FROM STDIN data for ducklake_*
 /// tables and stores the bootstrap rows in the session for later commit.
@@ -268,8 +277,14 @@ impl CopyHandler for RockLakeCopyHandler {
                         }
                     }
                 }
-                // ducklake_snapshot_changes and ducklake_metadata are accepted
-                // but not persisted; they don't affect catalog bootstrap state.
+                "ducklake_metadata" => {
+                    for row in &rows {
+                        if let Some(metadata) = extract_bootstrap_metadata(row) {
+                            session.bootstrap.metadata.push(metadata);
+                        }
+                    }
+                }
+                // ducklake_snapshot_changes do not affect catalog bootstrap state.
                 _ => {}
             }
         }
@@ -3321,5 +3336,25 @@ mod pg_parameter_tests {
         assert_eq!(fields[8].name(), "row_id_start");
         assert_eq!(fields[15].name(), "begin_snapshot");
         assert_eq!(fields[8].datatype(), &Type::INT8);
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_metadata_tests {
+    use super::extract_bootstrap_metadata;
+
+    #[test]
+    fn extracts_ducklake_metadata_copy_row() {
+        let row = vec![
+            Some(b"version".to_vec()),
+            Some(b"1.1".to_vec()),
+            Some(b"global".to_vec()),
+            Some(0_i64.to_be_bytes().to_vec()),
+        ];
+        let metadata = extract_bootstrap_metadata(&row).unwrap();
+        assert_eq!(metadata.key, "version");
+        assert_eq!(metadata.value, "1.1");
+        assert_eq!(metadata.scope.as_deref(), Some("global"));
+        assert_eq!(metadata.scope_id, Some(0));
     }
 }

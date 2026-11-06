@@ -1247,7 +1247,10 @@ async fn execute_classified<'a>(
             // snapshot).  Subsequent ATTACH on an already-populated catalog
             // must NOT re-create the initial schema/snapshot.
             let mut all_ops: Vec<BufferedOp> = Vec::new();
-            if bootstrap.has_snapshot || !bootstrap.schemas.is_empty() {
+            if bootstrap.has_snapshot
+                || !bootstrap.schemas.is_empty()
+                || !bootstrap.metadata.is_empty()
+            {
                 let reader = { store.lock().await.read_latest() };
                 let existing = reader.get_snapshot().await.map_err(RockLakeError::from)?;
                 if existing.is_none() {
@@ -1260,6 +1263,14 @@ async fn execute_classified<'a>(
                             path: None,
                             path_is_relative: None,
                             parent_schema_id: None,
+                        });
+                    }
+                    for metadata_row in bootstrap.metadata {
+                        all_ops.push(BufferedOp::InsertMetadata {
+                            key: metadata_row.key,
+                            value: metadata_row.value,
+                            scope: metadata_row.scope,
+                            scope_id: metadata_row.scope_id,
                         });
                     }
                     if bootstrap.has_snapshot {
