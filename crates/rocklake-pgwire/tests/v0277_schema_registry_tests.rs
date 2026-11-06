@@ -659,6 +659,23 @@ async fn ducklake_v10_table_column_stats_update_uses_legacy_fields() {
     assert_eq!(second.min_value.as_deref(), Some("3"));
     assert_eq!(second.max_value.as_deref(), Some("4"));
     assert_eq!(second.contains_null_value(), Some(true));
+
+    let response = exec("SELECT * FROM ducklake_table_column_stats", &store).await;
+    let Response::Query(response) = response else {
+        panic!("expected table column stats query response");
+    };
+    let rows = response.data_rows();
+    futures::pin_mut!(rows);
+    let row = rows.next().await.unwrap().unwrap();
+    let mut offset = 0;
+    for _ in 0..2 {
+        let length = i32::from_be_bytes(row.data[offset..offset + 4].try_into().unwrap());
+        offset += 4 + length as usize;
+    }
+    assert_eq!(
+        i32::from_be_bytes(row.data[offset..offset + 4].try_into().unwrap()),
+        -1
+    );
 }
 
 #[tokio::test]
