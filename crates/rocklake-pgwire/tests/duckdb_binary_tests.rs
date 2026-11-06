@@ -511,6 +511,7 @@ async fn duckdb_fresh_catalog_defaults_to_v11_and_reopens_after_restart() {
          INSERT INTO lake.analytics.events VALUES (1, 'file-backed'); \
          CALL ducklake_flush_inlined_data('lake', schema_name => 'analytics', table_name => 'events'); \
          INSERT INTO lake.analytics.events VALUES (2, 'inlined'); \
+         CREATE TABLE lake.analytics.signups AS SELECT 1 AS id, NULL AS referrer; \
          SELECT value FROM lake.options() WHERE option_name = 'version'; \
          SELECT id, payload FROM lake.analytics.events ORDER BY id; \
          DETACH lake;"
@@ -537,7 +538,7 @@ async fn duckdb_fresh_catalog_defaults_to_v11_and_reopens_after_restart() {
     assert!(create_stdout.contains("file-backed"), "{create_stdout}");
     assert!(create_stdout.contains("inlined"), "{create_stdout}");
 
-    let (version, table_id, data_files) = {
+    let (version, table_id, data_files, null_table_id, null_snapshot_id, null_type) = {
         let catalog = catalog.lock().await;
         let reader = catalog.read_latest();
         let version = reader
@@ -562,10 +563,104 @@ async fn duckdb_fresh_catalog_defaults_to_v11_and_reopens_after_restart() {
             .unwrap()
             .table_id;
         let data_files = reader.list_data_files(table_id).await.unwrap();
-        (version, table_id, data_files)
+        let null_table_id = reader
+            .list_tables(schema.schema_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|table| table.table_name == "signups")
+            .unwrap()
+            .table_id;
+        let null_type = reader
+            .describe_table(null_table_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .1
+            .into_iter()
+            .find(|column| column.column_name == "referrer")
+            .unwrap()
+            .data_type;
+        let null_snapshot_id = reader.get_snapshot().await.unwrap().unwrap().snapshot_id;
+        (
+            version,
+            table_id,
+            data_files,
+            null_table_id,
+            null_snapshot_id,
+            null_type,
+        )
     };
     assert_eq!(version, "1.1");
     assert!(!data_files.is_empty(), "flush must register a Parquet file");
+    assert_eq!(null_type.to_ascii_lowercase(), "null");
+
+    let promote_sql = format!(
+        "LOAD ducklake; \
+         ATTACH 'ducklake:postgres:host=127.0.0.1 port={port} dbname=rocklake' AS lake \
+             (DATA_PATH '{data_path}'); \
+         ALTER TABLE lake.analytics.signups ALTER referrer TYPE VARCHAR; \
+         INSERT INTO lake.analytics.signups VALUES (2, 'known'); \
+         SELECT concat( \
+             (SELECT count(*) FROM lake.analytics.signups WHERE referrer IS NULL)::VARCHAR, ':', \
+             (SELECT count(*) FROM lake.analytics.signups WHERE referrer = 'known')::VARCHAR \
+         ) AS null_counts; \
+         DETACH lake;"
+    );
+    let promote_output = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&promote_sql)
+            .output(),
+    )
+    .await
+    .expect("DuckDB NULL type promotion timed out")
+    .expect("duckdb process must start");
+    let promote_stdout = String::from_utf8_lossy(&promote_output.stdout);
+    let promote_stderr = String::from_utf8_lossy(&promote_output.stderr);
+    assert!(
+        promote_output.status.success(),
+        "DuckDB NULL type promotion failed: {}\nstdout: {promote_stdout}\nstderr: {promote_stderr}",
+        promote_output.status
+    );
+    assert!(promote_stdout.contains("1:1"), "{promote_stdout}");
+    {
+        let catalog = catalog.lock().await;
+        let latest = catalog.read_latest();
+        let event_columns = latest.describe_table(table_id).await.unwrap().unwrap().1;
+        assert!(
+            event_columns
+                .iter()
+                .any(|column| column.column_name == "payload"),
+            "events columns after NULL promotion: {event_columns:?}"
+        );
+        let promoted_type = latest
+            .describe_table(null_table_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .1
+            .into_iter()
+            .find(|column| column.column_name == "referrer")
+            .unwrap()
+            .data_type;
+        assert_eq!(promoted_type.to_ascii_lowercase(), "varchar");
+        let historical = catalog
+            .read_at(rocklake_core::mvcc::SnapshotId::new(null_snapshot_id))
+            .unwrap()
+            .describe_table(null_table_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .1
+            .into_iter()
+            .find(|column| column.column_name == "referrer")
+            .unwrap()
+            .data_type;
+        assert_eq!(historical.to_ascii_lowercase(), "null");
+    }
 
     let _ = shutdown_tx.send(());
     let _ = handle.await;
@@ -573,12 +668,31 @@ async fn duckdb_fresh_catalog_defaults_to_v11_and_reopens_after_restart() {
 
     let (restart_port, restart_shutdown_tx, restart_handle, restarted_catalog) =
         start_server(&dir, None).await;
+    let restarted_events_columns = restarted_catalog
+        .lock()
+        .await
+        .read_latest()
+        .describe_table(table_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .1;
+    assert!(
+        restarted_events_columns
+            .iter()
+            .any(|column| column.column_name == "payload"),
+        "events columns after server restart: {restarted_events_columns:?}"
+    );
     let reopen_sql = format!(
         "LOAD ducklake; \
          ATTACH 'ducklake:postgres:host=127.0.0.1 port={restart_port} dbname=rocklake' AS lake \
              (DATA_PATH '{data_path}'); \
          SELECT value FROM lake.options() WHERE option_name = 'version'; \
          SELECT id, payload FROM lake.analytics.events ORDER BY id; \
+         SELECT concat( \
+             (SELECT count(*) FROM lake.analytics.signups WHERE referrer IS NULL)::VARCHAR, ':', \
+             (SELECT count(*) FROM lake.analytics.signups WHERE referrer = 'known')::VARCHAR \
+         ) AS null_counts; \
          DETACH lake;"
     );
     let reopen_output = tokio::time::timeout(
@@ -604,6 +718,7 @@ async fn duckdb_fresh_catalog_defaults_to_v11_and_reopens_after_restart() {
     assert!(reopen_stdout.contains("1.1"), "{reopen_stdout}");
     assert!(reopen_stdout.contains("file-backed"), "{reopen_stdout}");
     assert!(reopen_stdout.contains("inlined"), "{reopen_stdout}");
+    assert!(reopen_stdout.contains("1:1"), "{reopen_stdout}");
     let restarted_table = restarted_catalog
         .lock()
         .await

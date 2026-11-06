@@ -332,7 +332,7 @@ pub(super) async fn execute_commit(
             BufferedOp::UpdateEndSnapshot {
                 table_name,
                 entity_id,
-                table_id: _table_id,
+                table_id,
                 begin_snapshot,
                 end_snapshot: _,
                 where_column,
@@ -389,11 +389,16 @@ pub(super) async fn execute_commit(
                         if !is_table_id_scope {
                             // Resolve table_id by scanning for the live column row
                             // (F-04: entity_id is column_id, not table_id).
-                            let table_id = writer
-                                .find_column_table_id(entity_id)
-                                .await
-                                .map_err(RockLakeError::from)?
-                                .unwrap_or(entity_id);
+                            let table_id = match table_id {
+                                Some(table_id) => table_id,
+                                None => writer
+                                    .find_column_table_id(entity_id)
+                                    .await
+                                    .map_err(RockLakeError::from)?
+                                    .ok_or_else(|| {
+                                        RockLakeError::NotFound(format!("column {entity_id}"))
+                                    })?,
+                            };
                             let mut resolved_begin = begin_snapshot;
                             if resolved_begin == 0 {
                                 if let Some(live_begin) = writer

@@ -1416,7 +1416,7 @@ fn extract_id_from_where_clause(sql: &str) -> Option<WhereClauseId> {
     None
 }
 
-fn ducklake_column_rename_entity_id(sql: &str) -> Option<u64> {
+fn ducklake_dropped_column_ids(sql: &str) -> Option<(u64, u64)> {
     let lower = sql.to_ascii_lowercase();
     let with_idx = lower.find("with dropped_cols")?;
     let values_idx = lower[with_idx..].find("values")? + with_idx;
@@ -1429,8 +1429,7 @@ fn ducklake_column_rename_entity_id(sql: &str) -> Option<u64> {
         .filter(|part| !part.is_empty())
         .filter_map(|part| part.parse::<u64>().ok());
 
-    let _table_id = numbers.next()?;
-    numbers.next()
+    Some((numbers.next()?, numbers.next()?))
 }
 
 fn placeholder_comparison_index(sql: &str, column: &str) -> Option<usize> {
@@ -4029,14 +4028,17 @@ async fn execute_classified<'a>(
             // DROP COLUMN uses a dropped_cols(tid, cid) CTE for both the
             // column and its tags. Neither WHERE clause contains a literal
             // column_id, so resolve cid from the CTE in both cases.
-            if matches!(
+            let dropped_column_ids = if matches!(
                 table_name.as_str(),
                 "ducklake_column" | "ducklake_column_tag"
             ) {
-                if let Some(dropped_column_id) = ducklake_column_rename_entity_id(_sql) {
-                    entity_id = dropped_column_id;
-                    where_column = Some("column_id".to_string());
-                }
+                ducklake_dropped_column_ids(_sql)
+            } else {
+                None
+            };
+            if let Some((_, dropped_column_id)) = dropped_column_ids {
+                entity_id = dropped_column_id;
+                where_column = Some("column_id".to_string());
             }
 
             if entity_id == 0 {
@@ -4079,7 +4081,8 @@ async fn execute_classified<'a>(
             let op = BufferedOp::UpdateEndSnapshot {
                 table_name: table_name.clone(),
                 entity_id,
-                table_id: resolve_comparison_u64(_sql, "table_id", params),
+                table_id: resolve_comparison_u64(_sql, "table_id", params)
+                    .or_else(|| dropped_column_ids.map(|(table_id, _)| table_id)),
                 begin_snapshot,
                 end_snapshot,
                 where_column,
