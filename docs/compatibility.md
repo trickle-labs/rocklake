@@ -15,13 +15,13 @@ root [`COMPATIBILITY.md`](https://github.com/trickle-labs/rocklake/blob/main/COM
 
 ## DuckLake v1.0 Compatibility Claim
 
-**RockLake targets DuckLake 1.0 (Catalog Version 7 / `V1_0`) with DuckDB 1.5.3–1.5.6 and 2.0.0.** DuckDB 2.0 defaults to DuckLake 1.1; explicitly pin `DUCKLAKE_VERSION '1.0'` on `ATTACH`.
+**RockLake's certified target remains DuckLake 1.0 (Catalog Version 7 / `V1_0`) with DuckDB 1.5.3–1.5.6 and 2.0.0.** A fresh unpinned catalog with DuckDB 2.0 follows its stable 1.1 default and persists the version metadata. This is a fresh-catalog preview, not full 1.1 certification; explicitly pin `DUCKLAKE_VERSION '1.0'` on `ATTACH` to use the certified format.
 
 This claim is backed by the durable compatibility corpus and automated CI evidence:
 
 | Acceptance Criterion | Status |
 |----------------------|--------|
-| DuckDB can attach fresh and create/drop schemas and tables; 2.0 requires the 1.0 version pin | ✅ |
+| DuckDB can attach fresh and create/drop schemas and tables; pin 1.0 on DuckDB 2.0 for the certified path | ✅ |
 | Inlined and file-backed tables both work | ✅ |
 | INSERT, DELETE, UPDATE, ALTER, DROP work for all 28 spec tables | ✅ |
 | Views, macros, tags, column tags, sort info, partition columns work | ✅ |
@@ -57,9 +57,12 @@ The direct-upgrade source is v0.60.0. The migration registry is fail-closed:
 v0.65.0 ships a verified same-format no-op, while unknown targets and all
 downgrades are rejected before mutation.
 
-**Out of scope**: DuckLake v1.1 (Catalog Version 8 / `V1_1_DEV_1`). RockLake strictly
-targets DuckLake 1.0. Any v1.1 migration statements are classified to a known handler
-and not applied.
+**Full DuckLake 1.1 support remains in progress.** Fresh DuckDB 2.0 catalogs
+use stable 1.1 by default and persist that version; existing 1.0 catalogs stay
+at 1.0 on ordinary attach. Feature and migration coverage remain open in
+[#110](https://github.com/trickle-labs/rocklake/issues/110),
+[#111](https://github.com/trickle-labs/rocklake/issues/111), and
+[#112](https://github.com/trickle-labs/rocklake/issues/112).
 
 ---
 
