@@ -105,6 +105,24 @@ async fn upsert_file_column_stats_with_new_fields() {
         )
         .await
         .unwrap();
+    writer
+        .upsert_table_column_stats(table_id, col_id, false, Some("1"), Some("999"), None, None)
+        .await
+        .unwrap();
+    writer
+        .set_table_column_stats(
+            table_id,
+            col_id,
+            None,
+            None,
+            Some("1"),
+            Some("999"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
     let _snap = writer.create_snapshot(None, None).await.unwrap();
 
     // Verify pruning still works with renamed field.
@@ -164,6 +182,12 @@ async fn upsert_file_column_stats_with_new_fields() {
         .unwrap();
     assert_eq!(restored_stats[0].min_is_exact, Some(false));
     assert_eq!(restored_stats[0].max_is_exact, Some(true));
+    let restored_table_stats = restored
+        .read_latest()
+        .list_all_table_column_stats()
+        .await
+        .unwrap();
+    assert_eq!(restored_table_stats[0].contains_null_value(), None);
     restored.close().await.unwrap();
 
     store.close().await.unwrap();

@@ -2595,7 +2595,7 @@ pub(crate) fn validate_import_data(
         "ducklake_column_mapping" => &["mapping_id", "table_id"],
         "ducklake_name_mapping" => &["mapping_id", "column_id", "name"],
         "ducklake_table_stats" => &["table_id", "record_count", "file_size_bytes"],
-        "ducklake_table_column_stats" => &["table_id", "column_id", "contains_null"],
+        "ducklake_table_column_stats" => &["table_id", "column_id"],
         "ducklake_file_column_stats" => &[
             "table_id",
             "column_id",
@@ -2643,7 +2643,6 @@ pub(crate) fn validate_import_data(
     }
     let bool_fields: &[&str] = match table {
         "ducklake_column" => &["is_nullable"],
-        "ducklake_table_column_stats" => &["contains_null"],
         "ducklake_file_column_stats" => &["contains_null", "contains_nan"],
         _ => &[],
     };
