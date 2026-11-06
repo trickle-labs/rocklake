@@ -261,6 +261,12 @@ pub fn data_file_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn data_file_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*data_file_schema()).clone();
+    fields.push(int8t!("row_group_count"));
+    Arc::new(fields)
+}
+
 // ── ducklake_delete_file ──────────────────────────────────────────────────────
 
 /// `ducklake_delete_file(delete_file_id, table_id, begin_snapshot, end_snapshot,
@@ -282,6 +288,12 @@ pub fn delete_file_schema() -> Arc<Vec<FieldInfo>> {
         text_col!("encryption_key"),
         int8t!("partial_max"),
     ])
+}
+
+pub fn delete_file_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*delete_file_schema()).clone();
+    fields.push(int8t!("row_group_count"));
+    Arc::new(fields)
 }
 
 // ── ducklake_table_stats ──────────────────────────────────────────────────────
@@ -787,8 +799,13 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
 }
 
 pub fn fields_for_table_version(table_name: &str, stable_1_1: bool) -> Option<Arc<Vec<FieldInfo>>> {
-    if stable_1_1 && table_name == "ducklake_schema" {
-        return Some(schema_schema_v11());
+    if stable_1_1 {
+        match table_name {
+            "ducklake_schema" => return Some(schema_schema_v11()),
+            "ducklake_data_file" => return Some(data_file_schema_v11()),
+            "ducklake_delete_file" => return Some(delete_file_schema_v11()),
+            _ => {}
+        }
     }
     fields_for_table(table_name)
 }
@@ -845,5 +862,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             (0..schema.len()).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn row_group_counts_are_only_exposed_in_v11_schemas() {
+        for table in ["ducklake_data_file", "ducklake_delete_file"] {
+            let v10 = fields_for_table_version(table, false).unwrap();
+            let v11 = fields_for_table_version(table, true).unwrap();
+            assert!(!v10.iter().any(|field| field.name() == "row_group_count"));
+            assert_eq!(v11.last().unwrap().name(), "row_group_count");
+        }
     }
 }

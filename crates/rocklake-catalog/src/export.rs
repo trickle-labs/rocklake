@@ -164,6 +164,7 @@ fn export_manifest(snapshot_id: u64) -> ExportManifest {
                 "partition_id",
                 "mapping_id",
                 "partial_max",
+                "row_group_count",
             ],
             "ducklake_delete_file" => &[
                 "delete_file_id",
@@ -180,6 +181,7 @@ fn export_manifest(snapshot_id: u64) -> ExportManifest {
                 "footer_size",
                 "encryption_key",
                 "partial_max",
+                "row_group_count",
             ],
             "ducklake_files_scheduled_for_deletion" => &[
                 "data_file_id",
@@ -686,6 +688,7 @@ pub async fn export_catalog<W: Write>(
                     "partition_id": row.partition_id,
                     "mapping_id": row.mapping_id,
                     "partial_max": row.partial_max,
+                    "row_group_count": row.row_group_count,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -729,6 +732,7 @@ pub async fn export_catalog<W: Write>(
                     "footer_size": row.footer_size,
                     "encryption_key": row.encryption_key,
                     "partial_max": row.partial_max,
+                    "row_group_count": row.row_group_count,
                 }),
             };
             serde_json::to_writer(&mut *writer, &exported)
@@ -1806,6 +1810,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     partition_id: d["partition_id"].as_u64(),
                     mapping_id: d["mapping_id"].as_u64(),
                     partial_max: d["partial_max"].as_str().map(|s| s.to_string()),
+                    row_group_count: d["row_group_count"].as_u64(),
                 };
                 let encoded = values::encode_value(&row);
                 // Write primary key and secondary index atomically so a
@@ -1856,6 +1861,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     footer_size: d["footer_size"].as_i64(),
                     partial_max: d["partial_max"].as_str().map(|s| s.to_string()),
                     encryption_key: d["encryption_key"].as_str().map(|s| s.to_string()),
+                    row_group_count: d["row_group_count"].as_u64(),
                 };
                 let key = keys::key_delete_file(data_file_id, delete_file_id);
                 let encoded = values::encode_value(&row);
@@ -3000,6 +3006,7 @@ pub async fn rebuild_catalog(db: &Db, data_paths: &[String]) -> CatalogResult<u6
             partition_id: None,
             mapping_id: None,
             partial_max: None,
+            row_group_count: None,
         };
         let encoded = values::encode_value(&row);
         batch.put(keys::key_data_file(table_id, file_id), &encoded);

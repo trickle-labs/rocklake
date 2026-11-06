@@ -1840,6 +1840,7 @@ impl CatalogWriter {
             partition_id: None,
             mapping_id: None,
             partial_max: None,
+            row_group_count: None,
         };
 
         let key = keys::key_data_file(table_id, data_file_id);
@@ -1904,6 +1905,7 @@ impl CatalogWriter {
             partition_id: None,
             mapping_id: None,
             partial_max: partial_max.map(|s| s.to_string()),
+            row_group_count: None,
         };
 
         let key = keys::key_data_file(table_id, data_file_id);
@@ -1940,6 +1942,37 @@ impl CatalogWriter {
         mapping_id: Option<u64>,
         partial_max: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.register_data_file_with_metadata_and_row_group_count(
+            table_id,
+            path,
+            file_format,
+            record_count,
+            file_size_bytes,
+            footer_size,
+            encryption_key,
+            partition_id,
+            mapping_id,
+            partial_max,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_data_file_with_metadata_and_row_group_count(
+        &mut self,
+        table_id: u64,
+        path: &str,
+        file_format: &str,
+        record_count: u64,
+        file_size_bytes: u64,
+        footer_size: Option<i64>,
+        encryption_key: Option<&str>,
+        partition_id: Option<u64>,
+        mapping_id: Option<u64>,
+        partial_max: Option<&str>,
+        row_group_count: Option<u64>,
+    ) -> CatalogResult<u64> {
         self.ensure_table_exists(table_id).await?;
         validate_registered_path(path, None)?;
         if let Some(partition_id) = partition_id {
@@ -1952,7 +1985,7 @@ impl CatalogWriter {
         let row_id_start = self
             .allocate_row_id_start(table_id, record_count, file_size_bytes)
             .await?;
-        self.register_data_file_with_metadata_and_row_id_start(
+        self.register_data_file_with_metadata_and_row_id_start_and_row_group_count(
             table_id,
             path,
             file_format,
@@ -1964,6 +1997,7 @@ impl CatalogWriter {
             mapping_id,
             partial_max,
             Some(row_id_start),
+            row_group_count,
         )
         .await
     }
@@ -1982,6 +2016,39 @@ impl CatalogWriter {
         mapping_id: Option<u64>,
         partial_max: Option<&str>,
         row_id_start: Option<u64>,
+    ) -> CatalogResult<u64> {
+        self.register_data_file_with_metadata_and_row_id_start_and_row_group_count(
+            table_id,
+            path,
+            file_format,
+            record_count,
+            file_size_bytes,
+            footer_size,
+            encryption_key,
+            partition_id,
+            mapping_id,
+            partial_max,
+            row_id_start,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_data_file_with_metadata_and_row_id_start_and_row_group_count(
+        &mut self,
+        table_id: u64,
+        path: &str,
+        file_format: &str,
+        record_count: u64,
+        file_size_bytes: u64,
+        footer_size: Option<i64>,
+        encryption_key: Option<&str>,
+        partition_id: Option<u64>,
+        mapping_id: Option<u64>,
+        partial_max: Option<&str>,
+        row_id_start: Option<u64>,
+        row_group_count: Option<u64>,
     ) -> CatalogResult<u64> {
         crate::fault_injection::trigger(
             crate::fault_injection::WriteFaultPoint::AfterParquetWriteBeforeRegisterDataFile,
@@ -2020,6 +2087,7 @@ impl CatalogWriter {
             partition_id,
             mapping_id,
             partial_max: partial_max.map(|s| s.to_string()),
+            row_group_count,
         };
 
         let key = keys::key_data_file(table_id, data_file_id);
@@ -2080,6 +2148,37 @@ impl CatalogWriter {
         partial_max: Option<&str>,
         encryption_key: Option<&str>,
     ) -> CatalogResult<u64> {
+        self.register_delete_file_with_opts_and_row_group_count(
+            data_file_id,
+            path,
+            delete_count,
+            file_size_bytes,
+            table_id,
+            format,
+            path_is_relative,
+            footer_size,
+            partial_max,
+            encryption_key,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_delete_file_with_opts_and_row_group_count(
+        &mut self,
+        data_file_id: u64,
+        path: &str,
+        delete_count: u64,
+        file_size_bytes: u64,
+        table_id: Option<u64>,
+        format: Option<&str>,
+        path_is_relative: Option<bool>,
+        footer_size: Option<i64>,
+        partial_max: Option<&str>,
+        encryption_key: Option<&str>,
+        row_group_count: Option<u64>,
+    ) -> CatalogResult<u64> {
         if let Some(table_id) = table_id {
             if data_file_id != 0 {
                 self.ensure_data_file_belongs(table_id, data_file_id)
@@ -2117,6 +2216,7 @@ impl CatalogWriter {
             footer_size,
             partial_max: partial_max.map(|s| s.to_string()),
             encryption_key: encryption_key.map(|s| s.to_string()),
+            row_group_count,
         };
 
         let key = keys::key_delete_file(data_file_id, delete_file_id);
@@ -2911,6 +3011,28 @@ impl CatalogWriter {
         };
         let key = keys::key_partition_column(partition_id, partition_key_index);
         self.stage(key, values::encode_value(&row));
+        Ok(())
+    }
+
+    pub async fn register_file_partition_value(
+        &mut self,
+        data_file_id: u64,
+        table_id: u64,
+        partition_key_index: u64,
+        partition_value: Option<&str>,
+    ) -> CatalogResult<()> {
+        self.ensure_data_file_belongs(table_id, data_file_id)
+            .await?;
+        let row = FilePartitionValueRow {
+            table_id,
+            partition_key_index,
+            data_file_id,
+            partition_value: partition_value.map(str::to_string),
+        };
+        self.stage(
+            keys::key_file_partition_value(table_id, partition_key_index, data_file_id),
+            values::encode_value(&row),
+        );
         Ok(())
     }
 

@@ -8,6 +8,8 @@ use std::cmp::Ordering;
 /// DuckLake column types for type-aware statistics comparison.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DuckLakeType {
+    /// A type that contains only SQL NULL values (DuckLake 1.1).
+    Null,
     /// Signed integer types (TINYINT, SMALLINT, INTEGER, BIGINT, HUGEINT).
     Integer {
         /// Whether the integer is signed.
@@ -142,6 +144,7 @@ impl DuckLakeType {
         }
 
         match lower {
+            "null" => DuckLakeType::Null,
             // Signed integers
             "int8" | "tinyint" => DuckLakeType::Integer {
                 signed: true,
@@ -335,8 +338,9 @@ pub fn type_aware_compare(
             Ok(left.cmp(right))
         }
         DuckLakeType::Varchar | DuckLakeType::Uuid | DuckLakeType::Json => Ok(left.cmp(right)),
-        // Variant, Geometry, and nested types: no meaningful min/max comparison; keep file.
-        DuckLakeType::Variant
+        // NULL, Variant, Geometry, and nested types have no useful min/max comparison.
+        DuckLakeType::Null
+        | DuckLakeType::Variant
         | DuckLakeType::Geometry
         | DuckLakeType::List(_)
         | DuckLakeType::Struct(_)
@@ -386,7 +390,7 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
 /// - If value < min → prune (for equality/range queries)
 /// - If value > max → prune
 /// - For float types: if contains_nan and the query involves NaN, keep
-/// - Variant, Geometry, and nested types always keep (no min/max pruning)
+/// - NULL, Variant, Geometry, and nested types always keep (no min/max pruning)
 pub fn prune_file(
     predicate_value: &str,
     min_value: Option<&str>,
@@ -399,10 +403,11 @@ pub fn prune_file(
         return Err(TypeCompareError::UnsupportedType(format!("{col_type:?}")));
     }
 
-    // Variant, Geometry, and nested types: no pruning possible, always keep
+    // NULL, Variant, Geometry, and nested types: no pruning possible, always keep
     if matches!(
         col_type,
-        DuckLakeType::Variant
+        DuckLakeType::Null
+            | DuckLakeType::Variant
             | DuckLakeType::Geometry
             | DuckLakeType::Json
             | DuckLakeType::List(_)
@@ -673,6 +678,17 @@ mod tests {
     fn unknown_type_fails_closed() {
         let t = DuckLakeType::Unknown("GEOMETRY".to_string());
         assert!(type_aware_compare("a", "b", &t).is_err());
+    }
+
+    #[test]
+    fn null_type_is_parsed_and_never_pruned_from_stats() {
+        let t = DuckLakeType::parse(" NULL ");
+        assert_eq!(t, DuckLakeType::Null);
+        assert_eq!(type_aware_compare("a", "b", &t).unwrap(), Ordering::Equal);
+        assert_eq!(
+            prune_file("1", Some("2"), Some("3"), false, &t).unwrap(),
+            PruneResult::Keep
+        );
     }
 
     #[test]

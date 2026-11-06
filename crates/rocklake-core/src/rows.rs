@@ -286,6 +286,9 @@ pub struct DataFileRow {
     /// v0.24: partial_max upper-bound for zone-map pruning.
     #[prost(string, optional, tag = "17")]
     pub partial_max: Option<String>,
+    /// v1.1: number of Parquet row groups, if known.
+    #[prost(uint64, optional, tag = "18")]
+    pub row_group_count: Option<u64>,
 }
 
 /// Delete file row value.
@@ -328,6 +331,9 @@ pub struct DeleteFileRow {
     /// v1.0: opaque delete-file encryption key material.
     #[prost(string, optional, tag = "14")]
     pub encryption_key: Option<String>,
+    /// v1.1: number of Parquet row groups, if known.
+    #[prost(uint64, optional, tag = "15")]
+    pub row_group_count: Option<u64>,
 }
 
 /// Files scheduled for deletion row value.

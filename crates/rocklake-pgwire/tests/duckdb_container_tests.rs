@@ -1042,6 +1042,8 @@ async fn duckdb_container_commit_boundaries_match_catalog_state() {
         .await
         .expect("bootstrap phase should succeed");
 
+    commit_visibility_barrier(&catalog, "duckdb-container", "bootstrap visibility barrier").await;
+
     let bootstrap_snapshot = catalog.reader_latest().await.snapshot_id();
     let bootstrap_schema_id = schema_id(&catalog, "analytics").await;
     let bootstrap_table_id = table_id(&catalog, bootstrap_schema_id, "events").await;

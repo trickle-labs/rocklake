@@ -147,6 +147,7 @@ proptest! {
             partition_id: None,
             mapping_id: None,
             partial_max: None,
+            row_group_count: Some(3),
         };
         let encoded = encode_value(&row);
         let decoded: DataFileRow = decode_value(&encoded).unwrap();
