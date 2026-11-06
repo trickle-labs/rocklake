@@ -1,12 +1,14 @@
 //! v0.41.0 — Migration Tooling & DuckLake Forward Compatibility tests.
 //!
-//! Test inventory (6 tests):
+//! Test inventory (8 tests):
 //! 1. migrate_from_in_memory_source
 //! 2. migrate_dry_run_writes_nothing
 //! 3. migrate_secondary_index_present
 //! 4. migrate_v11_source_rejected_by_default
 //! 5. migrate_v11_source_accepted_with_flag
 //! 6. export_import_delete_file_end_snapshot
+//! 7. migrate_v11_view_column_tags_from_spec_columns
+//! 8. stable_v11_format_is_rejected_before_loading_unsupported_tables
 
 use std::io::BufReader;
 use std::sync::Arc;
@@ -16,7 +18,7 @@ use object_store::path::Path as ObjectPath;
 
 use rocklake_catalog::export::{export_catalog, import_catalog, ExportedRow};
 use rocklake_catalog::migrate_from_ducklake::{
-    migrate_from_source, InMemoryDuckLakeSource, ACCEPT_VERSION_V1_1_DEV_1,
+    migrate_from_source, InMemoryDuckLakeSource, SqliteDuckLakeSource, ACCEPT_VERSION_V1_1_DEV_1,
     DUCKLAKE_V1_0_CATALOG_VERSION, DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION,
 };
 use rocklake_catalog::CatalogError;
@@ -271,6 +273,28 @@ async fn migrate_v11_view_column_tags_from_spec_columns() {
     assert_eq!(tag.column_name, "id");
     assert_eq!(tag.tag_key, "comment");
     assert_eq!(tag.tag_value, "identifier");
+}
+
+#[tokio::test]
+async fn stable_v11_format_is_rejected_before_loading_unsupported_tables() {
+    let db = fresh_db().await;
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE ducklake_metadata (key TEXT, value TEXT, scope TEXT, scope_id INTEGER); \
+         INSERT INTO ducklake_metadata VALUES ('version', '1.1', 'global', 0); \
+         CREATE TABLE ducklake_snapshot (snapshot_id INTEGER, schema_version INTEGER); \
+         INSERT INTO ducklake_snapshot VALUES (1, 0); \
+         CREATE TABLE ducklake_view_column_tag (view_id INTEGER);",
+    )
+    .unwrap();
+    let result = SqliteDuckLakeSource::from_connection(conn, None);
+    assert!(matches!(
+        result,
+        Err(CatalogError::UnsupportedDuckLakeVersion { .. })
+    ));
+
+    let mut iter = db.scan::<&[u8], _>(std::ops::RangeFull).await.unwrap();
+    assert!(iter.next().await.unwrap().is_none());
 }
 
 // ---------------------------------------------------------------------------

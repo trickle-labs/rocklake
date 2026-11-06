@@ -40,13 +40,17 @@ rocklake migrate-from-ducklake \
 
 ## DuckLake Version Support
 
-| catalog_version | DuckLake Release | Accepted by default | Accept flag required |
-|-----------------|-----------------|---------------------|----------------------|
-| 7 (V1_0)        | 1.0             | Yes                 | None                 |
-| 8 (V1_1_DEV_1)  | 1.1 (dev)       | No                  | `--accept-version V1_1_DEV_1` |
+| `ducklake_metadata.version` | DuckLake release | Accepted by default | Accept flag required |
+|-----------------------------|-----------------|---------------------|----------------------|
+| `1.0`                       | 1.0             | Yes                 | None                 |
+| `1.1-dev1`                  | 1.1 prerelease  | No                  | `--accept-version V1_1_DEV_1` |
+| `1.1`                       | 1.1 stable      | No                  | Not supported        |
 
-DuckLake v1.0 catalogs (`catalog_version = 7`) are accepted automatically.
-Attempting to migrate from a v1.1 catalog without the flag returns `SQLSTATE 0A000`.
+The importer reads the format version from `ducklake_metadata.version`.
+`ducklake_snapshot.schema_version` tracks schema changes within a catalog, so
+it does not identify the DuckLake format. Legacy catalogs without a metadata
+version row use the numeric compatibility fallback. Unsupported formats return
+`SQLSTATE 0A000` before any target writes.
 
 ## Dry Run
 
