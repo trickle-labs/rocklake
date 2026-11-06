@@ -437,6 +437,20 @@ async fn ducklake_v11_stats_expose_exactness_columns() {
     .await
     .unwrap();
 
+    let update = format!(
+        "UPDATE ducklake_table_column_stats SET contains_null = false, contains_nan = NULL, min_value = '1', max_value = '2', extra_stats = NULL, min_is_exact = true, max_is_exact = true WHERE table_id = {table_id} AND column_id = {column_id}"
+    );
+    executor::execute_sql(
+        &update,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
     let table_stats = exec("SELECT * FROM ducklake_table_column_stats", &store).await;
     let (table_cols, table_count) = inspect(table_stats).await;
     assert!(table_cols.ends_with(&["min_is_exact".into(), "max_is_exact".into()]));
@@ -448,7 +462,10 @@ async fn ducklake_v11_stats_expose_exactness_columns() {
         .list_all_table_column_stats()
         .await
         .unwrap();
-    assert_eq!(rows[0].min_is_exact, Some(false));
+    assert_eq!(rows[0].min_value.as_deref(), Some("1"));
+    assert_eq!(rows[0].max_value.as_deref(), Some("2"));
+    assert_eq!(rows[0].contains_nan, None);
+    assert_eq!(rows[0].min_is_exact, Some(true));
     assert_eq!(rows[0].max_is_exact, Some(true));
 
     let file_stats = exec("SELECT * FROM ducklake_file_column_stats", &store).await;

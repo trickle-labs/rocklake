@@ -479,6 +479,40 @@ impl CatalogWriter {
         Ok(())
     }
 
+    pub async fn set_table_column_stats(
+        &mut self,
+        table_id: u64,
+        column_id: u64,
+        contains_null: bool,
+        contains_nan: Option<bool>,
+        min_value: Option<&str>,
+        max_value: Option<&str>,
+        extra_stats: Option<&str>,
+        min_is_exact: Option<bool>,
+        max_is_exact: Option<bool>,
+    ) -> CatalogResult<bool> {
+        let key = keys::key_table_column_stats(table_id, column_id);
+        if self.staged_value(&key).is_none() && self.db.get(&key).await?.is_none() {
+            return Ok(false);
+        }
+        self.ensure_column_belongs(table_id, column_id).await?;
+        self.stage(
+            key,
+            values::encode_value(&TableColumnStatsRow {
+                table_id,
+                column_id,
+                contains_null,
+                contains_nan,
+                min_value: min_value.map(str::to_string),
+                max_value: max_value.map(str::to_string),
+                extra_stats: extra_stats.map(str::to_string),
+                min_is_exact,
+                max_is_exact,
+            }),
+        );
+        Ok(true)
+    }
+
     async fn read_table_stats_or_default(&self, table_id: u64) -> CatalogResult<TableStatsRow> {
         let key = keys::key_table_stats(table_id);
         Ok(

@@ -410,6 +410,32 @@ pub(super) async fn execute_commit(
                     .await
                     .map_err(RockLakeError::from)?;
             }
+            BufferedOp::SetTableColumnStats {
+                table_id,
+                column_id,
+                contains_null,
+                contains_nan,
+                min_value,
+                max_value,
+                extra_stats,
+                min_is_exact,
+                max_is_exact,
+            } => {
+                needs_snapshot |= writer
+                    .set_table_column_stats(
+                        table_id,
+                        column_id,
+                        contains_null,
+                        contains_nan,
+                        min_value.as_deref(),
+                        max_value.as_deref(),
+                        extra_stats.as_deref(),
+                        min_is_exact,
+                        max_is_exact,
+                    )
+                    .await
+                    .map_err(RockLakeError::from)?;
+            }
             BufferedOp::RecomputeTableFileSize { table_id } => {
                 needs_snapshot = true;
                 writer

@@ -652,6 +652,150 @@ fn resolve_expr(expr: &sqlparser::ast::Expr, params: &ParamValues) -> Option<Str
     }
 }
 
+fn update_table_column_stats(sql: &str, params: &ParamValues) -> Result<BufferedOp, RockLakeError> {
+    let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql)
+        .map_err(|error| RockLakeError::Unsupported(error.to_string()))?;
+    let Some(Statement::Update {
+        selection: Some(selection),
+        assignments,
+        ..
+    }) = statements.first()
+    else {
+        return Err(RockLakeError::Unsupported(
+            "DuckLake table-column stats updates require a row filter".into(),
+        ));
+    };
+
+    fn column_name(expr: &Expr) -> Option<String> {
+        let name = expr.to_string();
+        Some(
+            name.rsplit('.')
+                .next()?
+                .trim_matches('"')
+                .to_ascii_lowercase(),
+        )
+    }
+
+    fn collect_id_filters(
+        expr: &Expr,
+        params: &ParamValues,
+        filters: &mut std::collections::HashMap<String, u64>,
+    ) -> bool {
+        match expr {
+            Expr::Nested(expr) => collect_id_filters(expr, params, filters),
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::And,
+                right,
+            } => {
+                collect_id_filters(left, params, filters)
+                    && collect_id_filters(right, params, filters)
+            }
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Eq,
+                right,
+            } => {
+                let (column, value) = if column_name(left).as_deref() == Some("table_id") {
+                    ("table_id", resolve_expr(right, params))
+                } else if column_name(right).as_deref() == Some("table_id") {
+                    ("table_id", resolve_expr(left, params))
+                } else if column_name(left).as_deref() == Some("column_id") {
+                    ("column_id", resolve_expr(right, params))
+                } else if column_name(right).as_deref() == Some("column_id") {
+                    ("column_id", resolve_expr(left, params))
+                } else {
+                    return false;
+                };
+                let Some(value) = value.and_then(|value| value.parse::<u64>().ok()) else {
+                    return false;
+                };
+                filters.insert(column.to_string(), value).is_none()
+            }
+            _ => false,
+        }
+    }
+
+    let mut filters = std::collections::HashMap::new();
+    if !collect_id_filters(selection, params, &mut filters) || filters.len() != 2 {
+        return Err(RockLakeError::Unsupported(
+            "DuckLake table-column stats updates must filter one table_id and column_id".into(),
+        ));
+    }
+    let mut values = std::collections::HashMap::new();
+    for assignment in assignments {
+        let column = assignment
+            .target
+            .to_string()
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_ascii_lowercase();
+        if !matches!(
+            column.as_str(),
+            "contains_null"
+                | "contains_nan"
+                | "min_value"
+                | "max_value"
+                | "extra_stats"
+                | "min_is_exact"
+                | "max_is_exact"
+        ) || values
+            .insert(column, resolve_expr(&assignment.value, params))
+            .is_some()
+        {
+            return Err(RockLakeError::Unsupported(
+                "unsupported DuckLake table-column stats update".into(),
+            ));
+        }
+    }
+    if values.len() != 7 {
+        return Err(RockLakeError::Unsupported(
+            "DuckLake table-column stats updates must set all stats fields".into(),
+        ));
+    }
+
+    let required = |column: &str| {
+        values
+            .get(column)
+            .cloned()
+            .ok_or_else(|| RockLakeError::MissingParam {
+                name: column.to_string(),
+            })
+    };
+    let parse_bool = |column: &str, value: Option<String>| {
+        let Some(value) = value else {
+            return Err(RockLakeError::ValueDecode(format!(
+                "{column} cannot be NULL"
+            )));
+        };
+        match value.to_ascii_lowercase().as_str() {
+            "true" | "t" | "1" => Ok(true),
+            "false" | "f" | "0" => Ok(false),
+            _ => Err(RockLakeError::ValueDecode(format!(
+                "invalid boolean for {column}"
+            ))),
+        }
+    };
+    let parse_nullable_bool = |column: &str, value: Option<String>| {
+        value
+            .map(|value| parse_bool(column, Some(value)))
+            .transpose()
+    };
+    Ok(BufferedOp::SetTableColumnStats {
+        table_id: filters["table_id"],
+        column_id: filters["column_id"],
+        contains_null: parse_bool("contains_null", required("contains_null")?)?,
+        contains_nan: parse_nullable_bool("contains_nan", required("contains_nan")?)?,
+        min_value: required("min_value")?,
+        max_value: required("max_value")?,
+        extra_stats: required("extra_stats")?,
+        min_is_exact: parse_nullable_bool("min_is_exact", required("min_is_exact")?)?,
+        max_is_exact: parse_nullable_bool("max_is_exact", required("max_is_exact")?)?,
+    })
+}
+
 fn parse_insert_rows_map(
     sql: &str,
     params: &ParamValues,
@@ -2838,31 +2982,13 @@ async fn execute_classified<'a>(
             )))])
         }
         StatementKind::UpdateTableColumnStats => {
-            let ops: Vec<BufferedOp> = literal_insert_rows(_sql)
-                .into_iter()
-                .map(|literals| BufferedOp::InsertTableColumnStats {
-                    table_id: literal_u64(&literals, 0).unwrap_or(0),
-                    column_id: literal_u64(&literals, 1).unwrap_or(0),
-                    contains_null: literal_bool(&literals, 2).unwrap_or(false),
-                    contains_nan: literal_bool(&literals, 3),
-                    min_value: literal_string(&literals, 4),
-                    max_value: literal_string(&literals, 5),
-                    extra_stats: literal_string(&literals, 6),
-                    min_is_exact: literal_bool(&literals, 7).map(Some),
-                    max_is_exact: literal_bool(&literals, 8).map(Some),
-                })
-                .collect();
-            let row_count = ops.len();
+            let op = update_table_column_stats(_sql, params)?;
             if session.in_transaction {
-                for op in ops {
-                    session.pending_txn.push(op)?;
-                }
+                session.pending_txn.push(op)?;
             } else {
-                execute_commit(ops, store, notify_manager).await?;
+                execute_commit(vec![op], store, notify_manager).await?;
             }
-            Ok(vec![Response::Execution(Tag::new(&format!(
-                "UPDATE {row_count}"
-            )))])
+            Ok(vec![Response::Execution(Tag::new("UPDATE 1"))])
         }
         StatementKind::InsertMetadata => {
             let parameterized = _sql.contains('$');
