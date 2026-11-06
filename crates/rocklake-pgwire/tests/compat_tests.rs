@@ -80,6 +80,49 @@ async fn fresh_bootstrap_persists_ducklake_version_metadata() {
     assert_eq!(metadata.map(|row| row.value).as_deref(), Some("1.1"));
 }
 
+#[tokio::test]
+async fn rolled_back_bootstrap_metadata_is_not_committed_later() {
+    let dir = TempDir::new().unwrap();
+    let store = setup_store(&dir).await;
+    let mut session = SessionState::new();
+    session.bootstrap.metadata.push(BootstrapMetadataRow {
+        key: "version".into(),
+        value: "1.1".into(),
+        scope: Some("global".into()),
+        scope_id: Some(0),
+    });
+
+    executor::execute_sql(
+        "ROLLBACK",
+        &ParamValues::default(),
+        &store,
+        &mut session,
+        &default_notify_manager(),
+        &default_extension_schemas(),
+    )
+    .await
+    .unwrap();
+    executor::execute_sql(
+        "COMMIT",
+        &ParamValues::default(),
+        &store,
+        &mut session,
+        &default_notify_manager(),
+        &default_extension_schemas(),
+    )
+    .await
+    .unwrap();
+
+    let metadata = store
+        .lock()
+        .await
+        .read_latest()
+        .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+        .await
+        .unwrap();
+    assert!(metadata.is_none());
+}
+
 // ── Test 1: Full DuckLake tutorial lifecycle ───────────────────────────────────
 
 /// Full DuckLake tutorial lifecycle against a store.

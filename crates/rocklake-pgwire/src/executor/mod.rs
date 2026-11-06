@@ -1289,6 +1289,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::Rollback => {
             session.pending_txn.clear();
+            session.bootstrap = Default::default();
             session.in_transaction = false;
             session.transaction_snapshot_id = None;
             Ok(vec![Response::TransactionEnd(Tag::new("ROLLBACK"))])
