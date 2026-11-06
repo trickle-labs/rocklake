@@ -798,7 +798,7 @@ pub async fn is_ducklake_v11(catalog: &CatalogStore) -> CatalogResult<bool> {
     Ok(reader
         .get_metadata(MetadataScope::Global, 0, "version")
         .await?
-        .map(|row| matches!(row.value.as_str(), "1.1" | "1.1-dev1"))
+        .map(|row| row.value == "1.1")
         .unwrap_or(true))
 }
 
@@ -845,6 +845,24 @@ mod tests {
         catalog.commit_writer(snapshot);
 
         assert!(!is_ducklake_v11(&catalog).await.unwrap());
+
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1-dev1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+
+        assert!(!is_ducklake_v11(&catalog).await.unwrap());
+
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+
+        assert!(is_ducklake_v11(&catalog).await.unwrap());
     }
 
     #[test]
