@@ -1261,16 +1261,9 @@ async fn execute_classified<'a>(
                     }
                 }
             }
-            let (reader, bootstrap_relations, stable_1_1) = {
+            let (reader, bootstrap_relations) = {
                 let catalog = store.lock().await;
-                let stable_1_1 = crate::schema_registry::is_ducklake_v11(&catalog)
-                    .await
-                    .map_err(RockLakeError::from)?;
-                (
-                    catalog.read_latest(),
-                    catalog.bootstrap_relation_names(),
-                    stable_1_1,
-                )
+                (catalog.read_latest(), catalog.bootstrap_relation_names())
             };
             let stable_1_1 = stable_ducklake_v11(store).await?;
             let initialized = reader
