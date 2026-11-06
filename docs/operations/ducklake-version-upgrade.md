@@ -1,15 +1,17 @@
 # DuckLake Version Upgrade Guide
 
-This guide covers existing DuckLake catalogs used through RockLake. Full
-DuckLake 1.1 feature certification is still in progress; see the
-[compatibility inventory](../integration/ducklake-1.1-compatibility-inventory.md).
+This guide covers existing DuckLake catalogs used through RockLake. Stable
+DuckLake 1.1 with DuckDB 2.0.0 has passed release certification on the current
+development tree. See the
+[compatibility inventory](../integration/ducklake-1.1-compatibility-inventory.md)
+for the tested scope and retained limits.
 
 ## Current Boundary
 
 | DuckLake format | RockLake behavior |
 |-----------------|-------------------|
 | 1.0 | Supported. Ordinary attachment preserves 1.0. |
-| Stable 1.1 | Existing RockLake catalogs can be migrated with DuckDB 2.0 `AUTOMATIC_MIGRATION`. The migration path is tested; full 1.1 feature certification remains open in [#110](https://github.com/trickle-labs/rocklake/issues/110) and [#112](https://github.com/trickle-labs/rocklake/issues/112). |
+| Stable 1.1 | Release-certified with DuckDB 2.0.0 on the current development tree. New catalogs default to 1.1; existing RockLake 1.0 catalogs migrate only with explicit `AUTOMATIC_MIGRATION`. |
 | 1.1-dev1 | Separate experimental importer only; requires `--accept-version V1_1_DEV_1`. This flag does not enable stable 1.1 migration. |
 
 This in-place DuckDB migration is separate from `migrate-from-ducklake`, which

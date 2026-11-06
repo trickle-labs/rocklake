@@ -29,7 +29,7 @@ DuckLake's catalog is defined as 28 relational tables that together describe the
 
 - `ducklake_table_stats` — Table-level statistics: total row count, total file size, file count.
 
-The full set of 28 tables covers additional concerns like encryption keys, tags, and extended properties, but the tables listed above are the ones most relevant to understanding RockLake's implementation.
+The DuckLake 1.0 schema has 28 tables covering additional concerns like encryption keys, tags, and extended properties. Stable 1.1 adds `ducklake_view_column_tag` and new columns; see the [1.1 compatibility inventory](../integration/ducklake-1.1-compatibility-inventory.md) for that version's changes.
 
 ## Snapshot-Based Versioning
 
@@ -112,6 +112,6 @@ These non-requirements are what make RockLake possible as a lean, focused implem
 ## Further Reading
 
 - **[The SlateDB Storage Engine](slatedb.md)** — How SlateDB provides the durability and transaction guarantees that DuckLake requires
-- **[Architecture: Key Layout](../architecture/key-layout.md)** — The full binary encoding for all 28 table key structures
+- **[Architecture: Key Layout](../architecture/key-layout.md)** — The binary encoding for the DuckLake 1.0 table key structures
 - **[Architecture: SQL Dispatcher](../architecture/sql-dispatcher.md)** — How the bounded query set is classified and dispatched
-- **[Reference: Catalog Tables](../reference/catalog-tables.md)** — Complete reference for all 28 tables with column definitions
+- **[Reference: Catalog Tables](../reference/catalog-tables.md)** — Reference for the DuckLake 1.0 tables with column definitions

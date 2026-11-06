@@ -15,7 +15,7 @@ root [`COMPATIBILITY.md`](https://github.com/trickle-labs/rocklake/blob/main/COM
 
 ## DuckLake v1.0 Compatibility Claim
 
-**RockLake's certified target remains DuckLake 1.0 (Catalog Version 7 / `V1_0`) with DuckDB 1.5.3–1.5.6 and 2.0.0.** A fresh unpinned catalog with DuckDB 2.0 follows its stable 1.1 default and persists the version metadata. This is a fresh-catalog preview, not full 1.1 certification; explicitly pin `DUCKLAKE_VERSION '1.0'` on `ATTACH` to use the certified format.
+**For DuckLake 1.0, RockLake is CI-certified with DuckDB 1.5.3–1.5.6 and 2.0.0.** The released v0.65.0 remains 1.0-only. The current development tree also passed release certification for stable DuckLake 1.1 with DuckDB 2.0.0; see the section below. DuckDB 2.0 creates new catalogs as 1.1 by default; explicitly pin `DUCKLAKE_VERSION '1.0'` on `ATTACH` to keep the 1.0 format.
 
 This claim is backed by the durable compatibility corpus and automated CI evidence:
 
@@ -57,31 +57,25 @@ The direct-upgrade source is v0.60.0. The migration registry is fail-closed:
 v0.65.0 ships a verified same-format no-op, while unknown targets and all
 downgrades are rejected before mutation.
 
-## DuckLake v1.1 Migration Preview
+## DuckLake v1.1 Certified Support
 
-RockLake includes a real-client migration path for an existing RockLake
-DuckLake 1.0 catalog using DuckDB 2.0.0 and `AUTOMATIC_MIGRATION`. Ordinary
-attachment preserves 1.0; a fresh catalog defaults to stable 1.1. The manual
-end-to-end migration check covers nested-struct defaults, inlined and
-Parquet-backed rows, historical reads, downgrade rejection, and reconnect after
-a RockLake restart. Transaction failure/retry behavior has a separate test.
+Release Certification covers stable DuckLake 1.1 with DuckDB 2.0.0. The real
+client scenarios exercise fresh catalogs, nested schemas, `NULL` promotion,
+VARIANT inlining, epoch partitions, exact string bounds, row-group counts,
+Puffin deletion history, view-column tags, table layout options, migration from
+1.0, snapshot history, reconnect/restart, concurrent writers, and rejection by
+DuckDB 1.5.6. Local and Silo-backed catalog and Parquet paths are included.
+DuckDB 1.5.3–1.5.6 retain the separate DuckLake 1.0 compatibility matrix.
 
-This is a migration preview, not certification of every DuckLake 1.1 feature
-or interface. Broader fresh-catalog coverage in
-[#110](https://github.com/trickle-labs/rocklake/issues/110), remaining migration
-criteria in [#111](https://github.com/trickle-labs/rocklake/issues/111), and full
-feature certification in [#112](https://github.com/trickle-labs/rocklake/issues/112)
-remain open. See the
-[upgrade guide](operations/ducklake-version-upgrade.md) for backup, recovery,
-client, and downgrade boundaries.
-
-The C ABI and Python, Node.js, Go, and Java bindings expose high-level snapshot,
-schema, table, and selected data-file projections. They do not expose arbitrary
-DuckLake metadata tables, 1.1 fields such as nested-schema parent IDs,
-row-group counts, string-bound exactness, or view-column tags, or catalog
-import/export and migration operations. These projections are not a full-fidelity
-DuckLake 1.1 metadata API; those fields remain in catalog storage, but their
-direct read through these bindings is not certified.
+The certified boundary is DuckDB 2.0.0 for stable 1.1 through RockLake's
+PostgreSQL-wire catalog. Silo tests do not certify real AWS S3, GCS, or Azure;
+comparative performance parity has not been benchmarked. Catalog backup and
+restore preserve metadata and file references, but do not copy Parquet bytes.
+The C ABI and Python, Node.js, Go, and Java bindings expose selected high-level
+projections, not arbitrary 1.1 metadata tables, 1.1-only fields, or catalog
+import/export and migration operations. See the
+[upgrade guide](operations/ducklake-version-upgrade.md) for migration and
+recovery steps.
 
 ---
 
@@ -90,7 +84,7 @@ direct read through these bindings is not certified.
 | DuckDB Version | Status | Notes |
 |---------------|--------|-------|
 | 1.5.3–1.5.6 | ✅ Supported | Live DuckLake 1.0 compatibility matrix. |
-| 2.0.0 | ✅ Supported with DuckLake 1.0 | Explicit `DUCKLAKE_VERSION '1.0'` on `ATTACH`. |
+| 2.0.0 | ✅ Supported with DuckLake 1.0 and 1.1 | Stable 1.1 is the default; explicitly pin `DUCKLAKE_VERSION '1.0'` to preserve 1.0. |
 | < 1.5.2 | ❌ Not supported | Older versions do not support DuckLake 1.0 |
 
 For a stable DuckLake 1.1 catalog, DuckDB 2.0.0 is the tested client. An
@@ -110,9 +104,9 @@ Other client versions have not been tested against migrated 1.1 catalogs.
 | DROP TABLE CASCADE for tags | ✅ Supported | v0.27+ | All tag/column-tag rows retired |
 | DROP TABLE CASCADE for sort_info | ✅ Supported | v0.27+ | All sort_info rows retired |
 | `migrate-from-ducklake` CLI | ✅ Supported | v0.27+ | NDJSON source |
-| `export-catalog` CLI | ✅ Supported | v0.27+ | All 28 tables to NDJSON |
+| `export-catalog` CLI | ✅ Supported | v0.27+ | NDJSON metadata export; 1.1 fields are covered by backup/restore round-trip tests |
 | DuckLake compatibility corpus CI | ✅ Supported | v0.27.10 | Pinned DuckDB 1.5.3 / DuckLake 1.0 in CI |
-| DuckLake v1.0-to-1.1 migration | ⚠️ Preview | Live-client coverage; not release-certified | Existing catalogs require DuckDB 2.0 `AUTOMATIC_MIGRATION`; this is not full 1.1 certification |
+| DuckLake v1.0-to-1.1 migration | ✅ Supported | DuckDB 2.0.0 | Explicit `AUTOMATIC_MIGRATION`; recovery and downgrade rejection are tested |
 
 ## SQL Clients
 

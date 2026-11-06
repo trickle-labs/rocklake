@@ -14,7 +14,7 @@ Consider what RockLake's storage layer actually provides:
 - **Schema-independent key layout.** The 1-byte tag namespace supports 256 independent entity types, each with its own key structure.
 - **Audited retraction.** Facts can be retracted (end-version set) or physically excised, with full audit trails.
 
-These properties describe a general-purpose immutable fact log over object storage, not just a DuckLake catalog implementation. Any relational schema — not just DuckLake's 28 tables — could be hosted on this substrate with the same guarantees.
+These properties describe a general-purpose immutable fact log over object storage, not just a DuckLake catalog implementation. Any relational schema — not just DuckLake 1.0's 28 tables — could be hosted on this substrate with the same guarantees.
 
 ## What a General Fact Store Looks Like
 
@@ -48,9 +48,9 @@ This API would provide the same guarantees that DuckLake gets through RockLake: 
 
 The fact store vision explains several design choices in the current codebase that might otherwise seem like unnecessary generality:
 
-**The `rocklake-core` / `rocklake-catalog` separation.** The `rocklake-core` crate defines the key encoding primitives, the SDKV value header, the counter allocation protocol, and the MVCC visibility filter — all generic mechanisms that do not know about DuckLake's specific tables. The `rocklake-catalog` crate maps DuckLake's 28 tables onto these primitives. In the fact store future, additional crates would map additional schemas onto the same `rocklake-core` primitives.
+**The `rocklake-core` / `rocklake-catalog` separation.** The `rocklake-core` crate defines the key encoding primitives, the SDKV value header, the counter allocation protocol, and the MVCC visibility filter — all generic mechanisms that do not know about DuckLake's specific tables. The `rocklake-catalog` crate maps DuckLake's 1.0 tables onto these primitives. In the fact store future, additional crates would map additional schemas onto the same `rocklake-core` primitives.
 
-**The 1-byte tag namespace with 256 slots.** DuckLake needs 28 table tags plus 3 system tags (counters, system metadata, inlined data). That is 31 out of 256 possible tags. The remaining 225 slots are reserved for future schemas that might be hosted on the same storage substrate. If RockLake ever supports multiple independent schemas (each with their own tables), the tag namespace has room.
+**The 1-byte tag namespace with 256 slots.** DuckLake 1.0 needs 28 table tags plus 3 system tags (counters, system metadata, inlined data). That is 31 out of 256 possible tags. The remaining 225 slots are reserved for future schemas that might be hosted on the same storage substrate. If RockLake ever supports multiple independent schemas (each with their own tables), the tag namespace has room.
 
 **The strict naming conventions.** `dl_snapshot_id` (DuckLake-level snapshot) is carefully distinguished from `kv_snapshot` (SlateDB-level read view) because in a multi-schema future, each hosted schema might have its own version counter, and confusing them would be catastrophic.
 

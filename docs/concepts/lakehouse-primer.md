@@ -55,7 +55,7 @@ This is also why catalog *correctness* matters more than catalog *performance* f
 
 ## Where RockLake Fits
 
-The key insight behind RockLake is that the catalog database itself does not need to be a traditional database server. The DuckLake catalog schema — 28 tables of metadata, versioned with monotonically increasing snapshot IDs, accessed through a bounded set of SQL queries — maps naturally onto a key-value store. And if that key-value store happens to persist its state to object storage (as SlateDB does), then the entire catalog can live in the same bucket as the data files, with no additional infrastructure.
+The key insight behind RockLake is that the catalog database itself does not need to be a traditional database server. The DuckLake 1.0 catalog schema — 28 tables of metadata, versioned with monotonically increasing snapshot IDs, accessed through a bounded set of SQL queries — maps naturally onto a key-value store. And if that key-value store happens to persist its state to object storage (as SlateDB does), then the entire catalog can live in the same bucket as the data files, with no additional infrastructure.
 
 This means you end up with a data platform that consists of exactly two things: a bucket (containing both your Parquet data files and your SlateDB catalog files) and ephemeral compute (RockLake sidecar processes and DuckDB query engines that start, do work, and stop without leaving any persistent local state). There is no database server to keep running between queries, no replication topology to monitor, no backup schedule to maintain. The bucket is the system of record for both data and metadata.
 
