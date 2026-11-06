@@ -161,7 +161,7 @@ SELECT * FROM events;
 
 The released v0.65.0 supports DuckLake 1.0. The current development tree has
 passed release certification for stable DuckLake 1.1 with DuckDB 2.0.0. DuckDB
-1.5.x clients use the certified 1.0 path; pin `DUCKLAKE_VERSION '1.0'` on
+1.5.3–1.5.6 clients use the certified 1.0 path; pin `DUCKLAKE_VERSION '1.0'` on
 `ATTACH`: `(DATA_PATH '/tmp/ducklake', DUCKLAKE_VERSION '1.0')`. See the
 [compatibility matrix](docs/compatibility.md) for tested versions and limits.
 
