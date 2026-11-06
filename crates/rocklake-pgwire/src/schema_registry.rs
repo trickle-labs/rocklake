@@ -1,4 +1,4 @@
-//! DuckLake v1.0 table schema registry.
+//! Versioned DuckLake metadata table schema registry.
 //!
 //! This module is the **single authoritative source** for the PgWire
 //! `FieldInfo` definitions of every DuckLake metadata table.  All executor
@@ -7,9 +7,8 @@
 //!
 //! # Design
 //!
-//! Each public function returns a fresh `Arc<Vec<FieldInfo>>` whose column
-//! names, types, and wire formats exactly match the DuckLake v1.0 spec.
-//! Callers clone the `Arc` to share the immutable schema between the
+//! Each schema function returns a fresh `Arc<Vec<FieldInfo>>` for its DuckLake
+//! format version. Callers clone the `Arc` to share it between the
 //! `QueryResponse` header and each `DataRowEncoder`.
 
 use std::sync::Arc;
@@ -311,8 +310,7 @@ pub fn table_stats_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_table_column_stats ───────────────────────────────────────────────
 
-/// `ducklake_table_column_stats(table_id, column_id, contains_null,
-/// contains_nan, min_value, max_value, extra_stats)` — DuckLake v1.0 spec.
+/// DuckLake v1.0 column statistics schema.
 pub fn table_column_stats_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("table_id"),
@@ -325,11 +323,15 @@ pub fn table_column_stats_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn table_column_stats_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*table_column_stats_schema()).clone();
+    fields.extend([bool_col!("min_is_exact"), bool_col!("max_is_exact")]);
+    Arc::new(fields)
+}
+
 // ── ducklake_file_column_stats ────────────────────────────────────────────────
 
-/// `ducklake_file_column_stats(data_file_id, table_id, column_id,
-/// column_size_bytes, value_count, null_count, min_value, max_value,
-/// contains_nan, extra_stats)` — DuckLake v1.0 spec.
+/// DuckLake v1.0 file statistics schema.
 pub fn file_column_stats_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("data_file_id"),
@@ -343,6 +345,12 @@ pub fn file_column_stats_schema() -> Arc<Vec<FieldInfo>> {
         bool_col!("contains_nan"),
         text_col!("extra_stats"),
     ])
+}
+
+pub fn file_column_stats_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*file_column_stats_schema()).clone();
+    fields.extend([bool_col!("min_is_exact"), bool_col!("max_is_exact")]);
+    Arc::new(fields)
 }
 
 // ── ducklake_metadata ─────────────────────────────────────────────────────────
@@ -663,6 +671,12 @@ pub fn global_table_stats_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn global_table_stats_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*global_table_stats_schema()).clone();
+    fields.extend([bool_col!("min_is_exact"), bool_col!("max_is_exact")]);
+    Arc::new(fields)
+}
+
 // ── Utility: latest snapshot info ────────────────────────────────────────────
 
 /// Schema for the 4-column `SelectLatestSnapshotInfo` response.
@@ -817,6 +831,8 @@ pub fn fields_for_table_version(table_name: &str, stable_1_1: bool) -> Option<Ar
     if stable_1_1 {
         match table_name {
             "ducklake_schema" => return Some(schema_schema_v11()),
+            "ducklake_table_column_stats" => return Some(table_column_stats_schema_v11()),
+            "ducklake_file_column_stats" => return Some(file_column_stats_schema_v11()),
             "ducklake_data_file" => return Some(data_file_schema_v11()),
             "ducklake_delete_file" => return Some(delete_file_schema_v11()),
             _ => {}
@@ -854,6 +870,15 @@ mod tests {
         let v11 = fields_for_table_version("ducklake_schema", true).unwrap();
         assert!(!v10.iter().any(|field| field.name() == "parent_schema_id"));
         assert_eq!(v11.last().unwrap().name(), "parent_schema_id");
+    }
+
+    #[test]
+    fn exact_bounds_are_only_exposed_by_the_v11_schema() {
+        let v10 = fields_for_table_version("ducklake_file_column_stats", false).unwrap();
+        let v11 = fields_for_table_version("ducklake_file_column_stats", true).unwrap();
+        assert_eq!(v10.len() + 2, v11.len());
+        assert_eq!(v11[v11.len() - 2].name(), "min_is_exact");
+        assert_eq!(v11[v11.len() - 1].name(), "max_is_exact");
     }
 
     #[test]

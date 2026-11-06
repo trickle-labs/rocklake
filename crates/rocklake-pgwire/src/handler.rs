@@ -3052,7 +3052,12 @@ fn describe_fields_for_sql_version(
         }
         rocklake_sql::StatementKind::SelectFileColumnStats => project_described_fields(
             sql,
-            (*crate::schema_registry::file_column_stats_schema()).clone(),
+            (*if stable_1_1 {
+                crate::schema_registry::file_column_stats_schema_v11()
+            } else {
+                crate::schema_registry::file_column_stats_schema()
+            })
+            .clone(),
         ),
         // Combined global stats query (table_stats joined with column_stats).
         rocklake_sql::StatementKind::SelectTableStats
@@ -3062,7 +3067,12 @@ fn describe_fields_for_sql_version(
         {
             project_described_fields(
                 sql,
-                (*crate::schema_registry::global_table_stats_schema()).clone(),
+                (*if stable_1_1 {
+                    crate::schema_registry::global_table_stats_schema_v11()
+                } else {
+                    crate::schema_registry::global_table_stats_schema()
+                })
+                .clone(),
             )
         }
         rocklake_sql::StatementKind::SelectTableStats => {
@@ -3070,7 +3080,12 @@ fn describe_fields_for_sql_version(
         }
         rocklake_sql::StatementKind::SelectTableColumnStats => project_described_fields(
             sql,
-            (*crate::schema_registry::table_column_stats_schema()).clone(),
+            (*if stable_1_1 {
+                crate::schema_registry::table_column_stats_schema_v11()
+            } else {
+                crate::schema_registry::table_column_stats_schema()
+            })
+            .clone(),
         ),
         rocklake_sql::StatementKind::SelectInlinedData => project_described_fields(
             sql,
