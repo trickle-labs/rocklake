@@ -180,6 +180,12 @@ pub fn data_file_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn data_file_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*data_file_schema()).clone();
+    fields.push(int8t!("row_group_count"));
+    Arc::new(fields)
+}
+
 // ── ducklake_delete_file ──────────────────────────────────────────────────────
 
 /// `ducklake_delete_file(delete_file_id, table_id, begin_snapshot, end_snapshot,
@@ -201,6 +207,12 @@ pub fn delete_file_schema() -> Arc<Vec<FieldInfo>> {
         text_col!("encryption_key"),
         int8t!("partial_max"),
     ])
+}
+
+pub fn delete_file_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*delete_file_schema()).clone();
+    fields.push(int8t!("row_group_count"));
+    Arc::new(fields)
 }
 
 // ── ducklake_table_stats ──────────────────────────────────────────────────────
@@ -725,6 +737,8 @@ pub fn fields_for_table_version(table_name: &str, stable_1_1: bool) -> Option<Ar
         match table_name {
             "ducklake_table_column_stats" => return Some(table_column_stats_schema_v11()),
             "ducklake_file_column_stats" => return Some(file_column_stats_schema_v11()),
+            "ducklake_data_file" => return Some(data_file_schema_v11()),
+            "ducklake_delete_file" => return Some(delete_file_schema_v11()),
             _ => {}
         }
     }
@@ -761,5 +775,15 @@ mod tests {
         assert_eq!(v10.len() + 2, v11.len());
         assert_eq!(v11[v11.len() - 2].name(), "min_is_exact");
         assert_eq!(v11[v11.len() - 1].name(), "max_is_exact");
+    }
+
+    #[test]
+    fn row_group_counts_are_only_exposed_in_v11_schemas() {
+        for table in ["ducklake_data_file", "ducklake_delete_file"] {
+            let v10 = fields_for_table_version(table, false).unwrap();
+            let v11 = fields_for_table_version(table, true).unwrap();
+            assert!(!v10.iter().any(|field| field.name() == "row_group_count"));
+            assert_eq!(v11.last().unwrap().name(), "row_group_count");
+        }
     }
 }

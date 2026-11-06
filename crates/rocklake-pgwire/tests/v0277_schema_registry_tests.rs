@@ -27,7 +27,8 @@ use tokio::sync::Mutex;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 
-use pgwire::api::results::Response;
+use pgwire::api::results::{FieldFormat, Response};
+use pgwire::api::Type;
 use rocklake_catalog::{CatalogStore, OpenOptions};
 use rocklake_core::keys::MetadataScope;
 use rocklake_pgwire::executor;
@@ -103,9 +104,8 @@ async fn inspect(resp: Response<'static>) -> (Vec<String>, usize) {
             futures::pin_mut!(stream);
             let mut count = 0usize;
             while let Some(item) = stream.next().await {
-                if item.is_ok() {
-                    count += 1;
-                }
+                item.expect("valid response row");
+                count += 1;
             }
             (cols, count)
         }
@@ -339,6 +339,7 @@ async fn golden_ducklake_data_file() {
         cols.contains(&"path".to_string()),
         "must have path: {cols:?}"
     );
+    assert!(!cols.contains(&"row_group_count".to_string()));
 }
 
 #[tokio::test]
@@ -356,6 +357,107 @@ async fn golden_ducklake_delete_file() {
         cols.contains(&"path".to_string()),
         "must have path: {cols:?}"
     );
+    assert!(!cols.contains(&"row_group_count".to_string()));
+}
+
+#[tokio::test]
+async fn ducklake_v11_row_group_counts_persist_and_are_exposed() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let table_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(commit);
+        table_id
+    };
+    drop(store);
+    let store = open_store(&dir).await;
+
+    let insert_data = format!(
+        "INSERT INTO ducklake_data_file (table_id, path, file_format, record_count, file_size_bytes, row_group_count) VALUES ({table_id}, 'part.parquet', 'parquet', 10, 100, 3)"
+    );
+    executor::execute_sql(
+        &insert_data,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let data_files = store
+        .lock()
+        .await
+        .read_latest()
+        .list_data_files(table_id)
+        .await
+        .unwrap();
+    let data_file_id = data_files[0].data_file_id;
+    assert_eq!(data_files[0].row_group_count, Some(3));
+
+    let insert_delete = format!(
+        "INSERT INTO ducklake_delete_file (data_file_id, table_id, path, delete_count, file_size_bytes, row_group_count) VALUES ({data_file_id}, {table_id}, 'delete.parquet', 1, 20, 2)"
+    );
+    executor::execute_sql(
+        &insert_delete,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let delete_files = store
+        .lock()
+        .await
+        .read_latest()
+        .list_delete_files(table_id)
+        .await
+        .unwrap();
+    assert_eq!(delete_files[0].row_group_count, Some(2));
+
+    let (data_cols, _) = inspect(exec("SELECT * FROM ducklake_data_file", &store).await).await;
+    let (delete_cols, _) = inspect(exec("SELECT * FROM ducklake_delete_file", &store).await).await;
+    assert!(data_cols.ends_with(&["row_group_count".into()]));
+    assert!(delete_cols.ends_with(&["row_group_count".into()]));
+
+    let (data_projection, data_rows) = inspect(
+        exec(
+            "SELECT path, row_group_count FROM ducklake_data_file",
+            &store,
+        )
+        .await,
+    )
+    .await;
+    assert_cols_eq(
+        &data_projection,
+        &["path", "row_group_count"],
+        "data_file projection",
+    );
+    assert_eq!(data_rows, 1);
+
+    let (delete_projection, delete_rows) = inspect(
+        exec(
+            "SELECT path, row_group_count FROM ducklake_delete_file",
+            &store,
+        )
+        .await,
+    )
+    .await;
+    assert_cols_eq(
+        &delete_projection,
+        &["path", "row_group_count"],
+        "delete_file projection",
+    );
+    assert_eq!(delete_rows, 1);
 }
 
 #[tokio::test]
@@ -799,6 +901,84 @@ async fn golden_ducklake_file_partition_value() {
     );
 }
 
+#[tokio::test]
+async fn ducklake_file_partition_values_persist_and_project() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let table_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(commit);
+        table_id
+    };
+
+    let insert_file = format!(
+        "INSERT INTO ducklake_data_file (table_id, path, file_format, record_count, file_size_bytes) VALUES ({table_id}, 'epoch_day=-1.parquet', 'parquet', 1, 100)"
+    );
+    executor::execute_sql(
+        &insert_file,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let data_file_id = store
+        .lock()
+        .await
+        .read_latest()
+        .list_data_files(table_id)
+        .await
+        .unwrap()[0]
+        .data_file_id;
+
+    let insert_partition_value = format!(
+        "INSERT INTO ducklake_file_partition_value VALUES ({data_file_id}, {table_id}, 0, '-1')"
+    );
+    executor::execute_sql(
+        &insert_partition_value,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_file_partition_values(Some(table_id))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].data_file_id, data_file_id);
+    assert_eq!(rows[0].partition_value.as_deref(), Some("-1"));
+
+    let response = exec(
+        "SELECT table_id, partition_value FROM ducklake_file_partition_value",
+        &store,
+    )
+    .await;
+    let (columns, count) = inspect(response).await;
+    assert_cols_eq(
+        &columns,
+        &["table_id", "partition_value"],
+        "file_partition_value",
+    );
+    assert_eq!(count, 1);
+}
+
 // ── Three SELECT variants for high-risk tables ────────────────────────────────
 
 // ducklake_table_stats: SELECT *, SELECT explicit, SELECT with CAST
@@ -1067,6 +1247,73 @@ async fn inlined_row_select_star_returns_unaliased_columns() {
         !cols.contains(&"row_id".to_string()),
         "SELECT * must NOT expose system column row_id, got: {cols:?}"
     );
+}
+
+#[tokio::test]
+async fn variant_inlined_values_are_exposed_as_binary_bytea() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let (_, table_id, _) = populate_base(&store).await;
+    let schema_version = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer
+            .add_column(table_id, "variant_value", "VARIANT", 1, true, None)
+            .await
+            .unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        catalog
+            .read_latest()
+            .get_snapshot()
+            .await
+            .unwrap()
+            .unwrap()
+            .schema_version
+    };
+
+    let table = format!("ducklake_inlined_data_{table_id}_{schema_version}");
+    let insert =
+        format!(r#"INSERT INTO "public".{table} VALUES (0, {schema_version}, NULL, 42, '\x0102')"#);
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let query = format!(r#"SELECT variant_value FROM "public".{table}"#);
+    let mut responses = executor::execute_sql(
+        &query,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let Response::Query(response) = responses.remove(0) else {
+        panic!("expected query response");
+    };
+    let fields = response.row_schema();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].datatype(), &Type::BYTEA);
+    assert_eq!(fields[0].format(), FieldFormat::Binary);
+
+    let rows = response.data_rows();
+    futures::pin_mut!(rows);
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(row.field_count, 1);
+    assert_eq!(i32::from_be_bytes(row.data[..4].try_into().unwrap()), 2);
+    assert_eq!(&row.data[4..], &[0x01, 0x02]);
 }
 
 #[tokio::test]

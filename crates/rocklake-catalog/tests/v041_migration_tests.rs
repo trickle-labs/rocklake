@@ -16,7 +16,7 @@ use object_store::path::Path as ObjectPath;
 
 use rocklake_catalog::export::{export_catalog, import_catalog, ExportedRow};
 use rocklake_catalog::migrate_from_ducklake::{
-    migrate_from_source, InMemoryDuckLakeSource, ACCEPT_VERSION_V1_1_DEV_1,
+    migrate_from_source, InMemoryDuckLakeSource, SqliteDuckLakeSource, ACCEPT_VERSION_V1_1_DEV_1,
     DUCKLAKE_V1_0_CATALOG_VERSION, DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION,
 };
 use rocklake_catalog::CatalogError;
@@ -208,6 +208,28 @@ async fn migrate_v11_source_accepted_with_flag() {
         report.source_catalog_version,
         DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION
     );
+}
+
+#[tokio::test]
+async fn stable_v11_format_is_rejected_before_loading_unsupported_tables() {
+    let db = fresh_db().await;
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE ducklake_metadata (key TEXT, value TEXT, scope TEXT, scope_id INTEGER); \
+         INSERT INTO ducklake_metadata VALUES ('version', '1.1', 'global', 0); \
+         CREATE TABLE ducklake_snapshot (snapshot_id INTEGER, schema_version INTEGER); \
+         INSERT INTO ducklake_snapshot VALUES (1, 0); \
+         CREATE TABLE ducklake_view_column_tag (view_id INTEGER);",
+    )
+    .unwrap();
+    let result = SqliteDuckLakeSource::from_connection(conn, None);
+    assert!(matches!(
+        result,
+        Err(CatalogError::UnsupportedDuckLakeVersion { .. })
+    ));
+
+    let mut iter = db.scan::<&[u8], _>(std::ops::RangeFull).await.unwrap();
+    assert!(iter.next().await.unwrap().is_none());
 }
 
 // ---------------------------------------------------------------------------

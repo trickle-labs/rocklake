@@ -194,12 +194,14 @@ fn data_file_row_uses_begin_snapshot_not_snapshot_id() {
         partition_id: None,
         mapping_id: None,
         partial_max: None,
+        row_group_count: Some(4),
     };
     assert_eq!(row.begin_snapshot, Some(3));
     assert_eq!(row.record_count, 1000);
     assert_eq!(row.file_order, Some(1));
     assert_eq!(row.path_is_relative, Some(false));
     assert_eq!(row.row_id_start, Some(0));
+    assert_eq!(row.row_group_count, Some(4));
 }
 
 #[tokio::test]
@@ -264,12 +266,14 @@ fn delete_file_row_has_v024_fields() {
         footer_size: None,
         partial_max: None,
         encryption_key: None,
+        row_group_count: Some(2),
     };
     assert_eq!(row.delete_count, 500);
     assert_eq!(row.table_id, Some(42));
     assert_eq!(row.begin_snapshot, Some(3));
     assert_eq!(row.format.as_deref(), Some("parquet"));
     assert_eq!(row.path_is_relative, Some(false));
+    assert_eq!(row.row_group_count, Some(2));
 }
 
 #[tokio::test]

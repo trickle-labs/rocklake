@@ -3033,7 +3033,15 @@ fn describe_fields_for_sql_version(
             {
                 crate::executor::scan_data_file_fields(sql)
             } else {
-                project_described_fields(sql, (*crate::schema_registry::data_file_schema()).clone())
+                project_metadata_file_fields(
+                    sql,
+                    (*if stable_1_1 {
+                        crate::schema_registry::data_file_schema_v11()
+                    } else {
+                        crate::schema_registry::data_file_schema()
+                    })
+                    .clone(),
+                )
             }
         }
         rocklake_sql::StatementKind::SelectFileColumnStats => project_described_fields(
@@ -3094,9 +3102,15 @@ fn describe_fields_for_sql_version(
             sql,
             (*crate::schema_registry::snapshot_changes_schema()).clone(),
         ),
-        rocklake_sql::StatementKind::SelectDeleteFiles => {
-            project_described_fields(sql, (*crate::schema_registry::delete_file_schema()).clone())
-        }
+        rocklake_sql::StatementKind::SelectDeleteFiles => project_metadata_file_fields(
+            sql,
+            (*if stable_1_1 {
+                crate::schema_registry::delete_file_schema_v11()
+            } else {
+                crate::schema_registry::delete_file_schema()
+            })
+            .clone(),
+        ),
         rocklake_sql::StatementKind::SelectViews => {
             project_described_fields(sql, (*crate::schema_registry::view_schema()).clone())
         }
@@ -3268,16 +3282,71 @@ fn project_described_fields(
     _sql: &str,
     schema: Vec<pgwire::api::results::FieldInfo>,
 ) -> Vec<pgwire::api::results::FieldInfo> {
-    // The execute path (make_*_response) always returns ALL catalog columns
-    // regardless of the SELECT projection.  Returning the full schema here
-    // ensures the RowDescription from Describe matches the DataRow from
-    // Execute, so clients can resolve columns by name rather than by position.
+    // The legacy metadata handlers return full rows regardless of the projection.
     schema
+}
+
+fn project_metadata_file_fields(
+    sql: &str,
+    schema: Vec<pgwire::api::results::FieldInfo>,
+) -> Vec<pgwire::api::results::FieldInfo> {
+    let dialect = PostgreSqlDialect {};
+    let Some(Statement::Query(query)) = Parser::parse_sql(&dialect, sql)
+        .ok()
+        .and_then(|mut statements| statements.pop())
+    else {
+        return schema;
+    };
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return schema;
+    };
+
+    let mut fields = Vec::new();
+    for item in &select.projection {
+        match item {
+            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                fields.extend(schema.iter().cloned());
+            }
+            SelectItem::UnnamedExpr(expr) => {
+                let source_name = expr_last_identifier(expr);
+                if let Some(field) = schema.iter().find(|field| {
+                    field.name().eq_ignore_ascii_case(&source_name)
+                        || (source_name.eq_ignore_ascii_case("row_count")
+                            && field.name().eq_ignore_ascii_case("record_count"))
+                }) {
+                    fields.push(field.clone());
+                }
+            }
+            SelectItem::ExprWithAlias { expr, alias } => {
+                let source_name = expr_last_identifier(expr);
+                if let Some(field) = schema.iter().find(|field| {
+                    field.name().eq_ignore_ascii_case(&source_name)
+                        || (source_name.eq_ignore_ascii_case("row_count")
+                            && field.name().eq_ignore_ascii_case("record_count"))
+                }) {
+                    fields.push(FieldInfo::new(
+                        alias.value.clone(),
+                        None,
+                        None,
+                        field.datatype().clone(),
+                        field.format(),
+                    ));
+                }
+            }
+        }
+    }
+    if fields.is_empty() {
+        schema
+    } else {
+        fields
+    }
 }
 
 #[cfg(test)]
 mod pg_parameter_tests {
-    use super::{describe_fields_for_sql, describe_params_for_sql};
+    use super::{
+        describe_fields_for_sql, describe_fields_for_sql_version, describe_params_for_sql,
+    };
     use pgwire::api::Type;
 
     #[test]
@@ -3311,5 +3380,26 @@ mod pg_parameter_tests {
         assert_eq!(fields[8].name(), "row_id_start");
         assert_eq!(fields[15].name(), "begin_snapshot");
         assert_eq!(fields[8].datatype(), &Type::INT8);
+    }
+
+    #[test]
+    fn data_file_projection_description_matches_execution() {
+        let fields = describe_fields_for_sql(
+            "SELECT path AS file_path FROM ducklake_data_file WHERE table_id = $1",
+        );
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name(), "file_path");
+
+        let delete_fields = describe_fields_for_sql_version(
+            "SELECT path, row_group_count FROM ducklake_delete_file",
+            true,
+        );
+        assert_eq!(
+            delete_fields
+                .iter()
+                .map(|field| field.name())
+                .collect::<Vec<_>>(),
+            ["path", "row_group_count"]
+        );
     }
 }

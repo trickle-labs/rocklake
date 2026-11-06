@@ -111,3 +111,42 @@ async fn snapshot_changes_row_values_match_ducklake_1_0_contract() {
         "one snapshot must produce one row"
     );
 }
+
+#[tokio::test]
+async fn snapshot_info_lookup_honors_explicit_snapshot_id() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    {
+        let mut catalog = store.lock().await;
+        for name in ["first", "second"] {
+            let mut writer = catalog.begin_write();
+            writer.create_schema(name).await.unwrap();
+            let commit = writer
+                .create_snapshot(Some("certifier"), Some(name))
+                .await
+                .unwrap();
+            catalog.commit_writer(commit);
+        }
+    }
+
+    let mut session = SessionState::new();
+    let responses = executor::execute_sql(
+        "SELECT snapshot_id, schema_version, next_catalog_id, next_file_id \
+         FROM ducklake_snapshot WHERE snapshot_id = 1",
+        &ParamValues::default(),
+        &store,
+        &mut session,
+        &Arc::new(NotifyManager::new()),
+        &Arc::new(Vec::new()),
+    )
+    .await
+    .unwrap();
+    let Response::Query(query) = responses.into_iter().next().unwrap() else {
+        panic!("expected a query response")
+    };
+    let mut rows = query.data_rows();
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(i32::from_be_bytes(row.data[..4].try_into().unwrap()), 8);
+    assert_eq!(i64::from_be_bytes(row.data[4..12].try_into().unwrap()), 1);
+    assert!(rows.next().await.is_none());
+}

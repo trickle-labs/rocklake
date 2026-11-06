@@ -800,7 +800,7 @@ mod pg_catalog_tests {
         let expected = crate::schema_registry::supported_tables()
             .iter()
             .map(|table| {
-                crate::schema_registry::fields_for_table(table)
+                crate::schema_registry::fields_for_table_version(table, false)
                     .expect("registered metadata schema")
                     .len()
             })
