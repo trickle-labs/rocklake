@@ -589,6 +589,45 @@ async fn ducklake_1_1_view_column_tags_are_selectable() {
     );
     assert_eq!(count, 1);
 
+    let overwrite = format!(
+        "WITH overwritten_tags(vid, col, k) AS (VALUES ({view_id}, 'id', 'comment')) UPDATE \"public\".ducklake_view_column_tag SET end_snapshot = 12 FROM overwritten_tags WHERE view_id = vid AND ducklake_view_column_tag.column_name = overwritten_tags.col AND ducklake_view_column_tag.key = overwritten_tags.k AND end_snapshot IS NULL"
+    );
+    executor::execute_sql(
+        &overwrite,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let replacement = format!(
+        "INSERT INTO ducklake_view_column_tag (view_id, column_name, begin_snapshot, end_snapshot, key, value) VALUES ({view_id}, 'id', 1, NULL, 'comment', 'updated')"
+    );
+    executor::execute_sql(
+        &replacement,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let active_tags = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_view_column_tags()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|tag| tag.end_snapshot.is_none())
+        .collect::<Vec<_>>();
+    assert_eq!(active_tags.len(), 1);
+    assert_eq!(active_tags[0].tag_value, "updated");
+
     let begin_snapshot = store
         .lock()
         .await

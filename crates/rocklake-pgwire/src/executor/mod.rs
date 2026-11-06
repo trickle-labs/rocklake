@@ -440,8 +440,8 @@ fn file_ids_from_where_sql(sql: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_multi_statement_batch,
-        resolve_comparison_u64,
+        file_ids_from_where_sql, inlined_data_table_ids_from_ctid_sql, parse_insert_rows_map,
+        parse_multi_statement_batch, resolve_comparison_u64, row_map_string, row_map_u64,
     };
     use rocklake_sql::ParamValues;
 
@@ -486,6 +486,25 @@ mod tests {
             .expect("two SQL statements");
         assert_eq!(statements.len(), 2);
         assert!(statements[0].contains("delete; ducklake"));
+    }
+
+    #[test]
+    fn maps_positional_ducklake_view_rows_by_catalog_column_order() {
+        let rows = parse_insert_rows_map(
+            "INSERT INTO ducklake_view VALUES (9, '739b25e2-02e0-43e7-9bd0-0d31db9866e8', 11, NULL, 3, 'event_view', 'duckdb', 'SELECT 1', 'event_id')",
+            &ParamValues::default(),
+        )
+        .unwrap();
+        assert_eq!(row_map_u64(&rows[0], "schema_id"), Some(3));
+        assert_eq!(
+            row_map_string(&rows[0], "view_name").as_deref(),
+            Some("event_view")
+        );
+        assert_eq!(
+            row_map_string(&rows[0], "view_uuid").as_deref(),
+            Some("739b25e2-02e0-43e7-9bd0-0d31db9866e8")
+        );
+        assert_eq!(row_map_string(&rows[0], "sql").as_deref(), Some("SELECT 1"));
     }
 }
 
@@ -612,6 +631,13 @@ fn parse_insert_rows_map(
         {
             cols = crate::schema_registry::delete_file_schema().iter()
                 .map(|field| field.name().to_string()).collect();
+        } else if table_name_normalized == "ducklake_view"
+            && insert.source.as_ref().is_some_and(|source| matches!(&*source.body, SetExpr::Values(values) if values.rows.iter().all(|row| row.len() == 9)))
+        {
+            cols = crate::schema_registry::view_schema()
+                .iter()
+                .map(|field| field.name().to_string())
+                .collect();
         } else if table_name_normalized == "ducklake_column_mapping" {
             cols = vec!["table_id".to_string(), "mapping_type".to_string()];
         } else if table_name_normalized == "ducklake_name_mapping" {
@@ -2923,35 +2949,49 @@ async fn execute_classified<'a>(
             )))])
         }
         StatementKind::InsertView => {
-            let parameterized = _sql.contains('$');
-            let literals = literal_insert_values(_sql);
-            let op = BufferedOp::InsertView {
-                schema_id: if parameterized {
-                    required_param_u64(params, 0, "schema_id")?
-                } else {
-                    literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
-                        name: "schema_id".into(),
-                    })?
-                },
-                view_name: if parameterized {
-                    required_param_string(params, 1, "view_name")?
-                } else {
-                    literal_string(&literals, 1)
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| RockLakeError::MissingParam {
-                            name: "view_name".into(),
+            let op = if let Some(rows) = parse_insert_rows_map(_sql, params) {
+                let row = rows.first().ok_or_else(|| RockLakeError::MissingParam {
+                    name: "view_name".into(),
+                })?;
+                BufferedOp::InsertView {
+                    schema_id: required_row_u64_value(row, &["schema_id"])?,
+                    view_name: required_row_string_value(row, &["view_name"])?,
+                    sql: required_row_string_value(row, &["sql"])?,
+                    view_uuid: row_map_string(row, "view_uuid"),
+                    dialect: row_map_string(row, "dialect"),
+                    column_aliases: row_map_string(row, "column_aliases"),
+                }
+            } else {
+                let parameterized = _sql.contains('$');
+                let literals = literal_insert_values(_sql);
+                BufferedOp::InsertView {
+                    schema_id: if parameterized {
+                        required_param_u64(params, 0, "schema_id")?
+                    } else {
+                        literal_u64(&literals, 0).ok_or_else(|| RockLakeError::MissingParam {
+                            name: "schema_id".into(),
                         })?
-                },
-                sql: if parameterized {
-                    required_param_string(params, 2, "sql")?
-                } else {
-                    literal_string(&literals, 2)
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| RockLakeError::MissingParam { name: "sql".into() })?
-                },
-                view_uuid: params.get_optional_string(3),
-                dialect: params.get_optional_string(4),
-                column_aliases: params.get_optional_string(5),
+                    },
+                    view_name: if parameterized {
+                        required_param_string(params, 1, "view_name")?
+                    } else {
+                        literal_string(&literals, 1)
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| RockLakeError::MissingParam {
+                                name: "view_name".into(),
+                            })?
+                    },
+                    sql: if parameterized {
+                        required_param_string(params, 2, "sql")?
+                    } else {
+                        literal_string(&literals, 2)
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| RockLakeError::MissingParam { name: "sql".into() })?
+                    },
+                    view_uuid: params.get_optional_string(3),
+                    dialect: params.get_optional_string(4),
+                    column_aliases: params.get_optional_string(5),
+                }
             };
             if session.in_transaction {
                 session.pending_txn.push(op)?;
@@ -3083,6 +3123,16 @@ async fn execute_classified<'a>(
         StatementKind::UpdateEndSnapshot(ref table_name) => {
             if table_name == "ducklake_view_column_tag" {
                 if !updates_column(_sql, "end_snapshot") {
+                    let lower = _sql.to_ascii_lowercase();
+                    if lower.starts_with("with overwritten_tags")
+                        && lower.contains("update")
+                        && lower.contains("ducklake_view_column_tag")
+                        && lower.contains("set end_snapshot")
+                        && lower.contains("from overwritten_tags")
+                    {
+                        // DuckDB's replacement INSERT retires the matching live tag itself.
+                        return Ok(vec![Response::Execution(Tag::new("UPDATE 0"))]);
+                    }
                     return Err(RockLakeError::Unsupported(
                         "only end_snapshot updates are supported for ducklake_view_column_tag"
                             .into(),
