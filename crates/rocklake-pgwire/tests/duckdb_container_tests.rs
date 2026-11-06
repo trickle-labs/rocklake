@@ -2085,3 +2085,130 @@ async fn duckdb_container_reader_isolation_and_restart_recovery() {
     recovered_writer.stop().await;
     pgwire.stop().await;
 }
+
+#[tokio::test]
+async fn duckdb_2_0_puffin_deletions_preserve_snapshot_history() {
+    if !duckdb_version().starts_with("2.0") {
+        return;
+    }
+
+    let (catalog, pgwire) = setup_catalog("puffin_multi_snapshot").await;
+    let data_dir = TempDir::new().expect("duckdb data dir should be created");
+    let duckdb = start_duckdb(&data_dir).await;
+    let attach_with_vectors = format!(
+        "LOAD ducklake; ATTACH 'ducklake:postgres:{}' AS my_lake \
+         (DATA_PATH '{}', WRITE_DELETION_VECTORS TRUE, DATA_INLINING_ROW_LIMIT 0); ",
+        pgwire.container_connection_string(),
+        duckdb.data_path()
+    );
+
+    duckdb
+        .run_sql(&format!(
+            "{attach_with_vectors}CREATE TABLE my_lake.main.dv_events \
+             AS SELECT i AS id FROM range(100) t(i);"
+        ))
+        .await
+        .expect("DuckDB should create a file-backed 1.1 table");
+    let snapshot_after_create = catalog.reader_latest().await.snapshot_id().as_u64();
+
+    duckdb
+        .run_sql("DELETE FROM my_lake.main.dv_events WHERE id = 10;")
+        .await
+        .expect("first deletion should commit");
+    let snapshot_after_first_delete = catalog.reader_latest().await.snapshot_id().as_u64();
+
+    duckdb
+        .run_sql("DELETE FROM my_lake.main.dv_events WHERE id = 20;")
+        .await
+        .expect("second deletion should commit");
+    let snapshot_after_second_delete = catalog.reader_latest().await.snapshot_id().as_u64();
+
+    let schema = schema_id(&catalog, "main").await;
+    let table = table_id(&catalog, schema, "dv_events").await;
+    let reader = catalog.reader_latest().await;
+    let data_files = reader
+        .list_data_files(table)
+        .await
+        .expect("data file metadata should be readable");
+    let delete_files = reader
+        .list_delete_files(table)
+        .await
+        .expect("delete file metadata should be readable");
+    assert_eq!(data_files.len(), 1);
+    assert_eq!(data_files[0].row_group_count, Some(1));
+    assert_eq!(
+        delete_files.len(),
+        1,
+        "deletes should share one Puffin file"
+    );
+    let delete_file = &delete_files[0];
+    assert_eq!(delete_file.format.as_deref(), Some("puffin"));
+    assert_eq!(
+        delete_file.begin_snapshot,
+        Some(snapshot_after_first_delete)
+    );
+    assert_eq!(delete_file.end_snapshot, None);
+    assert_eq!(
+        delete_file
+            .partial_max
+            .as_deref()
+            .and_then(|value| value.parse::<u64>().ok()),
+        Some(snapshot_after_second_delete)
+    );
+    assert!(snapshot_after_create < snapshot_after_first_delete);
+    assert!(snapshot_after_first_delete < snapshot_after_second_delete);
+
+    pgwire.stop().await;
+    catalog
+        .reopen()
+        .await
+        .expect("catalog should reopen after Puffin writes");
+    let pgwire = PgWireHarness::start_with_catalog(catalog.store.clone())
+        .await
+        .expect("PG-Wire server should restart");
+    let current_sql = "SELECT count(*) AS current_rows FROM reconnected.main.dv_events;";
+    let first_delete_sql = format!(
+        "SELECT count(*) AS first_delete_rows FROM reconnected.main.dv_events \
+         AT (VERSION => {snapshot_after_first_delete});"
+    );
+    let second_delete_sql = format!(
+        "SELECT count(*) AS second_delete_rows FROM reconnected.main.dv_events \
+         AT (VERSION => {snapshot_after_second_delete});"
+    );
+    let metadata_sql = "SELECT format, begin_snapshot, end_snapshot, partial_max, row_group_count \
+                        FROM __ducklake_metadata_reconnected.ducklake_delete_file;";
+    let output = duckdb
+        .run_sql(&format!(
+            "LOAD ducklake; ATTACH 'ducklake:postgres:{}' AS reconnected \
+             (DATA_PATH '{}'); USE reconnected; CREATE TEMP TABLE reconnect_check AS SELECT 1; \
+             SELECT value FROM reconnected.options() WHERE option_name = 'version'; \
+             {current_sql} {first_delete_sql} {second_delete_sql} {metadata_sql}",
+            pgwire.container_connection_string(),
+            duckdb.data_path()
+        ))
+        .await
+        .expect("a fresh DuckDB attachment should read Puffin history after restart");
+    assert!(output.stdout.contains("1.1"), "{}", output.stdout);
+    for (statement, expected) in [
+        (current_sql.to_string(), "98"),
+        (first_delete_sql, "99"),
+        (second_delete_sql, "98"),
+    ] {
+        let rows = output_after_statement(&output.stdout, &statement);
+        assert!(
+            rows.contains(expected),
+            "expected {expected} rows after {statement}\nstdout: {}\nstderr: {}",
+            output.stdout,
+            output.stderr
+        );
+    }
+    let metadata = output_after_statement(&output.stdout, metadata_sql);
+    assert!(metadata.contains("puffin"), "{metadata}");
+    assert!(
+        metadata.contains(&snapshot_after_first_delete.to_string())
+            && metadata.contains(&snapshot_after_second_delete.to_string()),
+        "{metadata}"
+    );
+    duckdb.stop().await;
+    pgwire.stop().await;
+}

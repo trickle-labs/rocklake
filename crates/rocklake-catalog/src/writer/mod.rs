@@ -347,6 +347,36 @@ impl CatalogWriter {
         Err(CatalogError::NotFound(format!("data file {data_file_id}")))
     }
 
+    async fn ensure_delete_file_exists(&self, delete_file_id: u64) -> CatalogResult<()> {
+        let prefix = keys::prefix_for_tag(TAG_DELETE_FILE);
+        if self.staged.iter().any(|(key, value)| {
+            key.starts_with(&prefix)
+                && values::decode_value::<DeleteFileRow>(value)
+                    .map(|row| row.delete_file_id == delete_file_id)
+                    .unwrap_or(false)
+        }) {
+            return Ok(());
+        }
+        let mut iter = self
+            .db
+            .scan_prefix(&prefix)
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: DeleteFileRow = values::decode_value(&kv.value)?;
+            if row.delete_file_id == delete_file_id {
+                return Ok(());
+            }
+        }
+        Err(CatalogError::NotFound(format!(
+            "delete file {delete_file_id}"
+        )))
+    }
+
     async fn find_data_file_table_id(&self, data_file_id: u64) -> CatalogResult<Option<u64>> {
         let prefix = keys::prefix_for_tag(TAG_DATA_FILE);
         if let Some(table_id) = self.staged.iter().find_map(|(key, value)| {
@@ -2198,6 +2228,39 @@ impl CatalogWriter {
         encryption_key: Option<&str>,
         row_group_count: Option<u64>,
     ) -> CatalogResult<u64> {
+        self.register_delete_file_with_opts_and_row_group_count_and_begin_snapshot(
+            data_file_id,
+            path,
+            delete_count,
+            file_size_bytes,
+            table_id,
+            format,
+            path_is_relative,
+            footer_size,
+            partial_max,
+            encryption_key,
+            row_group_count,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_delete_file_with_opts_and_row_group_count_and_begin_snapshot(
+        &mut self,
+        data_file_id: u64,
+        path: &str,
+        delete_count: u64,
+        file_size_bytes: u64,
+        table_id: Option<u64>,
+        format: Option<&str>,
+        path_is_relative: Option<bool>,
+        footer_size: Option<i64>,
+        partial_max: Option<&str>,
+        encryption_key: Option<&str>,
+        row_group_count: Option<u64>,
+        begin_snapshot: Option<u64>,
+    ) -> CatalogResult<u64> {
         if let Some(table_id) = table_id {
             if data_file_id != 0 {
                 self.ensure_data_file_belongs(table_id, data_file_id)
@@ -2214,6 +2277,12 @@ impl CatalogWriter {
         };
         let delete_file_id = self.counters.alloc_file_id();
         let snapshot_id = self.counters.peek_snapshot_id();
+        let begin_snapshot = begin_snapshot.unwrap_or(snapshot_id);
+        if begin_snapshot > snapshot_id {
+            return Err(CatalogError::InvalidInput(format!(
+                "delete file begin_snapshot {begin_snapshot} is ahead of current snapshot {snapshot_id}"
+            )));
+        }
 
         // Detect if path is relative (no scheme like s3://, az://) or absolute
         let path_is_relative = validate_registered_path(path, path_is_relative)?;
@@ -2226,7 +2295,7 @@ impl CatalogWriter {
             file_size_bytes,
             snapshot_id,
             table_id,
-            begin_snapshot: Some(snapshot_id),
+            begin_snapshot: Some(begin_snapshot),
             end_snapshot: None,
             path_is_relative: Some(path_is_relative),
             format: format
@@ -2243,7 +2312,7 @@ impl CatalogWriter {
         self.stage(key, encoded.clone());
         if let Some(table_id) = indexed_table_id {
             self.stage(
-                keys::key_delete_file_by_table(table_id, snapshot_id, delete_file_id),
+                keys::key_delete_file_by_table(table_id, begin_snapshot, delete_file_id),
                 encoded,
             );
         }
@@ -3301,7 +3370,25 @@ impl CatalogWriter {
         path_is_relative: Option<bool>,
         schedule_start: u64,
     ) -> CatalogResult<()> {
-        self.ensure_data_file_exists(data_file_id).await?;
+        // DuckLake also stores delete-file IDs in this legacy data_file_id column.
+        let file_type = match file_type {
+            Some("delete") => {
+                self.ensure_delete_file_exists(data_file_id).await?;
+                file_type
+            }
+            Some(_) => {
+                self.ensure_data_file_exists(data_file_id).await?;
+                file_type
+            }
+            None => match self.ensure_data_file_exists(data_file_id).await {
+                Ok(()) => None,
+                Err(CatalogError::NotFound(_)) => {
+                    self.ensure_delete_file_exists(data_file_id).await?;
+                    Some("delete")
+                }
+                Err(error) => return Err(error),
+            },
+        };
         let row = FilesScheduledForDeletionRow {
             data_file_id,
             schedule_start,
