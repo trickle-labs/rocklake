@@ -13,6 +13,7 @@ use super::helpers::make_empty_response;
 
 pub(super) async fn execute_virtual_catalog_scan<'a>(
     table_name: &str,
+    sql: &str,
     store: &Arc<tokio::sync::Mutex<CatalogStore>>,
 ) -> Result<Vec<Response<'a>>, RockLakeError> {
     let reader = { store.lock().await.read_latest() };
@@ -32,7 +33,7 @@ pub(super) async fn execute_virtual_catalog_scan<'a>(
                     .await
                     .map_err(RockLakeError::from)?
             };
-            Ok(vec![make_schemas_response(schemas, stable_1_1)])
+            Ok(vec![make_schemas_response(schemas, sql, stable_1_1)])
         }
         "ducklake_table" => {
             let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;

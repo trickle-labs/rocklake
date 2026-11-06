@@ -1028,28 +1028,48 @@ pub(super) fn make_latest_snapshot_info_response(
 
 pub(super) fn make_schemas_response(
     schemas: Vec<rocklake_core::rows::SchemaRow>,
+    sql: &str,
     stable_1_1: bool,
 ) -> Response<'static> {
-    let schema = if stable_1_1 {
+    let source_schema = if stable_1_1 {
         crate::schema_registry::schema_schema_v11()
     } else {
         crate::schema_registry::schema_schema()
     };
+    let projections = crate::schema_registry::project_schema_columns(sql, &source_schema);
+    let schema: Arc<Vec<FieldInfo>> = Arc::new(
+        projections
+            .iter()
+            .map(|projection| {
+                let source = &source_schema[projection.index];
+                FieldInfo::new(
+                    projection.name.clone(),
+                    None,
+                    None,
+                    source.datatype().clone(),
+                    source.format(),
+                )
+            })
+            .collect(),
+    );
     let mut data_rows = Vec::new();
     for s in &schemas {
         let mut encoder = DataRowEncoder::new(schema.clone());
-        encode_schema_int8(&mut encoder, Some(s.schema_id));
-        encode_text_value(&mut encoder, &s.schema_uuid);
-        encode_schema_int8(&mut encoder, Some(s.begin_snapshot));
-        encode_schema_int8(&mut encoder, s.end_snapshot);
-        encode_text_value(&mut encoder, &Some(s.schema_name.clone()));
-        encode_text_value(&mut encoder, &s.path);
-        encode_text_value(
-            &mut encoder,
-            &s.path_is_relative.map(|value| value.to_string()),
-        );
-        if stable_1_1 {
-            encode_schema_int8(&mut encoder, s.parent_schema_id);
+        for projection in &projections {
+            match projection.index {
+                0 => encode_schema_int8(&mut encoder, Some(s.schema_id)),
+                1 => encode_text_value(&mut encoder, &s.schema_uuid),
+                2 => encode_schema_int8(&mut encoder, Some(s.begin_snapshot)),
+                3 => encode_schema_int8(&mut encoder, s.end_snapshot),
+                4 => encode_text_value(&mut encoder, &Some(s.schema_name.clone())),
+                5 => encode_text_value(&mut encoder, &s.path),
+                6 => encode_text_value(
+                    &mut encoder,
+                    &s.path_is_relative.map(|value| value.to_string()),
+                ),
+                7 => encode_schema_int8(&mut encoder, s.parent_schema_id),
+                _ => unreachable!("schema registry projection index"),
+            }
         }
         data_rows.push(encoder.finish());
     }

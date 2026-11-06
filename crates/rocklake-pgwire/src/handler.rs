@@ -3012,7 +3012,7 @@ fn describe_fields_for_sql_version(
             vec![text_col!(var.as_str())]
         }
         // ── Catalog table schemas — all derived from the shared schema registry ──
-        rocklake_sql::StatementKind::SelectSchemas => project_described_fields(
+        rocklake_sql::StatementKind::SelectSchemas => project_described_schema_fields(
             sql,
             (*if stable_1_1 {
                 crate::schema_registry::schema_schema_v11()
@@ -3264,6 +3264,25 @@ fn project_described_fields(
     // ensures the RowDescription from Describe matches the DataRow from
     // Execute, so clients can resolve columns by name rather than by position.
     schema
+}
+
+fn project_described_schema_fields(
+    sql: &str,
+    schema: Vec<pgwire::api::results::FieldInfo>,
+) -> Vec<pgwire::api::results::FieldInfo> {
+    crate::schema_registry::project_schema_columns(sql, &schema)
+        .into_iter()
+        .map(|projection| {
+            let field = &schema[projection.index];
+            pgwire::api::results::FieldInfo::new(
+                projection.name,
+                None,
+                None,
+                field.datatype().clone(),
+                field.format(),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

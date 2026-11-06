@@ -18,6 +18,9 @@ use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::api::Type;
 use rocklake_catalog::{CatalogResult, CatalogStore};
 use rocklake_core::keys::MetadataScope;
+use sqlparser::ast::{Expr, SelectItem, SetExpr, Statement};
+use sqlparser::dialect::PostgreSqlDialect;
+use sqlparser::parser::Parser;
 
 // ── helper macros ─────────────────────────────────────────────────────────────
 
@@ -117,6 +120,77 @@ pub fn schema_schema_v11() -> Arc<Vec<FieldInfo>> {
     let mut fields = (*schema_schema()).clone();
     fields.push(int8b!("parent_schema_id"));
     Arc::new(fields)
+}
+
+pub(crate) struct SchemaProjection {
+    pub index: usize,
+    pub name: String,
+}
+
+pub(crate) fn project_schema_columns(sql: &str, schema: &[FieldInfo]) -> Vec<SchemaProjection> {
+    let all = || {
+        schema
+            .iter()
+            .enumerate()
+            .map(|(index, field)| SchemaProjection {
+                index,
+                name: field.name().to_string(),
+            })
+            .collect()
+    };
+    let Ok(mut statements) = Parser::parse_sql(&PostgreSqlDialect {}, sql) else {
+        return all();
+    };
+    let Some(Statement::Query(query)) = statements.pop() else {
+        return all();
+    };
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return all();
+    };
+
+    let mut projections = Vec::new();
+    for item in &select.projection {
+        let (expr, name) = match item {
+            SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _) => {
+                projections.extend(all());
+                continue;
+            }
+            SelectItem::UnnamedExpr(expr) => (expr, None),
+            SelectItem::ExprWithAlias { expr, alias } => (
+                expr,
+                Some(if alias.quote_style.is_some() {
+                    alias.value.clone()
+                } else {
+                    alias.value.to_ascii_lowercase()
+                }),
+            ),
+        };
+        let identifier = match expr {
+            Expr::Identifier(identifier) => &identifier.value,
+            Expr::CompoundIdentifier(identifiers) => {
+                let Some(identifier) = identifiers.last() else {
+                    return all();
+                };
+                &identifier.value
+            }
+            _ => return all(),
+        };
+        let Some(index) = schema
+            .iter()
+            .position(|field| field.name().eq_ignore_ascii_case(identifier))
+        else {
+            return all();
+        };
+        projections.push(SchemaProjection {
+            index,
+            name: name.unwrap_or_else(|| schema[index].name().to_string()),
+        });
+    }
+    if projections.is_empty() {
+        all()
+    } else {
+        projections
+    }
 }
 
 // ── ducklake_table ────────────────────────────────────────────────────────────
@@ -748,5 +822,28 @@ mod tests {
         let v11 = fields_for_table_version("ducklake_schema", true).unwrap();
         assert!(!v10.iter().any(|field| field.name() == "parent_schema_id"));
         assert_eq!(v11.last().unwrap().name(), "parent_schema_id");
+    }
+
+    #[test]
+    fn schema_projection_maps_columns_aliases_and_wildcards() {
+        let schema = schema_schema();
+        let columns = project_schema_columns(
+            "SELECT schema_name AS schema, schema_id FROM ducklake_schema",
+            &schema,
+        );
+        assert_eq!(
+            columns
+                .iter()
+                .map(|column| (column.index, column.name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(4, "schema"), (0, "schema_id")]
+        );
+        assert_eq!(
+            project_schema_columns("SELECT * FROM ducklake_schema", &schema)
+                .iter()
+                .map(|column| column.index)
+                .collect::<Vec<_>>(),
+            (0..schema.len()).collect::<Vec<_>>()
+        );
     }
 }
