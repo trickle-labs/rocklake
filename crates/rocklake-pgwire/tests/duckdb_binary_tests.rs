@@ -888,3 +888,101 @@ async fn duckdb_2_0_epoch_partitions_and_variant_inlining_survive_restart() {
     restarted_epoch_values.sort();
     assert_eq!(restarted_epoch_values, vec!["-1", "0", "1"]);
 }
+
+#[tokio::test]
+#[ignore = "requires DuckDB 2.0, the DuckLake extension, and a loopback listener"]
+async fn duckdb_v11_concurrent_clients_keep_both_commits() {
+    let dir = TempDir::new().unwrap();
+    let data_dir = TempDir::new().unwrap();
+    let data_path = data_dir.path().to_string_lossy().into_owned();
+    let (port, shutdown_tx, handle, _) = start_server(&dir, None).await;
+    let attach = format!(
+        "ATTACH 'ducklake:postgres:host=127.0.0.1 port={port} dbname=rocklake' AS lake \
+             (DATA_PATH '{data_path}'); "
+    );
+    let init_sql = format!(
+        "LOAD ducklake; {attach} \
+         CREATE TABLE lake.main.concurrent_events (id INTEGER, writer VARCHAR); \
+         DETACH lake;"
+    );
+    let init = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&init_sql)
+            .output(),
+    )
+    .await
+    .expect("DuckLake 1.1 concurrency setup timed out")
+    .expect("duckdb process must start");
+    assert!(
+        init.status.success(),
+        "DuckLake 1.1 concurrency setup failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let left_sql = format!(
+        "LOAD ducklake; {attach} \
+         INSERT INTO lake.main.concurrent_events \
+             SELECT range + 1, 'left' FROM range(10); \
+         DETACH lake;"
+    );
+    let right_sql = format!(
+        "LOAD ducklake; {attach} \
+         INSERT INTO lake.main.concurrent_events \
+             SELECT range + 11, 'right' FROM range(10); \
+         DETACH lake;"
+    );
+    let mut left = tokio::process::Command::new("duckdb");
+    left.arg("-no-agent").arg("-c").arg(&left_sql);
+    let mut right = tokio::process::Command::new("duckdb");
+    right.arg("-no-agent").arg("-c").arg(&right_sql);
+    let (left, right) = tokio::time::timeout(Duration::from_secs(90), async {
+        tokio::join!(left.output(), right.output())
+    })
+    .await
+    .expect("concurrent DuckLake 1.1 clients timed out");
+    let left = left.expect("left DuckDB client must start");
+    let right = right.expect("right DuckDB client must start");
+    assert!(
+        left.status.success(),
+        "left concurrent write failed: {}",
+        String::from_utf8_lossy(&left.stderr)
+    );
+    assert!(
+        right.status.success(),
+        "right concurrent write failed: {}",
+        String::from_utf8_lossy(&right.stderr)
+    );
+
+    let read_sql = format!(
+        "LOAD ducklake; {attach} \
+         SELECT concat(count(*)::VARCHAR, ':', count(DISTINCT id)::VARCHAR) \
+             FROM lake.main.concurrent_events; \
+         SELECT value FROM lake.options() WHERE option_name = 'version'; \
+         DETACH lake;"
+    );
+    let read = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new("duckdb")
+            .arg("-no-agent")
+            .arg("-c")
+            .arg(&read_sql)
+            .output(),
+    )
+    .await
+    .expect("concurrent DuckLake 1.1 verification timed out")
+    .expect("duckdb process must start");
+    let _ = shutdown_tx.send(());
+    let _ = handle.await;
+    let stdout = String::from_utf8_lossy(&read.stdout);
+    let stderr = String::from_utf8_lossy(&read.stderr);
+    assert!(
+        read.status.success(),
+        "DuckLake 1.1 verification failed: {}\nstdout: {stdout}\nstderr: {stderr}",
+        read.status
+    );
+    assert!(stdout.contains("20:20"), "{stdout}");
+    assert!(stdout.contains("1.1"), "{stdout}");
+}
