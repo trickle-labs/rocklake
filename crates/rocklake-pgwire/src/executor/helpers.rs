@@ -700,7 +700,7 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
     sql: &str,
     initialized: bool,
     bootstrap_relations: &std::collections::HashSet<String>,
-    ducklake_v11: bool,
+    stable_1_1: bool,
 ) -> Vec<Response<'a>> {
     // Result set 1: pg_namespace
     let ns_schema = make_pg_namespace_schema();
@@ -725,7 +725,7 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
             .and_then(|filter| filter.trim_start().strip_prefix('\''))
             .and_then(|filter| filter.split('\'').next());
         for table in crate::schema_registry::supported_tables() {
-            if !ducklake_v11 && *table == "ducklake_view_column_tag" {
+            if !stable_1_1 && *table == "ducklake_view_column_tag" {
                 continue;
             }
             if !initialized && !bootstrap_relations.contains(*table) {
@@ -734,7 +734,7 @@ pub(super) fn make_pg_catalog_scan_responses<'a>(
             if requested_table.is_some_and(|requested| requested != *table) {
                 continue;
             }
-            let fields = crate::schema_registry::fields_for_table(table)
+            let fields = crate::schema_registry::fields_for_table_version(table, stable_1_1)
                 .expect("supported DuckLake metadata table must have a schema");
             for (index, field) in fields.iter().enumerate() {
                 cls_rows.push(make_pg_class_attribute_row(
@@ -805,7 +805,7 @@ mod pg_catalog_tests {
         let expected = crate::schema_registry::supported_tables()
             .iter()
             .map(|table| {
-                crate::schema_registry::fields_for_table(table)
+                crate::schema_registry::fields_for_table_version(table, true)
                     .expect("registered metadata schema")
                     .len()
             })

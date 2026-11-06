@@ -755,6 +755,14 @@ pub fn prefix_data_files_for_table(table_id: u64) -> Vec<u8> {
     buf
 }
 
+/// Build a scan prefix for file partition values of a specific table: `0x17 | table_id`.
+pub fn prefix_file_partition_values_for_table(table_id: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(9);
+    buf.push(TAG_FILE_PARTITION_VALUE);
+    buf.extend_from_slice(&encode_u64(table_id));
+    buf
+}
+
 /// Build a scan prefix for columns of a specific table: `0x06 | table_id`.
 pub fn prefix_columns_for_table(table_id: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(9);
@@ -949,8 +957,10 @@ mod tests {
     fn prefix_isolation() {
         let data_prefix = prefix_data_files_for_table(42);
         let col_prefix = prefix_columns_for_table(42);
+        let partition_value_prefix = prefix_file_partition_values_for_table(42);
         // Different tags → no overlap
         assert_ne!(data_prefix[0], col_prefix[0]);
+        assert!(key_file_partition_value(42, 0, 1).starts_with(&partition_value_prefix));
     }
 
     #[test]

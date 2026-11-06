@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use pgwire::api::results::{FieldFormat, FieldInfo};
 use pgwire::api::Type;
+use rocklake_catalog::{CatalogResult, CatalogStore};
+use rocklake_core::keys::MetadataScope;
 
 // ── helper macros ─────────────────────────────────────────────────────────────
 
@@ -179,6 +181,12 @@ pub fn data_file_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+pub fn data_file_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*data_file_schema()).clone();
+    fields.push(int8t!("row_group_count"));
+    Arc::new(fields)
+}
+
 // ── ducklake_delete_file ──────────────────────────────────────────────────────
 
 /// `ducklake_delete_file(delete_file_id, table_id, begin_snapshot, end_snapshot,
@@ -200,6 +208,12 @@ pub fn delete_file_schema() -> Arc<Vec<FieldInfo>> {
         text_col!("encryption_key"),
         int8t!("partial_max"),
     ])
+}
+
+pub fn delete_file_schema_v11() -> Arc<Vec<FieldInfo>> {
+    let mut fields = (*delete_file_schema()).clone();
+    fields.push(int8t!("row_group_count"));
+    Arc::new(fields)
 }
 
 // ── ducklake_table_stats ──────────────────────────────────────────────────────
@@ -719,6 +733,25 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
     }
 }
 
+pub fn fields_for_table_version(table_name: &str, stable_1_1: bool) -> Option<Arc<Vec<FieldInfo>>> {
+    if stable_1_1 {
+        match table_name {
+            "ducklake_data_file" => return Some(data_file_schema_v11()),
+            "ducklake_delete_file" => return Some(delete_file_schema_v11()),
+            _ => {}
+        }
+    }
+    fields_for_table(table_name)
+}
+
+pub async fn is_ducklake_v11(catalog: &CatalogStore) -> CatalogResult<bool> {
+    let reader = catalog.read_latest();
+    Ok(reader
+        .get_metadata(MetadataScope::Global, 0, "version")
+        .await?
+        .is_some_and(|row| row.value == "1.1"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +764,16 @@ mod tests {
             let values = schema.iter().map(|_| MetadataValue::Null).collect();
             encode_metadata_row(schema, values)
                 .unwrap_or_else(|error| panic!("{table} cannot be encoded: {error}"));
+        }
+    }
+
+    #[test]
+    fn row_group_counts_are_only_exposed_in_v11_schemas() {
+        for table in ["ducklake_data_file", "ducklake_delete_file"] {
+            let v10 = fields_for_table_version(table, false).unwrap();
+            let v11 = fields_for_table_version(table, true).unwrap();
+            assert!(!v10.iter().any(|field| field.name() == "row_group_count"));
+            assert_eq!(v11.last().unwrap().name(), "row_group_count");
         }
     }
 }

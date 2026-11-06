@@ -47,6 +47,7 @@ pub enum BufferedOp {
         partition_id: Option<u64>,
         mapping_id: Option<u64>,
         partial_max: Option<String>,
+        row_group_count: Option<u64>,
     },
     InsertDeleteFile {
         data_file_id: u64,
@@ -59,6 +60,7 @@ pub enum BufferedOp {
         footer_size: Option<i64>,
         partial_max: Option<String>,
         encryption_key: Option<String>,
+        row_group_count: Option<u64>,
     },
     InsertSnapshot {
         author: Option<String>,
