@@ -87,7 +87,7 @@ pub enum BufferedOp {
     SetTableColumnStats {
         table_id: u64,
         column_id: u64,
-        contains_null: bool,
+        contains_null: Option<bool>,
         contains_nan: Option<bool>,
         min_value: Option<String>,
         max_value: Option<String>,

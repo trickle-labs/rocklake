@@ -441,13 +441,18 @@ impl CatalogWriter {
                 None => None,
             }
         };
+        let contains_null = match existing.as_ref() {
+            Some(row) => row
+                .contains_null_value()
+                .map(|value| value || contains_null)
+                .or_else(|| contains_null.then_some(true)),
+            None => Some(contains_null),
+        };
         let row = TableColumnStatsRow {
             table_id,
             column_id,
-            contains_null: existing
-                .as_ref()
-                .map(|row| row.contains_null || contains_null)
-                .unwrap_or(contains_null),
+            contains_null: contains_null.unwrap_or(false),
+            contains_null_is_null: contains_null.is_none(),
             min_value: merge_min(
                 existing.as_ref().and_then(|row| row.min_value.as_deref()),
                 min_value,
@@ -484,7 +489,7 @@ impl CatalogWriter {
         &mut self,
         table_id: u64,
         column_id: u64,
-        contains_null: bool,
+        contains_null: Option<bool>,
         contains_nan: Option<bool>,
         min_value: Option<&str>,
         max_value: Option<&str>,
@@ -502,7 +507,8 @@ impl CatalogWriter {
             values::encode_value(&TableColumnStatsRow {
                 table_id,
                 column_id,
-                contains_null,
+                contains_null: contains_null.unwrap_or(false),
+                contains_null_is_null: contains_null.is_none(),
                 contains_nan,
                 min_value: min_value.map(str::to_string),
                 max_value: max_value.map(str::to_string),

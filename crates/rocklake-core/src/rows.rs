@@ -435,6 +435,9 @@ pub struct TableColumnStatsRow {
     /// v0.26: renamed from has_null (spec field is contains_null).
     #[prost(bool, tag = "3")]
     pub contains_null: bool,
+    /// Preserves DuckLake SQL NULL without changing the legacy protobuf false default.
+    #[prost(bool, tag = "10")]
+    pub contains_null_is_null: bool,
     #[prost(string, optional, tag = "4")]
     pub min_value: Option<String>,
     #[prost(string, optional, tag = "5")]
@@ -451,6 +454,13 @@ pub struct TableColumnStatsRow {
     /// v1.1: whether the stored maximum is an exact value.
     #[prost(bool, optional, tag = "9")]
     pub max_is_exact: Option<bool>,
+}
+
+impl TableColumnStatsRow {
+    /// Returns the nullable DuckLake value; legacy protobuf rows default to `false`.
+    pub fn contains_null_value(&self) -> Option<bool> {
+        (!self.contains_null_is_null).then_some(self.contains_null)
+    }
 }
 
 /// File column stats row value.

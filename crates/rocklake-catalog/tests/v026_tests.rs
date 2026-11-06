@@ -177,6 +177,7 @@ fn table_column_stats_row_has_v026_fields() {
         table_id: 1,
         column_id: 2,
         contains_null: false,
+        contains_null_is_null: false,
         min_value: Some("a".to_string()),
         max_value: Some("z".to_string()),
         contains_nan: Some(true),
@@ -184,7 +185,19 @@ fn table_column_stats_row_has_v026_fields() {
         min_is_exact: Some(true),
         max_is_exact: Some(false),
     };
-    assert!(!row.contains_null);
+    assert_eq!(row.contains_null_value(), Some(false));
+    let decoded = rocklake_core::values::decode_value::<TableColumnStatsRow>(
+        &rocklake_core::values::encode_value(&row),
+    )
+    .unwrap();
+    assert_eq!(decoded.contains_null_value(), Some(false));
+    let mut null_row = row.clone();
+    null_row.contains_null_is_null = true;
+    let decoded = rocklake_core::values::decode_value::<TableColumnStatsRow>(
+        &rocklake_core::values::encode_value(&null_row),
+    )
+    .unwrap();
+    assert_eq!(decoded.contains_null_value(), None);
     assert_eq!(row.contains_nan, Some(true));
     assert!(row.extra_stats.is_some());
     assert_eq!(row.min_is_exact, Some(true));

@@ -1246,7 +1246,7 @@ pub async fn export_catalog<W: Write>(
             data: serde_json::json!({
                 "table_id": row.table_id,
                 "column_id": row.column_id,
-                "contains_null": row.contains_null,
+                "contains_null": row.contains_null_value(),
                 "min_value": row.min_value,
                 "max_value": row.max_value,
                 "contains_nan": row.contains_nan,
@@ -2117,6 +2117,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     table_id,
                     column_id,
                     contains_null: d["contains_null"].as_bool().unwrap_or(false),
+                    contains_null_is_null: d["contains_null"].is_null(),
                     min_value: d["min_value"].as_str().map(|s| s.to_string()),
                     max_value: d["max_value"].as_str().map(|s| s.to_string()),
                     contains_nan: d["contains_nan"].as_bool(),

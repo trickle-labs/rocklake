@@ -2456,7 +2456,7 @@ fn encode_global_table_stats_row(
     encode_text_value(&mut encoder, &Some(stats.file_size_bytes.to_string()));
     encode_text_value(
         &mut encoder,
-        &column_stats.map(|row| row.contains_null.to_string()),
+        &column_stats.and_then(|row| row.contains_null_value().map(|value| value.to_string())),
     );
     encode_text_value(
         &mut encoder,
@@ -2570,7 +2570,7 @@ pub(super) fn make_snapshot_stats_changes_response(
                         Some(stats.record_count.to_string()),
                         stats.next_row_id.map(|value| value.to_string()),
                         Some(stats.file_size_bytes.to_string()),
-                        Some(column.contains_null.to_string()),
+                        column.contains_null_value().map(|value| value.to_string()),
                         column.contains_nan.map(|value| value.to_string()),
                         column.min_value,
                         column.max_value,
@@ -2633,7 +2633,10 @@ pub(super) fn make_table_column_stats_response(
         let mut encoder = DataRowEncoder::new(schema.clone());
         encode_text_value(&mut encoder, &Some(row.table_id.to_string()));
         encode_text_value(&mut encoder, &Some(row.column_id.to_string()));
-        encode_text_value(&mut encoder, &Some(row.contains_null.to_string()));
+        encode_text_value(
+            &mut encoder,
+            &row.contains_null_value().map(|value| value.to_string()),
+        );
         let contains_nan = row.contains_nan.map(|value| value.to_string());
         encode_text_value(&mut encoder, &contains_nan);
         encode_text_value(&mut encoder, &row.min_value);

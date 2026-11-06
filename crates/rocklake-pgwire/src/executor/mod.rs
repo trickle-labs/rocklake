@@ -925,7 +925,7 @@ fn update_table_column_stats(
         ops.push(BufferedOp::SetTableColumnStats {
             table_id: filters["table_id"],
             column_id: filters["column_id"],
-            contains_null: parse_bool("contains_null", required("contains_null")?)?,
+            contains_null: parse_nullable_bool("contains_null", required("contains_null")?)?,
             contains_nan: parse_nullable_bool("contains_nan", required("contains_nan")?)?,
             min_value: required("min_value")?,
             max_value: required("max_value")?,
