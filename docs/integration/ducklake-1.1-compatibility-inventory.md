@@ -52,6 +52,10 @@ The reference probe above is partial evidence; the following compatibility check
 - The effect and metadata contract of table options, newer pruning shapes, and broader Parquet imports on RockLake's PgWire path need reference-client traces.
 - No inventory row above is a feature certification. The companion implementation issues remain [#110](https://github.com/trickle-labs/rocklake/issues/110), [#111](https://github.com/trickle-labs/rocklake/issues/111), and [#112](https://github.com/trickle-labs/rocklake/issues/112).
 
+## Follow-on candidate evidence (2026-11-06)
+
+PR #130 adds a real DuckDB 2.0 scenario for creating a `NULL` column, promoting it to `VARCHAR`, preserving the earlier snapshot schema, and reading the data after a RockLake restart. The scenario also found and fixes a column-retirement path that discarded the table ID from DuckLake's `dropped_cols` CTE. PR #130 is open; this evidence is still a candidate change, not a release certification.
+
 ## Sources
 
 - [DuckLake 1.1 specification source at `465f852`](https://github.com/duckdb/ducklake-web/tree/465f852b1aedde79936a1cd722f1be2f9003cfc1/docs/stable/specification): [introduction](https://ducklake.select/docs/stable/specification/introduction), [data types](https://ducklake.select/docs/stable/specification/data_types), [queries](https://ducklake.select/docs/stable/specification/queries), and [table index](https://ducklake.select/docs/stable/specification/tables/overview).
