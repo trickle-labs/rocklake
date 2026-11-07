@@ -55,6 +55,7 @@ pub enum BufferedOp {
     },
     InsertDeleteFile {
         data_file_id: u64,
+        begin_snapshot: Option<u64>,
         path: String,
         delete_count: u64,
         file_size_bytes: u64,

@@ -269,6 +269,7 @@ pub(super) async fn execute_commit(
             }
             BufferedOp::InsertDeleteFile {
                 data_file_id,
+                begin_snapshot,
                 path,
                 delete_count,
                 file_size_bytes,
@@ -282,7 +283,7 @@ pub(super) async fn execute_commit(
             } => {
                 needs_snapshot = true;
                 writer
-                    .register_delete_file_with_opts_and_row_group_count(
+                    .register_delete_file_with_opts_and_row_group_count_and_begin_snapshot(
                         data_file_id,
                         &path,
                         delete_count,
@@ -294,6 +295,7 @@ pub(super) async fn execute_commit(
                         partial_max.as_deref(),
                         encryption_key.as_deref(),
                         row_group_count,
+                        begin_snapshot,
                     )
                     .await
                     .map_err(RockLakeError::from)?;

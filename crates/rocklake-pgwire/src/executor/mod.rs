@@ -3285,6 +3285,7 @@ async fn execute_classified<'a>(
                     .map(|row| {
                         Ok(BufferedOp::InsertDeleteFile {
                             data_file_id: row_map_u64(&row, "data_file_id").unwrap_or(0),
+                            begin_snapshot: row_map_u64(&row, "begin_snapshot"),
                             path: required_row_string_value(&row, &["path"])?,
                             delete_count: required_row_u64_value(
                                 &row,
@@ -3316,6 +3317,7 @@ async fn execute_classified<'a>(
                         name: "data_file_id".into(),
                     })?
                 },
+                begin_snapshot: None,
                 path: if parameterized {
                     required_param_string(params, 1, "path")?
                 } else {
