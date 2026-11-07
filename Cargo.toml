@@ -15,7 +15,7 @@ exclude = ["vendor/figment"]
 resolver = "2"
 
 [workspace.package]
-version = "0.65.0"
+version = "0.66.0"
 edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"

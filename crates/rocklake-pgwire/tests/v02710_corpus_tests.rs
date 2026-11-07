@@ -10,8 +10,8 @@
 //!    fresh RockLake catalog and return a `Query` response (not an error). For statements that
 //!    carry `expected_columns`, every listed column must appear in the response schema.
 //!
-//! 3. **DuckLake v1.1 rejection gate**: A catalog opened fresh must report schema version 7
-//!    (Catalog Version 7 / `V1_0`). DuckLake v1.1 sends
+//! 3. **DuckLake v1.1-dev1 prerelease gate**: A catalog opened fresh must report schema version 7
+//!    (Catalog Version 7 / `V1_0`). The v1.1-dev1 prerelease sends
 //!    `UPDATE ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version'` as its only
 //!    migration; this statement must classify to a known kind but must NOT advance the catalog
 //!    version beyond 7.
@@ -389,10 +389,10 @@ async fn ducklake_corpus_response_shapes_match() {
     );
 }
 
-// ── 6. DuckLake v1.1 rejection gate ──────────────────────────────────────────
+// ── 6. DuckLake v1.1-dev1 prerelease gate ────────────────────────────────────
 
 /// A fresh RockLake catalog must report Catalog Version 7 (DuckLake 1.0 / V1_0).
-/// It must NEVER report version 8 (DuckLake 1.1 / V1_1_DEV_1), even after
+/// It must NEVER report prerelease version 8 (V1_1_DEV_1), even after
 /// executing the v1.1 migration statement.
 #[tokio::test]
 async fn ducklake_v1_0_catalog_version_is_seven() {
@@ -456,12 +456,12 @@ fn ducklake_corpus_pinned_versions_match_ci() {
     assert_eq!(
         corpus["ducklake_version"].as_str().unwrap_or(""),
         "1.0",
-        "corpus ducklake_version must be 1.0 — DuckLake v1.1 is explicitly out of scope"
+        "corpus ducklake_version must be 1.0 — this fixture is the DuckLake 1.0 corpus"
     );
     assert_eq!(
         corpus["catalog_version"].as_u64().unwrap_or(0),
         7,
-        "corpus catalog_version must be 7 (V1_0) — Catalog Version 8 (V1_1_DEV_1) is out of scope"
+        "corpus catalog_version must be 7 (V1_0) — prerelease Catalog Version 8 (V1_1_DEV_1) is outside this 1.0 corpus"
     );
 }
 

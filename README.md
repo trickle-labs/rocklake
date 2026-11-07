@@ -37,8 +37,9 @@ Because every row ever written to the catalog is preserved, time travel is not a
 ### Horizontal read scale-out
 
 The catalog format supports independent readers through SlateDB's reader API.
-v0.65.0 ships the v0.63.2 through v0.63.7 quality baseline, including
-candidate-specific LocalFS evidence and artifact-only quickstart coverage.
+v0.66.0 ships the v0.63.2 through v0.63.7 quality baseline, including
+candidate-specific LocalFS evidence and artifact-only quickstart coverage, and
+adds certified stable DuckLake 1.1 support with DuckDB 2.0.0.
 
 ---
 
@@ -61,7 +62,7 @@ RockLake operates as three logically separable planes, all sharing the same Slat
                       ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   CATALOG (SlateDB)                         │
-│           28 DuckLake spec tables + 4 RockLake extension tables           │
+│         DuckLake 1.0/1.1 tables + RockLake extension tables              │
 └──────┬──────────────────────────────────────────────────────┘
        │
                       ┌───────────────────────────────────────┐
@@ -81,9 +82,10 @@ The **control plane** (`rocklake-pgwire`) handles DDL and ingest. It implements 
 
 ## Getting Started
 
-RockLake v0.65.0 is a production-beta quality-baseline release distributed as a
-standalone binary. The supported path remains the binary, PostgreSQL wire
-protocol, and DuckLake 1.0. There is no published Docker image.
+RockLake v0.66.0 is a production-beta release distributed as a standalone
+binary. The supported path is the binary and PostgreSQL wire protocol, using
+DuckLake 1.0 with DuckDB 1.5.3–1.5.6 or 2.0.0, or stable DuckLake 1.1 with
+DuckDB 2.0.0. There is no published Docker image.
 
 ### Install Release Binary
 
@@ -93,8 +95,8 @@ single `SHA256SUMS`, and `release-manifest.json`.
 
 ```bash
 # Download binary and checksum
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.65.0/rocklake-linux-x86_64
-curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.65.0/rocklake-linux-x86_64.sha256
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.66.0/rocklake-linux-x86_64
+curl -LO https://github.com/trickle-labs/rocklake/releases/download/v0.66.0/rocklake-linux-x86_64.sha256
 
 # Verify checksum
 sha256sum -c rocklake-linux-x86_64.sha256
@@ -159,11 +161,13 @@ SELECT * FROM events;
 
 ---
 
-The released v0.65.0 supports DuckLake 1.0. The current development tree has
-passed release certification for stable DuckLake 1.1 with DuckDB 2.0.0. DuckDB
-1.5.3–1.5.6 clients use the certified 1.0 path; pin `DUCKLAKE_VERSION '1.0'` on
-`ATTACH`: `(DATA_PATH '/tmp/ducklake', DUCKLAKE_VERSION '1.0')`. See the
-[compatibility matrix](docs/compatibility.md) for tested versions and limits.
+RockLake v0.66.0 supports DuckLake 1.0 with DuckDB 1.5.3–1.5.6 and 2.0.0, and
+stable DuckLake 1.1 with DuckDB 2.0.0. DuckDB 2.0 defaults to 1.1; pin
+`DUCKLAKE_VERSION '1.0'` on `ATTACH` to retain the 1.0 format. Migrating an
+existing 1.0 catalog requires explicit `AUTOMATIC_MIGRATION` and cannot be
+reversed. See the [compatibility matrix](docs/compatibility.md) and
+[upgrade guide](docs/operations/ducklake-version-upgrade.md) for limits and
+recovery steps.
 
 ## Workspace Layout
 
@@ -172,7 +176,7 @@ RockLake is a Cargo workspace of focused crates, each with a clear responsibilit
 | Crate | Purpose |
 |---|---|
 | `rocklake-core` | Foundational types: binary key layout, MVCC visibility logic, protobuf encoding, counter allocation |
-| `rocklake-catalog` | All 28 DuckLake v1.0 catalog operations + 4 RockLake extension tables (32 total): schemas, tables, columns, snapshots, and data files |
+| `rocklake-catalog` | DuckLake v1.0 and stable 1.1 catalog operations plus 4 RockLake extension tables: schemas, tables, columns, snapshots, and data files |
 | `rocklake-sql` | Bounded SQL parser and AST dispatcher — only the shapes DuckDB actually emits |
 | `rocklake-pgwire` | PostgreSQL wire protocol sidecar binary (startup, simple query, extended query) |
 | `rocklake-datafusion` | DataFusion integration for catalog-backed query planning and virtual-table scans |
@@ -228,7 +232,8 @@ RockLake is an opinionated piece of software. It makes strong bets and does not 
 | **v0.63.6** | Honest operator output | Done |
 | **v0.63.7** | Local release certification | Done |
 | **v0.64.0** | Quality baseline | Done |
-| **v0.65.0** | DuckDB compatibility and S3 path fixes | **Current** |
+| **v0.65.0** | DuckDB compatibility and S3 path fixes | Done |
+| **v0.66.0** | Stable DuckLake 1.1 support | **Current** |
 | v0.80.x | Remote-cloud and multi-node evidence | Unscheduled |
 | v1.0.x | Release candidates and stable release | Postponed indefinitely |
 

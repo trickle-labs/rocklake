@@ -47,7 +47,7 @@ RockLake stores column types as strings matching DuckDB's type system:
 | Temporal | DATE, TIME, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL | ✅ |
 | Boolean | BOOLEAN | ✅ |
 | Nested | STRUCT, LIST, MAP, UNION | ✅ |
-| Special | JSON, UUID, ENUM | ✅ |
+| Special | JSON, UUID, ENUM; `NULL` and `VARIANT` in DuckLake 1.1 | ✅ |
 | Array | VARCHAR[], INTEGER[], etc. | ✅ |
 
 ### Data File Operations
@@ -102,13 +102,15 @@ RockLake stores column types as strings matching DuckDB's type system:
 
 | DuckDB Version | ducklake Version | RockLake Compatibility | Notes |
 |----------------|-----------------|------------------------|-------|
-| 1.5.3–1.5.6 | 1.0 | ✅ Supported | Live matrix |
-| 2.0.0 | 1.1 extension / 1.0 catalog | ✅ Supported with catalog pin | Set `DUCKLAKE_VERSION '1.0'` on `ATTACH` |
+| 1.5.3–1.5.6 | 1.0 | ✅ Supported | Live DuckLake 1.0 matrix; not certified against stable 1.1 |
+| 2.0.0 | 1.0 and 1.1 | ✅ Supported | 1.1 is the default; pin `DUCKLAKE_VERSION '1.0'` to keep 1.0 |
 | < 1.5.2 | N/A | ❌ Not supported | DuckLake 1.0 requires DuckDB 1.5.2+ |
 
-### DuckDB 2.0 Catalog Version
+### DuckDB 2.0 Catalog Versions
 
-DuckDB 2.0 ships DuckLake 1.1 by default. RockLake still targets DuckLake catalog 1.0. Pin the format explicitly when attaching:
+DuckDB 2.0 ships DuckLake 1.1 by default, which RockLake supports. Existing
+1.0 catalogs remain at 1.0 on ordinary attachment. Pin the format explicitly
+to retain the 1.0 path:
 
 ```sql
 LOAD ducklake;
@@ -116,7 +118,8 @@ ATTACH 'ducklake:postgres:host=localhost port=5432 dbname=rocklake' AS lake
     (DATA_PATH '/tmp/ducklake', DUCKLAKE_VERSION '1.0');
 ```
 
-Do not enable automatic DuckLake 1.1 migration. DuckDB 1.5.x does not need this option.
+Migrating an existing 1.0 catalog to 1.1 requires explicit
+`AUTOMATIC_MIGRATION`. DuckDB 1.5.x supports the 1.0 path only.
 
 ### Version Detection
 

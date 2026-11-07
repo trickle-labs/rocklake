@@ -1,6 +1,6 @@
 # CLI Reference
 
-RockLake v0.65.0 uses one typed Clap parser. Unknown commands, flags, and
+RockLake v0.66.0 uses one typed Clap parser. Unknown commands, flags, and
 positional arguments fail before any catalog is opened. Use `--help` on the
 binary or a command for the complete generated reference.
 
@@ -156,9 +156,10 @@ GC and excision expose separate `plan` and `apply` subcommands. `repair` and
 `migrate` expose explicit `--dry-run` and `--apply` options. All destructive
 operations remain explicit in the command syntax.
 
-The v0.65.0 migration registry contains a verified same-format no-op. Unknown
-targets and downgrades fail before a write; an apply attempt is recorded in the
-administrative job ledger.
+The v0.66.0 RockLake storage migration registry contains a verified
+same-format no-op. Unknown targets and downgrades fail before a write; an apply
+attempt is recorded in the administrative job ledger. DuckLake's explicit
+1.0-to-1.1 upgrade is handled separately by DuckDB's `AUTOMATIC_MIGRATION`.
 
 Restore plans for existing catalog destinations print an overwrite token.
 Applying such a plan requires both `--overwrite` and the exact

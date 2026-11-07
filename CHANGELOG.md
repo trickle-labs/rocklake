@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.66.0] — 2026-11-07
+
+### Added
+
+- Added certified support for stable DuckLake 1.1 with DuckDB 2.0.0, including
+  fresh catalogs and explicit 1.0-to-1.1 migration.
+- Added DuckLake 1.1 coverage for nested schemas, `NULL` and `VARIANT` values,
+  epoch partitions, exact statistics, row-group counts, Puffin deletion history,
+  and view-column tags.
+
+### Fixed
+
+- Preserved nullable table statistics and unknown statistic values through
+  catalog updates and migration.
+- Hardened migration recovery, concurrent DuckDB 2.0 clients, and snapshot reads.
+
+### Limitations
+
+- Stable DuckLake 1.1 is certified only with DuckDB 2.0.0. DuckDB 1.5.3–1.5.6
+  remain supported with DuckLake 1.0.
+- Silo and emulator checks do not certify real cloud services or scale. Catalog
+  backups contain metadata and file references, not Parquet bytes; bindings
+  expose selected projections rather than arbitrary DuckLake 1.1 metadata.
+
 ## [0.65.0] — 2026-11-05
 
 ### Added

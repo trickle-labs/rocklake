@@ -15,7 +15,7 @@ root [`COMPATIBILITY.md`](https://github.com/trickle-labs/rocklake/blob/main/COM
 
 ## DuckLake v1.0 Compatibility Claim
 
-**For DuckLake 1.0, RockLake is CI-certified with DuckDB 1.5.3–1.5.6 and 2.0.0.** The released v0.65.0 remains 1.0-only. The current development tree also passed release certification for stable DuckLake 1.1 with DuckDB 2.0.0; see the section below. DuckDB 2.0 creates new catalogs as 1.1 by default; explicitly pin `DUCKLAKE_VERSION '1.0'` on `ATTACH` to keep the 1.0 format.
+**RockLake v0.66.0 is CI-certified for DuckLake 1.0 with DuckDB 1.5.3–1.5.6 and 2.0.0, and for stable DuckLake 1.1 with DuckDB 2.0.0.** DuckDB 2.0 creates new catalogs as 1.1 by default; explicitly pin `DUCKLAKE_VERSION '1.0'` on `ATTACH` to keep the 1.0 format.
 
 This claim is backed by the durable compatibility corpus and automated CI evidence:
 
@@ -31,13 +31,13 @@ This claim is backed by the durable compatibility corpus and automated CI eviden
 | Table stats, column stats, data-file metadata survive incremental commits | ✅ |
 | Conflict checks and snapshot changes work under multiple writers | ✅ |
 | Exact column schema, count, names, and OIDs under describe match the spec | ✅ |
-| Catalog Version 7 (`V1_0`) is returned; existing 1.0 catalogs stay at 1.0 on ordinary attach | ✅ |
+| Catalog Version 7 (`V1_0`) is returned for the 1.0 path; existing 1.0 catalogs stay at 1.0 on ordinary attach | ✅ |
 
 **CI Evidence**: The `ducklake-corpus` job in `.github/workflows/compatibility.yml`
 runs on every push/PR and verifies the full DuckLake compatibility corpus. A nightly job
 additionally runs the fresh, restart, and concurrent-writers scenarios.
 
-## RockLake v0.65.0 Version Domains
+## RockLake v0.66.0 Version Domains
 
 `rocklake status --output json` reports independent version domains instead of
 using the DuckLake schema version as a proxy for every persisted contract:
@@ -53,9 +53,14 @@ using the DuckLake schema version as a proxy for every persisted contract:
 | Public JSON | 1 | 1 | 1 |
 | Evidence result | 1 | 1 | 1 |
 
-The direct-upgrade source is v0.60.0. The migration registry is fail-closed:
-v0.65.0 ships a verified same-format no-op, while unknown targets and all
-downgrades are rejected before mutation.
+The status report's `format_version` identifies the per-catalog DuckLake
+metadata version (`1.0` or `1.1`); the numeric catalog version domain is
+reported separately.
+
+The direct-upgrade source is v0.60.0. The RockLake storage migration registry
+is fail-closed: v0.66.0 ships a verified same-format no-op, while unknown
+targets and all downgrades are rejected before mutation. DuckLake's separate
+1.0-to-1.1 migration requires explicit `AUTOMATIC_MIGRATION`.
 
 ## DuckLake v1.1 Certified Support
 

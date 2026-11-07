@@ -34,20 +34,32 @@ status = "supported"
 ci_job = "ducklake-corpus"
 test_command = "cargo test -p rocklake-pgwire --test v02710_corpus_tests"
 fixture_path = "tests/fixtures/ducklake-corpus"
-last_reviewed = "2026-05-29"
+last_reviewed = "2026-11-07"
 notes = "Catalog Version 7 / V1_0. CI runs on every push/PR."
 
 [[entry]]
 component = "ducklake"
-name = "DuckLake v1.1 rejection gate"
-version = "1.1"
+name = "DuckLake v1.1-dev1 prerelease catalog (opt-in importer only)"
+version = "1.1-dev1"
 platform = "all"
 status = "unsupported"
 ci_job = "ducklake-corpus"
 test_command = "cargo test -p rocklake-pgwire --test v02710_corpus_tests"
 fixture_path = ""
-last_reviewed = "2026-05-29"
-notes = "V1_1_DEV_1 migrations are classified and never applied."
+last_reviewed = "2026-11-07"
+notes = "Catalog Version 8 / V1_1_DEV_1 is a prerelease format; stable 1.1 uses a separate version field. Import is available only with the explicit opt-in token."
+
+[[entry]]
+component = "ducklake"
+name = "Stable DuckLake v1.1 catalog"
+version = "1.1"
+platform = "all"
+status = "supported"
+ci_job = "ducklake-v11-live"
+test_command = "cargo test -p rocklake-pgwire --test duckdb_binary_tests"
+fixture_path = ""
+last_reviewed = "2026-11-07"
+notes = "Release-certified with DuckDB 2.0.0; fresh catalogs and explicit 1.0-to-1.1 migration are covered."
 
 # ────────────────────────────────────────────────────────────────────────────
 # DuckDB Client Versions
@@ -62,7 +74,7 @@ status = "supported"
 ci_job = "ducklake-live"
 test_command = "cargo test -p rocklake-pgwire --test duckdb_container_tests --features minio-tests"
 fixture_path = "tests/fixtures/wire-corpus"
-last_reviewed = "2026-05-29"
+last_reviewed = "2026-11-07"
 notes = "DuckDB 1.5.3 through 1.5.6 are in the live DuckLake 1.0 CI matrix."
 
 [[entry]]
@@ -74,8 +86,8 @@ status = "supported"
 ci_job = "ducklake-live"
 test_command = "cargo test -p rocklake-pgwire --test duckdb_container_tests --features minio-tests"
 fixture_path = ""
-last_reviewed = "2026-10-22"
-notes = "Explicit DuckLake version 1.0 required on ATTACH; DuckLake 1.1 catalog unsupported."
+last_reviewed = "2026-11-07"
+notes = "Explicit DuckLake version 1.0 required on ATTACH for this compatibility path; stable 1.1 has a separate release-blocking gate."
 
 [[entry]]
 component = "duckdb"

@@ -134,10 +134,43 @@ fn test_status_and_backup_restore_workflow() {
     assert_eq!(status_json["snapshot_id"], 0);
     assert_eq!(status_json["output_schema_version"], 1);
     assert_eq!(status_json["versions"]["catalog_storage"], 1);
+    assert_eq!(status_json["format_version"], "DuckLake 1.0 (V1_0)");
     assert_eq!(
         status_json["compatibility"]["minimum_direct_upgrade"],
-        "v0.59.0"
+        "v0.60.0"
     );
+
+    rt.block_on(async {
+        let store = object_store::local::LocalFileSystem::new_with_prefix(lake_path).unwrap();
+        let mut catalog = rocklake_catalog::CatalogStore::open(rocklake_catalog::OpenOptions {
+            object_store: std::sync::Arc::new(store),
+            path: object_store::path::Path::from(""),
+            encryption: None,
+        })
+        .await
+        .unwrap();
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(
+                rocklake_core::keys::MetadataScope::Global,
+                0,
+                "version",
+                "1.1",
+            )
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        catalog.close().await.unwrap();
+    });
+
+    let v11_status = Command::new(&bin)
+        .args(["status", "--catalog", lake_path, "--output", "json"])
+        .output()
+        .expect("DuckLake 1.1 status");
+    assert!(v11_status.status.success());
+    let v11_status: serde_json::Value =
+        serde_json::from_slice(&v11_status.stdout).expect("parse DuckLake 1.1 status");
+    assert_eq!(v11_status["format_version"], "DuckLake 1.1");
 
     // 3. Create backup via `catalog backup create`
     let backup_out = Command::new(&bin)

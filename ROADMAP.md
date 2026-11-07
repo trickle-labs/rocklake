@@ -1,15 +1,15 @@
 # RockLake roadmap and implementation plan
 
 - **Status:** Active
-- **Baseline:** RockLake v0.65.0
+- **Baseline:** RockLake v0.66.0
 - **Prepared:** 2026-09-02
-- **Updated:** 2026-09-20
+- **Updated:** 2026-11-07
 - **Planning model:** Gate-based, not date-based
 - **Stable target:** Unscheduled
 
-> The completed sequence is v0.63.2 through v0.64.0. It records the v0.63.2
-> evidence baseline and certifies the result with local evidence.
-> Real-cloud testing and v1.0 release candidates are postponed indefinitely.
+> The completed release sequence now includes the v0.65.0 compatibility fixes
+> and v0.66.0 stable DuckLake 1.1 certification. Real-cloud testing and v1.0
+> release candidates remain postponed indefinitely.
 
 ## 1. Purpose
 
@@ -22,7 +22,7 @@ remaining work is to prove that architecture at scale, simplify the internal
 request path, add safe multi-catalog service operation, and freeze a supportable
 public product.
 
-This roadmap records the completed sequence from v0.51.5 through v0.64.0.
+This roadmap records the completed sequence from v0.51.5 through v0.66.0.
 Multi-tenancy routes to
 independent catalogs. It does not add a tenant identifier to every key in one
 shared catalog.
@@ -212,7 +212,8 @@ remote-cloud program is scheduled.
 | **v0.63.6** | Honest operator output | Cache and capacity reports distinguish observed values, user inputs, projections, and estimates. Done |
 | **v0.63.7** | Local release certification | Candidate-specific local evidence, previous-release upgrade and restore, and artifact-only quickstart pass. **Done** |
 | **v0.64.0** | Quality baseline | The v0.63.2 through v0.63.7 work ships as one documented, locally certified baseline. Done |
-| **v0.65.0** | DuckDB compatibility and S3 path fixes | DuckDB 1.5.6 and 2.0.0 coverage and S3-compatible path fixes. **Current** |
+| **v0.65.0** | DuckDB compatibility and S3 path fixes | DuckDB 1.5.6 and 2.0.0 coverage and S3-compatible path fixes. Done |
+| **v0.66.0** | Stable DuckLake 1.1 support | DuckDB 2.0.0 compatibility, catalog migration, metadata coverage, and recovery certification. **Current** |
 | **v0.80.0** | AWS S3 evidence | **Unscheduled.** Begin only after resources and a separate approval exist. |
 | **v0.80.1** | Multi-node soak | **Unscheduled.** Begin only after its topology and operating budget exist. |
 | **v0.80.2** | GCS, Azure, and evidence closure | **Unscheduled.** Emulator results cannot graduate a backend. |
@@ -2519,7 +2520,8 @@ README or documentation:
 | v0.63.6 | Honest operator output | Done |
 | v0.63.7 | Local release certification | Done |
 | v0.64.0 | Quality baseline | Done |
-| v0.65.0 | DuckDB compatibility and S3 path fixes | Current |
+| v0.65.0 | DuckDB compatibility and S3 path fixes | Done |
+| v0.66.0 | Stable DuckLake 1.1 support | Current |
 | v0.80.0–v0.80.2 | Remote-cloud and multi-node evidence | Unscheduled |
 | v1.0.0-rc.1–rc.2 | Release candidates | Postponed indefinitely |
 | v1.0.0 | Stable release | Postponed indefinitely |
