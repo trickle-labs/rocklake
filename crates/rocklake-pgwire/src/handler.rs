@@ -54,7 +54,16 @@ use crate::lifecycle::{
 };
 use crate::notify::NotifyManager;
 use crate::server::{server_shutting_down_error, AuthConfig, MultiPrincipalAuth};
-use crate::session::{BootstrapSchemaRow, SessionState};
+use crate::session::{BootstrapMetadataRow, BootstrapSchemaRow, SessionState};
+
+fn extract_bootstrap_metadata(row: &[Option<Vec<u8>>]) -> Option<BootstrapMetadataRow> {
+    Some(BootstrapMetadataRow {
+        key: copy_parser::extract_varchar(row, 0)?,
+        value: copy_parser::extract_varchar(row, 1)?,
+        scope: copy_parser::extract_varchar(row, 2),
+        scope_id: copy_parser::extract_i64(row, 3).and_then(|id| u64::try_from(id).ok()),
+    })
+}
 
 /// RockLake COPY handler: parses binary COPY FROM STDIN data for ducklake_*
 /// tables and stores the bootstrap rows in the session for later commit.
@@ -268,8 +277,14 @@ impl CopyHandler for RockLakeCopyHandler {
                         }
                     }
                 }
-                // ducklake_snapshot_changes and ducklake_metadata are accepted
-                // but not persisted; they don't affect catalog bootstrap state.
+                "ducklake_metadata" => {
+                    for row in &rows {
+                        if let Some(metadata) = extract_bootstrap_metadata(row) {
+                            session.bootstrap.metadata.push(metadata);
+                        }
+                    }
+                }
+                // ducklake_snapshot_changes do not affect catalog bootstrap state.
                 _ => {}
             }
         }
@@ -2938,20 +2953,20 @@ async fn describe_fields_for_sql_with_catalog(
 ) -> Vec<pgwire::api::results::FieldInfo> {
     let kind = rocklake_sql::classify_statement(sql)
         .unwrap_or(rocklake_sql::StatementKind::Unsupported(String::new()));
-    if matches!(kind, rocklake_sql::StatementKind::SelectInlinedRows) {
-        if let Some((table_id, _schema_version)) = parse_inlined_table_ids_from_sql(sql) {
-            let reader = { catalog.lock().await.read_latest() };
-            if let Ok(Some((_, columns))) = reader.describe_table(table_id).await {
-                return describe_inlined_row_fields(sql, &columns);
-            }
-        }
-    }
     let stable_1_1 = {
         let catalog = catalog.lock().await;
         crate::schema_registry::is_ducklake_v11(&catalog)
             .await
             .unwrap_or(false)
     };
+    if matches!(kind, rocklake_sql::StatementKind::SelectInlinedRows) {
+        if let Some((table_id, _schema_version)) = parse_inlined_table_ids_from_sql(sql) {
+            let reader = { catalog.lock().await.read_latest() };
+            if let Ok(Some((_, columns))) = reader.describe_table(table_id).await {
+                return describe_inlined_row_fields(sql, &columns, stable_1_1);
+            }
+        }
+    }
     describe_fields_for_sql_version(sql, stable_1_1)
 }
 
@@ -3004,9 +3019,12 @@ fn describe_fields_for_sql_version(
         rocklake_sql::StatementKind::SelectLatestSnapshotId => {
             vec![int8_col!("ducklake_latest_snapshot_id")]
         }
-        // Delegate to registry for the 4-col latest snapshot info shape.
+        // DuckDB 2.0 adds the metadata version as a fifth scalar column.
         rocklake_sql::StatementKind::SelectLatestSnapshotInfo => {
-            (*crate::schema_registry::latest_snapshot_info_schema()).clone()
+            (*crate::schema_registry::latest_snapshot_info_schema(
+                sql.to_ascii_lowercase().contains("ducklake_metadata"),
+            ))
+            .clone()
         }
         rocklake_sql::StatementKind::ShowVariable(ref var) => {
             vec![text_col!(var.as_str())]
@@ -3087,7 +3105,7 @@ fn describe_fields_for_sql_version(
             })
             .clone(),
         ),
-        rocklake_sql::StatementKind::SelectInlinedData => project_described_fields(
+        rocklake_sql::StatementKind::SelectInlinedData => project_metadata_file_fields(
             sql,
             if sql.to_ascii_lowercase().contains("ctid") {
                 vec![
@@ -3099,6 +3117,27 @@ fn describe_fields_for_sql_version(
                 (*crate::schema_registry::inlined_data_tables_schema()).clone()
             },
         ),
+        rocklake_sql::StatementKind::SelectInlinedRows
+            if sql
+                .to_ascii_lowercase()
+                .contains("ducklake_inlined_delete_") =>
+        {
+            project_described_schema_fields(
+                sql,
+                ["file_id", "row_id", "begin_snapshot"]
+                    .into_iter()
+                    .map(|name| {
+                        FieldInfo::new(
+                            name.to_string(),
+                            None,
+                            None,
+                            Type::INT8,
+                            FieldFormat::Binary,
+                        )
+                    })
+                    .collect(),
+            )
+        }
         // ── Additional catalog table schemas from registry ─────────────────
         rocklake_sql::StatementKind::SelectSnapshot
         | rocklake_sql::StatementKind::SelectFirstSnapshot => {
@@ -3196,27 +3235,49 @@ fn parse_inlined_table_ids_from_sql(sql: &str) -> Option<(u64, u64)> {
 fn describe_inlined_row_fields(
     sql: &str,
     columns: &[ColumnRow],
+    stable_1_1: bool,
 ) -> Vec<pgwire::api::results::FieldInfo> {
     use pgwire::api::results::{FieldFormat, FieldInfo};
 
     let field_for_name = |name: &str| {
         let lower = name.trim_matches('"').to_ascii_lowercase();
         match lower.as_str() {
-            "row_id" => Some(FieldInfo::new(
+            "_ducklake_row_id" if stable_1_1 => Some(FieldInfo::new(
                 name.to_string(),
                 None,
                 None,
                 Type::INT8,
                 FieldFormat::Binary,
             )),
-            "begin_snapshot" => Some(FieldInfo::new(
+            "row_id" if !stable_1_1 => Some(FieldInfo::new(
                 name.to_string(),
                 None,
                 None,
                 Type::INT8,
                 FieldFormat::Binary,
             )),
-            "end_snapshot" => Some(FieldInfo::new(
+            "_ducklake_begin_snapshot" if stable_1_1 => Some(FieldInfo::new(
+                name.to_string(),
+                None,
+                None,
+                Type::INT8,
+                FieldFormat::Binary,
+            )),
+            "begin_snapshot" if !stable_1_1 => Some(FieldInfo::new(
+                name.to_string(),
+                None,
+                None,
+                Type::INT8,
+                FieldFormat::Binary,
+            )),
+            "_ducklake_end_snapshot" if stable_1_1 => Some(FieldInfo::new(
+                name.to_string(),
+                None,
+                None,
+                Type::INT8,
+                FieldFormat::Binary,
+            )),
+            "end_snapshot" if !stable_1_1 => Some(FieldInfo::new(
                 name.to_string(),
                 None,
                 None,
@@ -3426,5 +3487,36 @@ mod pg_parameter_tests {
                 .collect::<Vec<_>>(),
             ["path", "row_group_count"]
         );
+    }
+
+    #[test]
+    fn inlined_data_table_projection_description_matches_execution() {
+        let fields = describe_fields_for_sql(
+            "SELECT table_id, schema_version, table_name FROM ducklake_inlined_data_tables",
+        );
+        assert_eq!(
+            fields.iter().map(|field| field.name()).collect::<Vec<_>>(),
+            ["table_id", "schema_version", "table_name"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_metadata_tests {
+    use super::extract_bootstrap_metadata;
+
+    #[test]
+    fn extracts_ducklake_metadata_copy_row() {
+        let row = vec![
+            Some(b"version".to_vec()),
+            Some(b"1.1".to_vec()),
+            Some(b"global".to_vec()),
+            Some(0_i64.to_be_bytes().to_vec()),
+        ];
+        let metadata = extract_bootstrap_metadata(&row).unwrap();
+        assert_eq!(metadata.key, "version");
+        assert_eq!(metadata.value, "1.1");
+        assert_eq!(metadata.scope.as_deref(), Some("global"));
+        assert_eq!(metadata.scope_id, Some(0));
     }
 }

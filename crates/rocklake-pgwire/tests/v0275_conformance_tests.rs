@@ -846,9 +846,7 @@ async fn spec_schema_columns_include_required_fields() {
 
 // ─── Task 15: Inlined data arbitrary output alias ─────────────────────────────
 
-/// Task 15: Verify that `SELECT row_id AS rid, CAST(id AS INTEGER) AS duck_id
-/// FROM ducklake_inlined_data_*` exposes the user-supplied alias names in the
-/// RowDescription, not the underlying column names.
+/// Task 15: Verify that DuckLake 1.1 inlined-row projections preserve aliases.
 #[tokio::test]
 async fn inlined_data_select_with_aliases_returns_aliased_column_names() {
     let dir = TempDir::new().unwrap();
@@ -902,7 +900,7 @@ async fn inlined_data_select_with_aliases_returns_aliased_column_names() {
 
     // SELECT with aliases — column names in RowDescription must match the alias.
     let resp = exec(
-        r#"SELECT row_id AS rid, CAST(id AS INTEGER) AS duck_id FROM "public".ducklake_inlined_data_2_1"#,
+        r#"SELECT _ducklake_row_id AS rid, CAST(id AS INTEGER) AS duck_id FROM "public".ducklake_inlined_data_2_1"#,
         &store,
     )
     .await;

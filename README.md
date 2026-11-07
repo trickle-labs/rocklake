@@ -159,9 +159,9 @@ SELECT * FROM events;
 
 ---
 
-DuckDB 2.0.0 requires an explicit DuckLake 1.0 catalog pin on `ATTACH`:
-`(DATA_PATH '/tmp/ducklake', DUCKLAKE_VERSION '1.0')`.
-RockLake does not support DuckLake 1.1 catalogs.
+DuckDB 2.0.0 uses DuckLake 1.1 for fresh catalogs. RockLake's DuckLake 1.1
+compatibility is in preview; pin `DUCKLAKE_VERSION '1.0'` on `ATTACH` to use
+the certified DuckLake 1.0 path: `(DATA_PATH '/tmp/ducklake', DUCKLAKE_VERSION '1.0')`.
 
 ## Workspace Layout
 

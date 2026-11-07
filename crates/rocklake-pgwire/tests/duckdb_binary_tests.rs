@@ -179,9 +179,18 @@ async fn duckdb_attach_full_lifecycle() {
              (DATA_PATH '{data_path}'); \
          USE my_lake; \
          CREATE SCHEMA IF NOT EXISTS analytics; \
-         CREATE TABLE analytics.events (id INTEGER, ts TIMESTAMP, payload VARCHAR); \
-         INSERT INTO analytics.events VALUES (1, NOW(), 'hello'); \
-         SELECT id, payload FROM analytics.events;"
+         CREATE TABLE analytics.inline_events (id INTEGER, payload VARCHAR); \
+         INSERT INTO analytics.inline_events VALUES (1, 'inline-old'), (2, 'inline-deleted'); \
+         CREATE TABLE analytics.file_events (id INTEGER, payload VARCHAR); \
+         INSERT INTO analytics.file_events SELECT range, 'file-' || range::VARCHAR FROM range(1, 13); \
+         UPDATE analytics.inline_events SET payload = 'inline-updated' WHERE id = 1; \
+         DELETE FROM analytics.inline_events WHERE id = 2; \
+         UPDATE analytics.file_events SET payload = 'file-updated' WHERE id = 2; \
+         DELETE FROM analytics.file_events WHERE id = 1; \
+         ALTER TABLE analytics.inline_events ADD COLUMN note VARCHAR; \
+         UPDATE analytics.inline_events SET note = 'schema-change' WHERE id = 1; \
+         SELECT id, payload, note FROM analytics.inline_events; \
+         SELECT id, payload FROM analytics.file_events WHERE id = 2;"
     );
 
     let output = tokio::time::timeout(
@@ -207,7 +216,10 @@ async fn duckdb_attach_full_lifecycle() {
         output.status
     );
     assert!(
-        stdout.contains("hello"),
-        "SELECT must return inserted row; got:\n{stdout}\nstderr:\n{stderr}"
+        stdout.contains("inline-updated")
+            && stdout.contains("schema-change")
+            && stdout.matches("file-updated").count() == 1
+            && !stdout.contains("file-2"),
+        "fresh DuckLake 1.1 should preserve inline/file writes; got:\n{stdout}\nstderr:\n{stderr}"
     );
 }

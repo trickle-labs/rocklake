@@ -43,7 +43,7 @@ use catalog::{
     make_extended_data_file_response, make_file_column_stats_stream_response,
     make_file_ids_response, make_file_partition_values_response, make_file_variant_stats_response,
     make_files_scheduled_for_deletion_response, make_global_table_stats_response,
-    make_inlined_data_tables_response, make_inlined_rows_response,
+    make_inlined_data_tables_response, make_inlined_deletes_response, make_inlined_rows_response,
     make_latest_snapshot_info_response, make_macro_impls_response, make_macro_parameters_response,
     make_macros_response, make_metadata_response, make_metadata_table_empty_response,
     make_name_mapping_response, make_partition_columns_response, make_partition_info_response,
@@ -491,6 +491,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_ducklake_v11_inlined_snapshot_filters() {
+        assert_eq!(
+            resolve_comparison_u64(
+                "SELECT id FROM ducklake_inlined_data_3_4 WHERE _ducklake_begin_snapshot <= 8",
+                "_ducklake_begin_snapshot",
+                &ParamValues::default(),
+            ),
+            Some(8)
+        );
+    }
+
+    #[test]
     fn parser_batch_keeps_quoted_semicolons_in_one_statement() {
         let statements = parse_multi_statement_batch("SELECT 'delete; ducklake'; SELECT 1")
             .expect("two SQL statements");
@@ -699,6 +711,7 @@ fn resolve_expr(expr: &sqlparser::ast::Expr, params: &ParamValues) -> Option<Str
             }
             _ => Some(val_with_span.value.to_string()),
         },
+        sqlparser::ast::Expr::Collate { expr, .. } => resolve_expr(expr, params),
         sqlparser::ast::Expr::Cast { expr, .. } => resolve_expr(expr, params),
         sqlparser::ast::Expr::Identifier(ident) => Some(ident.value.clone()),
         _ => Some(expr.to_string()),
@@ -1446,6 +1459,12 @@ fn resolve_comparison_u64(sql: &str, column: &str, params: &ParamValues) -> Opti
 fn resolve_comparison_string(sql: &str, column: &str, params: &ParamValues) -> Option<String> {
     let statements = Parser::parse_sql(&PostgreSqlDialect {}, sql).ok()?;
     let selection = match statements.first()? {
+        Statement::Query(query) => {
+            let SetExpr::Select(select) = query.body.as_ref() else {
+                return None;
+            };
+            select.selection.as_ref()?
+        }
         Statement::Update {
             selection: Some(selection),
             ..
@@ -1510,32 +1529,41 @@ enum InlinedRowSelection {
     Ended,
 }
 
-fn is_end_snapshot_column(expr: &Expr) -> bool {
+fn is_end_snapshot_column(expr: &Expr, stable_1_1: bool) -> bool {
     match expr {
-        Expr::Identifier(id) => id.value.eq_ignore_ascii_case("end_snapshot"),
-        Expr::CompoundIdentifier(ids) => ids
-            .last()
-            .is_some_and(|id| id.value.eq_ignore_ascii_case("end_snapshot")),
-        Expr::Nested(expr) => is_end_snapshot_column(expr),
+        Expr::Identifier(id) => id.value.eq_ignore_ascii_case(if stable_1_1 {
+            "_ducklake_end_snapshot"
+        } else {
+            "end_snapshot"
+        }),
+        Expr::CompoundIdentifier(ids) => ids.last().is_some_and(|id| {
+            id.value.eq_ignore_ascii_case(if stable_1_1 {
+                "_ducklake_end_snapshot"
+            } else {
+                "end_snapshot"
+            })
+        }),
+        Expr::Nested(expr) => is_end_snapshot_column(expr, stable_1_1),
         _ => false,
     }
 }
 
-fn required_end_snapshot_nullness(expr: &Expr) -> Option<bool> {
+fn required_end_snapshot_nullness(expr: &Expr, stable_1_1: bool) -> Option<bool> {
     match expr {
-        Expr::Nested(expr) => required_end_snapshot_nullness(expr),
+        Expr::Nested(expr) => required_end_snapshot_nullness(expr, stable_1_1),
         Expr::BinaryOp {
             left,
             op: BinaryOperator::And,
             right,
-        } => required_end_snapshot_nullness(left).or_else(|| required_end_snapshot_nullness(right)),
-        Expr::IsNull(expr) if is_end_snapshot_column(expr) => Some(false),
-        Expr::IsNotNull(expr) if is_end_snapshot_column(expr) => Some(true),
+        } => required_end_snapshot_nullness(left, stable_1_1)
+            .or_else(|| required_end_snapshot_nullness(right, stable_1_1)),
+        Expr::IsNull(expr) if is_end_snapshot_column(expr, stable_1_1) => Some(false),
+        Expr::IsNotNull(expr) if is_end_snapshot_column(expr, stable_1_1) => Some(true),
         _ => None,
     }
 }
 
-fn inlined_row_selection(sql: &str) -> InlinedRowSelection {
+fn inlined_row_selection(sql: &str, stable_1_1: bool) -> InlinedRowSelection {
     let Ok(statements) = Parser::parse_sql(&PostgreSqlDialect {}, sql) else {
         return InlinedRowSelection::Visible;
     };
@@ -1548,7 +1576,7 @@ fn inlined_row_selection(sql: &str) -> InlinedRowSelection {
     let Some(selection) = &select.selection else {
         return InlinedRowSelection::All;
     };
-    if let Some(is_ended) = required_end_snapshot_nullness(selection) {
+    if let Some(is_ended) = required_end_snapshot_nullness(selection, stable_1_1) {
         return if is_ended {
             InlinedRowSelection::Ended
         } else {
@@ -1557,7 +1585,7 @@ fn inlined_row_selection(sql: &str) -> InlinedRowSelection {
     }
     let mut references_end_snapshot = false;
     let _: std::ops::ControlFlow<()> = visit_expressions(selection, |expr| {
-        references_end_snapshot |= is_end_snapshot_column(expr);
+        references_end_snapshot |= is_end_snapshot_column(expr, stable_1_1);
         std::ops::ControlFlow::Continue(())
     });
     if references_end_snapshot {
@@ -1603,7 +1631,10 @@ fn normalize_table_ref(table_ref: &str) -> String {
 
 fn inlined_table_name_from_sql(sql: &str) -> Option<String> {
     let lower = sql.to_ascii_lowercase();
-    let start = lower.find("ducklake_inlined_data_")?;
+    let start = ["ducklake_inlined_data_", "ducklake_inlined_delete_"]
+        .into_iter()
+        .filter_map(|prefix| lower.find(prefix))
+        .min()?;
     let rest = &sql[start..];
     let end = rest
         .char_indices()
@@ -1616,6 +1647,15 @@ fn inlined_table_name_from_sql(sql: &str) -> Option<String> {
         })
         .unwrap_or(rest.len());
     Some(rest[..end].trim_matches('"').to_string())
+}
+
+fn parse_inlined_delete_table_id(table_name: &str) -> Option<u64> {
+    table_name
+        .trim_matches('"')
+        .to_ascii_lowercase()
+        .strip_prefix("ducklake_inlined_delete_")?
+        .parse()
+        .ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1650,7 +1690,28 @@ async fn execute_classified<'a>(
             Some("ducklake"),
         )]),
         StatementKind::SelectPgType => Ok(vec![make_pg_type_response()]),
-        StatementKind::SelectPgTables => Ok(vec![make_pg_tables_probe_response()]),
+        StatementKind::SelectPgTables => {
+            let exists =
+                if let Some(table_name) = resolve_comparison_string(_sql, "tablename", params) {
+                    if let Some(table_id) = parse_inlined_delete_table_id(&table_name) {
+                        let (reader, relations) = {
+                            let catalog = store.lock().await;
+                            (catalog.read_latest(), catalog.bootstrap_relation_names())
+                        };
+                        relations.contains(&table_name)
+                            || !reader
+                                .list_inlined_deletes(table_id)
+                                .await
+                                .map_err(RockLakeError::from)?
+                                .is_empty()
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+            Ok(vec![make_pg_tables_probe_response(exists)])
+        }
         StatementKind::ShowVariable(ref var) => {
             let val = get_show_value(var, session);
             Ok(vec![make_single_text_response(var, Some(&val))])
@@ -1700,6 +1761,7 @@ async fn execute_classified<'a>(
                     ducklake_v11,
                 )]);
             }
+            let stable_1_1 = stable_ducklake_v11(store).await?;
             if let Some(table_name) = inlined_table_name_from_sql(_sql) {
                 if let Some((table_id, _)) = parse_inlined_table_ids(&table_name) {
                     let reader = { store.lock().await.read_latest() };
@@ -1712,15 +1774,22 @@ async fn execute_classified<'a>(
                             &table_name,
                             columns,
                             _sql,
+                            stable_1_1,
                         )]);
                     }
                 }
             }
-            let (reader, bootstrap_relations) = {
+            let (reader, mut bootstrap_relations) = {
                 let catalog = store.lock().await;
                 (catalog.read_latest(), catalog.bootstrap_relation_names())
             };
-            let stable_1_1 = stable_ducklake_v11(store).await?;
+            for table_id in reader
+                .list_inlined_delete_table_ids()
+                .await
+                .map_err(RockLakeError::from)?
+            {
+                bootstrap_relations.insert(format!("ducklake_inlined_delete_{table_id}"));
+            }
             let initialized = reader
                 .get_snapshot()
                 .await
@@ -1768,7 +1837,10 @@ async fn execute_classified<'a>(
             // snapshot).  Subsequent ATTACH on an already-populated catalog
             // must NOT re-create the initial schema/snapshot.
             let mut all_ops: Vec<BufferedOp> = Vec::new();
-            if bootstrap.has_snapshot || !bootstrap.schemas.is_empty() {
+            if bootstrap.has_snapshot
+                || !bootstrap.schemas.is_empty()
+                || !bootstrap.metadata.is_empty()
+            {
                 let reader = { store.lock().await.read_latest() };
                 let existing = reader.get_snapshot().await.map_err(RockLakeError::from)?;
                 if existing.is_none() {
@@ -1781,6 +1853,14 @@ async fn execute_classified<'a>(
                             path: None,
                             path_is_relative: None,
                             parent_schema_id: None,
+                        });
+                    }
+                    for metadata_row in bootstrap.metadata {
+                        all_ops.push(BufferedOp::InsertMetadata {
+                            key: metadata_row.key,
+                            value: metadata_row.value,
+                            scope: metadata_row.scope,
+                            scope_id: metadata_row.scope_id,
                         });
                     }
                     if bootstrap.has_snapshot {
@@ -1799,6 +1879,7 @@ async fn execute_classified<'a>(
         }
         StatementKind::Rollback => {
             session.pending_txn.clear();
+            session.bootstrap = Default::default();
             session.in_transaction = false;
             session.transaction_snapshot_id = None;
             Ok(vec![Response::TransactionEnd(Tag::new("ROLLBACK"))])
@@ -1835,7 +1916,23 @@ async fn execute_classified<'a>(
                 resolve_comparison_u64(_sql, "snapshot_id", params).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snapshot_id).await?;
             let snap = reader.get_snapshot().await.map_err(RockLakeError::from)?;
-            Ok(vec![make_latest_snapshot_info_response(snap)])
+            let include_version = _sql.to_ascii_lowercase().contains("ducklake_metadata");
+            let version = if include_version {
+                reader
+                    .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+                    .await
+                    .map_err(RockLakeError::from)?
+                    .map(|row| row.value)
+                    // Fresh catalogs default to DuckLake 1.1 without a stored version row.
+                    .or_else(|| Some("1.1".to_string()))
+            } else {
+                None
+            };
+            Ok(vec![make_latest_snapshot_info_response(
+                snap,
+                include_version,
+                version,
+            )])
         }
         StatementKind::SelectSnapshotStatsAndChanges => {
             let reader = { store.lock().await.read_latest() };
@@ -1855,9 +1952,16 @@ async fn execute_classified<'a>(
             )])
         }
         StatementKind::SelectSchemas => {
-            let snap_id = get_snapshot_param(params);
+            let snap_id = resolve_comparison_u64(_sql, "begin_snapshot", params)
+                .unwrap_or_else(|| get_snapshot_param(params));
             let reader = resolve_reader(store, session, snap_id).await?;
-            let schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
+            let mut schemas = reader.list_schemas().await.map_err(RockLakeError::from)?;
+            if let Some(schema_id) = resolve_comparison_u64(_sql, "schema_id", params) {
+                schemas.retain(|schema| schema.schema_id == schema_id);
+            }
+            if let Some(schema_name) = resolve_comparison_string(_sql, "schema_name", params) {
+                schemas.retain(|schema| schema.schema_name == schema_name);
+            }
             Ok(vec![make_schemas_response(
                 schemas,
                 _sql,
@@ -2194,11 +2298,23 @@ async fn execute_classified<'a>(
         StatementKind::SelectMetadata => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snap_id).await?;
-            let rows = reader
+            let key = resolve_comparison_string(_sql, "key", params);
+            let scope = resolve_comparison_string(_sql, "scope", params);
+            let scope_id = resolve_comparison_u64(_sql, "scope_id", params);
+            let mut rows = reader
                 .list_all_metadata()
                 .await
                 .map_err(RockLakeError::from)?;
-            Ok(vec![make_metadata_response(rows)])
+            if let Some(key) = key {
+                rows.retain(|row| row.key == key);
+            }
+            if let Some(scope) = scope {
+                rows.retain(|row| row.scope.as_deref().unwrap_or("global") == scope);
+            }
+            if let Some(scope_id) = scope_id {
+                rows.retain(|row| row.scope_id.unwrap_or(0) == scope_id);
+            }
+            Ok(vec![make_metadata_response(_sql, rows)])
         }
         StatementKind::SelectViews => {
             let snap_id = params.get_u64(0).unwrap_or(u64::MAX);
@@ -2291,11 +2407,23 @@ async fn execute_classified<'a>(
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
             if table_name == "ducklake_schema_versions" =>
         {
+            let table_id = resolve_comparison_u64(_sql, "table_id", params);
+            let schema_version = resolve_comparison_u64(_sql, "schema_version", params);
+            let begin_snapshot = resolve_comparison_u64(_sql, "begin_snapshot", params);
             let reader = { store.lock().await.read_latest() };
-            let rows = reader
+            let mut rows = reader
                 .list_all_schema_versions()
                 .await
                 .map_err(RockLakeError::from)?;
+            if let Some(table_id) = table_id {
+                rows.retain(|row| row.table_id == table_id);
+            }
+            if let Some(schema_version) = schema_version {
+                rows.retain(|row| row.schema_version == schema_version);
+            }
+            if let Some(begin_snapshot) = begin_snapshot {
+                rows.retain(|row| row.begin_snapshot <= begin_snapshot);
+            }
             Ok(vec![make_schema_versions_response(rows)])
         }
 
@@ -2528,11 +2656,27 @@ async fn execute_classified<'a>(
             let Some(table_name) = inlined_table_name_from_sql(_sql) else {
                 return Ok(vec![make_empty_response()]);
             };
+            if let Some(table_id) = parse_inlined_delete_table_id(&table_name) {
+                let snap_id =
+                    resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
+                let reader = resolve_reader(store, session, snap_id).await?;
+                let rows = reader
+                    .list_inlined_deletes(table_id)
+                    .await
+                    .map_err(RockLakeError::from)?;
+                return Ok(vec![make_inlined_deletes_response(_sql, rows)]);
+            }
             let Some((table_id, schema_version)) = parse_inlined_table_ids(&table_name) else {
                 return Ok(vec![make_empty_response()]);
             };
+            let stable_1_1 = stable_ducklake_v11(store).await?;
+            let begin_snapshot_column = if stable_1_1 {
+                "_ducklake_begin_snapshot"
+            } else {
+                "begin_snapshot"
+            };
             let snap_id =
-                resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
+                resolve_comparison_u64(_sql, begin_snapshot_column, params).unwrap_or(u64::MAX);
             let reader = resolve_reader(store, session, snap_id).await?;
             let Some((_, columns)) = reader
                 .describe_table(table_id)
@@ -2541,7 +2685,7 @@ async fn execute_classified<'a>(
             else {
                 return Ok(vec![make_empty_response()]);
             };
-            let selection = inlined_row_selection(_sql);
+            let selection = inlined_row_selection(_sql, stable_1_1);
             let raw_inserts = match selection {
                 InlinedRowSelection::Visible => reader.list_inlined_inserts(table_id).await,
                 _ => reader.list_inlined_insert_versions(table_id).await,
@@ -2558,7 +2702,9 @@ async fn execute_classified<'a>(
                         }
                 })
                 .collect::<Vec<_>>();
-            Ok(vec![make_inlined_rows_response(_sql, columns, rows)])
+            Ok(vec![make_inlined_rows_response(
+                _sql, columns, rows, stable_1_1,
+            )])
         }
 
         // ─── pg-tide-relay extensions ──────────────────────────────────
@@ -2582,7 +2728,7 @@ async fn execute_classified<'a>(
                     Err(e) => return Err(RockLakeError::from(e)),
                 }
             };
-            Ok(vec![make_latest_snapshot_info_response(snap)])
+            Ok(vec![make_latest_snapshot_info_response(snap, false, None)])
         }
         StatementKind::SelectDataFilesWithLimit => {
             let table_id = require_param_u64(params, 0, "table_id")?;
@@ -3867,7 +4013,9 @@ async fn execute_classified<'a>(
                         .unwrap_or(&qualified)
                         .trim_matches('"')
                         .to_ascii_lowercase();
-                    if crate::schema_registry::fields_for_table(&table).is_some() {
+                    if crate::schema_registry::fields_for_table(&table).is_some()
+                        || parse_inlined_delete_table_id(&table).is_some()
+                    {
                         store.lock().await.note_bootstrap_relation(&table);
                     }
                 }
@@ -3876,6 +4024,22 @@ async fn execute_classified<'a>(
         }
         StatementKind::InsertInlinedRow => {
             let table_name = ducklake_insert_table_name(_sql).unwrap_or_default();
+            if let Some(table_id) = parse_inlined_delete_table_id(&table_name) {
+                let ops = literal_insert_rows(_sql)
+                    .into_iter()
+                    .filter_map(|row| {
+                        Some(BufferedOp::InsertInlinedDelete {
+                            table_id,
+                            data_file_id: literal_u64(&row, 0)?,
+                            row_id: literal_u64(&row, 1)?,
+                        })
+                    })
+                    .collect();
+                let row_count = submit_ops(ops, session, store, notify_manager).await?;
+                return Ok(vec![Response::Execution(Tag::new(&format!(
+                    "INSERT 0 {row_count}"
+                )))]);
+            }
             if matches!(
                 table_name.as_str(),
                 "ducklake_column_mapping"
@@ -3952,8 +4116,14 @@ async fn execute_classified<'a>(
         StatementKind::DeleteInlinedDataRows { ref table_name } => {
             let mut row_ids = row_ids_from_ctid_sql(_sql);
             if row_ids.is_empty() {
+                let stable_1_1 = stable_ducklake_v11(store).await?;
+                let begin_snapshot_column = if stable_1_1 {
+                    "_ducklake_begin_snapshot"
+                } else {
+                    "begin_snapshot"
+                };
                 if let Some(snapshot_threshold) =
-                    resolve_comparison_u64(_sql, "begin_snapshot", params)
+                    resolve_comparison_u64(_sql, begin_snapshot_column, params)
                 {
                     if let Some((table_id, _)) = parse_inlined_table_ids(table_name) {
                         let reader = { store.lock().await.read_latest() };

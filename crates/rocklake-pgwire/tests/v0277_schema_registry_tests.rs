@@ -35,6 +35,12 @@ use rocklake_pgwire::executor;
 use rocklake_pgwire::session::SessionState;
 use rocklake_sql::ParamValues;
 
+const LATEST_SNAPSHOT_VERSION_SQL: &str =
+    "SELECT snapshot_id, schema_version, next_catalog_id, next_file_id, \
+    (SELECT MAX(value) FROM ducklake_metadata WHERE key = 'version') \
+    FROM ducklake_snapshot WHERE snapshot_id = \
+    (SELECT MAX(snapshot_id) FROM ducklake_snapshot)";
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 async fn open_store(dir: &TempDir) -> Arc<Mutex<CatalogStore>> {
@@ -44,7 +50,21 @@ async fn open_store(dir: &TempDir) -> Arc<Mutex<CatalogStore>> {
         path: ObjectPath::from(""),
         encryption: None,
     };
-    let catalog = CatalogStore::open(opts).await.unwrap();
+    let mut catalog = CatalogStore::open(opts).await.unwrap();
+    if catalog
+        .read_latest()
+        .get_metadata(MetadataScope::Global, 0, "version")
+        .await
+        .unwrap()
+        .is_none()
+    {
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.0")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+    }
     Arc::new(Mutex::new(catalog))
 }
 
@@ -586,7 +606,8 @@ async fn ducklake_v11_stats_expose_exactness_columns() {
         writer
             .set_metadata(MetadataScope::Global, 0, "version", "1.1")
             .unwrap();
-        let _ = writer.create_snapshot(None, None).await.unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
         (table_id, column_id)
     };
     drop(store);
@@ -761,6 +782,154 @@ async fn golden_ducklake_metadata() {
         cols.contains(&"value".to_string()),
         "must have 'value' column (renamed from metadata_value): {cols:?}"
     );
+}
+
+#[tokio::test]
+async fn ducklake_metadata_select_honors_projection_and_key_filter() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "other", "value")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+    }
+
+    let resp = exec(
+        "SELECT value FROM ducklake_metadata WHERE key = 'version'",
+        &store,
+    )
+    .await;
+    let (cols, count) = inspect(resp).await;
+    assert_cols_eq(&cols, &["value"], "ducklake_metadata projection");
+    assert_eq!(count, 1);
+
+    let resp = exec("SELECT NULL FROM ducklake_metadata LIMIT 1", &store).await;
+    let (cols, _) = inspect(resp).await;
+    assert_cols_eq(&cols, &["?column?"], "ducklake_metadata NULL projection");
+
+    let resp = exec(
+        "SELECT scope, scope_id FROM ducklake_metadata WHERE key = 'other'",
+        &store,
+    )
+    .await;
+    let Response::Query(query) = resp else {
+        panic!("metadata scope query should return rows");
+    };
+    let mut rows = query.data_rows();
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(row.field_count, 2);
+    assert_eq!(i32::from_be_bytes(row.data[..4].try_into().unwrap()), -1);
+    assert_eq!(i32::from_be_bytes(row.data[4..8].try_into().unwrap()), -1);
+}
+
+#[tokio::test]
+async fn ducklake_schema_select_honors_collated_name_filter() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer.create_schema("analytics").await.unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+    }
+
+    let resp = exec(
+        "SELECT schema_name FROM ducklake_schema WHERE schema_name = 'analytics' COLLATE \"C\"",
+        &store,
+    )
+    .await;
+    let Response::Query(query) = resp else {
+        panic!("schema name filter should return rows");
+    };
+    assert_cols_eq(
+        &query
+            .row_schema()
+            .iter()
+            .map(|field| field.name().to_string())
+            .collect::<Vec<_>>(),
+        &["schema_name"],
+        "ducklake_schema name filter",
+    );
+    let mut rows = query.data_rows();
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(row.field_count, 1);
+    assert_eq!(i32::from_be_bytes(row.data[..4].try_into().unwrap()), 9);
+    assert_eq!(&row.data[4..], b"analytics");
+    assert!(rows.next().await.is_none());
+}
+
+#[tokio::test]
+async fn latest_snapshot_info_includes_requested_version_column() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+
+    let resp = exec(LATEST_SNAPSHOT_VERSION_SQL, &store).await;
+    let Response::Query(query) = resp else {
+        panic!("latest snapshot info should return a row");
+    };
+    let cols = query
+        .row_schema()
+        .iter()
+        .map(|field| field.name().to_lowercase())
+        .collect::<Vec<_>>();
+    assert_cols_eq(
+        &cols,
+        &[
+            "snapshot_id",
+            "schema_version",
+            "next_catalog_id",
+            "next_file_id",
+            "?column?",
+        ],
+        "latest snapshot info with format version",
+    );
+    let mut rows = query.data_rows();
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(row.field_count, 5);
+    assert_eq!(i32::from_be_bytes(row.data[48..52].try_into().unwrap()), 3);
+    assert_eq!(&row.data[52..], b"1.0");
+}
+
+#[tokio::test]
+async fn latest_snapshot_version_probe_uses_fresh_catalog_default() {
+    let dir = TempDir::new().unwrap();
+    let object_store = Arc::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
+    let opts = OpenOptions {
+        object_store,
+        path: ObjectPath::from(""),
+        encryption: None,
+    };
+    let catalog = CatalogStore::open(opts).await.unwrap();
+    let store = Arc::new(Mutex::new(catalog));
+    {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+    }
+    assert!(store
+        .lock()
+        .await
+        .read_latest()
+        .get_metadata(MetadataScope::Global, 0, "version")
+        .await
+        .unwrap()
+        .is_none());
+
+    let resp = exec(LATEST_SNAPSHOT_VERSION_SQL, &store).await;
+    let Response::Query(query) = resp else {
+        panic!("fresh latest snapshot info should return a row");
+    };
+    let mut rows = query.data_rows();
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(row.field_count, 5);
+    assert_eq!(i32::from_be_bytes(row.data[48..52].try_into().unwrap()), 3);
+    assert_eq!(&row.data[52..], b"1.1");
 }
 
 #[tokio::test]
@@ -1480,18 +1649,16 @@ async fn inlined_data_tables_explicit_projection() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
 
-    // The inlined data tables executor always returns the full 3-column registry
-    // schema (table_id, table_name, schema_version) regardless of projection.
     let resp = exec(
-        "SELECT table_id, schema_version FROM ducklake_inlined_data_tables",
+        "SELECT table_id, schema_version, table_name FROM ducklake_inlined_data_tables",
         &store,
     )
     .await;
     let (cols, _) = inspect(resp).await;
     assert_cols_eq(
         &cols,
-        &["table_id", "table_name", "schema_version"],
-        "ducklake_inlined_data_tables full registry schema",
+        &["table_id", "schema_version", "table_name"],
+        "DuckLake inline table projection",
     );
 }
 
@@ -1500,19 +1667,13 @@ async fn inlined_data_tables_aliased_projection() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
 
-    // The inlined data tables executor always returns the full registry schema.
     let resp = exec(
         "SELECT table_id AS tid, table_name AS tname FROM ducklake_inlined_data_tables",
         &store,
     )
     .await;
     let (cols, _) = inspect(resp).await;
-    // Full 3-column schema is returned, not aliases.
-    assert_cols_eq(
-        &cols,
-        &["table_id", "table_name", "schema_version"],
-        "ducklake_inlined_data_tables full registry schema",
-    );
+    assert_cols_eq(&cols, &["tid", "tname"], "DuckLake inline table aliases");
 }
 
 // ── Arbitrary output alias in binary COPY mode ────────────────────────────────
@@ -1559,6 +1720,121 @@ async fn inlined_row_select_with_aliases_propagates_to_schema() {
         !cols.contains(&"value".to_string()),
         "original name 'value' must NOT appear when aliased, got: {cols:?}"
     );
+}
+
+#[tokio::test]
+async fn ducklake_v11_inlined_rows_use_reserved_system_columns() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    populate_base(&store).await;
+    {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+    }
+
+    exec_params(
+        r#"INSERT INTO "public".ducklake_inlined_data_2_1 VALUES (0, 1, NULL, 42)"#,
+        &ParamValues::default(),
+        &store,
+    )
+    .await;
+
+    let resp = exec(
+        r#"SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_end_snapshot, value FROM "public".ducklake_inlined_data_2_1"#,
+        &store,
+    )
+    .await;
+    let (cols, count) = inspect(resp).await;
+    assert_cols_eq(
+        &cols,
+        &[
+            "_ducklake_row_id",
+            "_ducklake_begin_snapshot",
+            "_ducklake_end_snapshot",
+            "value",
+        ],
+        "DuckLake 1.1 inlined rows",
+    );
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn ducklake_inlined_delete_rows_are_persisted_and_projected() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+
+    exec(
+        "CREATE TABLE IF NOT EXISTS ducklake_inlined_delete_4 (file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT)",
+        &store,
+    )
+    .await;
+    exec(
+        "INSERT INTO ducklake_inlined_delete_4 VALUES (9, 1, 2)",
+        &store,
+    )
+    .await;
+
+    let resp = exec(
+        "SELECT file_id, row_id FROM ducklake_inlined_delete_4 WHERE begin_snapshot <= 2",
+        &store,
+    )
+    .await;
+    let (cols, count) = inspect(resp).await;
+    assert_cols_eq(&cols, &["file_id", "row_id"], "inlined deletes");
+    assert_eq!(count, 1);
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_inlined_deletes(4)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].data_file_id, 9);
+    assert_eq!(rows[0].row_id, 1);
+}
+
+#[tokio::test]
+async fn schema_versions_respects_table_and_snapshot_filters() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer.register_schema_version(1, 3, 3).await.unwrap();
+        writer.register_schema_version(1, 4, 4).await.unwrap();
+        writer.register_schema_version(2, 5, 4).await.unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+    }
+    let seeded = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_schema_versions()
+        .await
+        .unwrap();
+    assert_eq!(seeded.len(), 3);
+
+    let filtered = exec(
+        "SELECT * FROM ducklake_schema_versions WHERE table_id = 4 AND begin_snapshot <= 1",
+        &store,
+    )
+    .await;
+    let (_, count) = inspect(filtered).await;
+    assert_eq!(count, 1);
+
+    let filtered = exec(
+        "SELECT * FROM ducklake_schema_versions WHERE schema_version = 5",
+        &store,
+    )
+    .await;
+    let (_, count) = inspect(filtered).await;
+    assert_eq!(count, 1);
 }
 
 #[tokio::test]

@@ -679,14 +679,18 @@ pub fn global_table_stats_schema_v11() -> Arc<Vec<FieldInfo>> {
 
 // ── Utility: latest snapshot info ────────────────────────────────────────────
 
-/// Schema for the 4-column `SelectLatestSnapshotInfo` response.
-pub fn latest_snapshot_info_schema() -> Arc<Vec<FieldInfo>> {
-    Arc::new(vec![
+/// Schema for the `SelectLatestSnapshotInfo` response.
+pub fn latest_snapshot_info_schema(include_version: bool) -> Arc<Vec<FieldInfo>> {
+    let mut fields = vec![
         int8b!("snapshot_id"),
         int8b!("schema_version"),
         int8b!("next_catalog_id"),
         int8b!("next_file_id"),
-    ])
+    ];
+    if include_version {
+        fields.push(text_col!("?column?"));
+    }
+    Arc::new(fields)
 }
 
 // ── ducklake_file_variant_stats ───────────────────────────────────────────────
@@ -846,7 +850,8 @@ pub async fn is_ducklake_v11(catalog: &CatalogStore) -> CatalogResult<bool> {
     Ok(reader
         .get_metadata(MetadataScope::Global, 0, "version")
         .await?
-        .is_some_and(|row| row.value == "1.1"))
+        .map(|row| row.value == "1.1")
+        .unwrap_or(true))
 }
 
 #[cfg(test)]
@@ -870,6 +875,46 @@ mod tests {
         let v11 = fields_for_table_version("ducklake_schema", true).unwrap();
         assert!(!v10.iter().any(|field| field.name() == "parent_schema_id"));
         assert_eq!(v11.last().unwrap().name(), "parent_schema_id");
+    }
+
+    #[tokio::test]
+    async fn uninitialized_catalog_uses_v11_until_its_version_is_written() {
+        let mut catalog = CatalogStore::open(rocklake_catalog::OpenOptions {
+            object_store: Arc::new(object_store::memory::InMemory::new()),
+            path: object_store::path::Path::from("fresh-catalog"),
+            encryption: None,
+        })
+        .await
+        .unwrap();
+
+        assert!(is_ducklake_v11(&catalog).await.unwrap());
+
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.0")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+
+        assert!(!is_ducklake_v11(&catalog).await.unwrap());
+
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1-dev1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+
+        assert!(!is_ducklake_v11(&catalog).await.unwrap());
+
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+
+        assert!(is_ducklake_v11(&catalog).await.unwrap());
     }
 
     #[test]

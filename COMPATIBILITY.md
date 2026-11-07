@@ -15,7 +15,12 @@ backend versions that CI covers.
 
 ## Catalog and upstream versions
 
-- RockLake targets DuckLake 1.0, Catalog Version 7 (`V1_0`).
+- RockLake's certified DuckLake contract remains 1.0, Catalog Version 7 (`V1_0`).
+- A fresh DuckDB 2.0 catalog follows the stable 1.1 default and persists its
+  version metadata; full 1.1 feature and migration certification remains open
+  in [#110](https://github.com/trickle-labs/rocklake/issues/110),
+  [#111](https://github.com/trickle-labs/rocklake/issues/111), and
+  [#112](https://github.com/trickle-labs/rocklake/issues/112).
 - Each release records the DuckDB and DuckLake versions tested in the matrix.
 - A new upstream release becomes supported only after its compatibility tests
   pass and the matrix names the release.
@@ -23,9 +28,10 @@ backend versions that CI covers.
 - An incompatible catalog or migration is rejected before a write can corrupt
   the target.
 
-| Catalog format | Current read support | Current write support |
-|---|---|---|
-| DuckLake 1.0, Catalog Version 7 (`V1_0`) | v0.65.0 | v0.65.0 |
+| Catalog format | Current boundary |
+|---|---|
+| DuckLake 1.0, Catalog Version 7 (`V1_0`) | Certified read/write support in v0.65.0. |
+| Stable DuckLake 1.1 | Fresh-catalog default and version metadata are implemented; broader feature and migration certification remain open. |
 
 RockLake v0.65.0 reports independent version domains in `status --output json`:
 DuckLake catalog `7`, catalog storage `1`, registry `1`, catalog backup `2`,

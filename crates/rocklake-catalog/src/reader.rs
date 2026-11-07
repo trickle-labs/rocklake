@@ -1572,6 +1572,30 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// Return table IDs that have visible inlined delete rows.
+    pub async fn list_inlined_delete_table_ids(
+        &self,
+    ) -> CatalogResult<std::collections::HashSet<u64>> {
+        let prefix = [TAG_INLINED_ROWS, INLINED_SUBTYPE_DELETE];
+        let mut table_ids = std::collections::HashSet::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: InlinedDeleteRow = values::decode_value(&kv.value)?;
+            if mvcc::is_inlined_delete_visible_at(
+                row.begin_snapshot,
+                row.end_snapshot,
+                self.dl_snapshot_id,
+            ) {
+                table_ids.insert(row.table_id);
+            }
+        }
+        Ok(table_ids)
+    }
+
     // ─── Phase 6: Views ────────────────────────────────────────────────────
 
     /// List all views in a schema visible at this snapshot.
