@@ -16,11 +16,9 @@ backend versions that CI covers.
 ## Catalog and upstream versions
 
 - RockLake's certified DuckLake contract remains 1.0, Catalog Version 7 (`V1_0`).
-- A fresh DuckDB 2.0 catalog follows the stable 1.1 default and persists its
-  version metadata; full 1.1 feature and migration certification remains open
-  in [#110](https://github.com/trickle-labs/rocklake/issues/110),
-  [#111](https://github.com/trickle-labs/rocklake/issues/111), and
-  [#112](https://github.com/trickle-labs/rocklake/issues/112).
+- Fresh DuckDB 2.0 catalogs use stable 1.1 by default. Existing RockLake 1.0
+  catalogs can be migrated with DuckDB 2.0 `AUTOMATIC_MIGRATION`; the path is
+  a preview, not full 1.1 certification.
 - Each release records the DuckDB and DuckLake versions tested in the matrix.
 - A new upstream release becomes supported only after its compatibility tests
   pass and the matrix names the release.
@@ -31,7 +29,7 @@ backend versions that CI covers.
 | Catalog format | Current boundary |
 |---|---|
 | DuckLake 1.0, Catalog Version 7 (`V1_0`) | Certified read/write support in v0.65.0. |
-| Stable DuckLake 1.1 | Fresh-catalog default and version metadata are implemented; broader feature and migration certification remain open. |
+| Stable DuckLake 1.1 | Fresh-catalog default and metadata are implemented; existing-catalog migration is a DuckDB 2.0 preview. Full 1.1 feature and migration certification remain open in [#110](https://github.com/trickle-labs/rocklake/issues/110), [#111](https://github.com/trickle-labs/rocklake/issues/111), and [#112](https://github.com/trickle-labs/rocklake/issues/112). |
 
 RockLake v0.65.0 reports independent version domains in `status --output json`:
 DuckLake catalog `7`, catalog storage `1`, registry `1`, catalog backup `2`,
@@ -39,6 +37,12 @@ job ledger `1`, audit `1`, public JSON `1`, and evidence `1`. v0.60.0 is the
 minimum direct-upgrade source. Unknown required formats and unsafe downgrades
 are rejected before a write; a format-changing migration is not shipped in
 v0.65.0.
+
+DuckLake's separate 1.0-to-1.1 migration path uses DuckDB's explicit
+`AUTOMATIC_MIGRATION` option. Ordinary attachment preserves 1.0. Back up the
+catalog and its referenced data files before migrating; a migrated catalog
+cannot be downgraded. See the [migration guide](docs/operations/ducklake-version-upgrade.md)
+for the tested recovery boundary and current limitations.
 
 ## Metrics
 

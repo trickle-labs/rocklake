@@ -41,8 +41,10 @@ fn classify_copy_from_stdin(sql: &str) -> Option<StatementKind> {
     // Normalize: strip quotes, schema prefix, and column list
     let table = normalize_copy_table(table_part);
 
-    // Only accept ducklake_* tables
-    if table.starts_with("ducklake_") {
+    // Accept ducklake_* tables and text-format migration staging tables.
+    if table.starts_with("ducklake_")
+        || (table.starts_with("update_data_") && upper.contains("FORMAT TEXT"))
+    {
         Some(StatementKind::CopyFromStdin { table })
     } else {
         // Unknown table — return None to fall through to sqlparser
@@ -189,6 +191,8 @@ pub enum StatementKind {
     /// `SELECT snapshot_id, schema_version, next_catalog_id, next_file_id FROM ducklake_snapshot ...`
     SelectLatestSnapshotInfo,
     SelectSnapshotStatsAndChanges,
+    /// Full history projection used while backfilling inlined schema versions.
+    SelectSnapshotHistory,
     /// `SELECT max(snapshot_id) FROM ducklake_snapshot WHERE snapshot_id > $1`
     SelectMaxSnapshotAfter,
     SelectSchemas,
@@ -259,8 +263,12 @@ pub enum StatementKind {
     InsertMacroParameters,
 
     UpdateEndSnapshot(String),
+    UpdateMetadata,
     UpdateTableStats,
     UpdateTableColumnStats,
+    /// A DuckLake v1.0-to-v1.1 migration statement whose effect is applied
+    /// atomically when the version marker is updated.
+    DuckLakeV11MigrationStep,
 
     // ─── Inlined Data DDL/DML ──────────────────────────────────────────
     CreateInlinedTable,
@@ -368,6 +376,13 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
     let sql_cow = normalize::normalize_sql(sql);
     let sql = sql_cow.as_ref();
     let lower = sql.to_ascii_lowercase();
+
+    if is_ducklake_v11_metadata_staging_update(&lower) {
+        return Ok(StatementKind::UpdateMetadata);
+    }
+    if is_ducklake_v11_migration_step(&lower) {
+        return Ok(StatementKind::DuckLakeV11MigrationStep);
+    }
 
     // DuckLake 1.0 on DuckDB 2.0 probes pg_tables before creating its
     // optional inlined-deletion table. This is a PostgreSQL system view.
@@ -530,6 +545,70 @@ pub fn classify_statement(sql: &str) -> Result<StatementKind, SqlDispatchError> 
     Ok(classify_ast(stmt))
 }
 
+fn is_ducklake_v11_migration_step(sql: &str) -> bool {
+    let inlined_table = sql.contains("ducklake_inlined_data_");
+    let migration_temp_table = sql.starts_with("create local temporary table")
+        && sql.contains("update_data_")
+        && sql.contains("__page_id_string")
+        && (sql.contains("initial_default") || sql.contains("\"value\" varchar"));
+    let struct_default_temp_update = sql.starts_with("update")
+        && sql.contains("ducklake_column")
+        && sql.contains("update_data_")
+        && sql.contains("initial_default")
+        && sql.contains("__page_id_string");
+    let inlined_column_rename = sql.contains("alter table")
+        && inlined_table
+        && sql.contains("rename column")
+        && [
+            ("row_id", "_ducklake_row_id"),
+            ("begin_snapshot", "_ducklake_begin_snapshot"),
+            ("end_snapshot", "_ducklake_end_snapshot"),
+        ]
+        .iter()
+        .any(|(old, new)| sql.contains(old) && sql.contains(new));
+    let added_column = [
+        ("ducklake_data_file", "row_group_count"),
+        ("ducklake_delete_file", "row_group_count"),
+        ("ducklake_file_column_stats", "min_is_exact"),
+        ("ducklake_file_column_stats", "max_is_exact"),
+        ("ducklake_table_column_stats", "min_is_exact"),
+        ("ducklake_table_column_stats", "max_is_exact"),
+        ("ducklake_schema", "parent_schema_id"),
+    ]
+    .iter()
+    .any(|(table, column)| {
+        sql.starts_with("alter table")
+            && sql.contains(table)
+            && sql.contains("add column")
+            && sql.contains(column)
+    });
+    inlined_column_rename
+        || migration_temp_table
+        || struct_default_temp_update
+        || (sql.starts_with("alter table")
+            && ((inlined_table && sql.contains("_migrated")) || added_column))
+        || (sql.starts_with("create table") && inlined_table && sql.contains("_migrated"))
+        || (sql.starts_with("insert into")
+            && ((sql.contains("ducklake_schema_versions") && sql.contains(" select "))
+                || (inlined_table && sql.contains("_migrated") && sql.contains(" select "))))
+        || (sql.starts_with("update")
+            && ((sql.contains("update ducklake_column as renamed")
+                && sql.contains("from ducklake_column as original")
+                && sql.contains("initial_default"))
+                || ((sql.contains("update ducklake_file_column_stats as stats")
+                    || sql.contains("update ducklake_table_column_stats as stats"))
+                    && sql.contains("set min_value"))))
+}
+
+fn is_ducklake_v11_metadata_staging_update(sql: &str) -> bool {
+    sql.starts_with("update")
+        && sql.contains("ducklake_metadata")
+        && sql.contains("update_data_")
+        && sql.contains("__page_id_string")
+        && sql.contains("ctid")
+        && sql.contains("value")
+}
+
 #[cfg(test)]
 mod duckdb_2_copy_tests {
     use super::*;
@@ -573,6 +652,86 @@ mod duckdb_2_copy_tests {
         assert!(matches!(
             classify_statement(&query).unwrap(),
             StatementKind::SelectDataFiles
+        ));
+    }
+
+    #[test]
+    fn ducklake_v11_migration_sql_is_scoped_to_known_steps() {
+        assert!(matches!(
+            classify_statement(
+                "ALTER TABLE public.ducklake_schema ADD COLUMN parent_schema_id BIGINT"
+            )
+            .unwrap(),
+            StatementKind::DuckLakeV11MigrationStep
+        ));
+        assert!(matches!(
+            classify_statement(
+                "UPDATE public.ducklake_metadata SET value = '1.1' WHERE key = 'version'"
+            )
+            .unwrap(),
+            StatementKind::UpdateMetadata
+        ));
+        assert!(matches!(
+            classify_statement("ALTER TABLE ducklake_schema ADD COLUMN unrelated VARCHAR").unwrap(),
+            StatementKind::Unsupported(_)
+        ));
+        assert!(matches!(
+            classify_statement(
+                "CREATE TABLE public.ducklake_view_column_tag(view_id BIGINT, column_name VARCHAR)"
+            )
+            .unwrap(),
+            StatementKind::CreateInlinedTable
+        ));
+        assert!(matches!(
+            classify_statement(
+                "SET LOCAL extra_float_digits = 3; \
+                 ALTER TABLE public.ducklake_inlined_data_2_2 RENAME COLUMN row_id TO _ducklake_row_id; \
+                 ALTER TABLE public.ducklake_inlined_data_2_2 RENAME COLUMN begin_snapshot TO _ducklake_begin_snapshot; \
+                 ALTER TABLE public.ducklake_inlined_data_2_2 RENAME COLUMN end_snapshot TO _ducklake_end_snapshot"
+            )
+            .unwrap(),
+            StatementKind::DuckLakeV11MigrationStep
+        ));
+        assert!(matches!(
+            classify_statement("SELECT snapshot_id, schema_version FROM ducklake_snapshot")
+                .unwrap(),
+            StatementKind::SelectSnapshotHistory
+        ));
+        assert!(matches!(
+            classify_statement(
+                "CREATE LOCAL TEMPORARY TABLE \"update_data_123\"(\"initial_default\" VARCHAR, \
+                 \"default_value\" VARCHAR, __page_id_string VARCHAR) ON COMMIT DROP"
+            )
+            .unwrap(),
+            StatementKind::DuckLakeV11MigrationStep
+        ));
+        assert!(matches!(
+            classify_statement(
+                "CREATE LOCAL TEMPORARY TABLE \"update_data_123\"(\"value\" VARCHAR, \
+                 __page_id_string VARCHAR) ON COMMIT DROP"
+            )
+            .unwrap(),
+            StatementKind::DuckLakeV11MigrationStep
+        ));
+        assert!(matches!(
+            classify_statement("COPY \"update_data_123\" FROM STDIN (FORMAT TEXT)").unwrap(),
+            StatementKind::CopyFromStdin { table } if table == "update_data_123"
+        ));
+        assert!(matches!(
+            classify_statement(
+                "UPDATE public.ducklake_column SET initial_default = update_data_123.initial_default \
+                 FROM update_data_123 WHERE ducklake_column.ctid=__page_id_string::TID"
+            )
+            .unwrap(),
+            StatementKind::DuckLakeV11MigrationStep
+        ));
+        assert!(matches!(
+            classify_statement(
+                "UPDATE public.ducklake_metadata SET value = update_data_123.value \
+                 FROM update_data_123 WHERE ducklake_metadata.ctid=__page_id_string::TID"
+            )
+            .unwrap(),
+            StatementKind::UpdateMetadata
         ));
     }
 }

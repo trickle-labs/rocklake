@@ -51,6 +51,25 @@ fn validate_registered_path(path: &str, declared_relative: Option<bool>) -> Cata
     Ok(inferred)
 }
 
+fn float_bound_loses_precision(bound: &str) -> bool {
+    bound
+        .parse::<f64>()
+        .map(|value| {
+            let narrowed = value as f32;
+            !narrowed.is_finite() || f64::from(narrowed) != value
+        })
+        .unwrap_or(true)
+}
+
+fn timestamp_bound_exceeds_precision(bound: &str, max_fractional_digits: usize) -> bool {
+    bound
+        .split_once('.')
+        .map(|(_, fraction)| {
+            fraction.chars().take_while(char::is_ascii_digit).count() > max_fractional_digits
+        })
+        .unwrap_or(false)
+}
+
 /// Writes to the catalog, producing new snapshots atomically.
 ///
 /// Call `create_snapshot()` to commit all staged mutations in a single atomic
@@ -3346,6 +3365,351 @@ impl CatalogWriter {
         let k = keys::key_metadata(scope, scope_id, key);
         self.stage(k, values::encode_value(&row));
         Ok(())
+    }
+
+    /// Upgrade a DuckLake 1.0 catalog as one atomic RockLake snapshot.
+    pub async fn migrate_ducklake_v10_to_v11(&mut self) -> CatalogResult<bool> {
+        use rocklake_core::keys::MetadataScope;
+
+        let version_key = keys::key_metadata(MetadataScope::Global, 0, "version");
+        let stored_version = match self.staged_value(&version_key) {
+            Some(value) => Some(values::decode_value::<MetadataRow>(value)?.value),
+            None => self
+                .db
+                .get(&version_key)
+                .await?
+                .map(|value| values::decode_value::<MetadataRow>(&value))
+                .transpose()?
+                .map(|row| row.value),
+        };
+        match stored_version.as_deref() {
+            Some("1.0") => {}
+            Some("1.1") => return Ok(false),
+            Some(version) => {
+                return Err(CatalogError::InvalidInput(format!(
+                    "DuckLake v1.1 migration requires catalog version 1.0, got {version}"
+                )))
+            }
+            None => {
+                return Err(CatalogError::InvalidInput(
+                    "DuckLake v1.1 migration requires a catalog version marker".into(),
+                ))
+            }
+        }
+
+        let mut snapshots = Vec::new();
+        let mut iter = self
+            .db
+            .scan_prefix(&keys::prefix_for_tag(rocklake_core::tags::TAG_SNAPSHOT))
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?
+        {
+            snapshots.push(values::decode_value::<SnapshotRow>(&kv.value)?);
+        }
+        snapshots.sort_by_key(|row| row.snapshot_id);
+
+        let mut inlined_tables = Vec::new();
+        let mut iter = self
+            .db
+            .scan_prefix(&keys::prefix_for_tag(
+                rocklake_core::tags::TAG_INLINED_DATA_TABLES,
+            ))
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?
+        {
+            inlined_tables.push(values::decode_value::<InlinedDataTablesRow>(&kv.value)?);
+        }
+
+        let mut schema_versions = HashSet::new();
+        let mut schema_version_snapshots = HashMap::<u64, Vec<u64>>::new();
+        let mut iter = self
+            .db
+            .scan_prefix(&keys::prefix_for_tag(
+                rocklake_core::tags::TAG_SCHEMA_VERSIONS,
+            ))
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?
+        {
+            let row = values::decode_value::<SchemaVersionsRow>(&kv.value)?;
+            schema_versions.insert((row.table_id, row.schema_version));
+            schema_version_snapshots
+                .entry(row.table_id)
+                .or_default()
+                .push(row.begin_snapshot);
+        }
+
+        for pair in snapshots.windows(2) {
+            let previous = &pair[0];
+            let current = &pair[1];
+            if current.snapshot_id != previous.snapshot_id + 1
+                || current.schema_version <= previous.schema_version
+            {
+                continue;
+            }
+            for table in &inlined_tables {
+                let key = (table.table_id, table.schema_version);
+                if table.schema_version > previous.schema_version
+                    && table.schema_version <= current.schema_version
+                    && !schema_versions.contains(&key)
+                    && schema_version_snapshots
+                        .get(&table.table_id)
+                        .is_some_and(|begins| {
+                            begins
+                                .iter()
+                                .filter(|snapshot_id| **snapshot_id <= current.snapshot_id)
+                                .count()
+                                > 1
+                        })
+                {
+                    self.register_schema_version(
+                        current.snapshot_id,
+                        table.schema_version,
+                        table.table_id,
+                    )
+                    .await?;
+                    schema_versions.insert(key);
+                }
+            }
+        }
+
+        let mut column_history = HashMap::<(u64, u64), Vec<(Vec<u8>, ColumnRow)>>::new();
+        let mut iter = self
+            .db
+            .scan_prefix(&keys::prefix_for_tag(rocklake_core::tags::TAG_COLUMN))
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?
+        {
+            let row = values::decode_value::<ColumnRow>(&kv.value)?;
+            column_history
+                .entry((row.table_id, row.column_id))
+                .or_default()
+                .push((kv.key.to_vec(), row));
+        }
+
+        let mut column_types = HashMap::new();
+        for (key, history) in &mut column_history {
+            history.sort_by_key(|(_, row)| row.begin_snapshot);
+            let types = history
+                .iter()
+                .map(|(_, row)| row.data_type.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            let has_float64 = types.iter().any(|ty| ty == "float64");
+            let retyped = types.iter().any(|ty| ty != "float64");
+            let timestamp_precision = types
+                .iter()
+                .filter_map(|ty| match ty.as_str() {
+                    "timestamp_s" => Some(0),
+                    "timestamp_ms" => Some(3),
+                    "timestamp" => Some(6),
+                    _ => None,
+                })
+                .min();
+            let timestamptz = types.iter().any(|ty| ty == "timestamptz");
+            column_types.insert(
+                *key,
+                (has_float64, retyped, timestamp_precision, timestamptz),
+            );
+
+            for index in 0..history.len() {
+                let (_, renamed) = &history[index];
+                if renamed.parent_column.is_none() || renamed.initial_default.is_some() {
+                    continue;
+                }
+                let Some((_, original)) = history[..index]
+                    .iter()
+                    .rev()
+                    .find(|(_, row)| row.initial_default.is_some())
+                else {
+                    continue;
+                };
+                let defaults = (
+                    original.initial_default.clone(),
+                    original.default_value.clone(),
+                    original.default_value_type.clone(),
+                    original.default_value_dialect.clone(),
+                );
+                let (key, row) = &mut history[index];
+                row.initial_default = defaults.0;
+                row.default_value = defaults.1;
+                row.default_value_type = defaults.2;
+                row.default_value_dialect = defaults.3;
+                self.stage(key.clone(), values::encode_value(row));
+            }
+        }
+
+        let mut mapped_files = HashSet::new();
+        let mut file_begin_snapshots = HashMap::new();
+        let mut iter = self
+            .db
+            .scan_prefix(&keys::prefix_for_tag(rocklake_core::tags::TAG_DATA_FILE))
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?
+        {
+            let row = values::decode_value::<DataFileRow>(&kv.value)?;
+            if row.mapping_id.is_some() {
+                mapped_files.insert((row.table_id, row.data_file_id));
+            }
+            file_begin_snapshots.insert(
+                (row.table_id, row.data_file_id),
+                row.begin_snapshot.unwrap_or_default(),
+            );
+        }
+        let mut mapped_tables = HashSet::new();
+        for (table_id, _) in &mapped_files {
+            mapped_tables.insert(*table_id);
+        }
+
+        let mut iter = self
+            .db
+            .scan_prefix(&keys::prefix_for_tag(
+                rocklake_core::tags::TAG_FILE_COLUMN_STATS,
+            ))
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?
+        {
+            let mut row = values::decode_value::<FileColumnStatsRow>(&kv.value)?;
+            let (has_float, retyped, precision, timestamptz) = column_types
+                .get(&(row.table_id, row.column_id))
+                .copied()
+                .unwrap_or_default();
+            let mapped = mapped_files.contains(&(row.table_id, row.data_file_id));
+            let clear_both =
+                timestamptz && mapped && (row.min_value.is_some() || row.max_value.is_some());
+            let clear_min = clear_both
+                || ((has_float && (retyped || mapped))
+                    && row
+                        .min_value
+                        .as_deref()
+                        .is_some_and(float_bound_loses_precision))
+                || (mapped
+                    && precision.is_some_and(|max| {
+                        row.min_value
+                            .as_deref()
+                            .is_some_and(|value| timestamp_bound_exceeds_precision(value, max))
+                    }));
+            let clear_max = clear_both
+                || ((has_float && (retyped || mapped))
+                    && row
+                        .max_value
+                        .as_deref()
+                        .is_some_and(float_bound_loses_precision))
+                || (mapped
+                    && precision.is_some_and(|max| {
+                        row.max_value
+                            .as_deref()
+                            .is_some_and(|value| timestamp_bound_exceeds_precision(value, max))
+                    }));
+            if clear_min || clear_max {
+                if clear_min {
+                    row.min_value = None;
+                }
+                if clear_max {
+                    row.max_value = None;
+                }
+                let value = values::encode_value(&row);
+                self.stage(
+                    keys::key_file_column_stats(row.table_id, row.column_id, row.data_file_id),
+                    value.clone(),
+                );
+                self.stage(
+                    keys::key_file_column_stats_by_snapshot(
+                        row.table_id,
+                        row.column_id,
+                        file_begin_snapshots
+                            .get(&(row.table_id, row.data_file_id))
+                            .copied()
+                            .unwrap_or_default(),
+                        row.data_file_id,
+                    ),
+                    value,
+                );
+            }
+        }
+
+        let mut iter = self
+            .db
+            .scan_prefix(&keys::prefix_for_tag(
+                rocklake_core::tags::TAG_TABLE_COLUMN_STATS,
+            ))
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|error| CatalogError::SlateDb(error.to_string()))?
+        {
+            let mut row = values::decode_value::<TableColumnStatsRow>(&kv.value)?;
+            let (has_float, retyped, precision, timestamptz) = column_types
+                .get(&(row.table_id, row.column_id))
+                .copied()
+                .unwrap_or_default();
+            let mapped = mapped_tables.contains(&row.table_id);
+            let clear_both =
+                timestamptz && mapped && (row.min_value.is_some() || row.max_value.is_some());
+            let clear_min = clear_both
+                || ((has_float && (retyped || mapped))
+                    && row
+                        .min_value
+                        .as_deref()
+                        .is_some_and(float_bound_loses_precision))
+                || (mapped
+                    && precision.is_some_and(|max| {
+                        row.min_value
+                            .as_deref()
+                            .is_some_and(|value| timestamp_bound_exceeds_precision(value, max))
+                    }));
+            let clear_max = clear_both
+                || ((has_float && (retyped || mapped))
+                    && row
+                        .max_value
+                        .as_deref()
+                        .is_some_and(float_bound_loses_precision))
+                || (mapped
+                    && precision.is_some_and(|max| {
+                        row.max_value
+                            .as_deref()
+                            .is_some_and(|value| timestamp_bound_exceeds_precision(value, max))
+                    }));
+            if clear_min || clear_max {
+                if clear_min {
+                    row.min_value = None;
+                }
+                if clear_max {
+                    row.max_value = None;
+                }
+                self.stage(
+                    keys::key_table_column_stats(row.table_id, row.column_id),
+                    values::encode_value(&row),
+                );
+            }
+        }
+
+        self.set_metadata(MetadataScope::Global, 0, "version", "1.1")?;
+        Ok(true)
     }
 
     // ─── v0.18: Rowid Range Allocation ────────────────────────────────────

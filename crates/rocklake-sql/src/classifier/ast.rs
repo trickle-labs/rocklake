@@ -542,6 +542,7 @@ pub(super) fn classify_update(table: &sqlparser::ast::TableWithJoins) -> Stateme
         return StatementKind::VirtualCatalogMutation { table_name: tbl };
     }
     match table_name {
+        "ducklake_metadata" => StatementKind::UpdateMetadata,
         "ducklake_table_stats" => StatementKind::UpdateTableStats,
         "ducklake_table" | "ducklake_column" | "ducklake_data_file" | "ducklake_view"
         | "ducklake_macro" | "ducklake_schema" => {
