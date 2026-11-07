@@ -2553,8 +2553,10 @@ async fn execute_classified<'a>(
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
             if table_name == "ducklake_partition_info" =>
         {
-            let table_id = params.get_u64(0).ok();
-            let reader = { store.lock().await.read_latest() };
+            let table_id = resolve_comparison_u64(_sql, "table_id", params);
+            let snapshot_id =
+                resolve_comparison_u64(_sql, "begin_snapshot", params).unwrap_or(u64::MAX);
+            let reader = resolve_reader(store, session, snapshot_id).await?;
             let rows = if let Some(table_id) = table_id {
                 reader
                     .list_partition_info(table_id)
@@ -2579,7 +2581,7 @@ async fn execute_classified<'a>(
                 }
                 rows
             };
-            Ok(vec![make_partition_info_response(rows)])
+            Ok(vec![make_partition_info_response(_sql, rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
@@ -2598,7 +2600,7 @@ async fn execute_classified<'a>(
                     .await
                     .map_err(RockLakeError::from)?
             };
-            Ok(vec![make_partition_columns_response(rows)])
+            Ok(vec![make_partition_columns_response(_sql, rows)])
         }
 
         StatementKind::SelectDuckLakeMetadataTable { ref table_name }
@@ -4467,11 +4469,24 @@ async fn execute_classified<'a>(
                     "COPY into migration staging table {table} outside DuckLake v1.1 migration"
                 )));
             }
+            let inlined_column_types =
+                if let Some((table_id, _)) = catalog::parse_inlined_table_ids(table) {
+                    let reader = { store.lock().await.read_latest() };
+                    let (_, columns) = reader
+                        .describe_table(table_id)
+                        .await
+                        .map_err(RockLakeError::from)?
+                        .ok_or_else(|| RockLakeError::NotFound(table.clone()))?;
+                    Some(columns.into_iter().map(|column| column.data_type).collect())
+                } else {
+                    None
+                };
             // Record which table is being loaded so on_copy_data / on_copy_done
             // can accumulate and parse the binary stream correctly.
             session.pending_copy = Some(CopyAccumulator {
                 table: table.clone(),
                 data: Vec::new(),
+                inlined_column_types,
             });
             let format = if table.starts_with("update_data_") {
                 0
