@@ -1919,6 +1919,12 @@ impl CatalogReader {
 
     /// List all `ducklake_name_mapping` rows visible at this snapshot.
     pub async fn list_name_mappings(&self) -> CatalogResult<Vec<NameMappingRow>> {
+        let visible_mapping_ids: std::collections::HashSet<u64> = self
+            .list_column_mappings()
+            .await?
+            .into_iter()
+            .map(|row| row.mapping_id)
+            .collect();
         let visible_columns: std::collections::HashSet<u64> = {
             let schemas = self.list_schemas().await?;
             let mut cols = std::collections::HashSet::new();
@@ -1943,7 +1949,10 @@ impl CatalogReader {
             .map_err(|e| CatalogError::SlateDb(e.to_string()))?
         {
             let row: NameMappingRow = values::decode_value(&kv.value)?;
-            if visible_columns.is_empty() || visible_columns.contains(&row.column_id) {
+            if visible_mapping_ids.contains(&row.mapping_id)
+                || visible_columns.is_empty()
+                || visible_columns.contains(&row.column_id)
+            {
                 rows.push(row);
             }
         }

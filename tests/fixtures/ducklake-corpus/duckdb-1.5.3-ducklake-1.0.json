@@ -491,7 +491,7 @@
       "seq": 58,
       "phase": "compat_v1_1_gate",
       "sql": "UPDATE ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version'",
-      "expected_kind": "UpdateEndSnapshot",
+      "expected_kind": "UpdateMetadata",
       "description": "DuckLake v1.1 migration statement \u2014 classified and rejected at runtime; never applied to version field"
     },
     {

@@ -15,10 +15,13 @@ backend versions that CI covers.
 
 ## Catalog and upstream versions
 
-- RockLake's certified DuckLake contract remains 1.0, Catalog Version 7 (`V1_0`).
+- The v0.65.0 release certifies DuckLake 1.0, Catalog Version 7 (`V1_0`).
+- Stable DuckLake 1.1 with DuckDB 2.0.0 has passed release certification on
+  the current development tree. It is not included in v0.65.0; the next release
+  must name this version in its tested matrix before claiming released support.
 - Fresh DuckDB 2.0 catalogs use stable 1.1 by default. Existing RockLake 1.0
-  catalogs can be migrated with DuckDB 2.0 `AUTOMATIC_MIGRATION`; the path is
-  a preview, not full 1.1 certification.
+  catalogs stay at 1.0 on ordinary attachment and migrate only when DuckDB 2.0
+  requests `AUTOMATIC_MIGRATION`.
 - Each release records the DuckDB and DuckLake versions tested in the matrix.
 - A new upstream release becomes supported only after its compatibility tests
   pass and the matrix names the release.
@@ -29,7 +32,7 @@ backend versions that CI covers.
 | Catalog format | Current boundary |
 |---|---|
 | DuckLake 1.0, Catalog Version 7 (`V1_0`) | Certified read/write support in v0.65.0. |
-| Stable DuckLake 1.1 | Fresh-catalog default and metadata are implemented; existing-catalog migration is a DuckDB 2.0 preview. Full 1.1 feature and migration certification remain open in [#110](https://github.com/trickle-labs/rocklake/issues/110), [#111](https://github.com/trickle-labs/rocklake/issues/111), and [#112](https://github.com/trickle-labs/rocklake/issues/112). |
+| Stable DuckLake 1.1 | Release-certified on the current development tree with DuckDB 2.0.0; not included in v0.65.0. Existing 1.0 catalogs require explicit `AUTOMATIC_MIGRATION`. |
 
 RockLake v0.65.0 reports independent version domains in `status --output json`:
 DuckLake catalog `7`, catalog storage `1`, registry `1`, catalog backup `2`,

@@ -1221,7 +1221,6 @@ pub async fn export_catalog<W: Write>(
             data: serde_json::json!({
                 "sort_id": row.sort_id,
                 "sort_key_index": row.sort_key_index,
-                "column_id": row.column_id,
                 "sort_direction": row.sort_direction,
                 "null_order": row.null_order,
                 "table_id": row.table_id,
@@ -2151,7 +2150,7 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                 let row = SortExpressionRow {
                     sort_id,
                     sort_key_index,
-                    column_id: req_u64!(d, "column_id", tbl),
+                    column_id: d["column_id"].as_u64(),
                     sort_direction: d["sort_direction"].as_str().map(|s| s.to_string()),
                     null_order: d["null_order"].as_str().map(|s| s.to_string()),
                     table_id: d["table_id"].as_u64(),
@@ -2692,7 +2691,7 @@ pub(crate) fn validate_import_data(
         "ducklake_partition_column" => &["partition_id", "partition_key_index", "column_id"],
         "ducklake_file_partition_value" => &["table_id", "partition_key_index", "data_file_id"],
         "ducklake_sort_info" => &["sort_id", "table_id", "begin_snapshot"],
-        "ducklake_sort_expression" => &["sort_id", "sort_key_index", "column_id"],
+        "ducklake_sort_expression" => &["sort_id", "sort_key_index"],
         "ducklake_tag" => &["object_id", "tag_key", "tag_value", "begin_snapshot"],
         "ducklake_column_tag" => &[
             "table_id",

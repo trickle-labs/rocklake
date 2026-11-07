@@ -3,7 +3,7 @@ use std::sync::Arc;
 use object_store::path::Path as ObjectPath;
 use rocklake_catalog::writer::stats::FileColumnStatsInput;
 use rocklake_catalog::{CatalogStore, OpenOptions};
-use rocklake_core::keys::MetadataScope;
+use rocklake_core::{keys::MetadataScope, mvcc::SnapshotId};
 use tempfile::TempDir;
 
 fn test_opts(dir: &TempDir) -> OpenOptions {
@@ -14,6 +14,14 @@ fn test_opts(dir: &TempDir) -> OpenOptions {
         path: ObjectPath::from("catalog"),
         encryption: None,
     }
+}
+
+async fn open_db(dir: &TempDir) -> slatedb::Db {
+    let store =
+        Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir.path()).unwrap());
+    slatedb::Db::open(ObjectPath::from("catalog"), store)
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -383,4 +391,168 @@ async fn v10_migration_recovers_after_failed_snapshot_commit_and_reopen() {
         reader.list_inlined_inserts(table_id).await.unwrap().len(),
         1
     );
+}
+
+#[tokio::test]
+async fn v11_metadata_survives_backup_and_restore() {
+    let source_dir = TempDir::new().unwrap();
+    let mut catalog = CatalogStore::open(test_opts(&source_dir)).await.unwrap();
+    let (parent_id, schema_id, table_id, column_id, data_file_id, snapshot_id) = {
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let parent_id = writer.create_schema("main").await.unwrap();
+        let schema_id = writer
+            .create_schema_with_metadata("nested", None, None, None, Some(parent_id))
+            .await
+            .unwrap();
+        let table_id = writer
+            .create_table(schema_id, "events", None)
+            .await
+            .unwrap();
+        let column_id = writer
+            .add_column(table_id, "value", "varchar", 0, true, None)
+            .await
+            .unwrap();
+        let data_file_id = writer
+            .register_data_file_with_metadata_and_row_group_count(
+                table_id,
+                "events/part.parquet",
+                "parquet",
+                10,
+                100,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(2),
+            )
+            .await
+            .unwrap();
+        writer
+            .register_delete_file_with_opts_and_row_group_count(
+                data_file_id,
+                "events/delete.parquet",
+                1,
+                20,
+                Some(table_id),
+                Some("parquet"),
+                Some(true),
+                None,
+                None,
+                None,
+                Some(1),
+            )
+            .await
+            .unwrap();
+        writer
+            .upsert_file_column_stats_with_exactness(
+                FileColumnStatsInput {
+                    table_id,
+                    column_id,
+                    data_file_id,
+                    contains_null: false,
+                    min_value: Some("a"),
+                    max_value: Some("z"),
+                    contains_nan: false,
+                    column_size_bytes: None,
+                    value_count: Some(10),
+                    null_count: Some(0),
+                    extra_stats: None,
+                },
+                Some(false),
+                Some(true),
+            )
+            .await
+            .unwrap();
+        let view_id = writer
+            .create_view(schema_id, "event_values", "SELECT value FROM events")
+            .await
+            .unwrap();
+        writer
+            .set_view_column_tag(view_id, "value", "comment", "event value")
+            .await
+            .unwrap();
+        let commit = writer.create_snapshot(None, None).await.unwrap();
+        let snapshot_id = commit.snapshot_id.as_u64();
+        catalog.commit_writer(commit);
+        (
+            parent_id,
+            schema_id,
+            table_id,
+            column_id,
+            data_file_id,
+            snapshot_id,
+        )
+    };
+
+    let backup_dir = source_dir.path().join("backup");
+    let backup = rocklake_catalog::create_backup(
+        catalog.db(),
+        &backup_dir,
+        "ducklake-1.1",
+        Some(snapshot_id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(backup.manifest.snapshot_id, snapshot_id);
+    assert_eq!(
+        rocklake_catalog::inspect_backup(&backup_dir)
+            .await
+            .unwrap()
+            .manifest,
+        backup.manifest
+    );
+    catalog.close().await.unwrap();
+
+    let restore_dir = TempDir::new().unwrap();
+    let restored_db = open_db(&restore_dir).await;
+    let data = std::fs::File::open(backup_dir.join("catalog.ndjson")).unwrap();
+    rocklake_catalog::export::import_catalog(&restored_db, std::io::BufReader::new(data))
+        .await
+        .unwrap();
+    restored_db.close().await.unwrap();
+
+    let restored = CatalogStore::open(test_opts(&restore_dir)).await.unwrap();
+    let reader = restored.read_at(SnapshotId::new(snapshot_id)).unwrap();
+    assert_eq!(
+        reader
+            .get_metadata(MetadataScope::Global, 0, "version")
+            .await
+            .unwrap()
+            .unwrap()
+            .value,
+        "1.1"
+    );
+    let schemas = reader.list_schemas().await.unwrap();
+    assert_eq!(
+        schemas
+            .iter()
+            .find(|schema| schema.schema_id == schema_id)
+            .unwrap()
+            .parent_schema_id,
+        Some(parent_id)
+    );
+    assert_eq!(
+        reader.list_data_files(table_id).await.unwrap()[0].row_group_count,
+        Some(2)
+    );
+    assert_eq!(
+        reader.list_delete_files(table_id).await.unwrap()[0].row_group_count,
+        Some(1)
+    );
+    let stats = reader
+        .list_file_column_stats(table_id, column_id)
+        .await
+        .unwrap();
+    assert_eq!(stats[0].min_is_exact, Some(false));
+    assert_eq!(stats[0].max_is_exact, Some(true));
+    assert_eq!(stats[0].data_file_id, data_file_id);
+    assert_eq!(
+        reader.list_all_view_column_tags().await.unwrap()[0].tag_value,
+        "event value"
+    );
+    restored.close().await.unwrap();
 }

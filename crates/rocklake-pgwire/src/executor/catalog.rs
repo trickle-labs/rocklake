@@ -215,6 +215,7 @@ pub(super) async fn execute_commit(
                 }
             }
             BufferedOp::InsertDataFile {
+                data_file_id,
                 table_id,
                 path,
                 file_format,
@@ -222,6 +223,10 @@ pub(super) async fn execute_commit(
                 file_size_bytes,
                 row_id_start,
                 row_id_start_supplied,
+                begin_snapshot,
+                end_snapshot,
+                file_order,
+                path_is_relative,
                 footer_size,
                 encryption_key,
                 partition_id,
@@ -230,7 +235,30 @@ pub(super) async fn execute_commit(
                 row_group_count,
             } => {
                 needs_snapshot = true;
-                if row_id_start_supplied {
+                if let Some(data_file_id) = data_file_id {
+                    writer
+                        .register_data_file_row(rocklake_core::rows::DataFileRow {
+                            data_file_id,
+                            table_id,
+                            path,
+                            file_format,
+                            record_count: row_count,
+                            file_size_bytes,
+                            footer_size,
+                            encryption_key,
+                            begin_snapshot,
+                            end_snapshot,
+                            file_order,
+                            path_is_relative,
+                            row_id_start,
+                            partition_id,
+                            mapping_id,
+                            partial_max,
+                            row_group_count,
+                        })
+                        .await
+                        .map_err(RockLakeError::from)?;
+                } else if row_id_start_supplied {
                     writer
                         .register_data_file_with_metadata_and_row_id_start_and_row_group_count(
                             table_id,
@@ -594,6 +622,16 @@ pub(super) async fn execute_commit(
                     .set_metadata(resolved_scope, resolved_scope_id, &key, &value)
                     .map_err(RockLakeError::from)?;
             }
+            BufferedOp::DeleteMetadata {
+                key,
+                scope,
+                scope_id,
+            } => {
+                needs_snapshot = true;
+                writer
+                    .delete_metadata(scope, scope_id, &key)
+                    .map_err(RockLakeError::from)?;
+            }
             BufferedOp::MigrateDuckLakeV11 => {
                 needs_snapshot |= writer
                     .migrate_ducklake_v10_to_v11()
@@ -739,7 +777,7 @@ pub(super) async fn execute_commit(
                                 .register_sort_expression(
                                     required_row_u64(&row, "sort_id")?,
                                     required_row_u64(&row, "sort_key_index")?,
-                                    required_row_u64(&row, "column_id")?,
+                                    row_map_u64(&row, "column_id"),
                                     row_map_string(&row, "sort_direction").as_deref(),
                                     row_map_string(&row, "null_order").as_deref(),
                                     row_map_u64(&row, "table_id"),
@@ -842,6 +880,17 @@ pub(super) async fn execute_commit(
                         .await
                         .map_err(RockLakeError::from)?;
                 }
+            }
+            BufferedOp::DeleteInlinedDelete {
+                table_id,
+                data_file_id,
+                row_id,
+            } => {
+                needs_snapshot = true;
+                writer
+                    .retire_inlined_delete(table_id, data_file_id, row_id)
+                    .await
+                    .map_err(RockLakeError::from)?;
             }
             BufferedOp::DeleteDuckLakeCatalogRows {
                 table_name,
@@ -3490,6 +3539,34 @@ pub(super) fn make_inlined_deletes_response(
     sql: &str,
     rows: Vec<InlinedDeleteRow>,
 ) -> Response<'static> {
+    if sql.to_ascii_lowercase().contains("ctid") {
+        let schema = Arc::new(vec![FieldInfo::new(
+            "ctid".into(),
+            None,
+            None,
+            Type::TID,
+            FieldFormat::Binary,
+        )]);
+        let data_rows = rows
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let mut encoder = DataRowEncoder::new(schema.clone());
+                let mut tid = [0u8; 6];
+                tid[..4].copy_from_slice(&(index as u32).to_be_bytes());
+                encoder
+                    .encode_field_with_type_and_format(
+                        &tid.as_slice(),
+                        &Type::BYTEA,
+                        FieldFormat::Binary,
+                    )
+                    .expect("pgwire field encoding is infallible");
+                encoder.finish()
+            })
+            .collect();
+        return make_encoded_metadata_response(schema, data_rows, "ctid ASC");
+    }
+
     let source_schema = ["file_id", "row_id", "begin_snapshot"]
         .into_iter()
         .map(|name| {

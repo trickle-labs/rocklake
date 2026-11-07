@@ -793,7 +793,7 @@ fn sort_expression_row_has_v026_fields() {
     let row = SortExpressionRow {
         sort_id: 1,
         sort_key_index: 0,
-        column_id: 5,
+        column_id: Some(5),
         sort_direction: Some("ASC".to_string()),
         null_order: Some("NULLS LAST".to_string()),
         table_id: Some(10),
@@ -810,7 +810,7 @@ fn sort_expression_row_with_expression() {
     let row = SortExpressionRow {
         sort_id: 2,
         sort_key_index: 1,
-        column_id: 0,
+        column_id: None,
         sort_direction: Some("DESC".to_string()),
         null_order: Some("NULLS FIRST".to_string()),
         table_id: Some(20),

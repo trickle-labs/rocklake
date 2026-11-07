@@ -533,8 +533,7 @@ pub fn sort_info_schema() -> Arc<Vec<FieldInfo>> {
 
 // ── ducklake_sort_expression ──────────────────────────────────────────────────
 
-/// `ducklake_sort_expression(sort_id, sort_index, column_id, sort_order,
-/// null_order)` — DuckLake v1.0 spec.
+/// Stable DuckLake schema for `ducklake_sort_expression`.
 pub fn sort_expression_schema() -> Arc<Vec<FieldInfo>> {
     Arc::new(vec![
         int8t!("sort_id"),

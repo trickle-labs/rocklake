@@ -1,12 +1,12 @@
 # DuckLake 1.1 Compatibility Inventory
 
-**Status:** implementation and verification scope; not a support or certification claim.
+**Status:** specification and verification inventory. The current support boundary is stated in the [compatibility page](../compatibility.md); this inventory records its coverage and limits.
 
 **Baseline reviewed:** RockLake `main` at `92b8e40` (`v0.65.0`), DuckLake 1.1 stable documentation and release notes as published on 2026-10-21, reviewed 2026-11-05. The upstream documentation source is `duckdb/ducklake-web` `main` at `465f852b1aedde79936a1cd722f1be2f9003cfc1` (HEAD from `git ls-remote` on the review date); the served pages identify themselves as 1.1 stable. The DuckLake 1.0 pages were also consulted for the comparison.
 
-## Current contract
+## Baseline contract at `92b8e40`
 
-RockLake's [compatibility page](../compatibility.md) and compatibility workflow claim DuckLake 1.0. DuckDB 2.0 tests explicitly pin `DUCKLAKE_VERSION '1.0'`; the corpus is pinned to catalog version 7 and has a gate against version 8. The existing experimental import token `V1_1_DEV_1` refers to a prerelease source version, not stable DuckLake 1.1 support.
+At the reviewed baseline, RockLake's [compatibility page](../compatibility.md) and compatibility workflow claim DuckLake 1.0. DuckDB 2.0 tests explicitly pin `DUCKLAKE_VERSION '1.0'`; the corpus is pinned to catalog version 7 and has a gate against version 8. The existing experimental import token `V1_1_DEV_1` refers to a prerelease source version, not stable DuckLake 1.1 support. The implementation and certification evidence below supersede that baseline for stable 1.1.
 
 The upstream 1.1 table overview lists 29 metadata tables, including the new `ducklake_view_column_tag`. RockLake's v1.0 catalog schema fixture and PgWire registry cover the v1.0 surface. An implementation primitive or generic string field is not evidence that a DuckLake 1.1 behavior works end to end.
 
@@ -24,7 +24,7 @@ The upstream 1.1 table overview lists 29 metadata tables, including the new `duc
 | **Row-group counts.** `ducklake_data_file` and `ducklake_delete_file` add nullable `row_group_count` so readers can plan scans without fetching each footer. | `DataFileRow`, `DeleteFileRow`, and their PgWire schemas omit `row_group_count`. | Preserve null for old files, round-trip counts for new files, and verify counts for both data and delete files after restart. [#110](https://github.com/trickle-labs/rocklake/issues/110), [#112](https://github.com/trickle-labs/rocklake/issues/112). |
 | **View column tags.** New `ducklake_view_column_tag` rows use the output column name before aliases, are snapshot-versioned, and retire with the view. | The v1.0 schema registry, SQL classifier, catalog row types, and writer expose table and table-column tags; no view-column-tag table or handler was found. | Add the 29th table and lifecycle semantics, including comments on aliased view columns, snapshot reads, and export/restore. [#110](https://github.com/trickle-labs/rocklake/issues/110), [#112](https://github.com/trickle-labs/rocklake/issues/112). |
 | **Inlined-table migration.** Internal columns are renamed to `_ducklake_row_id`, `_ducklake_begin_snapshot`, `_ducklake_end_snapshot`; migration also adds missing schema-version rows and repairs defaults and incorrectly typed column bounds. | `InlinedDataTablesRow` is in `rows.rs`; migration-from-DuckLake has a prerelease import gate, but no stable `AUTOMATIC_MIGRATION` implementation or repair test was found. | This is a data-preserving catalog migration, not just version acceptance. Cover explicit opt-in, no-op attachment, all repairs, interruptions/recovery, and the no-downgrade boundary. [#111](https://github.com/trickle-labs/rocklake/issues/111). |
-| **Features available without migration.** DuckDB 2.0 also adds create-time sort/partition declarations, table options, broader statistics pruning, compaction selection controls, and Parquet import types. | RockLake has v1.0 sort/partition metadata and file/statistics operations; the live compatibility suite exercises a 1.0 catalog. | These are reference-client behaviors as well as metadata operations. Their complete RockLake interaction with DuckDB 2.0 on both 1.0 and 1.1 catalogs is unverified; do not attribute DuckDB execution-engine behavior to the catalog server without an end-to-end result. [#112](https://github.com/trickle-labs/rocklake/issues/112). |
+| **Features available without migration.** DuckDB 2.0 adds create-time sort/partition declarations, table options, broader statistics pruning, compaction selection controls, and Parquet import types. | `duckdb_2_0_non_migration_features_work_with_rocklake` in `crates/rocklake-pgwire/tests/duckdb_binary_tests.rs` exercises these paths against a fresh 1.1 catalog, including table-option set/reset, `OR`/nested `IS NULL` filters, compaction time windows and file limits, and importing `TIME_NS`, `TIMESTAMPTZ_NS`, and `VARIANT` data from Parquet. | The local DuckDB 2.0 scenario now confirms these paths end to end. It does not establish the same feature matrix on a 1.0 catalog or Silo-backed storage, and the import case covers a representative file rather than every supported Parquet type. [#112](https://github.com/trickle-labs/rocklake/issues/112). |
 | **Storage, snapshots, and existing 1.0 contract.** Preserve attach, schema/table DDL, inlined and Parquet data, insert/update/delete, views/macros/tags, file/statistics metadata, restart and time-travel reads, and multi-writer behavior already covered by the 1.0 compatibility contract. | `docs/compatibility.md`, `tests/fixtures/ducklake-v1.0-schema.toml`, and the v1.0 corpus define that baseline. `.github/workflows/compatibility.yml` runs the DuckDB 1.5.3–2.0.0 matrix pinned to 1.0. `duckdb_parquet_and_catalog_share_s3_store` in `duckdb_container_tests.rs` exercises Silo-backed catalog and Parquet paths under distinct prefixes. | This is useful 1.0 and S3-compatible evidence, but it does not certify 1.1 or real AWS S3. Add separate 1.1 local and Silo scenarios, fresh-client/restart reads, history, concurrent writers, and preserve the current 1.0 jobs. [#110](https://github.com/trickle-labs/rocklake/issues/110), [#112](https://github.com/trickle-labs/rocklake/issues/112). |
 | **Import/export, backup/restore, client and binding surfaces.** New catalog metadata must survive supported interfaces; unsupported operations must fail clearly rather than drop fields. | Catalog import/export logic is in `crates/rocklake-catalog/src/export.rs` and `migrate_from_ducklake.rs`; backup/restore and public clients live in `crates/rocklake-catalog/src/backup.rs` and `bindings/`. These are versioned around the current 1.0 model. | No 1.1 metadata round-trip matrix or documented binding limitations were found. Exercise each supported interface with the new columns/table and state any deliberate limitations. [#112](https://github.com/trickle-labs/rocklake/issues/112). |
 | **DuckDB 2.0 performance claims.** The release post reports faster attach, metadata enumeration, inlining, and bulk catalog operations for the DuckDB extension with DuckDB and PostgreSQL catalogs. | RockLake has separate SlateDB/KV storage and PgWire catalog paths; the inspected compatibility suite reports correctness, not equivalent comparative benchmarks. | These upstream measurements do not transfer to RockLake. No comparable baseline is established here; avoid a performance parity claim unless RockLake is benchmarked under matching workloads. [#112](https://github.com/trickle-labs/rocklake/issues/112). |
@@ -35,26 +35,46 @@ The installed DuckDB CLI reported `v2.0.0 (Cyanoptera) d54cbbe3df`. Against fres
 
 `pragma_table_info` against a fresh DuckDB 2.0 catalog enumerated all 29 metadata tables, with ordered columns, SQL types, and nullability matching the 1.1 specification's full schema script. Comparing it with the v1.0 schema confirmed the catalog delta: one new table (`ducklake_view_column_tag`); `parent_schema_id` on `ducklake_schema`; `row_group_count` on data and delete files; and `min_is_exact`/`max_is_exact` on file and table column statistics. The inlined-table system-column rename is a physical data-table change and is not represented in this metadata-table inventory. This reference capture does not exercise RockLake PgWire or data operations. A SQLite-backed probe could not run because `sqlite_scanner` was unavailable locally and network access prevented downloading it.
 
-## Remaining verification work to close the gaps
+## Final verification evidence
 
-The reference probe above is partial evidence; the following compatibility checks remain unrun.
+The 1.0 schema manifest test is retained. The v1.1 schema delta is covered by
+the registry tests for nested-schema parentage, data/delete row-group counts,
+exact statistics columns, and view-column tags, alongside the DuckLake 1.1
+critical-path certification. This checks the complete 1.0 baseline plus the
+specified stable 1.1 catalog additions without duplicating the full manifest.
 
-1. Compare the captured 29-table DuckDB 2.0 schema and version behavior against RockLake PgWire. Keep the 1.0 fixture and tests separate.
-2. Run real DuckDB 2.0 scenarios for nested schemas, `NULL` promotion, PostgreSQL `VARIANT` inlining, epoch transforms, multi-snapshot Puffin deletes/time travel, exact string bounds, row-group counts, and view column tags. Inspect the catalog rows as well as query results.
-3. Test fresh 1.1 and explicit 1.0 creation, reconnect/restart, and 1.0-to-1.1 `AUTOMATIC_MIGRATION`; inject a migration failure and test the documented recovery path and downgrade rejection.
-4. Round-trip representative 1.1 rows through catalog import/export, backup/restore, and each maintained client surface. Unsupported paths must return an error without dropping metadata.
-5. Run local-storage and Silo scenarios with catalog and Parquet data under separate prefixes. Verify newly written Parquet object paths and exact rows after a fresh DuckDB process. Treat real-cloud certification as separate evidence.
-6. Run the complete 1.0 compatibility matrix, plus 1.1 snapshot/history, concurrency, unsupported-version, and release-certification jobs. Report the exact client and format versions.
+DuckDB 2.0.0 end-to-end coverage exercises fresh 1.1 creation, `NULL`
+promotion, VARIANT inlining, epoch transforms, Puffin deletion history,
+statistics and row-group metadata, view-column tags, inlined system-column
+names, create-time table layout/options, pruning and compaction, and
+representative Parquet import. Tests read catalog rows and verify query
+results, historical snapshots, reconnect/restart, concurrent commits,
+unsupported-client rejection, and 1.0-to-1.1 migration with recovery and
+downgrade checks.
 
-## Unresolved evidence
+The metadata export/restore test creates a 1.1 backup and imports its NDJSON
+catalog into a new catalog, then checks version, nested-schema parentage,
+row-group counts, exactness flags, and view-column tags. The backup contains
+catalog metadata and file references; it does not copy Parquet bytes. Local
+and separate-prefix Silo-backed catalog and Parquet scenarios verify fresh
+client reads. The final Release Certification workflow is the source for the
+exact passing candidate and its 1.0/1.1 job results.
 
-- The reference catalog exposes stable format version as the string `1.1` in `ducklake_metadata`; it did not expose a corresponding stable catalog-version integer in the probed metadata. RockLake's importer currently derives its numeric gate from `MAX(ducklake_snapshot.schema_version)`, which is a different field. Determine whether another stable identifier is required and align detection and emitted migration SQL with DuckDB 2.0.
-- The effect and metadata contract of table options, newer pruning shapes, and broader Parquet imports on RockLake's PgWire path need reference-client traces.
-- No inventory row above is a feature certification. The companion implementation issues remain [#110](https://github.com/trickle-labs/rocklake/issues/110), [#111](https://github.com/trickle-labs/rocklake/issues/111), and [#112](https://github.com/trickle-labs/rocklake/issues/112).
+## Retained limits
 
-## Follow-on candidate evidence (2026-11-06)
+- DuckDB 2.0.0 is the only client certified against stable DuckLake 1.1. DuckDB
+  1.5.3–1.5.6 remain covered against DuckLake 1.0; DuckDB 1.5.6 has an explicit
+  1.1 rejection/no-mutation check.
+- Silo and emulator scenarios do not certify real AWS S3, GCS, or Azure.
+- The Parquet import scenario covers representative types, not every supported
+  Parquet type. Equivalent new-feature coverage on 1.0 catalogs is not claimed.
+- The C ABI and Python, Node.js, Go, and Java bindings expose selected
+  high-level projections; they do not provide arbitrary 1.1 metadata access or
+  catalog import/export and migration APIs.
+- Catalog backup and restore preserve metadata and file references, not the
+  referenced Parquet bytes. Comparative performance parity is not benchmarked.
 
-PR #130 adds a real DuckDB 2.0 scenario for creating a `NULL` column, promoting it to `VARCHAR`, preserving the earlier snapshot schema, and reading the data after a RockLake restart. The scenario also found and fixes a column-retirement path that discarded the table ID from DuckLake's `dropped_cols` CTE. PR #130 is open; this evidence is still a candidate change, not a release certification.
+The 1.1 implementation and certification changes are tracked in PRs [#130](https://github.com/trickle-labs/rocklake/pull/130) and [#131](https://github.com/trickle-labs/rocklake/pull/131). The [compatibility page](../compatibility.md) records the support claim and tested versions.
 
 ## Sources
 
