@@ -123,6 +123,10 @@ async fn upsert_file_column_stats_with_new_fields() {
         )
         .await
         .unwrap();
+    writer
+        .upsert_table_column_stats(table_id, col_id, false, Some("1"), Some("999"), None, None)
+        .await
+        .unwrap();
     let _snap = writer.create_snapshot(None, None).await.unwrap();
 
     // Verify pruning still works with renamed field.
