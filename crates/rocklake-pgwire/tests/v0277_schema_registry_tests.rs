@@ -1,7 +1,7 @@
 //! v0.27.7 Schema Registry Tests — DuckLake SQL Schema Registry.
 //!
 //! Verifies that the `schema_registry` module is the single authoritative
-//! source for all 28 DuckLake v1.0 metadata table schemas, and that every
+//! source for DuckLake v1.0 metadata schemas and the v1.1 view-tag table, and that every
 //! executor path returns RowDescription that matches the registry.
 //!
 //! # Tests
@@ -166,14 +166,14 @@ async fn populate_base(store: &Arc<Mutex<CatalogStore>>) -> (u64, u64, u64) {
     (1, 2, 3)
 }
 
-// ── Registry correctness: fields_for_table covers all 28 tables ──────────────
+// ── Registry correctness: every supported table has a schema ────────────────
 
 #[test]
 fn registry_covers_all_32_tables() {
     use rocklake_pgwire::schema_registry::fields_for_table;
 
     let tables = [
-        // 29 original tables
+        // DuckLake catalog tables
         "ducklake_snapshot",
         "ducklake_snapshot_changes",
         "ducklake_schema",
@@ -191,6 +191,7 @@ fn registry_covers_all_32_tables() {
         "ducklake_macro_parameters",
         "ducklake_tag",
         "ducklake_column_tag",
+        "ducklake_view_column_tag",
         "ducklake_partition_info",
         "ducklake_partition_column",
         "ducklake_partition_value",
@@ -203,24 +204,24 @@ fn registry_covers_all_32_tables() {
         "ducklake_encrypted_secret",
         "ducklake_encryption_key",
         "ducklake_file_partition_value",
-        // 3 extension tables added in v0.27.11
+        // Extension tables
         "ducklake_file_variant_stats",
         "ducklake_column_mapping",
         "ducklake_name_mapping",
     ];
 
-    assert_eq!(tables.len(), 32, "test list must have exactly 32 tables");
+    assert_eq!(tables.len(), 33, "test list must have exactly 33 tables");
 
     for table in &tables {
         assert!(
             fields_for_table(table).is_some(),
-            "fields_for_table must return Some for all 32 spec tables; missing: {table}"
+            "fields_for_table must return Some for all supported tables; missing: {table}"
         );
     }
 }
 
 // ── Golden column-order tests ─────────────────────────────────────────────────
-// For each of the 28 tables, verify that executing a SELECT returns column
+// For each legacy table, verify that executing a SELECT returns column
 // names and order matching the spec as defined in schema_registry.rs.
 
 #[tokio::test]
@@ -865,6 +866,179 @@ async fn golden_ducklake_column_tag() {
         ],
         "ducklake_column_tag",
     );
+}
+
+#[tokio::test]
+async fn ducklake_1_1_view_column_tags_are_selectable() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let version_error = executor::execute_sql(
+        "SELECT * FROM ducklake_view_column_tag",
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .err()
+    .expect("DuckLake 1.0 must reject the 1.1-only relation");
+    assert!(version_error
+        .to_string()
+        .contains("requires DuckLake format version 1.1"));
+
+    let view_id = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        writer
+            .set_metadata(
+                rocklake_core::keys::MetadataScope::Global,
+                0,
+                "version",
+                "1.1",
+            )
+            .unwrap();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let view_id = writer
+            .create_view(schema_id, "tagged_view", "SELECT 1 AS id")
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        view_id
+    };
+
+    let insert = format!(
+        "INSERT INTO ducklake_view_column_tag (view_id, column_name, begin_snapshot, end_snapshot, key, value) VALUES ({view_id}, 'id', 1, NULL, 'comment', 'identifier')"
+    );
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let (cols, count) = inspect(exec("SELECT * FROM ducklake_view_column_tag", &store).await).await;
+    assert_cols_eq(
+        &cols,
+        &[
+            "view_id",
+            "column_name",
+            "begin_snapshot",
+            "end_snapshot",
+            "key",
+            "value",
+        ],
+        "ducklake_view_column_tag",
+    );
+    assert_eq!(count, 1);
+
+    let overwrite = format!(
+        "WITH overwritten_tags(vid, col, k) AS (VALUES ({view_id}, 'id', 'comment')) UPDATE \"public\".ducklake_view_column_tag SET end_snapshot = 12 FROM overwritten_tags WHERE view_id = vid AND ducklake_view_column_tag.column_name = overwritten_tags.col AND ducklake_view_column_tag.key = overwritten_tags.k AND end_snapshot IS NULL"
+    );
+    executor::execute_sql(
+        &overwrite,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let replacement = format!(
+        "INSERT INTO ducklake_view_column_tag (view_id, column_name, begin_snapshot, end_snapshot, key, value) VALUES ({view_id}, 'id', 1, NULL, 'comment', 'updated')"
+    );
+    executor::execute_sql(
+        &replacement,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let active_tags = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_view_column_tags()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|tag| tag.end_snapshot.is_none())
+        .collect::<Vec<_>>();
+    assert_eq!(active_tags.len(), 1);
+    assert_eq!(active_tags[0].tag_value, "updated");
+
+    let begin_snapshot = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_view_column_tags()
+        .await
+        .unwrap()[0]
+        .begin_snapshot;
+
+    executor::execute_sql(
+        "UPDATE ducklake_view_column_tag SET end_snapshot = $1 WHERE view_id = $2 AND column_name = $3 AND key = $4 AND begin_snapshot = $5",
+        &ParamValues::new(vec![
+            Some("3".into()),
+            Some(view_id.to_string()),
+            Some("id".into()),
+            Some("comment".into()),
+            Some(begin_snapshot.to_string()),
+        ]),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let (_, count) = inspect(exec("SELECT * FROM ducklake_view_column_tag", &store).await).await;
+    assert_eq!(count, 0);
+
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let begin_snapshot = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_view_column_tags()
+        .await
+        .unwrap()[0]
+        .begin_snapshot;
+    executor::execute_sql(
+        "DELETE FROM ducklake_view_column_tag WHERE view_id = $1 AND column_name = $2 AND key = $3 AND begin_snapshot = $4",
+        &ParamValues::new(vec![
+            Some(view_id.to_string()),
+            Some("id".into()),
+            Some("comment".into()),
+            Some(begin_snapshot.to_string()),
+        ]),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+    let (_, count) = inspect(exec("SELECT * FROM ducklake_view_column_tag", &store).await).await;
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]

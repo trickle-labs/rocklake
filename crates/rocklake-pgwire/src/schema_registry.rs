@@ -466,6 +466,19 @@ pub fn column_tag_schema() -> Arc<Vec<FieldInfo>> {
     ])
 }
 
+/// `ducklake_view_column_tag(view_id, column_name, begin_snapshot,
+/// end_snapshot, key, value)` — DuckLake 1.1.
+pub fn view_column_tag_schema() -> Arc<Vec<FieldInfo>> {
+    Arc::new(vec![
+        int8t!("view_id"),
+        text_col!("column_name"),
+        int8t!("begin_snapshot"),
+        int8t!("end_snapshot"),
+        text_col!("key"),
+        text_col!("value"),
+    ])
+}
+
 // ── ducklake_partition_info ───────────────────────────────────────────────────
 
 /// `ducklake_partition_info(partition_id, table_id, begin_snapshot,
@@ -765,13 +778,14 @@ pub fn supported_tables() -> &'static [&'static str] {
         "ducklake_file_variant_stats",
         "ducklake_column_mapping",
         "ducklake_name_mapping",
+        "ducklake_view_column_tag",
     ]
 }
 
 /// Look up the canonical `FieldInfo` list for a named DuckLake metadata table.
 ///
-/// Returns `Some(schema)` for the 28 DuckLake v1.0 tables and RockLake's
-/// retained extension tables; `None` for unknown names.
+/// Returns `Some(schema)` for supported DuckLake and RockLake tables; `None`
+/// for unknown names.
 pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
     match table_name {
         "ducklake_snapshot" => Some(snapshot_schema()),
@@ -791,6 +805,7 @@ pub fn fields_for_table(table_name: &str) -> Option<Arc<Vec<FieldInfo>>> {
         "ducklake_macro_parameters" => Some(macro_parameters_schema()),
         "ducklake_tag" => Some(tag_schema()),
         "ducklake_column_tag" => Some(column_tag_schema()),
+        "ducklake_view_column_tag" => Some(view_column_tag_schema()),
         "ducklake_partition_info" => Some(partition_info_schema()),
         "ducklake_partition_column" => Some(partition_column_schema()),
         "ducklake_partition_value" => Some(partition_value_schema()),

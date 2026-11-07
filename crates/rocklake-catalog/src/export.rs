@@ -299,6 +299,16 @@ fn export_manifest(snapshot_id: u64) -> ExportManifest {
                 "end_snapshot",
                 "tag_key_hash",
             ],
+            "ducklake_view_column_tag" => &[
+                "view_id",
+                "column_name",
+                "tag_key",
+                "tag_value",
+                "begin_snapshot",
+                "end_snapshot",
+                "column_name_hash",
+                "tag_key_hash",
+            ],
             "ducklake_schema_version" => &["table_id", "begin_snapshot", "schema_version"],
             "ducklake_inlined_insert" => &[
                 "table_id",
@@ -361,6 +371,7 @@ fn export_manifest(snapshot_id: u64) -> ExportManifest {
         (TAG_SORT_EXPRESSION, "ducklake_sort_expression"),
         (TAG_TAG, "ducklake_tag"),
         (TAG_COLUMN_TAG, "ducklake_column_tag"),
+        (TAG_VIEW_COLUMN_TAG, "ducklake_view_column_tag"),
         (TAG_SCHEMA_VERSIONS, "ducklake_schema_version"),
         (TAG_INLINED_ROWS, "ducklake_inlined_insert"),
         (TAG_INLINED_ROWS, "ducklake_inlined_delete"),
@@ -1064,6 +1075,47 @@ pub async fn export_catalog<W: Write>(
                     "tag_value": row.tag_value,
                     "begin_snapshot": row.begin_snapshot,
                     "end_snapshot": row.end_snapshot,
+                    "tag_key_hash": tag_key_hash,
+                }),
+            };
+            serde_json::to_writer(&mut *writer, &exported)
+                .map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            writeln!(writer).map_err(|e| CatalogError::SlateDb(e.to_string()))?;
+            rows_exported += 1;
+        }
+    }
+
+    // Export view column tags (ducklake_view_column_tag).
+    tables_exported += 1;
+    let prefix = keys::prefix_for_tag(TAG_VIEW_COLUMN_TAG);
+    let mut iter = db.scan_prefix(&prefix).await?;
+    while let Some(kv) = iter
+        .next()
+        .await
+        .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+    {
+        let row: ViewColumnTagRow = values::decode_value(&kv.value)?;
+        if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, dl_snapshot_id) {
+            let column_name_hash = kv
+                .key
+                .get(9..17)
+                .and_then(|bytes| keys::decode_u64(bytes).ok())
+                .unwrap_or(0);
+            let tag_key_hash = kv
+                .key
+                .get(17..25)
+                .and_then(|bytes| keys::decode_u64(bytes).ok())
+                .unwrap_or(0);
+            let exported = ExportedRow {
+                table: "ducklake_view_column_tag".to_string(),
+                data: serde_json::json!({
+                    "view_id": row.view_id,
+                    "column_name": row.column_name,
+                    "tag_key": row.tag_key,
+                    "tag_value": row.tag_value,
+                    "begin_snapshot": row.begin_snapshot,
+                    "end_snapshot": row.end_snapshot,
+                    "column_name_hash": column_name_hash,
                     "tag_key_hash": tag_key_hash,
                 }),
             };
@@ -2037,6 +2089,34 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                 put!(key, values::encode_value(&row));
                 rows_imported += 1;
             }
+            "ducklake_view_column_tag" => {
+                let view_id = req_u64!(d, "view_id", tbl);
+                let column_name = req_str!(d, "column_name", tbl);
+                let tag_key = req_str!(d, "tag_key", tbl);
+                let begin_snapshot = req_u64!(d, "begin_snapshot", tbl);
+                let column_name_hash = d["column_name_hash"]
+                    .as_u64()
+                    .unwrap_or_else(|| hash_tag_key(&column_name));
+                let tag_key_hash = d["tag_key_hash"]
+                    .as_u64()
+                    .unwrap_or_else(|| hash_tag_key(&tag_key));
+                let row = ViewColumnTagRow {
+                    view_id,
+                    column_name,
+                    tag_key,
+                    tag_value: req_str!(d, "tag_value", tbl),
+                    begin_snapshot,
+                    end_snapshot: d["end_snapshot"].as_u64(),
+                };
+                let key = keys::key_view_column_tag(
+                    view_id,
+                    column_name_hash,
+                    tag_key_hash,
+                    begin_snapshot,
+                );
+                put!(key, values::encode_value(&row));
+                rows_imported += 1;
+            }
             "ducklake_partition_info" => {
                 let partition_id = req_u64!(d, "partition_id", tbl);
                 let table_id = req_u64!(d, "table_id", tbl);
@@ -2526,6 +2606,7 @@ fn is_import_table(table: &str) -> bool {
             | "ducklake_sort_expression"
             | "ducklake_tag"
             | "ducklake_column_tag"
+            | "ducklake_view_column_tag"
             | "ducklake_schema_version"
             | "ducklake_inlined_insert"
             | "ducklake_inlined_delete"
@@ -2616,6 +2697,13 @@ pub(crate) fn validate_import_data(
         "ducklake_column_tag" => &[
             "table_id",
             "column_id",
+            "tag_key",
+            "tag_value",
+            "begin_snapshot",
+        ],
+        "ducklake_view_column_tag" => &[
+            "view_id",
+            "column_name",
             "tag_key",
             "tag_value",
             "begin_snapshot",
@@ -2765,6 +2853,13 @@ pub(crate) fn validate_import_data(
             "end_snapshot",
             "tag_key_hash",
         ],
+        "ducklake_view_column_tag" => &[
+            "view_id",
+            "begin_snapshot",
+            "end_snapshot",
+            "column_name_hash",
+            "tag_key_hash",
+        ],
         "ducklake_schema_version" => &["table_id", "begin_snapshot", "schema_version"],
         "ducklake_inlined_insert" => &[
             "table_id",
@@ -2855,7 +2950,9 @@ pub(crate) fn validate_import_data(
         "ducklake_partition_column" => &["transform"],
         "ducklake_file_partition_value" => &["partition_value"],
         "ducklake_sort_expression" => &["sort_direction", "null_order", "expression", "dialect"],
-        "ducklake_tag" | "ducklake_column_tag" => &["tag_key", "tag_value"],
+        "ducklake_tag" | "ducklake_column_tag" | "ducklake_view_column_tag" => {
+            &["tag_key", "tag_value"]
+        }
         "rocklake_snapshot_lease" => &["consumer_id"],
         "rocklake_extension_schema" => &["table_name", "data_json"],
         "ducklake_encrypted_secret" => &["secret_name", "encrypted_secret"],

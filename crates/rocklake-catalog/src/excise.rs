@@ -181,6 +181,11 @@ pub async fn excise_apply(
         (TAG_TAG, "tag", tag_is_excisable),
         (TAG_COLUMN_TAG, "column tag", column_tag_is_excisable),
         (
+            TAG_VIEW_COLUMN_TAG,
+            "view column tag",
+            view_column_tag_is_excisable,
+        ),
+        (
             TAG_ENCRYPTION_KEY,
             "encryption key",
             encryption_key_is_excisable,
@@ -512,6 +517,12 @@ fn tag_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
 
 fn column_tag_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
     Ok(values::decode_value::<ColumnTagRow>(value)?
+        .end_snapshot
+        .is_some_and(|end| end <= floor))
+}
+
+fn view_column_tag_is_excisable(value: &[u8], floor: u64) -> CatalogResult<bool> {
+    Ok(values::decode_value::<ViewColumnTagRow>(value)?
         .end_snapshot
         .is_some_and(|end| end <= floor))
 }

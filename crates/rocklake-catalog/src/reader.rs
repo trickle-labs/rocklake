@@ -1794,6 +1794,24 @@ impl CatalogReader {
         Ok(rows)
     }
 
+    /// List all view column tags visible at this snapshot.
+    pub async fn list_all_view_column_tags(&self) -> CatalogResult<Vec<ViewColumnTagRow>> {
+        let prefix = keys::prefix_for_tag(TAG_VIEW_COLUMN_TAG);
+        let mut rows = Vec::new();
+        let mut iter = self.db.scan_prefix(&prefix).await?;
+        while let Some(kv) = iter
+            .next()
+            .await
+            .map_err(|e| CatalogError::SlateDb(e.to_string()))?
+        {
+            let row: ViewColumnTagRow = values::decode_value(&kv.value)?;
+            if mvcc::is_visible(row.begin_snapshot, row.end_snapshot, self.dl_snapshot_id) {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
     /// List all `ducklake_sort_info` rows visible at this snapshot (all tables).
     pub async fn list_all_sort_info(&self) -> CatalogResult<Vec<SortInfoRow>> {
         let prefix = keys::prefix_for_tag(TAG_SORT_INFO);

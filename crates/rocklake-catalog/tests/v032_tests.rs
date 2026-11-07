@@ -160,6 +160,14 @@ async fn export_import_round_trip_new_categories() {
     let src = TempDir::new().unwrap();
     let mut store = CatalogStore::open(test_opts(&src)).await.unwrap();
     let mut writer = store.begin_write();
+    writer
+        .set_metadata(
+            rocklake_core::keys::MetadataScope::Global,
+            0,
+            "version",
+            "1.1",
+        )
+        .unwrap();
 
     let schema_id = writer.create_schema("main").await.unwrap();
     let table_id = writer
@@ -179,12 +187,16 @@ async fn export_import_round_trip_new_categories() {
         .await
         .unwrap();
 
-    let _view_id = writer
+    let view_id = writer
         .create_view(
             schema_id,
             "recent_metrics",
             "SELECT * FROM metrics LIMIT 100",
         )
+        .await
+        .unwrap();
+    writer
+        .set_view_column_tag(view_id, "ts", "comment", "event time")
         .await
         .unwrap();
     let macro_id = writer
@@ -241,6 +253,13 @@ async fn export_import_round_trip_new_categories() {
 
     let files = reader.list_data_files(table_id).await.unwrap();
     assert_eq!(files.len(), 1, "data file must survive round-trip");
+    let view_tags = reader.list_all_view_column_tags().await.unwrap();
+    assert_eq!(
+        view_tags.len(),
+        1,
+        "view column tag must survive round-trip"
+    );
+    assert_eq!(view_tags[0].tag_value, "event time");
 
     imported.close().await.unwrap();
 }

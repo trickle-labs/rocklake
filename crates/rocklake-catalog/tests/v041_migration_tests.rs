@@ -1,12 +1,14 @@
 //! v0.41.0 — Migration Tooling & DuckLake Forward Compatibility tests.
 //!
-//! Test inventory (6 tests):
+//! Test inventory (8 tests):
 //! 1. migrate_from_in_memory_source
 //! 2. migrate_dry_run_writes_nothing
 //! 3. migrate_secondary_index_present
 //! 4. migrate_v11_source_rejected_by_default
 //! 5. migrate_v11_source_accepted_with_flag
 //! 6. export_import_delete_file_end_snapshot
+//! 7. migrate_v11_view_column_tags_from_spec_columns
+//! 8. stable_v11_format_is_rejected_before_loading_unsupported_tables
 
 use std::io::BufReader;
 use std::sync::Arc;
@@ -208,6 +210,69 @@ async fn migrate_v11_source_accepted_with_flag() {
         report.source_catalog_version,
         DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION
     );
+}
+
+#[tokio::test]
+async fn migrate_v11_view_column_tags_from_spec_columns() {
+    let db = fresh_db().await;
+    let mut source = InMemoryDuckLakeSource::new(DUCKLAKE_V1_1_DEV_1_CATALOG_VERSION);
+    source.add_rows("ducklake_snapshot", vec![snapshot_row(1, 8)]);
+    source.add_rows(
+        "ducklake_schema",
+        vec![ExportedRow {
+            table: "ducklake_schema".into(),
+            data: serde_json::json!({
+                "schema_id": 1,
+                "schema_name": "main",
+                "begin_snapshot": 1
+            }),
+        }],
+    );
+    source.add_rows(
+        "ducklake_view",
+        vec![ExportedRow {
+            table: "ducklake_view".into(),
+            data: serde_json::json!({
+                "view_id": 2,
+                "schema_id": 1,
+                "view_name": "v",
+                "sql": "SELECT 1 AS id",
+                "begin_snapshot": 1
+            }),
+        }],
+    );
+    source.add_rows(
+        "ducklake_view_column_tag",
+        vec![ExportedRow {
+            table: "ducklake_view_column_tag".into(),
+            data: serde_json::json!({
+                "view_id": 2,
+                "column_name": "id",
+                "begin_snapshot": 1,
+                "end_snapshot": null,
+                "key": "comment",
+                "value": "identifier"
+            }),
+        }],
+    );
+
+    migrate_from_source(&mut source, &db, &[ACCEPT_VERSION_V1_1_DEV_1], false)
+        .await
+        .unwrap();
+
+    let mut iter = db
+        .scan_prefix(&rocklake_core::keys::prefix_for_tag(
+            rocklake_core::tags::TAG_VIEW_COLUMN_TAG,
+        ))
+        .await
+        .unwrap();
+    let value = iter.next().await.unwrap().expect("migrated view tag").value;
+    let tag: rocklake_core::rows::ViewColumnTagRow =
+        rocklake_core::values::decode_value(&value).expect("valid view column tag row");
+    assert_eq!(tag.view_id, 2);
+    assert_eq!(tag.column_name, "id");
+    assert_eq!(tag.tag_key, "comment");
+    assert_eq!(tag.tag_value, "identifier");
 }
 
 #[tokio::test]

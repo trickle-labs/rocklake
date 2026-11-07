@@ -3231,7 +3231,7 @@ async fn cmd_migrate_from_ducklake(
 
 // ─── export-catalog ────────────────────────────────────────────────────────
 
-/// Export all DuckLake catalog tables (28 spec + 4 extension) to a JSON-lines file.
+/// Export all DuckLake catalog tables (29 spec + 4 extension) to a JSON-lines file.
 ///
 /// This produces an interop dump suitable for migration or debugging.
 /// Sensitive fields (encryption keys, secrets) are redacted in the output.
@@ -3267,7 +3267,7 @@ async fn cmd_export_catalog(
     )
     .await?;
 
-    println!("Export complete (28 DuckLake spec + 4 extension catalog tables):");
+    println!("Export complete (29 DuckLake spec + 4 extension catalog tables):");
     println!("  Rows exported:   {}", result.rows_exported);
     println!("  Tables exported: {}", result.tables_exported);
     println!("  Output:          {output_path}");
