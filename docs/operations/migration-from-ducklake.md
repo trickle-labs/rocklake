@@ -52,6 +52,11 @@ it does not identify the DuckLake format. Legacy catalogs without a metadata
 version row use the numeric compatibility fallback. Unsupported formats return
 `SQLSTATE 0A000` before any target writes.
 
+This importer does not ingest stable DuckLake 1.1 catalogs. To upgrade an
+existing RockLake catalog in place, use DuckDB's explicit
+`AUTOMATIC_MIGRATION` path described in the [DuckLake version upgrade
+guide](ducklake-version-upgrade.md).
+
 ## Dry Run
 
 Use `--dry-run` to validate the source without committing any writes:

@@ -1,8 +1,10 @@
 # Release process
 
-Releases are prepared from the tagged source commit. For v0.65.0, the
+Releases are prepared from the tagged source commit. For v0.66.0, the
 release-blocking `Release Certification` workflow retains the complete
-correctness matrix:
+correctness matrix, with separate DuckLake 1.0 and stable 1.1 gates. DuckLake
+1.1 is certified with DuckDB 2.0.0; DuckDB 1.5.3–1.5.6 remain on the 1.0
+matrix. The workflow includes:
 formatting, clippy, workspace tests, DuckLake conformance, public-surface and
 backend execution, Windows, security, docs, quickstart, compatibility, Miri,
 sanitizers, and the preserved v0.47.17 production-failure certification. The
@@ -19,7 +21,7 @@ verified no-op, downgrade-rejection, status JSON, and v0.59.0 direct-upgrade
 checks cover the compatibility freeze. The v0.63.7 certification profile
 validates the public surface manifest, beta support policy, evidence ledger,
 redacted support bundle, candidate-specific LocalFS evidence, and release
-artifact contract for v0.65.0.
+artifact contract for v0.66.0.
 The publication stage also tests the built artifacts without rebuilding from
 source.
 
@@ -41,11 +43,12 @@ test -s docs/assessments/v1-readiness.md
 ```
 
 Update `CHANGELOG.md` and current version references. Keep claims tied to
-tests: v0.65.0 supports the binary, DuckLake 1.0 targets covered by CI, the
-implemented local and cloud object-store paths, server-side TLS, password
-authentication, SCRAM-SHA-256 authentication, multi-principal grants, bounded
-quotas, and typed TOML configuration. Local and emulator checks do not certify
-cloud scale. Rust client, read-only API, DataFusion, and language bindings
+tests: v0.66.0 supports the binary, DuckLake 1.0 targets covered by CI, stable
+DuckLake 1.1 with DuckDB 2.0.0, the implemented local and cloud object-store
+paths, server-side TLS, password authentication, SCRAM-SHA-256 authentication,
+multi-principal grants, bounded quotas, and typed TOML configuration. Local and
+emulator checks do not certify cloud scale. Rust client, read-only API,
+DataFusion, and language bindings
 remain Preview or Experimental unless the support-level manifest says
 otherwise. It does not publish Docker images or support mTLS or certificate
 hot-reload.
@@ -70,8 +73,8 @@ After the PR checks pass, merge the release PR. After manual Release
 Certification passes on the merge SHA, tag that commit:
 
 ```bash
-git tag v0.65.0
-git push origin v0.65.0
+git tag v0.66.0
+git push origin v0.66.0
 ```
 
 Release artifacts must be built from that tag. The release contains raw

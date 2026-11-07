@@ -15,10 +15,9 @@ backend versions that CI covers.
 
 ## Catalog and upstream versions
 
-- The v0.65.0 release certifies DuckLake 1.0, Catalog Version 7 (`V1_0`).
-- Stable DuckLake 1.1 with DuckDB 2.0.0 has passed release certification on
-  the current development tree. It is not included in v0.65.0; the next release
-  must name this version in its tested matrix before claiming released support.
+- v0.65.0 certifies DuckLake 1.0, Catalog Version 7 (`V1_0`).
+- v0.66.0 adds certified stable DuckLake 1.1 support with DuckDB 2.0.0; the
+  DuckLake 1.0 path remains supported.
 - Fresh DuckDB 2.0 catalogs use stable 1.1 by default. Existing RockLake 1.0
   catalogs stay at 1.0 on ordinary attachment and migrate only when DuckDB 2.0
   requests `AUTOMATIC_MIGRATION`.
@@ -31,15 +30,17 @@ backend versions that CI covers.
 
 | Catalog format | Current boundary |
 |---|---|
-| DuckLake 1.0, Catalog Version 7 (`V1_0`) | Certified read/write support in v0.65.0. |
-| Stable DuckLake 1.1 | Release-certified on the current development tree with DuckDB 2.0.0; not included in v0.65.0. Existing 1.0 catalogs require explicit `AUTOMATIC_MIGRATION`. |
+| DuckLake 1.0, Catalog Version 7 (`V1_0`) | Certified read/write support since v0.65.0. |
+| Stable DuckLake 1.1 | Certified read/write support in v0.66.0 with DuckDB 2.0.0. Existing 1.0 catalogs require explicit `AUTOMATIC_MIGRATION`. |
 
-RockLake v0.65.0 reports independent version domains in `status --output json`:
+RockLake v0.66.0 reports independent version domains in `status --output json`:
 DuckLake catalog `7`, catalog storage `1`, registry `1`, catalog backup `2`,
 job ledger `1`, audit `1`, public JSON `1`, and evidence `1`. v0.60.0 is the
 minimum direct-upgrade source. Unknown required formats and unsafe downgrades
-are rejected before a write; a format-changing migration is not shipped in
-v0.65.0.
+are rejected before a write. DuckLake's 1.0-to-1.1 migration is an explicit
+upstream format migration; RockLake's catalog storage format remains unchanged.
+The status report's `format_version` field reflects the catalog's DuckLake
+metadata version (`1.0` or `1.1`).
 
 DuckLake's separate 1.0-to-1.1 migration path uses DuckDB's explicit
 `AUTOMATIC_MIGRATION` option. Ordinary attachment preserves 1.0. Back up the
@@ -73,8 +74,8 @@ The v0.60.0 migration command is read-only by default. It uses the typed
 migration registry, records an administrative job when applied, verifies the
 catalog before activation, and rejects unregistered targets. Since v0.60.0
 does not change the catalog storage format, the supported apply path is a
-verified no-op. v0.65.0 continues production beta with the documented public
-surface frozen and adds no persisted catalog format changes.
+verified no-op. v0.66.0 continues production beta with the documented public
+surface frozen and adds no RockLake catalog storage format changes.
 
 Backups and exports state whether they restore into a current release and which
 catalog formats they contain. A catalog export contains metadata and file

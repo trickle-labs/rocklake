@@ -236,14 +236,14 @@ jobs:
       - name: Run ducklake corpus classification tests
         run: cargo test --package rocklake-pgwire --test v02710_corpus_tests -- --nocapture
 
-      - name: "Gate: no DuckLake v1.1 (Catalog Version 8) statements in corpus"
+      - name: "Gate: no DuckLake 1.1-dev1 (Catalog Version 8) statements in 1.0 corpus"
         run: |
           python3 - <<'EOF'
           import json, sys
           with open("tests/fixtures/ducklake-corpus/duckdb-1.5.3-ducklake-1.0.json") as f:
               corpus = json.load(f)
           if corpus.get("catalog_version", 0) >= 8:
-              print("FAIL: corpus targets Catalog Version >= 8 (DuckLake v1.1) — out of scope", file=sys.stderr)
+              print("FAIL: 1.0 corpus targets prerelease V1_1_DEV_1 Catalog Version >= 8", file=sys.stderr)
               sys.exit(1)
           v11_keywords = ["1.1-dev", "V1_1_DEV", "catalog_version_8", "v1_1"]
           for stmt in corpus.get("statements", []):

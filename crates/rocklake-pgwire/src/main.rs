@@ -3894,19 +3894,23 @@ async fn collect_status(
     })
     .await?;
     let snapshot = store.current_snapshot_id().as_u64();
-    let schema_version = store
-        .reader()?
+    let reader = store.reader()?;
+    let schema_version = reader
         .get_snapshot()
         .await?
         .map(|row| row.schema_version)
         .unwrap_or(0);
+    let ducklake_version = reader
+        .get_metadata(rocklake_core::keys::MetadataScope::Global, 0, "version")
+        .await?
+        .map(|row| row.value);
     let json = serde_json::json!({
         "output_schema_version": rocklake_core::version::PUBLIC_JSON_SCHEMA_VERSION,
         "catalog": redact_catalog_url(catalog_url),
         "status": "ready",
         "snapshot_id": snapshot,
         "retain_from": store.retain_from(),
-        "format_version": "DuckLake 1.0 (V1_0)",
+        "format_version": ducklake_format_version_label(ducklake_version.as_deref()),
         "schema_version": schema_version,
         "versions": rocklake_core::version::CURRENT_VERSIONS,
         "compatibility": {
@@ -3914,12 +3918,19 @@ async fn collect_status(
             "ducklake_catalog_write": [rocklake_core::version::DUCKLAKE_CATALOG_VERSION],
             "catalog_storage_read": [rocklake_core::version::CATALOG_STORAGE_VERSION],
             "catalog_storage_write": [rocklake_core::version::CATALOG_STORAGE_VERSION],
-            "minimum_direct_upgrade": "v0.59.0",
+            "minimum_direct_upgrade": "v0.60.0",
             "downgrade_after_migration": "rejected_before_write"
         }
     });
     store.close().await?;
     Ok(json)
+}
+
+fn ducklake_format_version_label(version: Option<&str>) -> String {
+    match version.unwrap_or("1.0") {
+        "1.0" => "DuckLake 1.0 (V1_0)".to_string(),
+        version => format!("DuckLake {version}"),
+    }
 }
 
 async fn cmd_support(

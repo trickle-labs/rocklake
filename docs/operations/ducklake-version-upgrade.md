@@ -1,8 +1,7 @@
 # DuckLake Version Upgrade Guide
 
 This guide covers existing DuckLake catalogs used through RockLake. Stable
-DuckLake 1.1 with DuckDB 2.0.0 has passed release certification on the current
-development tree. See the
+DuckLake 1.1 is certified in v0.66.0 with DuckDB 2.0.0. See the
 [compatibility inventory](../integration/ducklake-1.1-compatibility-inventory.md)
 for the tested scope and retained limits.
 
@@ -11,7 +10,7 @@ for the tested scope and retained limits.
 | DuckLake format | RockLake behavior |
 |-----------------|-------------------|
 | 1.0 | Supported. Ordinary attachment preserves 1.0. |
-| Stable 1.1 | Release-certified with DuckDB 2.0.0 on the current development tree. New catalogs default to 1.1; existing RockLake 1.0 catalogs migrate only with explicit `AUTOMATIC_MIGRATION`. |
+| Stable 1.1 | Certified in v0.66.0 with DuckDB 2.0.0. New catalogs default to 1.1; existing RockLake 1.0 catalogs migrate only with explicit `AUTOMATIC_MIGRATION`. |
 | 1.1-dev1 | Separate experimental importer only; requires `--accept-version V1_1_DEV_1`. This flag does not enable stable 1.1 migration. |
 
 This in-place DuckDB migration is separate from `migrate-from-ducklake`, which

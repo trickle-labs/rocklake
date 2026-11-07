@@ -1,6 +1,6 @@
 //! v0.41.0 — DuckLake Forward Compatibility tests (PG-Wire layer).
 //!
-//! These tests validate the version-gating behaviour for DuckLake v1.1
+//! These tests validate the version-gating behaviour for DuckLake v1.1-dev1
 //! pre-release catalogs.
 //!
 //! Test inventory (2 tests):
@@ -48,11 +48,11 @@ fn v11_snapshot_row() -> ExportedRow {
 // Test 1: ducklake_v11_rejection_gate
 // ---------------------------------------------------------------------------
 
-/// Migration from a v1.1 pre-release source (catalog_version=8) must be
+/// Migration from a v1.1-dev1 pre-release source (catalog_version=8) must be
 /// rejected by default with SQLSTATE 0A000 (UnsupportedDuckLakeVersion).
 ///
 /// This mirrors the PG-Wire executor gate: a client connecting to RockLake
-/// and attempting to migrate from a v1.1 source must receive an error
+/// and attempting to migrate from a v1.1-dev1 source must receive an error
 /// unless --accept-version V1_1_DEV_1 is explicitly passed.
 #[tokio::test]
 async fn ducklake_v11_rejection_gate() {
@@ -82,7 +82,7 @@ async fn ducklake_v11_rejection_gate() {
 // Test 2: ducklake_v11_accept_version_flag
 // ---------------------------------------------------------------------------
 
-/// When ACCEPT_VERSION_V1_1_DEV_1 is supplied, migration from a v1.1 source
+/// When ACCEPT_VERSION_V1_1_DEV_1 is supplied, migration from a v1.1-dev1 source
 /// must succeed and the report must reflect the correct catalog version.
 #[tokio::test]
 async fn ducklake_v11_accept_version_flag() {
