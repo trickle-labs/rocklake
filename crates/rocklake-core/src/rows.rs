@@ -435,6 +435,9 @@ pub struct TableColumnStatsRow {
     /// v0.26: renamed from has_null (spec field is contains_null).
     #[prost(bool, tag = "3")]
     pub contains_null: bool,
+    /// Preserves DuckLake SQL NULL without changing the legacy protobuf false default.
+    #[prost(bool, tag = "10")]
+    pub contains_null_is_null: bool,
     #[prost(string, optional, tag = "4")]
     pub min_value: Option<String>,
     #[prost(string, optional, tag = "5")]
@@ -445,6 +448,19 @@ pub struct TableColumnStatsRow {
     /// v0.26: JSON blob for geometry or variant extra stats.
     #[prost(string, optional, tag = "7")]
     pub extra_stats: Option<String>,
+    /// v1.1: whether the stored minimum is an exact value.
+    #[prost(bool, optional, tag = "8")]
+    pub min_is_exact: Option<bool>,
+    /// v1.1: whether the stored maximum is an exact value.
+    #[prost(bool, optional, tag = "9")]
+    pub max_is_exact: Option<bool>,
+}
+
+impl TableColumnStatsRow {
+    /// Returns the nullable DuckLake value; legacy protobuf rows default to `false`.
+    pub fn contains_null_value(&self) -> Option<bool> {
+        (!self.contains_null_is_null).then_some(self.contains_null)
+    }
 }
 
 /// File column stats row value.
@@ -477,6 +493,12 @@ pub struct FileColumnStatsRow {
     /// v0.26: JSON blob for geometry or variant extra stats.
     #[prost(string, optional, tag = "11")]
     pub extra_stats: Option<String>,
+    /// v1.1: whether the stored minimum is an exact value.
+    #[prost(bool, optional, tag = "12")]
+    pub min_is_exact: Option<bool>,
+    /// v1.1: whether the stored maximum is an exact value.
+    #[prost(bool, optional, tag = "13")]
+    pub max_is_exact: Option<bool>,
 }
 
 /// File variant stats row value.

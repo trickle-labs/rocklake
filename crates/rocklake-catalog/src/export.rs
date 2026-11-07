@@ -221,6 +221,8 @@ fn export_manifest(snapshot_id: u64) -> ExportManifest {
                 "max_value",
                 "contains_nan",
                 "extra_stats",
+                "min_is_exact",
+                "max_is_exact",
             ],
             "ducklake_file_column_stats" => &[
                 "table_id",
@@ -234,6 +236,8 @@ fn export_manifest(snapshot_id: u64) -> ExportManifest {
                 "value_count",
                 "null_count",
                 "extra_stats",
+                "min_is_exact",
+                "max_is_exact",
             ],
             "ducklake_file_variant_stats" => &[
                 "table_id",
@@ -1242,11 +1246,13 @@ pub async fn export_catalog<W: Write>(
             data: serde_json::json!({
                 "table_id": row.table_id,
                 "column_id": row.column_id,
-                "contains_null": row.contains_null,
+                "contains_null": row.contains_null_value(),
                 "min_value": row.min_value,
                 "max_value": row.max_value,
                 "contains_nan": row.contains_nan,
                 "extra_stats": row.extra_stats,
+                "min_is_exact": row.min_is_exact,
+                "max_is_exact": row.max_is_exact,
             }),
         };
         serde_json::to_writer(&mut *writer, &exported)
@@ -1279,6 +1285,8 @@ pub async fn export_catalog<W: Write>(
                 "value_count": row.value_count,
                 "null_count": row.null_count,
                 "extra_stats": row.extra_stats,
+                "min_is_exact": row.min_is_exact,
+                "max_is_exact": row.max_is_exact,
             }),
         };
         serde_json::to_writer(&mut *writer, &exported)
@@ -2109,10 +2117,13 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     table_id,
                     column_id,
                     contains_null: d["contains_null"].as_bool().unwrap_or(false),
+                    contains_null_is_null: d["contains_null"].is_null(),
                     min_value: d["min_value"].as_str().map(|s| s.to_string()),
                     max_value: d["max_value"].as_str().map(|s| s.to_string()),
                     contains_nan: d["contains_nan"].as_bool(),
                     extra_stats: d["extra_stats"].as_str().map(|s| s.to_string()),
+                    min_is_exact: d["min_is_exact"].as_bool(),
+                    max_is_exact: d["max_is_exact"].as_bool(),
                 };
                 let key = keys::key_table_column_stats(table_id, column_id);
                 put!(key, values::encode_value(&row));
@@ -2134,6 +2145,8 @@ pub async fn import_catalog<R: BufRead>(db: &Db, reader: R) -> CatalogResult<Imp
                     value_count: d["value_count"].as_u64(),
                     null_count: d["null_count"].as_u64(),
                     extra_stats: d["extra_stats"].as_str().map(|s| s.to_string()),
+                    min_is_exact: d["min_is_exact"].as_bool(),
+                    max_is_exact: d["max_is_exact"].as_bool(),
                 };
                 let key = keys::key_file_column_stats(table_id, column_id, data_file_id);
                 let encoded = values::encode_value(&row);
@@ -2582,7 +2595,7 @@ pub(crate) fn validate_import_data(
         "ducklake_column_mapping" => &["mapping_id", "table_id"],
         "ducklake_name_mapping" => &["mapping_id", "column_id", "name"],
         "ducklake_table_stats" => &["table_id", "record_count", "file_size_bytes"],
-        "ducklake_table_column_stats" => &["table_id", "column_id", "contains_null"],
+        "ducklake_table_column_stats" => &["table_id", "column_id"],
         "ducklake_file_column_stats" => &[
             "table_id",
             "column_id",
@@ -2630,7 +2643,6 @@ pub(crate) fn validate_import_data(
     }
     let bool_fields: &[&str] = match table {
         "ducklake_column" => &["is_nullable"],
-        "ducklake_table_column_stats" => &["contains_null"],
         "ducklake_file_column_stats" => &["contains_null", "contains_nan"],
         _ => &[],
     };

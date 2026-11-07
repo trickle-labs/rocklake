@@ -213,6 +213,8 @@ proptest! {
             value_count: None,
             null_count: None,
             extra_stats: None,
+            min_is_exact: None,
+            max_is_exact: None,
         };
         let encoded = encode_value(&row);
         let decoded: FileColumnStatsRow = decode_value(&encoded).unwrap();

@@ -485,6 +485,7 @@ async fn golden_ducklake_table_column_stats() {
         cols.first().map(|s| s.as_str()) == Some("table_id"),
         "first column must be table_id, got: {cols:?}"
     );
+    assert!(!cols.contains(&"min_is_exact".to_string()));
 }
 
 #[tokio::test]
@@ -497,6 +498,183 @@ async fn golden_ducklake_file_column_stats() {
     assert!(
         cols.first().map(|s| s.as_str()) == Some("data_file_id"),
         "first column must be data_file_id, got: {cols:?}"
+    );
+    assert!(!cols.contains(&"min_is_exact".to_string()));
+}
+
+#[tokio::test]
+async fn ducklake_v11_stats_expose_exactness_columns() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let (table_id, column_id) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+        let column_id = writer
+            .add_column(table_id, "name", "varchar", 0, true, None)
+            .await
+            .unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.1")
+            .unwrap();
+        let _ = writer.create_snapshot(None, None).await.unwrap();
+        (table_id, column_id)
+    };
+    drop(store);
+    let store = open_store(&dir).await;
+
+    let insert = format!(
+        "INSERT INTO ducklake_table_column_stats (table_id, column_id, contains_null, contains_nan, min_value, max_value, extra_stats, min_is_exact, max_is_exact) VALUES ({table_id}, {column_id}, false, false, 'a', 'z', NULL, false, true)"
+    );
+    let mut session = SessionState::new();
+    executor::execute_sql(
+        &insert,
+        &ParamValues::default(),
+        &store,
+        &mut session,
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let update = format!(
+        "UPDATE ducklake_table_column_stats SET contains_null = false, contains_nan = NULL, min_value = '1', max_value = '2', extra_stats = NULL, min_is_exact = true, max_is_exact = true WHERE table_id = {table_id} AND column_id = {column_id}"
+    );
+    executor::execute_sql(
+        &update,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let table_stats = exec("SELECT * FROM ducklake_table_column_stats", &store).await;
+    let (table_cols, table_count) = inspect(table_stats).await;
+    assert!(table_cols.ends_with(&["min_is_exact".into(), "max_is_exact".into()]));
+    assert_eq!(table_count, 1);
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_table_column_stats()
+        .await
+        .unwrap();
+    assert_eq!(rows[0].min_value.as_deref(), Some("1"));
+    assert_eq!(rows[0].max_value.as_deref(), Some("2"));
+    assert_eq!(rows[0].contains_nan, None);
+    assert_eq!(rows[0].min_is_exact, Some(true));
+    assert_eq!(rows[0].max_is_exact, Some(true));
+
+    let file_stats = exec("SELECT * FROM ducklake_file_column_stats", &store).await;
+    let (file_cols, _) = inspect(file_stats).await;
+    assert!(file_cols.ends_with(&["min_is_exact".into(), "max_is_exact".into()]));
+}
+
+#[tokio::test]
+async fn ducklake_v10_table_column_stats_update_uses_legacy_fields() {
+    let dir = TempDir::new().unwrap();
+    let store = open_store(&dir).await;
+    let (table_id, column_id, second_column_id) = {
+        let mut catalog = store.lock().await;
+        let mut writer = catalog.begin_write();
+        let schema_id = writer.create_schema("main").await.unwrap();
+        let table_id = writer.create_table(schema_id, "t", None).await.unwrap();
+        let column_id = writer
+            .add_column(table_id, "name", "varchar", 0, true, None)
+            .await
+            .unwrap();
+        let second_column_id = writer
+            .add_column(table_id, "other", "varchar", 1, true, None)
+            .await
+            .unwrap();
+        writer
+            .set_metadata(MetadataScope::Global, 0, "version", "1.0")
+            .unwrap();
+        writer
+            .upsert_table_column_stats(
+                table_id,
+                column_id,
+                false,
+                Some("a"),
+                Some("z"),
+                Some(false),
+                None,
+            )
+            .await
+            .unwrap();
+        writer
+            .upsert_table_column_stats(
+                table_id,
+                second_column_id,
+                false,
+                Some("b"),
+                Some("y"),
+                Some(false),
+                None,
+            )
+            .await
+            .unwrap();
+        let snapshot = writer.create_snapshot(None, None).await.unwrap();
+        catalog.commit_writer(snapshot);
+        (table_id, column_id, second_column_id)
+    };
+
+    let update = format!(
+        "WITH new_values(tid, cid, new_contains_null, new_contains_nan, new_min, new_max, new_extra_stats) AS (VALUES ({table_id}, {column_id}, NULL, NULL, '1', '2', NULL), ({table_id}, {second_column_id}, true, NULL, '3', '4', NULL)) UPDATE ducklake_table_column_stats SET contains_null = CAST(new_contains_null AS BOOLEAN), contains_nan = CAST(new_contains_nan AS BOOLEAN), min_value = new_min, max_value = new_max, extra_stats = new_extra_stats FROM new_values WHERE table_id = tid AND column_id = cid"
+    );
+    executor::execute_sql(
+        &update,
+        &ParamValues::default(),
+        &store,
+        &mut SessionState::new(),
+        &nm(),
+        &ext(),
+    )
+    .await
+    .unwrap();
+
+    let rows = store
+        .lock()
+        .await
+        .read_latest()
+        .list_all_table_column_stats()
+        .await
+        .unwrap();
+    let first = rows.iter().find(|row| row.column_id == column_id).unwrap();
+    assert_eq!(first.min_value.as_deref(), Some("1"));
+    assert_eq!(first.max_value.as_deref(), Some("2"));
+    assert_eq!(first.contains_null_value(), None);
+    assert_eq!(first.contains_nan, None);
+    assert_eq!(first.min_is_exact, None);
+    assert_eq!(first.max_is_exact, None);
+    let second = rows
+        .iter()
+        .find(|row| row.column_id == second_column_id)
+        .unwrap();
+    assert_eq!(second.min_value.as_deref(), Some("3"));
+    assert_eq!(second.max_value.as_deref(), Some("4"));
+    assert_eq!(second.contains_null_value(), Some(true));
+
+    let response = exec("SELECT * FROM ducklake_table_column_stats", &store).await;
+    let Response::Query(response) = response else {
+        panic!("expected table column stats query response");
+    };
+    let rows = response.data_rows();
+    futures::pin_mut!(rows);
+    let row = rows.next().await.unwrap().unwrap();
+    let mut offset = 0;
+    for _ in 0..2 {
+        let length = i32::from_be_bytes(row.data[offset..offset + 4].try_into().unwrap());
+        offset += 4 + length as usize;
+    }
+    assert_eq!(
+        i32::from_be_bytes(row.data[offset..offset + 4].try_into().unwrap()),
+        -1
     );
 }
 
