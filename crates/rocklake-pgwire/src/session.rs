@@ -14,6 +14,10 @@ const MAX_BATCH_SIZE: usize = 64 * 1024 * 1024;
 pub enum BufferedOp {
     InsertSchema {
         schema_name: String,
+        schema_uuid: Option<String>,
+        path: Option<String>,
+        path_is_relative: Option<bool>,
+        parent_schema_id: Option<u64>,
     },
     InsertTable {
         table_id: Option<u64>,

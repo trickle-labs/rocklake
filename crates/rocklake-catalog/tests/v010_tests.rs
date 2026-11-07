@@ -513,6 +513,7 @@ fn cdc_snapshot_to_jsonl_is_valid() {
             schema_uuid: None,
             path: None,
             path_is_relative: None,
+            parent_schema_id: None,
         }],
         retired_schemas: vec![],
         added_tables: vec![TableRow {

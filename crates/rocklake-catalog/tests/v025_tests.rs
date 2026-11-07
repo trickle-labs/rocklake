@@ -38,6 +38,7 @@ fn schema_row_has_v025_fields() {
         schema_uuid: Some("uuid-1234".to_string()),
         path: Some("s3://bucket/schemas/myschema".to_string()),
         path_is_relative: Some(false),
+        parent_schema_id: None,
     };
     assert_eq!(row.schema_uuid.as_deref(), Some("uuid-1234"));
     assert_eq!(row.path.as_deref(), Some("s3://bucket/schemas/myschema"));
