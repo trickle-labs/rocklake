@@ -128,7 +128,7 @@ jobs:
       - name: Install DuckDB CLI and DuckLake extension
         run: |
           mkdir -p "$RUNNER_TEMP/duckdb"
-          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz" -o "$RUNNER_TEMP/duckdb.tar.gz"
+          curl --retry 5 --retry-delay 2 --retry-max-time 120 -fsSL "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz" -o "$RUNNER_TEMP/duckdb.tar.gz"
           tar -xzf "$RUNNER_TEMP/duckdb.tar.gz" -C "$RUNNER_TEMP/duckdb"
           test -x "$RUNNER_TEMP/duckdb/duckdb"
           echo "$RUNNER_TEMP/duckdb" >> "$GITHUB_PATH"
@@ -246,10 +246,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/duckdb"
           if [[ "$DUCKDB_VERSION" == 2.* ]]; then
-            curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz" -o "$RUNNER_TEMP/duckdb.tar.gz"
+            curl --retry 5 --retry-delay 2 --retry-max-time 120 -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz" -o "$RUNNER_TEMP/duckdb.tar.gz"
             tar -xzf "$RUNNER_TEMP/duckdb.tar.gz" -C "$RUNNER_TEMP/duckdb"
           else
-            curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o "$RUNNER_TEMP/duckdb.zip"
+            curl --retry 5 --retry-delay 2 --retry-max-time 120 -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o "$RUNNER_TEMP/duckdb.zip"
             unzip -q "$RUNNER_TEMP/duckdb.zip" -d "$RUNNER_TEMP/duckdb"
           fi
           test -x "$RUNNER_TEMP/duckdb/duckdb"
