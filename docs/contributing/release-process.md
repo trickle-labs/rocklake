@@ -22,8 +22,8 @@ checks cover the compatibility freeze. The v0.63.7 certification profile
 validates the public surface manifest, beta support policy, evidence ledger,
 redacted support bundle, candidate-specific LocalFS evidence, and release
 artifact contract for v0.66.0.
-The publication stage also tests the built artifacts without rebuilding from
-source.
+The release is published only after the built artifacts pass checksum,
+installation, and quickstart checks without rebuilding from source.
 
 ## Before the release PR
 

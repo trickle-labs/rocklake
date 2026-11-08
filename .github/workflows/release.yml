@@ -199,7 +199,7 @@ jobs:
         env:
           DUCKDB_VERSION: "1.5.6"
         run: |
-          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o "$RUNNER_TEMP/duckdb.zip"
+          curl --retry 5 --retry-delay 2 --retry-max-time 120 -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" -o "$RUNNER_TEMP/duckdb.zip"
           unzip -q "$RUNNER_TEMP/duckdb.zip" -d "$RUNNER_TEMP/duckdb"
           echo "$RUNNER_TEMP/duckdb" >> "$GITHUB_PATH"
       - name: Run artifact quickstart
@@ -232,7 +232,7 @@ jobs:
   # Create a GitHub Release with all binaries and checksums.
   release:
     name: GitHub Release
-    needs: [build, sbom, prepare, certification]
+    needs: [build, sbom, prepare, certification, artifact-install]
     runs-on: ubuntu-latest
     permissions:
       contents: write
